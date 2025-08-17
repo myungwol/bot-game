@@ -1,4 +1,4 @@
-# main.py
+# bot-game/main.py
 
 import discord
 from discord.ext import commands
@@ -7,7 +7,6 @@ import asyncio
 import logging
 import logging.handlers
 
-# [수정] 함수의 이름이 sync_defaults_to_db 입니다.
 from utils.database import load_all_data_from_db, sync_defaults_to_db
 
 # --- 중앙 로깅 설정 ---
@@ -28,7 +27,14 @@ class MyBot(commands.Bot):
     def __init__(self, *args, **kwargs): super().__init__(*args, **kwargs)
     async def setup_hook(self):
         await self.load_all_extensions()
-        cogs_with_persistent_views = ["ServerSystem", "Onboarding", "Nicknames", "UserProfile", "Fishing", "Commerce"]
+        
+        # [수정] 이 봇이 관리하는 View 목록에서 서버 관리 Cog를 삭제합니다.
+        cogs_with_persistent_views = [
+            "UserProfile", 
+            "Fishing", 
+            "Commerce"
+        ]
+        
         registered_views = 0
         for cog_name in cogs_with_persistent_views:
             cog = self.get_cog(cog_name)
@@ -56,20 +62,15 @@ class MyBot(commands.Bot):
 
 bot = MyBot(command_prefix="/", intents=intents)
 
-async def regenerate_all_panels():
-    logger.info("------ [ 모든 패널 자동 재생성 시작 ] ------")
-    regenerated_panels = 0
-    for cog_name, cog in bot.cogs.items():
-        if hasattr(cog, 'regenerate_panel'):
-            try: await cog.regenerate_panel(); regenerated_panels +=1
-            except Exception as e: logger.error(f"❌ '{cog_name}' 패널 재생성 작업 중 오류 발생: {e}", exc_info=True)
-    logger.info(f"✅ 총 {regenerated_panels}개의 패널에 대한 재생성 작업이 요청되었습니다.")
-    logger.info("------ [ 모든 패널 자동 재생성 완료 ] ------")
+# [삭제] 게임 봇에는 패널 자동 재생성 기능이 필요 없습니다.
+# async def regenerate_all_panels(): ...
 
 @bot.event
 async def on_ready():
     logger.info(f'✅ {bot.user.name}(이)가 성공적으로 로그인했습니다.')
-    await sync_defaults_to_db()
+    
+    # [수정] 게임 봇은 UI 기본값을 DB에 쓸 필요가 없습니다. 관리 봇이 하므로 읽기만 합니다.
+    # await sync_defaults_to_db() 
     await load_all_data_from_db()
     
     logger.info("------ [ 모든 Cog 설정 새로고침 시작 ] ------")
@@ -88,7 +89,9 @@ async def on_ready():
         else:
             synced = await bot.tree.sync(); logger.info(f'✅ {len(synced)}개의 슬래시 명령어를 전체 서버에 동기화했습니다.')
     except Exception as e: logger.error(f'❌ 명령어 동기화 중 오류가 발생했습니다: {e}')
-    await regenerate_all_panels()
+    
+    # [삭제] 패널 자동 재생성 기능 호출을 삭제합니다.
+    # await regenerate_all_panels()
 
 async def main():
     async with bot: await bot.start(BOT_TOKEN)
