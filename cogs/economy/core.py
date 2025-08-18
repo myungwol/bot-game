@@ -5,8 +5,6 @@ from discord.ext import commands, tasks
 from discord import app_commands, ui
 import random
 import asyncio
-# [삭제] defaultdict는 더 이상 필요 없습니다.
-# from collections import defaultdict
 import logging
 from typing import Optional, Dict
 
@@ -66,15 +64,8 @@ class EconomyCore(commands.Cog):
         self.bot = bot
         self.coin_log_channel_id: Optional[int] = None
         self.admin_role_id: Optional[int] = None
-        
-        # [삭제] 메모리에 저장하던 딕셔너리들을 제거합니다.
-        # self.user_chat_progress: Dict[int, int] = defaultdict(int)
-        # self.user_voice_progress: Dict[int, int] = defaultdict(int)
-
         self.currency_icon = "🪙"
-        
         self._chat_cooldown = commands.CooldownMapping.from_cooldown(1, 3.0, commands.BucketType.user)
-        
         self.voice_reward_loop.start()
         logger.info("EconomyCore Cog가 성공적으로 초기화되었습니다.")
         
@@ -106,21 +97,16 @@ class EconomyCore(commands.Cog):
         if not chat_reward_range or len(chat_reward_range) != 2: chat_reward_range = [5, 10]
 
         try:
-            # [수정] DB의 카운트를 1 증가시키고, 증가된 값을 받아옵니다.
             params = {'p_user_id': str(user.id), 'p_chat_increment': 1}
             response = await supabase.rpc('increment_user_progress', params).execute()
 
             if response.data:
                 current_progress = response.data[0]['new_chat_progress']
                 
-                # [수정] DB에서 받아온 값으로 보상 지급 여부를 확인합니다.
                 if current_progress >= chat_req:
-                    # 보상 지급
                     reward = random.randint(chat_reward_range[0], chat_reward_range[1])
                     await update_wallet(user, reward)
                     await self.log_coin_activity(user, reward, "チャット活動報酬")
-
-                    # [수정] DB의 카운트를 0으로 초기화합니다.
                     reset_params = {'p_user_id': str(user.id), 'p_reset_chat': True}
                     await supabase.rpc('reset_user_progress', reset_params).execute()
 
@@ -139,28 +125,22 @@ class EconomyCore(commands.Cog):
                 for vc in guild.voice_channels:
                     if vc.id == afk_ch_id: continue
                     
-                    eligible_members = [
-                        m for m in vc.members 
-                        if not m.bot and m.voice and not m.voice.self_deaf and not m.voice.self_mute
-                    ]
+                    # [핵심 수정] 봇이 아닌 모든 멤버를 대상으로 변경
+                    eligible_members = [m for m in vc.members if not m.bot]
                     
                     for member in eligible_members:
                         try:
-                            # [수정] DB의 음성 카운트를 1 증가시키고, 증가된 값을 받아옵니다.
                             params = {'p_user_id': str(member.id), 'p_voice_increment': 1}
                             response = await supabase.rpc('increment_user_progress', params).execute()
                             
                             if response.data:
                                 current_progress = response.data[0]['new_voice_progress']
                                 
-                                # [수정] DB에서 받아온 값으로 보상 지급 여부를 확인합니다.
                                 if current_progress >= voice_req_min:
-                                    # 보상 지급
                                     reward = random.randint(voice_reward_range[0], voice_reward_range[1])
                                     await update_wallet(member, reward)
                                     await self.log_coin_activity(member, reward, "ボイスチャット活動報酬")
                                     
-                                    # [수정] DB의 카운트를 0으로 초기화합니다.
                                     reset_params = {'p_user_id': str(member.id), 'p_reset_voice': True}
                                     await supabase.rpc('reset_user_progress', reset_params).execute()
 
