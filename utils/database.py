@@ -1,4 +1,4 @@
-# bot-game/utils/database.py (기본 낚싯대 상수 추가)
+# bot-game/utils/database.py (SyntaxError 수정 최종본)
 
 import os
 import discord
@@ -68,7 +68,8 @@ async def load_all_data_from_db():
 @supabase_retry_handler()
 async def load_bot_configs_from_db():
     global _configs_cache
-    response = await supabase.table('bot_configs').select('config_key, 'config_value').execute()
+    # [🔴 핵심 수정] 오타 수정
+    response = await supabase.table('bot_configs').select('config_key, config_value').execute()
     if response and response.data:
         for item in response.data:
             _configs_cache[item['config_key']] = item['config_value']
@@ -170,7 +171,6 @@ async def update_inventory(user_id_str: str, item_name: str, quantity: int):
     await supabase.rpc('increment_inventory_quantity', params).execute()
 
 BARE_HANDS = "素手"
-# [추가] 기본 낚싯대 이름을 상수로 정의
 DEFAULT_ROD = "古い釣竿"
 
 async def get_user_gear(user_id_str: str) -> dict:
