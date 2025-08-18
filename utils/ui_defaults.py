@@ -100,6 +100,7 @@ UI_STRINGS = {
     # --- 프로필(UserProfile) Cog 관련 문자열 ---
     "profile_view": {
         "base_title": "{user_name}님의 프로필",
+        "refresh_button": "새로고침", # <--- 이 줄을 추가해주세요.
         "tabs": {
             "info": {"title_suffix": " - 情報", "label": "情報", "emoji": "ℹ️"},
             "item": {"title_suffix": " - アイテム", "label": "アイテム", "emoji": "📦"},
@@ -108,6 +109,7 @@ UI_STRINGS = {
             "seed": {"title_suffix": " - シード", "label": "シード", "emoji": "🌱"},
             "crop": {"title_suffix": " - 作物", "label": "作物", "emoji": "🌾"},
             "feed": {"title_suffix": " - 餌", "label": "餌", "emoji": "🍖"}
+             
         },
         "info_tab": {
             "field_balance": "💰 所持金",
