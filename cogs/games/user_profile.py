@@ -1,4 +1,4 @@
-# cogs/games/user_profile.py (문자열 외부화 리팩토링 완료)
+# cogs/games/user_profile.py (드롭다운 생성 오류 수정)
 
 import discord
 from discord.ext import commands
@@ -11,18 +11,19 @@ from typing import Optional, Dict, List, Any
 from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
     save_panel_id, get_panel_id, get_id, get_embed_from_db, get_panel_components_from_db,
-    get_item_database, get_config, get_string # [수정] get_string 임포트
+    get_item_database, get_config, get_string
 )
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# --- 아이템 카테고리 상수 (DB의 'category' 컬럼과 일치해야 함) ---
+# --- 아이템 카테고리 상수 ---
 ROD_CATEGORY = "釣竿"
 BAIT_CATEGORY = "釣りエサ"
 
 
 class ProfileView(ui.View):
+    # ... (이전과 동일, 변경 없음) ...
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
         super().__init__(timeout=300)
         self.user: discord.Member = user
@@ -150,7 +151,6 @@ class ProfileView(ui.View):
             await self.update_display(interaction)
 
 class GearSelectView(ui.View):
-    # ... (GearSelectView와 UserProfilePanelView, UserProfile Cog, setup 함수는 이전과 동일하게 유지) ...
     def __init__(self, parent_view: ProfileView, gear_type: str):
         super().__init__(timeout=180)
         self.parent_view = parent_view
@@ -178,11 +178,12 @@ class GearSelectView(ui.View):
             if item_data and item_data.get('category') == target_category:
                 options.append(discord.SelectOption(label=f"{name} ({count}個)", value=name, emoji=item_data.get('emoji')))
         
-        if len(options) > 1:
-            placeholder = get_string("gear_select_view.placeholder", category_name=category_name)
-            select = ui.Select(placeholder=placeholder, options=options)
-            select.callback = self.select_callback
-            self.add_item(select)
+        # [핵심 수정] if len(options) > 1: 조건문 제거
+        # 이제 options 리스트에 '장비 해제' 옵션만 있더라도 드롭다운 메뉴가 항상 생성됩니다.
+        placeholder = get_string("gear_select_view.placeholder", category_name=category_name)
+        select = ui.Select(placeholder=placeholder, options=options)
+        select.callback = self.select_callback
+        self.add_item(select)
         
         self.add_item(ui.Button(label=get_string("gear_select_view.back_button"), style=discord.ButtonStyle.grey, row=1, custom_id="back"))
         for child in self.children:
@@ -210,6 +211,7 @@ class GearSelectView(ui.View):
 
 
 class UserProfilePanelView(ui.View):
+    # ... (이전과 동일, 변경 없음) ...
     def __init__(self, cog_instance: 'UserProfile'):
         super().__init__(timeout=None)
         self.cog = cog_instance
@@ -229,6 +231,7 @@ class UserProfilePanelView(ui.View):
 
 
 class UserProfile(commands.Cog):
+    # ... (이전과 동일, 변경 없음) ...
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.view_instance: Optional[UserProfilePanelView] = None
