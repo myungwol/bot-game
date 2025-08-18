@@ -1,4 +1,4 @@
-# cogs/games/fishing.py (누락된 클래스 복원)
+# cogs/games/fishing.py (이전 결과 메시지 자동 삭제 기능 추가)
 
 import discord
 from discord.ext import commands
@@ -20,12 +20,13 @@ logger = logging.getLogger(__name__)
 
 # --- 낚시 게임 로직을 담는 View ---
 class FishingGameView(ui.View):
-    def __init__(self, bot: commands.Bot, user: discord.Member, used_rod: str, used_bait: str, remaining_baits: Dict[str, int], active_fishers_set: Set[int]):
+    # [수정] cog_instance를 받도록 __init__ 변경
+    def __init__(self, bot: commands.Bot, user: discord.Member, used_rod: str, used_bait: str, remaining_baits: Dict[str, int], cog_instance: 'Fishing'):
         super().__init__(timeout=35)
         self.bot = bot; self.player = user; self.message: Optional[discord.WebhookMessage] = None
         self.game_state = "waiting"; self.game_task: Optional[asyncio.Task] = None
         self.used_rod = used_rod; self.used_bait = used_bait; self.remaining_baits = remaining_baits
-        self.active_fishers_set = active_fishers_set
+        self.fishing_cog = cog_instance # [추가] Cog 인스턴스 저장
         
         item_db = get_item_database()
         rod_data = item_db.get(self.used_rod, {})
@@ -118,7 +119,10 @@ class FishingGameView(ui.View):
                 except Exception as e: logger.error(f"공개 낚시 로그 전송 실패: {e}", exc_info=True)
         embed.set_footer(text=f"{footer_public}\n{footer_private}")
         if self.message:
-            try: await self.message.edit(embed=embed, view=None)
+            try: 
+                await self.message.edit(embed=embed, view=None)
+                # [추가] 결과 메시지를 Cog에 저장
+                self.fishing_cog.last_result_messages[self.player.id] = self.message
             except (discord.NotFound, AttributeError, discord.HTTPException): pass
 
     async def on_timeout(self):
@@ -129,9 +133,10 @@ class FishingGameView(ui.View):
 
     def stop(self):
         if self.game_task and not self.game_task.done(): self.game_task.cancel()
-        self.active_fishers_set.discard(self.player.id); super().stop()
+        self.fishing_cog.active_fishing_sessions_by_user.discard(self.player.id) # [수정] active_fishers_set 대신 Cog의 세트 사용
+        super().stop()
 
-# --- [복원] 낚시 패널 UI ---
+
 class FishingPanelView(ui.View):
     def __init__(self, bot: commands.Bot, cog_instance: 'Fishing'):
         super().__init__(timeout=None)
@@ -153,6 +158,14 @@ class FishingPanelView(ui.View):
 
     async def start_fishing(self, interaction: discord.Interaction):
         user_id = interaction.user.id
+        
+        # [추가] 이전 낚시 결과 메시지 삭제 로직
+        if last_message := self.fishing_cog.last_result_messages.pop(user_id, None):
+            try:
+                await last_message.delete()
+            except (discord.NotFound, discord.Forbidden):
+                pass # 이미 삭제되었거나 권한이 없는 경우 무시
+
         lock = self.user_locks.setdefault(user_id, asyncio.Lock())
         if lock.locked():
             return await interaction.response.send_message("現在、以前のリクエストを処理中です。しばらくお待ちください。", ephemeral=True)
@@ -188,20 +201,22 @@ class FishingPanelView(ui.View):
                 desc = f"### ウキを投げました。\n**🎣 使用中の釣竿:** `{rod}` (`珍しい魚の確率 +{rod_bonus}%`)\n**🐛 使用中のエサ:** `{bait}` (`アタリ待機時間: {bite_range[0]}～{bite_range[1]}秒`)"
                 embed = discord.Embed(title="🎣 釣りを開始しました！", description=desc, color=discord.Color.light_grey())
                 
-                view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog.active_fishing_sessions_by_user)
+                # [수정] active_fishers_set 대신 Cog 인스턴스 전달
+                view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog)
                 await view.start_game(interaction, embed)
             except Exception as e:
                 self.fishing_cog.active_fishing_sessions_by_user.discard(user_id)
                 logger.error(f"낚시 게임 시작 중 오류: {e}", exc_info=True)
                 await interaction.followup.send(f"❌ 釣りの開始中にエラーが発生しました。\n`{e}`", ephemeral=True)
 
-# --- [복원] 낚시 기능 메인 Cog ---
 class Fishing(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_fishing_sessions_by_user: Set[int] = set()
         self.fishing_log_channel_id: Optional[int] = None
         self.view_instance = None
+        # [추가] 사용자별 마지막 결과 메시지를 저장할 딕셔너리
+        self.last_result_messages: Dict[int, discord.Message] = {}
         logger.info("Fishing Cog가 성공적으로 초기화되었습니다.")
 
     async def register_persistent_views(self):
