@@ -8,15 +8,21 @@ import asyncio
 from typing import Dict, Callable, Any, List, Optional
 from functools import wraps
 
+# [수정] ui_defaults에서 UI_STRINGS를 가져옵니다.
+from utils.ui_defaults import UI_STRINGS
+
 logger = logging.getLogger(__name__)
 
 # --- 캐시 영역 ---
-_bot_configs_cache: Dict[str, Any] = {}
+# [수정] _bot_configs_cache 이름을 _configs_cache로 변경하고, strings도 포함
+_configs_cache: Dict[str, Any] = {
+    "strings": UI_STRINGS # ui_defaults.py에서 직접 로드
+}
 _channel_id_cache: Dict[str, int] = {}
 _item_database_cache: Dict[str, Dict[str, Any]] = {}
 _fishing_loot_cache: List[Dict[str, Any]] = []
 
-# --- Supabase 클라이언트 초기화 ---
+# ... (supabase 클라이언트 초기화 및 supabase_retry_handler 데코레이터는 이전과 동일) ...
 supabase: AsyncClient = None
 try:
     url: str = os.environ.get("SUPABASE_URL")
@@ -28,7 +34,6 @@ try:
 except Exception as e:
     logger.critical(f"❌ Supabase 클라이언트 생성 실패: {e}", exc_info=True)
 
-# --- 범용 재시도 핸들러 ---
 def supabase_retry_handler(retries: int = 3, delay: int = 5):
     def decorator(func: Callable):
         @wraps(func)
@@ -56,21 +61,44 @@ async def load_all_data_from_db():
 
 @supabase_retry_handler()
 async def load_bot_configs_from_db():
-    global _bot_configs_cache
+    global _configs_cache
     response = await supabase.table('bot_configs').select('config_key, config_value').execute()
     if response and response.data:
-        _bot_configs_cache = {item['config_key']: item['config_value'] for item in response.data}
-        logger.info(f"✅ {len(_bot_configs_cache)}개의 봇 설정을 DB에서 로드했습니다.")
+        # DB에서 불러온 설정을 기존 캐시에 업데이트
+        for item in response.data:
+            _configs_cache[item['config_key']] = item['config_value']
+        logger.info(f"✅ {len(response.data)}개의 봇 설정을 DB에서 로드하고 캐시에 병합했습니다.")
     else:
         logger.warning("DB 'bot_configs' 테이블에서 설정 정보를 찾을 수 없습니다.")
 
 def get_config(key: str, default: Any = None) -> Any:
-    return _bot_configs_cache.get(key, default)
+    # [수정] _configs_cache를 사용하도록 변경
+    return _configs_cache.get(key, default)
 
+# --- [신규 추가] UI 문자열을 가져오는 헬퍼 함수 ---
+def get_string(key_path: str, default: str = "", **kwargs) -> str:
+    """
+    'profile_view.info_tab.description' 같은 경로를 사용하여
+    _configs_cache['strings']에서 문자열을 안전하게 가져오고 포맷팅합니다.
+    """
+    try:
+        keys = key_path.split('.')
+        value = _configs_cache.get("strings", {})
+        for key in keys:
+            value = value[key]
+        
+        if isinstance(value, str):
+            return value.format_map(kwargs)
+        return str(value)
+    except (KeyError, TypeError):
+        # 키가 없는 경우, 기본값을 반환하거나 경로 자체를 반환하여 문제 파악을 돕습니다.
+        return default.format_map(kwargs) if default else f"[{key_path}]"
+
+# ... (이하 get_id, load_channel_ids_from_db 등 나머지 함수는 이전과 동일) ...
 @supabase_retry_handler()
 async def load_channel_ids_from_db():
     global _channel_id_cache
-    response = await supabase.table('channel_configs').select('channel_key, channel_id').execute()
+    response = await supabase.table('channel_configs').select('channel_key', 'channel_id').execute()
     if response and response.data:
         _channel_id_cache = {item['channel_key']: int(item['channel_id']) for item in response.data}
         logger.info(f"✅ {len(_channel_id_cache)}개의 채널/역할 ID를 DB에서 로드했습니다.")
@@ -80,7 +108,6 @@ async def load_channel_ids_from_db():
 def get_id(key: str) -> Optional[int]:
     return _channel_id_cache.get(key)
 
-# --- 게임 데이터 관련 ---
 @supabase_retry_handler()
 async def load_game_data_from_db():
     global _item_database_cache, _fishing_loot_cache
@@ -93,21 +120,16 @@ async def load_game_data_from_db():
         _fishing_loot_cache = loot_response.data
         logger.info(f"✅ {len(_fishing_loot_cache)}개의 낚시 결과물 정보를 DB에서 로드했습니다.")
 
-def get_item_database() -> Dict[str, Dict[str, Any]]:
-    return _item_database_cache
-def get_fishing_loot() -> List[Dict[str, Any]]:
-    return _fishing_loot_cache
+def get_item_database() -> Dict[str, Dict[str, Any]]: return _item_database_cache
+def get_fishing_loot() -> List[Dict[str, Any]]: return _fishing_loot_cache
 
-# --- 패널 및 UI 관련 (읽기 및 게임 봇 전용 쓰기) ---
 @supabase_retry_handler()
 async def save_id_to_db(key: str, object_id: int):
-    """게임 봇이 자신의 패널 ID 등을 저장할 때만 사용됩니다."""
     global _channel_id_cache
     await supabase.table('channel_configs').upsert({"channel_key": key, "channel_id": str(object_id)}, on_conflict="channel_key").execute()
     _channel_id_cache[key] = object_id
 
 async def save_panel_id(panel_name: str, message_id: int, channel_id: int):
-    """게임 봇의 패널(상점, 낚시터 등) ID를 저장합니다."""
     await save_id_to_db(f"panel_{panel_name}_message_id", message_id)
     await save_id_to_db(f"panel_{panel_name}_channel_id", channel_id)
 
@@ -126,7 +148,6 @@ async def get_panel_components_from_db(panel_key: str) -> list:
     response = await supabase.table('panel_components').select('*').eq('panel_key', panel_key).order('row', desc=False).execute()
     return response.data if response and response.data else []
 
-# --- 사용자 데이터 (코인, 인벤토리 등) 관련 ---
 @supabase_retry_handler()
 async def get_or_create_user(table_name: str, user_id_str: str, default_data: dict) -> dict:
     response = await supabase.table(table_name).select("*").eq("user_id", user_id_str).limit(1).execute()
@@ -136,9 +157,7 @@ async def get_or_create_user(table_name: str, user_id_str: str, default_data: di
     response = await supabase.table(table_name).insert(insert_data, returning="representation").execute()
     return response.data[0] if response and response.data else default_data
 
-async def get_wallet(user_id: int) -> dict:
-    return await get_or_create_user('wallets', str(user_id), {"balance": 0})
-
+async def get_wallet(user_id: int) -> dict: return await get_or_create_user('wallets', str(user_id), {"balance": 0})
 @supabase_retry_handler()
 async def update_wallet(user: discord.User, amount: int) -> Optional[dict]:
     params = {'user_id_param': str(user.id), 'amount_param': amount}
@@ -188,7 +207,6 @@ async def add_to_aquarium(user_id_str: str, fish_data: dict):
 async def get_cooldown(user_id_str: str, cooldown_key: str) -> float:
     response = await supabase.table('cooldowns').select('last_cooldown_timestamp').eq('user_id', user_id_str).eq('cooldown_key', cooldown_key).limit(1).execute()
     if response and response.data and response.data[0].get('last_cooldown_timestamp') is not None:
-        # Supabase는 타임스탬프를 문자열로 반환할 수 있으므로 float으로 변환
         return float(response.data[0]['last_cooldown_timestamp'])
     return 0.0
 
