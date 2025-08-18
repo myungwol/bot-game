@@ -1,7 +1,7 @@
 # bot-game/utils/ui_defaults.py
 """
 [게임 봇 전용]
-이 파일은 게임 봇이 사용하는 UI 요소(임베드, 버튼)의 기본값을 정의합니다.
+이 파일은 게임 봇이 사용하는 UI 요소(임베드, 버튼, 문자열)의 기본값을 정의합니다.
 참고: 이 봇은 이 데이터를 DB에 동기화(sync)하지 않습니다. 
      DB 동기화는 서버 관리 봇의 책임입니다.
 """
@@ -9,8 +9,6 @@
 # ==============================================================================
 # 1. 역할 키 맵 (Role Key Map) - 게임 봇에서는 사용하지 않음
 # ==============================================================================
-# 역할 관리는 서버 관리 봇의 책임이므로, 이 맵은 게임 봇에 필요 없습니다.
-# 역할 정보가 필요할 경우 DB에서 읽어옵니다.
 UI_ROLE_KEY_MAP = {}
 
 # ==============================================================================
@@ -51,16 +49,9 @@ UI_EMBEDS = {
         "description": "⚙️ {admin_mention}さんが{target_mention}さんのコインを`{amount}`{currency_icon}だけ**{action}**しました。",
         "color": 0x3498DB
     },
-    "embed_shop_buy": {
-        "title": "🏪 Dico森商店 - 「{category}」",
-        "description": "現在の所持金: `{balance}`{currency_icon}",
-        "color": 0x3498DB
-    },
-    "embed_shop_sell": {
-        "title": "📦 販売所 - 「{category}」",
-        "description": "現在の所持金: `{balance}`{currency_icon}",
-        "color": 0xE67E22
-    }
+    # 상점 임베드는 이제 동적으로 생성되므로 이 부분은 필요 없습니다.
+    # "embed_shop_buy": { ... },
+    # "embed_shop_sell": { ... }
 }
 
 # ==============================================================================
@@ -98,7 +89,7 @@ UI_PANEL_COMPONENTS = [
         "component_key": "open_inventory",
         "panel_key": "profile",
         "component_type": "button",
-        "label": "持ち物を開く",
+        "label": "持ち物を見る", # 라벨을 좀 더 명확하게 변경
         "style": "primary",
         "emoji": "📦",
         "row": 0
@@ -111,7 +102,7 @@ UI_PANEL_COMPONENTS = [
 UI_STRINGS = {
     # --- 프로필(UserProfile) Cog 관련 문자열 ---
     "profile_view": {
-        "base_title": "{user_name}さんのプロフィール",
+        "base_title": "{user_name}님의 프로필",
         "tabs": {
             "info": {"title_suffix": " - 情報", "label": "情報", "emoji": "ℹ️"},
             "item": {"title_suffix": " - アイテム", "label": "アイテム", "emoji": "📦"},
@@ -158,5 +149,26 @@ UI_STRINGS = {
         "unequip_bait_label": "エサを外す",
         "unequip_prefix": "✋",
         "back_button": "戻る"
+    },
+    # --- 상점(Commerce) Cog 관련 문자열 ---
+    "commerce": {
+        "category_view_title": "🏪 Dico森商店 - カテゴリー選択",
+        "category_view_desc": "購入したいアイテムのカテゴリーを選択してください。",
+        "item_view_title": "🏪 Dico森商店 - 「{category}」",
+        "item_view_desc": "現在の所持金: `{balance}`{currency_icon}\n購入したい商品を選択してください。",
+        "categories": {
+            "アイテム": "アイテム",
+            "釣り": "釣り",
+            "農場": "農場 (準備中)",
+            "ペット": "ペット (準備中)"
+        },
+        "back_button": "カテゴリー選択に戻る",
+        "wip_category": "このカテゴリーの商品は現在準備中です。",
+        "purchase_success": "✅ **{item_name}** {quantity}個の購入が完了しました。",
+        "upgrade_success": "✅ **{new_item}**を購入し、古い**{old_item}**を`{sell_price}`{currency_icon}で売却しました。",
+        "error_insufficient_funds": "❌ 残高が不足しています。",
+        "error_already_owned": "❌ すでにそのアイテムを所持しています。",
+        "error_upgrade_needed": "❌ より下位の装備を先に購入してください。",
+        "error_already_have_better": "❌ すでにその装備またはより良い装備を持っています。"
     }
 }
