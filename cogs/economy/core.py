@@ -13,13 +13,13 @@ from utils.database import (
     get_wallet, update_wallet,
     get_id, supabase, get_embed_from_db, get_config
 )
-# [수정] 잘못된 경로를 올바른 경로로 변경합니다.
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
 # --- UI 클래스 (TransferConfirmView) ---
 class TransferConfirmView(ui.View):
+    # ... (이전과 동일, 변경 없음) ...
     def __init__(self, sender: discord.Member, recipient: discord.Member, amount: int, cog_instance: 'EconomyCore'):
         super().__init__(timeout=60)
         self.sender = sender
@@ -70,6 +70,9 @@ class EconomyCore(commands.Cog):
 
         self.currency_icon = "🪙"
         
+        # [추가] 채팅 보상을 위한 3초 쿨타임 설정
+        self._chat_cooldown = commands.CooldownMapping.from_cooldown(1, 3.0, commands.BucketType.user)
+        
         self.voice_reward_loop.start()
         logger.info("EconomyCore Cog가 성공적으로 초기화되었습니다.")
         
@@ -89,16 +92,24 @@ class EconomyCore(commands.Cog):
     async def on_message(self, message: discord.Message):
         if message.author.bot or message.guild is None or message.content.startswith('/'):
             return
+
+        # [수정] 쿨타임 확인 로직 추가
+        bucket = self._chat_cooldown.get_bucket(message)
+        retry_after = bucket.update_rate_limit()
+        if retry_after:
+            # 쿨타임 중이면 메시지 카운트하지 않고 조용히 무시
+            return
         
-        chat_req = get_config("CHAT_MESSAGE_REQUIREMENT", 10)
-        chat_reward_range = get_config("CHAT_REWARD_RANGE", [5, 10])
+        # --- 기존 로직 (DB에서 설정값 가져오기) ---
+        chat_req = get_config("CHAT_MESSAGE_REQUIREMENT", 10) # 10번 채팅
+        chat_reward_range = get_config("CHAT_REWARD_RANGE", [5, 10]) # 5~10 코인
         if not chat_reward_range or len(chat_reward_range) != 2: chat_reward_range = [5, 10]
         
         user = message.author
         self.user_chat_progress[user.id] += 1
         
         if self.user_chat_progress[user.id] >= chat_req:
-            self.user_chat_progress[user.id] = 0
+            self.user_chat_progress[user.id] = 0 # 카운트 초기화
             reward = random.randint(chat_reward_range[0], chat_reward_range[1])
             await update_wallet(user, reward)
             await self.log_coin_activity(user, reward, "チャット活動報酬")
@@ -106,8 +117,9 @@ class EconomyCore(commands.Cog):
     @tasks.loop(minutes=1)
     async def voice_reward_loop(self):
         try:
-            voice_req_min = get_config("VOICE_TIME_REQUIREMENT_MINUTES", 10)
-            voice_reward_range = get_config("VOICE_REWARD_RANGE", [10, 15])
+            # --- 기존 로직 (DB에서 설정값 가져오기) ---
+            voice_req_min = get_config("VOICE_TIME_REQUIREMENT_MINUTES", 10) # 10분
+            voice_reward_range = get_config("VOICE_REWARD_RANGE", [10, 15]) # 10~15 코인
             if not voice_reward_range or len(voice_reward_range) != 2: voice_reward_range = [10, 15]
 
             for guild in self.bot.guilds:
@@ -131,6 +143,7 @@ class EconomyCore(commands.Cog):
         except Exception as e:
             logger.error(f"음성 보상 루프 중 오류: {e}", exc_info=True)
         
+    # ... (이하 나머지 코드는 이전과 동일, 변경 없음) ...
     @voice_reward_loop.before_loop
     async def before_voice_reward_loop(self):
         await self.bot.wait_until_ready()
