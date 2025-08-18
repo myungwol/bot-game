@@ -83,8 +83,6 @@ bot = MyBot(command_prefix="/", intents=intents)
 async def on_ready():
     logger.info(f'✅ {bot.user.name}(이)가 성공적으로 로그인했습니다.')
     
-    # [핵심] 경쟁 상태의 원인이었던 DB 설정 덮어쓰기 코드를 제거합니다.
-    # await sync_defaults_to_db() 
     await load_all_data_from_db()
     
     logger.info("------ [ 모든 Cog 설정 새로고침 시작 ] ------")
@@ -98,6 +96,14 @@ async def on_ready():
                 logger.error(f"❌ '{cog_name}' Cog 설정 새로고침 중 오류: {e}", exc_info=True)
     logger.info(f"✅ 총 {refreshed_cogs}개의 Cog 설정이 새로고침되었습니다.")
     logger.info("------ [ 모든 Cog 설정 새로고침 완료 ] ------")
+
+    # [추가] 패널 재생성 요청 확인 루프 시작
+    panel_updater_cog = bot.get_cog("PanelUpdater")
+    if panel_updater_cog:
+        logger.info("PanelUpdater Cog를 찾아, 패널 업데이트 확인 루프를 시작합니다.")
+        panel_updater_cog.check_for_panel_updates.start()
+    else:
+        logger.warning("PanelUpdater Cog를 찾을 수 없어, 패널 업데이트 확인 루프를 시작할 수 없습니다.")
 
     try:
         if TEST_GUILD_ID:
