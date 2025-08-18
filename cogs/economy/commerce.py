@@ -1,4 +1,4 @@
-# cogs/economy/commerce.py (delete_after 제거 및 로직 안정화)
+# cogs/economy/commerce.py (RPC 호출 로직 수정)
 
 import discord
 from discord.ext import commands
@@ -15,7 +15,6 @@ from utils.database import (
 )
 
 class QuantityModal(ui.Modal):
-    # ... (이전과 동일, 변경 없음) ...
     quantity = ui.TextInput(label="数量", placeholder="例: 10", required=True, max_length=5)
     def __init__(self, title: str, max_value: int):
         super().__init__(title=title)
@@ -39,12 +38,10 @@ class ShopViewBase(ui.View):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.message: Optional[discord.WebhookMessage] = None
     async def handle_error(self, interaction: discord.Interaction, error: Exception, custom_message: str = ""):
-        logger.error(f"상점 처리 중 오류 발생: {error}", exc_info=False) # 로깅 간소화
+        logger.error(f"상점 처리 중 오류 발생: {error}", exc_info=False)
         message = custom_message or "❌ 購入処理中にエラーが発生しました。"
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
+        if interaction.response.is_done(): await interaction.followup.send(message, ephemeral=True)
+        else: await interaction.response.send_message(message, ephemeral=True)
 
 class BuyItemView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str):
@@ -53,11 +50,7 @@ class BuyItemView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
-        return discord.Embed(
-            title=get_string("commerce.item_view_title", category=self.category),
-            description=get_string("commerce.item_view_desc", balance=f"{balance:,}", currency_icon=self.currency_icon),
-            color=discord.Color.blue()
-        )
+        return discord.Embed(title=get_string("commerce.item_view_title", category=self.category), description=get_string("commerce.item_view_desc", balance=f"{balance:,}", currency_icon=self.currency_icon), color=discord.Color.blue())
     async def build_components(self):
         self.clear_items()
         item_db = get_item_database()
@@ -74,8 +67,7 @@ class BuyItemView(ShopViewBase):
         item_name = interaction.data['values'][0]
         item_data = get_item_database().get(item_name)
         is_modal_needed = item_data and item_data.get('max_ownable', 999) > 1
-        if not is_modal_needed:
-            await interaction.response.defer(ephemeral=True)
+        if not is_modal_needed: await interaction.response.defer(ephemeral=True)
         try:
             wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(str(self.user.id)))
             balance = wallet.get('balance', 0)
@@ -88,7 +80,9 @@ class BuyItemView(ShopViewBase):
                 sell_price = 100 if current_rod and "古い" not in current_rod else 0
                 params = {'p_user_id': str(self.user.id), 'p_new_rod_name': item_name, 'p_old_rod_name': current_rod, 'p_price': item_data['price'], 'p_sell_value': sell_price}
                 res = await supabase.rpc('upgrade_rod_and_sell_old', params).execute()
-                if not res.data or not res.data.get('success'): raise ValueError("error_insufficient_funds")
+                # [핵심 수정] 반환 형식이 리스트 안의 딕셔너리로 변경됨
+                if not res.data or not res.data[0].get('success'):
+                    raise ValueError("error_insufficient_funds")
                 await interaction.followup.send(get_string("commerce.upgrade_success", new_item=item_name, old_item=current_rod, sell_price=sell_price, currency_icon=self.currency_icon), ephemeral=True)
             elif is_modal_needed:
                 max_buyable = balance // item_data['price'] if item_data['price'] > 0 else 999
@@ -102,7 +96,7 @@ class BuyItemView(ShopViewBase):
                 res = await supabase.rpc('buy_item', {'user_id_param': str(self.user.id), 'item_name_param': item_name, 'quantity_param': quantity, 'total_price_param': total_price}).execute()
                 if not res.data: raise Exception()
                 await interaction.followup.send(get_string("commerce.purchase_success", item_name=item_name, quantity=quantity), ephemeral=True)
-            else: # 단일 구매
+            else:
                 if inventory.get(item_name, 0) > 0: raise ValueError("error_already_owned")
                 total_price, quantity = item_data['price'], 1
                 if balance < total_price: raise ValueError("error_insufficient_funds")
@@ -175,8 +169,7 @@ class Commerce(commands.Cog):
         view = CommercePanelView(self)
         await view.setup_buttons()
         self.bot.add_view(view)
-    async def regenerate_panel(self, channel: discord.TextChannel):
-        pass
+    async def regenerate_panel(self, channel: discord.TextChannel): pass
 
 async def setup(bot: commands.Cog):
     await bot.add_cog(Commerce(bot))
