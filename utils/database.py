@@ -1,4 +1,4 @@
-# bot-game/utils/database.py (맨손 상태 추가 및 기본 장비 로직 수정)
+# bot-game/utils/database.py (기본 낚싯대 상수 추가)
 
 import os
 import discord
@@ -43,17 +43,14 @@ def supabase_retry_handler(retries: int = 3, delay: int = 5):
         return wrapper
     return decorator
 
-# --- [신규 추가] 서버 전체 쿨타임 관련 함수 ---
 ONE_WEEK_IN_SECONDS = 7 * 24 * 60 * 60
 
 async def is_legendary_fish_available() -> bool:
-    """전설의 물고기를 잡을 수 있는 상태인지 확인합니다 (주 1회)."""
     last_caught_str = get_config("legendary_fish_last_caught_timestamp", '"0"')
     last_caught_timestamp = float(last_caught_str.strip('"'))
     return (time.time() - last_caught_timestamp) > ONE_WEEK_IN_SECONDS
 
 async def save_config(key: str, value: Any):
-    """DB와 로컬 캐시에 설정을 저장하는 통합 함수."""
     global _configs_cache
     str_value = f'"{str(value)}"'
     await supabase.table('bot_configs').upsert({"config_key": key, "config_value": str_value}).execute()
@@ -61,10 +58,8 @@ async def save_config(key: str, value: Any):
     logger.info(f"설정이 업데이트되었습니다: {key} -> {str_value}")
 
 async def set_legendary_fish_cooldown():
-    """전설의 물고기 쿨타임을 지금 시간으로 설정합니다."""
     await save_config("legendary_fish_last_caught_timestamp", time.time())
 
-# --- 데이터 로드 및 관리 함수 ---
 async def load_all_data_from_db():
     logger.info("------ [ 모든 DB 데이터 로드 시작 ] ------")
     await asyncio.gather(load_bot_configs_from_db(), load_channel_ids_from_db(), load_game_data_from_db())
@@ -73,7 +68,7 @@ async def load_all_data_from_db():
 @supabase_retry_handler()
 async def load_bot_configs_from_db():
     global _configs_cache
-    response = await supabase.table('bot_configs').select('config_key, config_value').execute()
+    response = await supabase.table('bot_configs').select('config_key, 'config_value').execute()
     if response and response.data:
         for item in response.data:
             _configs_cache[item['config_key']] = item['config_value']
@@ -174,30 +169,23 @@ async def update_inventory(user_id_str: str, item_name: str, quantity: int):
     params = {'user_id_param': user_id_str, 'item_name_param': item_name, 'amount_param': quantity}
     await supabase.rpc('increment_inventory_quantity', params).execute()
 
-# [추가] 낚싯대가 없는 상태를 나타내는 상수
 BARE_HANDS = "素手"
+# [추가] 기본 낚싯대 이름을 상수로 정의
+DEFAULT_ROD = "古い釣竿"
 
 async def get_user_gear(user_id_str: str) -> dict:
-    # [🔴 핵심 수정] 기본 낚싯대 설정을 '맨손'으로 변경
     default_bait = "エサなし"
     default_gear = {"rod": BARE_HANDS, "bait": default_bait}
-    
-    # DB에서 장비 정보를 가져오거나, 없으면 '맨손' 상태로 생성
     gear = await get_or_create_user('gear_setups', user_id_str, default_gear)
     inv = await get_inventory(user_id_str)
-    
     rod = gear.get('rod', BARE_HANDS)
-    # [🔴 핵심 수정] 장착한 낚싯대가 인벤토리에 없으면(판매했거나 버그) '맨손'으로 되돌림
     if rod != BARE_HANDS and inv.get(rod, 0) <= 0:
         rod = BARE_HANDS
-        # DB의 장착 정보도 맨손으로 업데이트
         await set_user_gear(user_id_str, rod=BARE_HANDS)
-
     bait = gear.get('bait', default_bait)
     if bait != default_bait and inv.get(bait, 0) <= 0:
         bait = default_bait
         await set_user_gear(user_id_str, bait=default_bait)
-
     return {"rod": rod, "bait": bait}
 
 @supabase_retry_handler()
