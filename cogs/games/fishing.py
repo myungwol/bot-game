@@ -163,22 +163,53 @@ class FishingPanelView(ui.View):
 
 class Fishing(commands.Cog):
     def __init__(self, bot: commands.Bot):
-        self.bot = bot; self.active_fishing_sessions_by_user: Set[int] = set()
-        self.fishing_log_channel_id: Optional[int] = None # [수정] 채널 ID 변수는 남겨둡니다.
-        self.view_instance = None; logger.info("Fishing Cog가 성공적으로 초기화되었습니다.")
+        self.bot = bot
+        self.active_fishing_sessions_by_user: Set[int] = set()
+        self.fishing_log_channel_id: Optional[int] = None
+        self.view_instance = None
+        logger.info("Fishing Cog가 성공적으로 초기화되었습니다.")
 
     async def register_persistent_views(self):
         self.view_instance = FishingPanelView(self.bot, self)
-        await self.view_instance.setup_buttons(); self.bot.add_view(self.view_instance)
+        await self.view_instance.setup_buttons()
+        self.bot.add_view(self.view_instance)
 
     async def cog_load(self):
         await self.load_configs()
 
     async def load_configs(self):
-        # [수정] 이 봇은 이제 로그 채널 ID만 알면 됩니다.
         self.fishing_log_channel_id = get_id("fishing_log_channel_id")
 
-    # [삭제] regenerate_panel 함수는 관리 봇의 책임이므로 삭제합니다.
+    # ▼▼▼▼▼▼▼ [ 이 함수를 Fishing 클래스 안에 추가해주세요 ] ▼▼▼▼▼▼▼
+    async def regenerate_panel(self, channel: discord.TextChannel):
+        """요청에 의해 낚시터 패널을 재생성합니다."""
+        panel_key = "fishing"
+        embed_key = "panel_fishing"
+
+        panel_info = get_panel_id(panel_key)
+        if panel_info and (old_id := panel_info.get('message_id')):
+            try:
+                old_message = await channel.fetch_message(old_id)
+                await old_message.delete()
+            except (discord.NotFound, discord.Forbidden):
+                pass
+        
+        embed_data = await get_embed_from_db(embed_key)
+        if not embed_data:
+            logger.error(f"DB에서 '{embed_key}' 임베드를 찾을 수 없어 패널 생성을 중단합니다.")
+            return
+
+        embed = discord.Embed.from_dict(embed_data)
+
+        if self.view_instance is None:
+            await self.register_persistent_views()
+        else:
+            await self.view_instance.setup_buttons()
+
+        new_message = await channel.send(embed=embed, view=self.view_instance)
+        await save_panel_id(panel_key, new_message.id, channel.id)
+        logger.info(f"✅ 낚시터 패널을 성공적으로 새로 생성했습니다. (채널: #{channel.name})")
+    # ▲▲▲▲▲▲▲ [ 여기까지 추가 ] ▲▲▲▲▲▲▲
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Fishing(bot))
