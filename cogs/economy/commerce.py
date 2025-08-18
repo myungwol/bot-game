@@ -1,4 +1,4 @@
-# cogs/economy/commerce.py (상호작용 최종 해결 및 판매 기능 완성)
+# cogs/economy/commerce.py (재정 정보 표시 및 메시지 자동삭제 최종 완성본)
 
 import discord
 from discord.ext import commands
@@ -15,7 +15,6 @@ from utils.database import (
     get_aquarium, get_fishing_loot, sell_fish_from_db
 )
 
-# [수정] 헬퍼 함수를 View 클래스 밖으로 이동
 async def delete_after(message: discord.WebhookMessage, delay: int):
     await asyncio.sleep(delay)
     try:
@@ -34,11 +33,14 @@ class QuantityModal(ui.Modal):
         try:
             q_val = int(self.quantity.value)
             if not (1 <= q_val <= self.max_value):
-                return await i.response.send_message(f"1から{self.max_value}までの数字を入力してください。", ephemeral=True, delete_after=5)
+                # ephemeral 메시지는 delete_after를 지원하지 않아 별도 처리 필요
+                msg = await i.response.send_message(f"1から{self.max_value}までの数字を入力してください。", ephemeral=True)
+                # asyncio.create_task(delete_after(msg, 5)) # 이 방식은 webhook 메시지에만 가능
+                return
             self.value = q_val
             await i.response.defer(ephemeral=True) 
         except ValueError: 
-            await i.response.send_message("数字のみ入力してください。", ephemeral=True, delete_after=5)
+            await i.response.send_message("数字のみ入力してください。", ephemeral=True)
         except Exception: 
             self.stop()
 
@@ -56,9 +58,7 @@ class ShopViewBase(ui.View):
             msg = await interaction.followup.send(message_content, ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
         else:
-            # ephemeral 메시지는 delete_after를 지원하지 않으므로 별도 처리 필요
             await interaction.response.send_message(message_content, ephemeral=True)
-
 
 class BuyItemView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str):
@@ -99,7 +99,7 @@ class BuyItemView(ShopViewBase):
                 max_buyable = balance // item_data['price'] if item_data['price'] > 0 else item_data.get('max_ownable', 999)
 
                 if max_buyable == 0:
-                    await interaction.response.send_message(get_string("commerce.error_insufficient_funds"), ephemeral=True, delete_after=5)
+                    await interaction.response.send_message(get_string("commerce.error_insufficient_funds"), ephemeral=True)
                     return
                 
                 modal = QuantityModal(f"{item_name} 購入", max_buyable)
@@ -116,10 +116,13 @@ class BuyItemView(ShopViewBase):
                 if wallet_after_modal.get('balance', 0) < total_price:
                      raise ValueError("error_insufficient_funds")
 
-                res = await supabase.rpc('buy_item', {'user_id_param': str(self.user.id), 'item_name_param': item_name, 'quantity_param': quantity, 'total_price_param': total_price}).execute()
-                if not res.data: raise Exception("DB RPC call failed for multi-buy item.")
+                await supabase.rpc('buy_item', {'user_id_param': str(self.user.id), 'item_name_param': item_name, 'quantity_param': quantity, 'total_price_param': total_price}).execute()
                 
-                msg = await interaction.followup.send(get_string("commerce.purchase_success", item_name=item_name, quantity=quantity), ephemeral=True)
+                # [🔴 핵심 수정] 잔액을 다시 가져와서 메시지 생성
+                new_wallet = await get_wallet(self.user.id)
+                new_balance = new_wallet.get('balance', 0)
+                success_message = f"✅ **{item_name}** {quantity}個を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
+                msg = await interaction.followup.send(success_message, ephemeral=True)
                 asyncio.create_task(delete_after(msg, 5))
             else:
                 await interaction.response.defer(ephemeral=True)
@@ -132,14 +135,17 @@ class BuyItemView(ShopViewBase):
                 if wallet.get('balance', 0) < total_price:
                     raise ValueError("error_insufficient_funds")
                 
-                res = await supabase.rpc('buy_item', {'user_id_param': str(self.user.id), 'item_name_param': item_name, 'quantity_param': quantity, 'total_price_param': total_price}).execute()
-                if not res.data: raise Exception("DB RPC call failed for single-buy item.")
+                await supabase.rpc('buy_item', {'user_id_param': str(self.user.id), 'item_name_param': item_name, 'quantity_param': quantity, 'total_price_param': total_price}).execute()
                 
                 if id_key := item_data.get('id_key'):
                     if role_id := get_id(id_key):
                         if role := interaction.guild.get_role(role_id): await self.user.add_roles(role)
                 
-                msg = await interaction.followup.send(get_string("commerce.purchase_success", item_name=item_name, quantity=quantity), ephemeral=True)
+                # [🔴 핵심 수정] 잔액을 다시 가져와서 메시지 생성
+                new_wallet = await get_wallet(self.user.id)
+                new_balance = new_wallet.get('balance', 0)
+                success_message = f"✅ **{item_name}**を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
+                msg = await interaction.followup.send(success_message, ephemeral=True)
                 asyncio.create_task(delete_after(msg, 5))
 
             embed, view = await self.build_embed(), await self.build_components()
@@ -186,7 +192,6 @@ class BuyCategoryView(ShopViewBase):
         item_view.message = self.message
         embed, view = await item_view.build_embed(), await item_view.build_components()
         await self.message.edit(embed=embed, view=view)
-
 
 class SellFishView(ShopViewBase):
     def __init__(self, user: discord.Member):
@@ -253,11 +258,16 @@ class SellFishView(ShopViewBase):
         
         try:
             await sell_fish_from_db(str(self.user.id), fish_ids_to_sell, total_price)
-            sold_fish_names = ", ".join(f"**{self.fish_data_map[val]['name']}**" for val in select_menu.values)
-            msg = await interaction.followup.send(f"✅ {sold_fish_names} を売却し、`{total_price:,}`{self.currency_icon} を獲得しました！", ephemeral=True)
+            
+            # [🔴 핵심 수정] 잔액을 다시 가져와서 메시지 생성
+            new_wallet = await get_wallet(self.user.id)
+            new_balance = new_wallet.get('balance', 0)
+            sold_fish_count = len(fish_ids_to_sell)
+            
+            success_message = f"✅ 魚{sold_fish_count}匹を`{total_price:,}`{self.currency_icon}で売却しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
+            msg = await interaction.followup.send(success_message, ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
             
-            # [🔴 핵심 수정] interaction 대신 View의 메시지를 직접 수정
             await self.refresh_view()
         except Exception as e:
             logger.error(f"물고기 판매 중 오류: {e}", exc_info=True)
@@ -288,7 +298,7 @@ class SellCategoryView(ShopViewBase):
         category = interaction.data['custom_id'].split('_')[-1]
         if category == "fish":
             view = SellFishView(self.user)
-            view.message = self.message
+            view.message = self.message # 기존 메시지를 넘겨줌
             await view.refresh_view() # 새 View의 내용으로 기존 메시지를 수정
 
 class CommercePanelView(ui.View):
