@@ -1,4 +1,4 @@
-# cogs/games/fishing.py (낚싯대 소지 여부 확인 로직 추가)
+# cogs/games/fishing.py (사용자 안내 메시지 개선)
 
 import discord
 from discord.ext import commands
@@ -14,7 +14,7 @@ from utils.database import (
     get_embed_from_db, get_panel_components_from_db,
     get_item_database, get_fishing_loot, get_config, get_string,
     is_legendary_fish_available, set_legendary_fish_cooldown,
-    BARE_HANDS  # [추가] 맨손 상태 import
+    BARE_HANDS, DEFAULT_ROD # [수정] 상수 import
 )
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class FishingGameView(ui.View):
                 await self._send_result(embed); self.stop()
         except asyncio.CancelledError: pass
         except Exception as e:
-            logger.error(f"{self.player.display_name}の낚시 게임 흐름 중 오류: {e}", exc_info=True)
+            logger.error(f"{self.player.display_name}의 낚시 게임 흐름 중 오류: {e}", exc_info=True)
             if not self.is_finished():
                 await self._send_result(discord.Embed(title="❌ エラー発生", description="釣りの処理中に予期せぬエラーが発生しました。", color=discord.Color.red())); self.stop()
 
@@ -171,21 +171,22 @@ class FishingPanelView(ui.View):
                 return await interaction.response.send_message("すでに釣りを開始しています。", ephemeral=True)
 
             await interaction.response.defer(ephemeral=True)
-
+            
+            # [🔴 핵심 수정] 오류 발생 대신 안내 메시지를 보내도록 로직 변경
             try:
                 uid_str = str(user_id)
                 gear, inventory = await asyncio.gather(get_user_gear(uid_str), get_inventory(uid_str))
                 rod = gear.get('rod', BARE_HANDS)
                 item_db = get_item_database()
 
-                # [🔴 핵심 수정] 낚싯대를 장착했는지 확인
                 if rod == BARE_HANDS:
-                    # 인벤토리에 낚싯대가 하나라도 있는지 추가 확인
                     has_any_rod = any('竿' in item_name for item_name in inventory if item_db.get(item_name, {}).get('category') == '釣り')
                     if not has_any_rod:
-                        raise ValueError("釣竿を商店で購入してください。")
+                        await interaction.followup.send(f"❌ 釣りをするには、まず商店で「{DEFAULT_ROD}」を購入してください。", ephemeral=True)
+                        return
                     else:
-                        raise ValueError("プロフィール画面から釣竿を装備してください。")
+                        await interaction.followup.send("❌ プロフィール画面から釣竿を装備してください。", ephemeral=True)
+                        return
                 
                 self.fishing_cog.active_fishing_sessions_by_user.add(user_id)
 
@@ -208,10 +209,9 @@ class FishingPanelView(ui.View):
                 view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog)
                 await view.start_game(interaction, embed)
             except Exception as e:
-                # 낚시 시작 실패 시 세션에서 제거
                 self.fishing_cog.active_fishing_sessions_by_user.discard(user_id)
-                logger.error(f"낚시 게임 시작 중 오류: {e}", exc_info=True)
-                await interaction.followup.send(f"❌ 釣りの開始中にエラーが発生しました。\n`{e}`", ephemeral=True)
+                logger.error(f"낚시 게임 시작 중 예측 못한 오류: {e}", exc_info=True)
+                await interaction.followup.send(f"❌ 釣りの開始中に予期せぬエラーが発生しました。", ephemeral=True)
 
 
 class Fishing(commands.Cog):
