@@ -1,4 +1,4 @@
-# cogs/games/fishing.py (이전 결과 메시지 자동 삭제 기능 추가)
+# cogs/games/fishing.py (낚싯대 소지 여부 확인 로직 추가)
 
 import discord
 from discord.ext import commands
@@ -10,24 +10,23 @@ from typing import Optional, Set, Dict
 
 from utils.database import (
     update_wallet, get_inventory, update_inventory, add_to_aquarium,
-    get_user_gear, set_user_gear, save_panel_id, get_panel_id, get_id, 
+    get_user_gear, set_user_gear, save_panel_id, get_panel_id, get_id,
     get_embed_from_db, get_panel_components_from_db,
     get_item_database, get_fishing_loot, get_config, get_string,
-    is_legendary_fish_available, set_legendary_fish_cooldown
+    is_legendary_fish_available, set_legendary_fish_cooldown,
+    BARE_HANDS  # [추가] 맨손 상태 import
 )
 
 logger = logging.getLogger(__name__)
 
-# --- 낚시 게임 로직을 담는 View ---
 class FishingGameView(ui.View):
-    # [수정] cog_instance를 받도록 __init__ 변경
     def __init__(self, bot: commands.Bot, user: discord.Member, used_rod: str, used_bait: str, remaining_baits: Dict[str, int], cog_instance: 'Fishing'):
         super().__init__(timeout=35)
         self.bot = bot; self.player = user; self.message: Optional[discord.WebhookMessage] = None
         self.game_state = "waiting"; self.game_task: Optional[asyncio.Task] = None
         self.used_rod = used_rod; self.used_bait = used_bait; self.remaining_baits = remaining_baits
-        self.fishing_cog = cog_instance # [추가] Cog 인스턴스 저장
-        
+        self.fishing_cog = cog_instance
+
         item_db = get_item_database()
         rod_data = item_db.get(self.used_rod, {})
         bait_data = item_db.get(self.used_bait, {})
@@ -56,7 +55,7 @@ class FishingGameView(ui.View):
                 await self._send_result(embed); self.stop()
         except asyncio.CancelledError: pass
         except Exception as e:
-            logger.error(f"{self.player.display_name}의 낚시 게임 흐름 중 오류: {e}", exc_info=True)
+            logger.error(f"{self.player.display_name}の낚시 게임 흐름 중 오류: {e}", exc_info=True)
             if not self.is_finished():
                 await self._send_result(discord.Embed(title="❌ エラー発生", description="釣りの処理中に予期せぬエラーが発生しました。", color=discord.Color.red())); self.stop()
 
@@ -119,9 +118,8 @@ class FishingGameView(ui.View):
                 except Exception as e: logger.error(f"공개 낚시 로그 전송 실패: {e}", exc_info=True)
         embed.set_footer(text=f"{footer_public}\n{footer_private}")
         if self.message:
-            try: 
+            try:
                 await self.message.edit(embed=embed, view=None)
-                # [추가] 결과 메시지를 Cog에 저장
                 self.fishing_cog.last_result_messages[self.player.id] = self.message
             except (discord.NotFound, AttributeError, discord.HTTPException): pass
 
@@ -133,9 +131,8 @@ class FishingGameView(ui.View):
 
     def stop(self):
         if self.game_task and not self.game_task.done(): self.game_task.cancel()
-        self.fishing_cog.active_fishing_sessions_by_user.discard(self.player.id) # [수정] active_fishers_set 대신 Cog의 세트 사용
+        self.fishing_cog.active_fishing_sessions_by_user.discard(self.player.id)
         super().stop()
-
 
 class FishingPanelView(ui.View):
     def __init__(self, bot: commands.Bot, cog_instance: 'Fishing'):
@@ -158,33 +155,40 @@ class FishingPanelView(ui.View):
 
     async def start_fishing(self, interaction: discord.Interaction):
         user_id = interaction.user.id
-        
-        # [추가] 이전 낚시 결과 메시지 삭제 로직
+
         if last_message := self.fishing_cog.last_result_messages.pop(user_id, None):
             try:
                 await last_message.delete()
             except (discord.NotFound, discord.Forbidden):
-                pass # 이미 삭제되었거나 권한이 없는 경우 무시
+                pass
 
         lock = self.user_locks.setdefault(user_id, asyncio.Lock())
         if lock.locked():
             return await interaction.response.send_message("現在、以前のリクエストを処理中です。しばらくお待ちください。", ephemeral=True)
-        
+
         async with lock:
             if user_id in self.fishing_cog.active_fishing_sessions_by_user:
                 return await interaction.response.send_message("すでに釣りを開始しています。", ephemeral=True)
-            
+
             await interaction.response.defer(ephemeral=True)
-            self.fishing_cog.active_fishing_sessions_by_user.add(user_id)
+
             try:
                 uid_str = str(user_id)
                 gear, inventory = await asyncio.gather(get_user_gear(uid_str), get_inventory(uid_str))
-                rod = gear.get('rod', '素手')
+                rod = gear.get('rod', BARE_HANDS)
                 item_db = get_item_database()
 
-                if rod == "素手" or item_db.get(rod) is None:
-                    raise ValueError("「古い釣竿」以上の釣竿を商店で購入し、装備してください。")
+                # [🔴 핵심 수정] 낚싯대를 장착했는지 확인
+                if rod == BARE_HANDS:
+                    # 인벤토리에 낚싯대가 하나라도 있는지 추가 확인
+                    has_any_rod = any('竿' in item_name for item_name in inventory if item_db.get(item_name, {}).get('category') == '釣り')
+                    if not has_any_rod:
+                        raise ValueError("釣竿を商店で購入してください。")
+                    else:
+                        raise ValueError("プロフィール画面から釣竿を装備してください。")
                 
+                self.fishing_cog.active_fishing_sessions_by_user.add(user_id)
+
                 bait = gear.get('bait', 'エサなし')
                 if bait != "エサなし":
                     if inventory.get(bait, 0) > 0:
@@ -197,17 +201,18 @@ class FishingPanelView(ui.View):
                 rod_bonus = int(item_db.get(rod, {}).get("good_fish_bonus", 0.0) * 100)
                 bait_data = item_db.get(bait, {})
                 bite_range = bait_data.get("bite_time_range") if bait_data and bait_data.get("bite_time_range") else [10.0, 15.0]
-                
+
                 desc = f"### ウキを投げました。\n**🎣 使用中の釣竿:** `{rod}` (`珍しい魚の確率 +{rod_bonus}%`)\n**🐛 使用中のエサ:** `{bait}` (`アタリ待機時間: {bite_range[0]}～{bite_range[1]}秒`)"
                 embed = discord.Embed(title="🎣 釣りを開始しました！", description=desc, color=discord.Color.light_grey())
-                
-                # [수정] active_fishers_set 대신 Cog 인스턴스 전달
+
                 view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog)
                 await view.start_game(interaction, embed)
             except Exception as e:
+                # 낚시 시작 실패 시 세션에서 제거
                 self.fishing_cog.active_fishing_sessions_by_user.discard(user_id)
                 logger.error(f"낚시 게임 시작 중 오류: {e}", exc_info=True)
                 await interaction.followup.send(f"❌ 釣りの開始中にエラーが発生しました。\n`{e}`", ephemeral=True)
+
 
 class Fishing(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -215,7 +220,6 @@ class Fishing(commands.Cog):
         self.active_fishing_sessions_by_user: Set[int] = set()
         self.fishing_log_channel_id: Optional[int] = None
         self.view_instance = None
-        # [추가] 사용자별 마지막 결과 메시지를 저장할 딕셔너리
         self.last_result_messages: Dict[int, discord.Message] = {}
         logger.info("Fishing Cog가 성공적으로 초기화되었습니다.")
 
@@ -232,11 +236,11 @@ class Fishing(commands.Cog):
 
     async def log_legendary_catch(self, user: discord.Member, result_embed: discord.Embed):
         if not self.fishing_log_channel_id or not (log_channel := self.bot.get_channel(self.fishing_log_channel_id)): return
-        
+
         fish_field = next((f for f in result_embed.fields if f.name == "魚"), None)
         size_field = next((f for f in result_embed.fields if f.name == "サイズ"), None)
         if not all([fish_field, size_field]): return
-        
+
         fish_name_raw = fish_field.value.split('**')[1]
         fish_data = next((loot for loot in get_fishing_loot() if loot['name'] == fish_name_raw), None)
         if not fish_data: return
@@ -246,7 +250,7 @@ class Fishing(commands.Cog):
         value = int(fish_data.get("base_value", 0) + (size_cm * fish_data.get("size_multiplier", 0)))
 
         field_value = get_string("log_legendary_catch.field_value", emoji=fish_data.get('emoji','👑'), name=fish_name_raw, size=size_cm_str, value=f"{value:,}", currency_icon=get_config('CURRENCY_ICON', '🪙'))
-        
+
         embed = discord.Embed(
             title=get_string("log_legendary_catch.title"),
             description=get_string("log_legendary_catch.description", user_mention=user.mention),
