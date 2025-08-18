@@ -222,11 +222,54 @@ class CommercePanelView(ui.View):
 
 class Commerce(commands.Cog):
     def __init__(self, bot: commands.Bot):
-        self.bot, self.view_instance = bot, None; logger.info("Commerce Cog가 성공적으로 초기화되었습니다.")
+        self.bot = bot
+        self.view_instance = None
+        logger.info("Commerce Cog가 성공적으로 초기화되었습니다.")
+        
     async def register_persistent_views(self):
-        self.view_instance = CommercePanelView(self); await self.view_instance.setup_buttons(); self.bot.add_view(self.view_instance)
-    async def cog_load(self): await self.load_configs()
-    async def load_configs(self): pass
+        self.view_instance = CommercePanelView(self)
+        await self.view_instance.setup_buttons()
+        self.bot.add_view(self.view_instance)
+        
+    async def cog_load(self):
+        await self.load_configs()
+        
+    async def load_configs(self):
+        pass
+
+    # ▼▼▼▼▼▼▼ [ 이 함수를 Commerce 클래스 안에 추가해주세요 ] ▼▼▼▼▼▼▼
+    async def regenerate_panel(self, channel: discord.TextChannel):
+        """요청에 의해 상점 패널을 재생성합니다."""
+        panel_key = "commerce"
+        embed_key = "panel_commerce"
+        
+        # 기존 메시지 삭제
+        panel_info = get_panel_id(panel_key)
+        if panel_info and (old_id := panel_info.get('message_id')):
+            try:
+                old_message = await channel.fetch_message(old_id)
+                await old_message.delete()
+            except (discord.NotFound, discord.Forbidden):
+                pass
+        
+        embed_data = await get_embed_from_db(embed_key)
+        if not embed_data:
+            logger.error(f"DB에서 '{embed_key}' 임베드를 찾을 수 없어 패널 생성을 중단합니다.")
+            return
+
+        embed = discord.Embed.from_dict(embed_data)
+        
+        # View 인스턴스가 없으면 새로 등록
+        if self.view_instance is None:
+            await self.register_persistent_views()
+        else:
+            # 버튼 최신화
+            await self.view_instance.setup_buttons()
+
+        new_message = await channel.send(embed=embed, view=self.view_instance)
+        await save_panel_id(panel_key, new_message.id, channel.id)
+        logger.info(f"✅ 상점 패널을 성공적으로 새로 생성했습니다. (채널: #{channel.name})")
+    # ▲▲▲▲▲▲▲ [ 여기까지 추가 ] ▲▲▲▲▲▲▲
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Commerce(bot))
