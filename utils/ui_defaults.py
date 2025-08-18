@@ -1,4 +1,4 @@
-# bot-game/utils/ui_defaults.py
+# bot-game/utils/ui_defaults.py (최종 수정본)
 """
 [게임 봇 전용]
 이 파일은 게임 봇이 사용하는 UI 요소(임베드, 버튼, 문자열)의 기본값을 정의합니다.
@@ -49,9 +49,6 @@ UI_EMBEDS = {
         "description": "⚙️ {admin_mention}さんが{target_mention}さんのコインを`{amount}`{currency_icon}だけ**{action}**しました。",
         "color": 0x3498DB
     },
-    # 상점 임베드는 이제 동적으로 생성되므로 이 부분은 필요 없습니다.
-    # "embed_shop_buy": { ... },
-    # "embed_shop_sell": { ... }
 }
 
 # ==============================================================================
@@ -89,7 +86,7 @@ UI_PANEL_COMPONENTS = [
         "component_key": "open_inventory",
         "panel_key": "profile",
         "component_type": "button",
-        "label": "持ち物を見る", # 라벨을 좀 더 명확하게 변경
+        "label": "持ち物を見る",
         "style": "primary",
         "emoji": "📦",
         "row": 0
@@ -141,14 +138,6 @@ UI_STRINGS = {
         }
     },
      
-    "log_legendary_catch": {
-        "title": "👑 伝説の魚が釣り上げられました！ 👑",
-        "description": "今週の**ヌシ**が、**{user_mention}**さんの手によって釣り上げられました！\n\n巨大な魚影は、次の週まで姿を消します…。",
-        "color": "0xFFD700",
-        "field_name": "釣り上げられたヌシ",
-        "field_value": "{emoji} **{name}**\n**サイズ**: `{size}`cm\n**価値**: `{value}`{currency_icon}"
-    }
-}
     # --- 장비 변경(GearSelect) View 관련 문자열 ---
     "gear_select_view": {
         "embed_title": "装備変更: {category_name}",
@@ -159,6 +148,7 @@ UI_STRINGS = {
         "unequip_prefix": "✋",
         "back_button": "戻る"
     },
+
     # --- 상점(Commerce) Cog 관련 문자열 ---
     "commerce": {
         "category_view_title": "🏪 Dico森商店 - カテゴリー選択",
@@ -179,5 +169,14 @@ UI_STRINGS = {
         "error_already_owned": "❌ すでにそのアイテムを所持しています。",
         "error_upgrade_needed": "❌ より下位の装備を先に購入してください。",
         "error_already_have_better": "❌ すでにその装備またはより良い装備を持っています。"
+    },
+
+    # --- 낚시(Fishing) Cog 관련 문자열 ---
+    "log_legendary_catch": {
+        "title": "👑 伝説の魚が釣り上げられました！ 👑",
+        "description": "今週の**ヌシ**が、**{user_mention}**さんの手によって釣り上げられました！\n\n巨大な魚影は、次の週まで姿を消します…。",
+        "color": "0xFFD700",
+        "field_name": "釣り上げられたヌシ",
+        "field_value": "{emoji} **{name}**\n**サイズ**: `{size}`cm\n**価値**: `{value}`{currency_icon}"
     }
 }
