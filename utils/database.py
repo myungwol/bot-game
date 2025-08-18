@@ -1,4 +1,4 @@
-# bot-game/utils/database.py (SyntaxError 수정 최종본)
+# bot-game/utils/database.py (판매 함수 추가)
 
 import os
 import discord
@@ -68,7 +68,6 @@ async def load_all_data_from_db():
 @supabase_retry_handler()
 async def load_bot_configs_from_db():
     global _configs_cache
-    # [🔴 핵심 수정] 오타 수정
     response = await supabase.table('bot_configs').select('config_key, config_value').execute()
     if response and response.data:
         for item in response.data:
@@ -215,3 +214,17 @@ async def get_cooldown(user_id_str: str, cooldown_key: str) -> float:
 @supabase_retry_handler()
 async def set_cooldown(user_id_str: str, cooldown_key: str, timestamp: float):
     await supabase.table('cooldowns').upsert({"user_id": user_id_str, "cooldown_key": cooldown_key, "last_cooldown_timestamp": timestamp}).execute()
+
+# [추가] 물고기 판매를 위한 DB 함수
+@supabase_retry_handler()
+async def sell_fish_from_db(user_id_str: str, fish_ids: List[int], total_sell_price: int):
+    """
+    여러 마리의 물고기를 판매하고 재화를 얻는 RPC를 호출합니다.
+    Supabase에 'sell_fishes'라는 이름의 RPC 함수가 필요합니다.
+    """
+    params = {
+        'p_user_id': user_id_str,
+        'p_fish_ids': fish_ids,
+        'p_total_value': total_sell_price
+    }
+    await supabase.rpc('sell_fishes', params).execute()
