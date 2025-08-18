@@ -111,7 +111,7 @@ UI_PANEL_COMPONENTS = [
 UI_STRINGS = {
     # --- 프로필(UserProfile) Cog 관련 문자열 ---
     "profile_view": {
-        "base_title": "{user_name}님의 프로필",
+        "base_title": "{user_name}さんのプロフィール",
         "tabs": {
             "info": {"title_suffix": " - 情報", "label": "情報", "emoji": "ℹ️"},
             "item": {"title_suffix": " - アイテム", "label": "アイテム", "emoji": "📦"},
