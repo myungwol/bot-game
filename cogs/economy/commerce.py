@@ -1,4 +1,4 @@
-# cogs/economy/commerce.py (UI 새로고침 로직 추가 최종본)
+# cogs/economy/commerce.py (UI 새로고침 로직 및 자동 메시지 삭제 추가)
 
 import discord
 from discord.ext import commands
@@ -37,8 +37,8 @@ class ShopViewBase(ui.View):
     async def handle_error(self, interaction: discord.Interaction, error: Exception, custom_message: str = ""):
         logger.error(f"상점 처리 중 오류 발생: {error}", exc_info=False)
         message = custom_message or "❌ 購入処理中にエラーが発生しました。"
-        if interaction.response.is_done(): await interaction.followup.send(message, ephemeral=True)
-        else: await interaction.response.send_message(message, ephemeral=True)
+        if interaction.response.is_done(): await interaction.followup.send(message, ephemeral=True, delete_after=5) # [수정] 에러 메시지도 5초 뒤 삭제
+        else: await interaction.response.send_message(message, ephemeral=True, delete_after=5) # [수정] 에러 메시지도 5초 뒤 삭제
 
 class BuyItemView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str):
@@ -59,6 +59,7 @@ class BuyItemView(ShopViewBase):
             self.add_item(select)
         back_button = ui.Button(label=get_string("commerce.back_button"), style=discord.ButtonStyle.grey, row=1)
         back_button.callback = self.back_callback
+        self.add_item(back_button) # [수정] 뒤로가기 버튼 추가
         return self
     async def select_callback(self, interaction: discord.Interaction):
         item_name = interaction.data['values'][0]
@@ -78,19 +79,21 @@ class BuyItemView(ShopViewBase):
                 params = {'p_user_id': str(self.user.id), 'p_new_rod_name': item_name, 'p_old_rod_name': current_rod, 'p_price': item_data['price'], 'p_sell_value': sell_price}
                 res = await supabase.rpc('upgrade_rod_and_sell_old', params).execute()
                 if not res.data or not res.data[0].get('success'): raise ValueError("error_insufficient_funds")
-                await interaction.followup.send(get_string("commerce.upgrade_success", new_item=item_name, old_item=current_rod, sell_price=sell_price, currency_icon=self.currency_icon), ephemeral=True)
+                # [수정] delete_after=5 추가
+                await interaction.followup.send(get_string("commerce.upgrade_success", new_item=item_name, old_item=current_rod, sell_price=sell_price, currency_icon=self.currency_icon), ephemeral=True, delete_after=5)
             elif is_modal_needed:
                 max_buyable = balance // item_data['price'] if item_data['price'] > 0 else 999
                 if max_buyable == 0: raise ValueError("error_insufficient_funds")
                 modal = QuantityModal(f"{item_name} 購入", max_buyable)
                 await interaction.response.send_modal(modal)
                 await modal.wait()
-                if not modal.value: return await interaction.followup.send("購入がキャンセルされました。", ephemeral=True)
+                if not modal.value: return await interaction.followup.send("購入がキャンセルされました。", ephemeral=True, delete_after=5) # [수정] delete_after=5 추가
                 quantity, total_price = modal.value, item_data['price'] * modal.value
                 if balance < total_price: raise ValueError("error_insufficient_funds")
                 res = await supabase.rpc('buy_item', {'user_id_param': str(self.user.id), 'item_name_param': item_name, 'quantity_param': quantity, 'total_price_param': total_price}).execute()
                 if not res.data: raise Exception()
-                await interaction.followup.send(get_string("commerce.purchase_success", item_name=item_name, quantity=quantity), ephemeral=True)
+                # [수정] delete_after=5 추가
+                await interaction.followup.send(get_string("commerce.purchase_success", item_name=item_name, quantity=quantity), ephemeral=True, delete_after=5)
             else:
                 if inventory.get(item_name, 0) > 0: raise ValueError("error_already_owned")
                 total_price, quantity = item_data['price'], 1
@@ -100,9 +103,10 @@ class BuyItemView(ShopViewBase):
                 if id_key := item_data.get('id_key'):
                     if role_id := get_id(id_key):
                         if role := interaction.guild.get_role(role_id): await self.user.add_roles(role)
-                await interaction.followup.send(get_string("commerce.purchase_success", item_name=item_name, quantity=quantity), ephemeral=True)
+                # [수정] delete_after=5 추가
+                await interaction.followup.send(get_string("commerce.purchase_success", item_name=item_name, quantity=quantity), ephemeral=True, delete_after=5)
             
-            # [핵심 수정] 구매 성공 후, 현재 View를 최신 정보로 새로고침합니다.
+            # 구매 성공 후, 현재 View를 최신 정보로 새로고침 (드롭다운 초기화)
             embed, view = await self.build_embed(), await self.build_components()
             await self.message.edit(embed=embed, view=view)
         except ValueError as e:
@@ -112,6 +116,7 @@ class BuyItemView(ShopViewBase):
     async def back_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         category_view = BuyCategoryView(self.user)
+        category_view.message = self.message # [추가] message 객체 전달
         await category_view.build_components()
         await self.message.edit(embed=category_view.build_embed(), view=category_view)
 
@@ -134,6 +139,7 @@ class BuyCategoryView(ShopViewBase):
         embed, view = await item_view.build_embed(), await item_view.build_components()
         await self.message.edit(embed=embed, view=view)
 
+# ... (이하 CommercePanelView, Commerce Cog는 변경 없음) ...
 class CommercePanelView(ui.View):
     def __init__(self, cog_instance: 'Commerce'):
         super().__init__(timeout=None)
