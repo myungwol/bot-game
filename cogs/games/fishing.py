@@ -72,7 +72,7 @@ class FishingGameView(ui.View):
             value = catch_proto.get('value', 0)
             if value > 0: await update_wallet(self.player, value)
             log_publicly = catch_proto.get("log_publicly", False)
-            embed = discord.Embed(title=catch_proto['title'], description=catch_proto['description'].format(user_mention=user_mention, value=value), color=discord.Color(catch_proto['color']))
+            embed = discord.Embed(title=catch_proto['title'], description=catch_proto['description'].format(user_mention=user_mention, value=value), color=discord.Color(int(catch_proto['color'])))
         return embed, log_publicly, is_big_catch
     
     @ui.button(label="待機中...", style=discord.ButtonStyle.secondary, custom_id="catch_fish_button", emoji="🎣")
@@ -121,6 +121,7 @@ class FishingPanelView(ui.View):
         self.user_locks: Dict[int, asyncio.Lock] = {}
 
     async def setup_buttons(self):
+        self.clear_items()
         button_styles = get_config("DISCORD_BUTTON_STYLES_MAP", {})
         components_data = await get_panel_components_from_db('fishing')
         if not components_data:
@@ -180,7 +181,6 @@ class Fishing(commands.Cog):
     async def load_configs(self):
         self.fishing_log_channel_id = get_id("fishing_log_channel_id")
 
-    # ▼▼▼▼▼▼▼ [ 이 함수를 Fishing 클래스 안에 추가해주세요 ] ▼▼▼▼▼▼▼
     async def regenerate_panel(self, channel: discord.TextChannel):
         """요청에 의해 낚시터 패널을 재생성합니다."""
         panel_key = "fishing"
@@ -201,15 +201,14 @@ class Fishing(commands.Cog):
 
         embed = discord.Embed.from_dict(embed_data)
 
-        if self.view_instance is None:
-            await self.register_persistent_views()
-        else:
-            await self.view_instance.setup_buttons()
+        # [핵심 수정] View 인스턴스를 매번 새로 생성하고 봇에 등록합니다.
+        self.view_instance = FishingPanelView(self.bot, self)
+        await self.view_instance.setup_buttons()
+        self.bot.add_view(self.view_instance)
 
         new_message = await channel.send(embed=embed, view=self.view_instance)
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ 낚시터 패널을 성공적으로 새로 생성했습니다. (채널: #{channel.name})")
-    # ▲▲▲▲▲▲▲ [ 여기까지 추가 ] ▲▲▲▲▲▲▲
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Fishing(bot))
