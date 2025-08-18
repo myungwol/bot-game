@@ -1,4 +1,4 @@
-# cogs/games/user_profile.py (DB 데이터 불일치 문제 해결 최종본)
+# cogs/games/user_profile.py (상호작용 실패 최종 해결)
 
 import discord
 from discord.ext import commands
@@ -16,10 +16,7 @@ from utils.database import (
 
 logger = logging.getLogger(__name__)
 
-# [🔴 핵심 수정] 코드의 카테고리 이름을 DB의 '釣り'로 통일합니다.
-# '釣竿', '釣りエサ' 같은 세부 카테고리가 없으므로 하나의 카테고리로 처리합니다.
 GEAR_CATEGORY = "釣り" 
-
 
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
@@ -40,12 +37,13 @@ class ProfileView(ui.View):
         self.build_components()
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
+    # [🔴 핵심 수정] 응답 방식을 edit_original_response로 통일
     async def update_display(self, interaction: discord.Interaction, reload_data: bool = False):
         if reload_data:
             await self.load_data()
         embed = await self.build_embed()
         self.build_components()
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
         self.status_message = None
 
     async def load_data(self):
@@ -91,7 +89,6 @@ class ProfileView(ui.View):
             embed.description = description
 
         elif self.current_page == "item":
-            # [수정] 필터링 로직 수정
             general_items = {
                 name: count for name, count in inventory.items()
                 if item_db.get(name, {}).get('category') != GEAR_CATEGORY
@@ -104,7 +101,6 @@ class ProfileView(ui.View):
             rod_emoji, bait_emoji = item_db.get(rod_name, {}).get('emoji', '🎣'), item_db.get(bait_name, {}).get('emoji', '🐛')
             embed.add_field(name=get_string("profile_view.gear_tab.current_gear_field"), value=f"{rod_emoji} **釣竿**: {rod_name}\n{bait_emoji} **エサ**: {bait_name}", inline=False)
             
-            # [수정] 필터링 로직 수정
             gear_items = {
                 name: count for name, count in inventory.items()
                 if item_db.get(name, {}).get('category') == GEAR_CATEGORY
@@ -156,6 +152,9 @@ class ProfileView(ui.View):
         if interaction.user.id != self.user.id:
             return await interaction.response.send_message("自分専用のメニューを操作してください。", ephemeral=True)
         
+        # [🔴 핵심 수정] 모든 콜백 시작 시 defer() 호출
+        await interaction.response.defer()
+        
         custom_id = interaction.data['custom_id']
         
         if custom_id.startswith("profile_tab_"):
@@ -165,9 +164,7 @@ class ProfileView(ui.View):
 
         elif custom_id.startswith("profile_change_"):
             gear_type = custom_id.split("_")[-1]
-            # [수정] is_rod 판단을 위한 임시 로직 추가
-            # 아이템 이름에 '竿'이 포함되면 낚싯대로, 아니면 미끼로 간주합니다.
-            # 향후 DB에 item_type 같은 컬럼을 추가하면 더 좋습니다.
+            # GearSelectView로 넘길 때 interaction을 그대로 전달
             await GearSelectView(self, gear_type).setup_and_update(interaction)
         
         elif custom_id.startswith("profile_fish_"):
@@ -182,12 +179,10 @@ class GearSelectView(ui.View):
         self.user = parent_view.user
         self.gear_type = gear_type
 
+    # [🔴 핵심 수정] interaction을 받아 화면을 수정하도록 변경
     async def setup_and_update(self, interaction: discord.Interaction):
         inventory = self.parent_view.cached_data.get("inventory", {})
         item_db = get_item_database()
-        
-        # [🔴 핵심 수정] 낚싯대와 미끼를 구분하는 로직 변경
-        # DB 카테고리가 '釣り'로 같으므로, 아이템 이름으로 구분해야 합니다.
         is_rod_change = self.gear_type == 'rod'
         category_name = "釣竿" if is_rod_change else "釣りエサ"
         
@@ -198,9 +193,7 @@ class GearSelectView(ui.View):
         
         for name, count in inventory.items():
             item_data = item_db.get(name)
-            # 카테고리가 '釣り'인 아이템만 대상으로 필터링
             if item_data and item_data.get('category') == GEAR_CATEGORY:
-                # '竿'이 이름에 포함되면 낚싯대, 아니면 미끼로 간주
                 is_rod_item = '竿' in name
                 if (is_rod_change and is_rod_item) or (not is_rod_change and not is_rod_item):
                      options.append(discord.SelectOption(label=f"{name} ({count}個)", value=name, emoji=item_data.get('emoji')))
@@ -214,9 +207,12 @@ class GearSelectView(ui.View):
         self.add_item(back_button)
         
         embed = discord.Embed(title=get_string("gear_select_view.embed_title", category_name=category_name), description=get_string("gear_select_view.embed_description"), color=self.user.color)
-        await interaction.response.edit_message(embed=embed, view=self)
+        # 부모의 interaction을 사용해 화면을 수정
+        await interaction.edit_original_response(embed=embed, view=self)
 
     async def select_callback(self, interaction: discord.Interaction):
+        # [🔴 핵심 수정] 콜백 시작 시 defer()
+        await interaction.response.defer()
         selected_item = interaction.data['values'][0]
         await set_user_gear(str(self.user.id), **{self.gear_type: selected_item})
         
@@ -224,13 +220,14 @@ class GearSelectView(ui.View):
         await self.go_back_to_profile(interaction, reload_data=True)
 
     async def back_callback(self, interaction: discord.Interaction):
+        # [🔴 핵심 수정] 콜백 시작 시 defer()
+        await interaction.response.defer()
         await self.go_back_to_profile(interaction)
 
     async def go_back_to_profile(self, interaction: discord.Interaction, reload_data: bool = False):
         self.parent_view.current_page = "gear"
         await self.parent_view.update_display(interaction, reload_data=reload_data)
 
-# ... (이하 UserProfilePanelView, UserProfile Cog는 이전과 동일) ...
 class UserProfilePanelView(ui.View):
     def __init__(self, cog_instance: 'UserProfile'):
         super().__init__(timeout=None)
