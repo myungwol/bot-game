@@ -12,12 +12,10 @@ from utils.database import (
     save_panel_id, get_panel_id, get_id, get_embed_from_db, get_panel_components_from_db,
     get_item_database, get_fishing_loot, get_config
 )
-# [수정] 잘못된 경로를 올바른 경로로 변경합니다.
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# (commerce.py 와 동일한 UI 클래스들, 추후 별도 파일로 분리하면 더 좋습니다.)
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
         super().__init__(timeout=300)
@@ -25,7 +23,7 @@ class ProfileView(ui.View):
         self.cog = cog_instance
         self.message: Optional[discord.WebhookMessage] = None
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
-        self.current_page = "inventory" # or "aquarium" or "gear"
+        self.current_page = "inventory"
 
     async def fetch_and_build(self):
         wallet_data, inventory, aquarium, gear = await asyncio.gather(
@@ -38,9 +36,10 @@ class ProfileView(ui.View):
 
         embed = discord.Embed(
             title=f"{self.user.display_name}님의 프로필",
-            color=self.user.color
+            color=self.user.color or discord.Color.default()
         )
-        embed.set_thumbnail(url=self.user.display_avatar.url)
+        if self.user.display_avatar:
+            embed.set_thumbnail(url=self.user.display_avatar.url)
         embed.add_field(name="💰 所持金", value=f"`{balance:,}`{self.currency_icon}", inline=False)
         
         if self.current_page == "inventory":
@@ -63,7 +62,6 @@ class ProfileView(ui.View):
         return embed
 
     def update_buttons(self):
-        # 버튼 상태 업데이트 로직 (예: 현재 페이지 버튼 비활성화)
         for item in self.children:
             if isinstance(item, ui.Button):
                 item.disabled = (item.custom_id == f"profile_{self.current_page}")
@@ -84,7 +82,6 @@ class ProfileView(ui.View):
     
     @ui.button(label="装備", style=discord.ButtonStyle.secondary, custom_id="profile_gear", emoji="⚙️")
     async def gear_button(self, i: discord.Interaction, b: ui.Button): await self.button_callback(i)
-
 
 class UserProfilePanelView(ui.View):
     def __init__(self, cog_instance: 'UserProfile'):
@@ -112,7 +109,6 @@ class UserProfilePanelView(ui.View):
         embed = await view.fetch_and_build()
         view.message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
-
 class UserProfile(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -125,9 +121,10 @@ class UserProfile(commands.Cog):
         self.bot.add_view(self.view_instance)
         
     async def cog_load(self):
-        pass # 특별히 로드할 설정 없음
+        pass
 
     async def regenerate_panel(self, channel: discord.TextChannel):
+        """요청에 의해 프로필 패널을 재생성합니다."""
         panel_key = "profile"
         embed_key = "panel_profile"
 
@@ -145,8 +142,10 @@ class UserProfile(commands.Cog):
             return
 
         embed = discord.Embed.from_dict(embed_data)
-        if not self.view_instance:
-             await self.register_persistent_views()
+        
+        self.view_instance = UserProfilePanelView(self)
+        await self.view_instance.setup_buttons()
+        self.bot.add_view(self.view_instance)
 
         new_message = await channel.send(embed=embed, view=self.view_instance)
         await save_panel_id(panel_key, new_message.id, channel.id)
