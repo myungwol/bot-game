@@ -1,4 +1,4 @@
-# cogs/games/user_profile.py (자동 새로고침 및 메시지 자동삭제 기능 추가)
+# cogs/games/user_profile.py (오류 수정 최종본)
 
 import discord
 from discord.ext import commands
@@ -92,10 +92,6 @@ class ProfileView(ui.View):
         for i, (key, config) in enumerate(tabs_config.items()):
             style = discord.ButtonStyle.primary if self.current_page == key else discord.ButtonStyle.secondary
             self.add_item(ui.Button(label=config.get("label"), style=style, custom_id=f"profile_tab_{key}", emoji=config.get("emoji"), row=i // 4))
-        
-        # [수정] 새로고침 버튼 제거
-        # self.add_item(ui.Button(label=get_string("profile_view.refresh_button", "새로고침"), style=discord.ButtonStyle.blurple, custom_id="profile_refresh", emoji="🔄", row=2))
-        
         if self.current_page == "gear":
             self.add_item(ui.Button(label=get_string("profile_view.gear_tab.change_rod_button"), style=discord.ButtonStyle.success, custom_id="profile_change_rod", emoji="🎣", row=3))
             self.add_item(ui.Button(label=get_string("profile_view.gear_tab.change_bait_button"), style=discord.ButtonStyle.success, custom_id="profile_change_bait", emoji="🐛", row=3))
@@ -109,15 +105,9 @@ class ProfileView(ui.View):
     async def button_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.user.id: return await interaction.response.send_message("自分専用のメニューを操作してください。", ephemeral=True)
         custom_id = interaction.data['custom_id']
-        
-        # [수정] 새로고침 버튼 로직 제거
-        # if custom_id == "profile_refresh":
-        #     await self.update_display(interaction, reload_data=True)
-            
         if custom_id.startswith("profile_tab_"):
             self.current_page = custom_id.split("_")[-1]
             if self.current_page == 'fish': self.fish_page_index = 0
-            # [수정] 탭을 누를 때마다 항상 데이터를 새로고침하도록 변경
             await self.update_display(interaction, reload_data=True) 
         elif custom_id.startswith("profile_change_"):
             gear_type = custom_id.split("_")[-1]
@@ -157,8 +147,7 @@ class GearSelectView(ui.View):
     async def select_callback(self, interaction: discord.Interaction):
         selected_item = interaction.data['values'][0]
         await set_user_gear(str(self.user.id), **{self.gear_type: selected_item})
-        # [추가] 장비 변경 완료 메시지를 5초간 표시
-        await interaction.followup.send(f"✅ 装備を**{selected_item}**に変更しました。", ephemeral=True, delete_after=5)
+        await interaction.followup.send(f"✅ 装備を**{selected_item}**に変更しました。", ephemeral=True)
         await self.go_back_to_profile(interaction, reload_data=True)
     async def back_callback(self, interaction: discord.Interaction):
         await self.go_back_to_profile(interaction)
@@ -166,7 +155,6 @@ class GearSelectView(ui.View):
         self.parent_view.current_page = "gear"
         await self.parent_view.update_display(interaction, reload_data=reload_data)
 
-# ... (이하 UserProfilePanelView, UserProfile Cog는 변경 없음) ...
 class UserProfilePanelView(ui.View):
     def __init__(self, cog_instance: 'UserProfile'):
         super().__init__(timeout=None)
