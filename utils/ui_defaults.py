@@ -104,3 +104,59 @@ UI_PANEL_COMPONENTS = [
         "row": 0
     },
 ]
+
+# ==============================================================================
+# 4. UI 텍스트 문자열 (UI Strings)
+# ==============================================================================
+UI_STRINGS = {
+    # --- 프로필(UserProfile) Cog 관련 문자열 ---
+    "profile_view": {
+        "base_title": "{user_name}님의 프로필",
+        "tabs": {
+            "info": {"title_suffix": " - 情報", "label": "情報", "emoji": "ℹ️"},
+            "item": {"title_suffix": " - アイテム", "label": "アイテム", "emoji": "📦"},
+            "gear": {"title_suffix": " - 装備", "label": "装備", "emoji": "⚙️"},
+            "fish": {"title_suffix": " - 魚", "label": "魚", "emoji": "🐠"},
+            "seed": {"title_suffix": " - シード", "label": "シード", "emoji": "🌱"},
+            "crop": {"title_suffix": " - 作物", "label": "作物", "emoji": "🌾"},
+            "feed": {"title_suffix": " - 餌", "label": "餌", "emoji": "🍖"}
+        },
+        "info_tab": {
+            "field_balance": "💰 所持金",
+            "field_rank": "🏆 等級",
+            "default_rank_name": "等級なし",
+            "description": "現在の所持金と等級を確認できます。"
+        },
+        "item_tab": {
+            "no_items": "所持しているアイテムがありません。"
+        },
+        "gear_tab": {
+            "current_gear_field": "[ 現在の装備 ]",
+            "owned_gear_field": "[ 所持している装備 ]",
+            "no_owned_gear": "所持している装備がありません。",
+            "change_rod_button": "釣竿を変更",
+            "change_bait_button": "エサを変更"
+        },
+        "fish_tab": {
+            "no_fish": "水槽に魚がいません。",
+            "pagination_footer": "ページ {current_page} / {total_pages}"
+        },
+        "wip_tab": {
+            "description": "この機能は現在準備中です。"
+        },
+        "pagination_buttons": {
+            "prev": "◀",
+            "next": "▶"
+        }
+    },
+    # --- 장비 변경(GearSelect) View 관련 문자열 ---
+    "gear_select_view": {
+        "embed_title": "装備変更: {category_name}",
+        "embed_description": "インベントリから装着するアイテムを選択してください。",
+        "placeholder": "新しい{category_name}を選択してください...",
+        "unequip_rod_label": "釣竿を外す",
+        "unequip_bait_label": "エサを外す",
+        "unequip_prefix": "✋",
+        "back_button": "戻る"
+    }
+}
