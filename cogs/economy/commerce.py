@@ -1,4 +1,4 @@
-# cogs/economy/commerce.py (임시 메시지로 상점 UI를 보내도록 수정)
+# cogs/economy/commerce.py (setup 함수 포함 최종본)
 
 import discord
 from discord.ext import commands
@@ -29,10 +29,11 @@ class QuantityModal(ui.Modal):
             if not (1 <= q_val <= self.max_value):
                 return await i.response.send_message(f"1から{self.max_value}までの数字を入力してください。", ephemeral=True, delete_after=10)
             self.value = q_val
-            await i.response.defer()
+            # defer()는 modal에서는 불필요하며, 상호작용이 이미 modal 제출로 응답되었음
         except ValueError: await i.response.send_message("数字のみ入力してください。", ephemeral=True, delete_after=10)
         except Exception: self.stop()
 
+# --- 구매 흐름을 위한 View 클래스들 ---
 class BuyItemView(ui.View):
     """특정 카테고리의 아이템 목록을 보여주고 구매를 처리하는 View"""
     def __init__(self, user: discord.Member, category: str, parent_view: 'BuyCategoryView'):
@@ -43,7 +44,7 @@ class BuyItemView(ui.View):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
 
     async def build_and_update(self, interaction: discord.Interaction):
-        if not interaction.response.is_done(): await interaction.response.defer()
+        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
         
@@ -68,23 +69,27 @@ class BuyItemView(ui.View):
         back_button = ui.Button(label=get_string("commerce.back_button"), style=discord.ButtonStyle.grey, row=1)
         back_button.callback = self.back_callback
         self.add_item(back_button)
-        await interaction.edit_original_response(embed=embed, view=self)
+        
+        # defer() 후에는 edit_original_response 대신 followup 사용
+        if interaction.response.is_done():
+            await interaction.followup.edit_message(interaction.message.id, embed=embed, view=self)
+        else:
+            await interaction.response.edit_message(embed=embed, view=self)
+
 
     async def select_callback(self, interaction: discord.Interaction):
         item_name = interaction.data['values'][0]
         item_data = get_item_database().get(item_name)
         if not item_data: return
 
-        # ephemeral=True가 동반되지 않은 defer는 thinking 상태를 표시
-        # modal이 뜰 수도 있으므로 일단 thinking으로 응답
-        if not interaction.response.is_done():
-            await interaction.response.defer(thinking=True, ephemeral=True)
+        # 응답이 필요한 상호작용(modal)이 있을 수 있으므로 먼저 defer하지 않음
         
         wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(str(self.user.id)))
         balance = wallet.get('balance', 0)
         
         try:
             if item_data.get('is_upgrade_item'):
+                if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
                 hierarchy = get_config("ROD_HIERARCHY", [])
                 if not hierarchy: raise Exception("ROD_HIERARCHY 설정이 DB에 없습니다.")
                 
@@ -95,48 +100,38 @@ class BuyItemView(ui.View):
                 
                 target_rank = hierarchy.index(item_name)
 
-                # [수정] 오류 처리 로직 강화
-                if target_rank <= current_rank:
-                    raise ValueError("error_already_have_better")
-                
-                # [신규] 바로 이전 등급의 낚싯대를 가지고 있는지 확인
-                if target_rank > 0 and hierarchy[target_rank - 1] != current_rod:
-                    raise ValueError("error_upgrade_needed")
+                if target_rank <= current_rank: raise ValueError("error_already_have_better")
+                if target_rank > 0 and hierarchy[target_rank - 1] != current_rod: raise ValueError("error_upgrade_needed")
 
                 sell_price = 100 if current_rod and "古い" not in current_rod else 0
-                params = {
-                    'p_user_id': str(self.user.id), 'p_new_rod_name': item_name,
-                    'p_old_rod_name': current_rod, 'p_price': item_data['price'],
-                    'p_sell_value': sell_price
-                }
+                params = {'p_user_id': str(self.user.id), 'p_new_rod_name': item_name, 'p_old_rod_name': current_rod, 'p_price': item_data['price'], 'p_sell_value': sell_price}
                 res = await supabase.rpc('upgrade_rod_and_sell_old', params).execute()
                 
                 if not res.data or not res.data.get('success'):
                     if res.data.get('message') == 'insufficient_funds': raise ValueError("error_insufficient_funds")
                     raise Exception(f"Upgrade RPC failed: {res.data.get('message')}")
                 
-                await interaction.followup.send(
-                    get_string("commerce.upgrade_success", new_item=item_name, old_item=current_rod, sell_price=sell_price, currency_icon=self.currency_icon),
-                    ephemeral=True, delete_after=10
-                )
+                await interaction.followup.send(get_string("commerce.upgrade_success", new_item=item_name, old_item=current_rod, sell_price=sell_price, currency_icon=self.currency_icon), ephemeral=True, delete_after=10)
                 await self.build_and_update(interaction)
                 return
 
             quantity = 1
             if item_data.get('max_ownable', 999) == 1:
+                if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
                 if inventory.get(item_name, 0) > 0 or ((id_key := item_data.get('id_key')) and (role_id := get_id(id_key)) and self.user.get_role(role_id)):
                      raise ValueError("error_already_owned")
             else:
                 max_buyable = balance // item_data['price'] if item_data['price'] > 0 else 999
-                if max_buyable == 0: raise ValueError("error_insufficient_funds")
+                if max_buyable == 0:
+                    if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
+                    raise ValueError("error_insufficient_funds")
                 
-                # [수정] Modal을 보내기 전에 defer()를 하면 안되므로, Modal을 보낼 때는 response를 직접 사용
                 modal = QuantityModal(f"{item_name} 購入", "購入する数量", f"最大 {max_buyable}個まで", max_buyable)
                 await interaction.response.send_modal(modal)
                 await modal.wait()
                 if modal.value is None:
-                    # 사용자가 Modal을 닫았을 때, 이미 응답했으므로 followup으로 메시지 전송
-                    await interaction.followup.send("購入がキャンセルされました。", ephemeral=True, delete_after=5)
+                    try: await interaction.followup.send("購入がキャンセルされました。", ephemeral=True, delete_after=5)
+                    except: pass
                     return
                 quantity = modal.value
 
@@ -154,15 +149,89 @@ class BuyItemView(ui.View):
             await self.build_and_update(interaction)
 
         except ValueError as e:
-            # [수정] 오류 메시지를 followup.send로 보내 안정성 확보
             error_key = str(e)
-            if error_key.startswith("error_"):
-                await interaction.followup.send(get_string(f"commerce.{error_key}"), ephemeral=True, delete_after=10)
-            else: # 혹시 모를 다른 ValueError에 대비
-                await interaction.followup.send(f"エラー: {error_key}", ephemeral=True, delete_after=10)
+            message = get_string(f"commerce.{error_key}", f"エラー: {error_key}") if error_key.startswith("error_") else f"エラー: {error_key}"
+            if interaction.response.is_done(): await interaction.followup.send(message, ephemeral=True, delete_after=10)
+            else: await interaction.response.send_message(message, ephemeral=True, delete_after=10)
         except Exception as e:
             logger.error(f"구매 처리 중 오류: {e}", exc_info=True)
-            await interaction.followup.send("❌ 購入処理中にエラーが発生しました。", ephemeral=True, delete_after=10)
+            message = "❌ 購入処理中にエラーが発生しました。"
+            if interaction.response.is_done(): await interaction.followup.send(message, ephemeral=True, delete_after=10)
+            else: await interaction.response.send_message(message, ephemeral=True, delete_after=10)
 
     async def back_callback(self, interaction: discord.Interaction):
         await self.parent_view.build_and_update(interaction)
+
+class BuyCategoryView(ui.View):
+    def __init__(self, user: discord.Member):
+        super().__init__(timeout=300)
+        self.user = user
+    def _build_embed(self) -> discord.Embed:
+        return discord.Embed(title=get_string("commerce.category_view_title"), description=get_string("commerce.category_view_desc"), color=discord.Color.green())
+    def _build_components(self):
+        self.clear_items()
+        categories = get_string("commerce.categories", {})
+        for key, label in categories.items():
+            button = ui.Button(label=label, custom_id=f"buy_category_{key}")
+            button.callback = self.category_callback
+            if "準備中" in label: button.disabled = True
+            self.add_item(button)
+    async def send_initial_message(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        embed = self._build_embed()
+        self._build_components()
+        await interaction.followup.send(embed=embed, view=self, ephemeral=True)
+    async def build_and_update(self, interaction: discord.Interaction):
+        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
+        embed = self._build_embed()
+        self._build_components()
+        await interaction.edit_original_response(embed=embed, view=self)
+    async def category_callback(self, interaction: discord.Interaction):
+        category = interaction.data['custom_id'].split('_')[-1]
+        await BuyItemView(self.user, category, self).build_and_update(interaction)
+
+class CommercePanelView(ui.View):
+    def __init__(self, cog_instance: 'Commerce'):
+        super().__init__(timeout=None)
+        self.commerce_cog = cog_instance
+    async def setup_buttons(self):
+        self.clear_items()
+        components_data = await get_panel_components_from_db('commerce')
+        for comp in components_data:
+            if comp.get('component_type') == 'button' and (key := comp.get('component_key')):
+                style_str = comp.get('style', 'secondary')
+                style = discord.ButtonStyle[style_str] if hasattr(discord.ButtonStyle, style_str) else discord.ButtonStyle.secondary
+                button = ui.Button(label=comp.get('label'), style=style, emoji=comp.get('emoji'), custom_id=key)
+                if key == 'open_shop': button.callback = self.open_shop
+                elif key == 'open_market': button.callback = self.open_market
+                self.add_item(button)
+    async def open_shop(self, interaction: discord.Interaction):
+        await BuyCategoryView(interaction.user).send_initial_message(interaction)
+    async def open_market(self, interaction: discord.Interaction):
+        await interaction.response.send_message("販売機能は現在準備中です。", ephemeral=True)
+
+class Commerce(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot, self.view_instance = bot, None
+        logger.info("Commerce Cog가 성공적으로 초기화되었습니다.")
+    async def register_persistent_views(self):
+        self.view_instance = CommercePanelView(self)
+        await self.view_instance.setup_buttons()
+        self.bot.add_view(self.view_instance)
+    async def regenerate_panel(self, channel: discord.TextChannel):
+        panel_key, embed_key = "commerce", "panel_commerce"
+        if (panel_info := get_panel_id(panel_key)) and (old_id := panel_info.get('message_id')):
+            try: await (await channel.fetch_message(old_id)).delete()
+            except (discord.NotFound, discord.Forbidden): pass
+        if not (embed_data := await get_embed_from_db(embed_key)):
+            return logger.error(f"DB에서 '{embed_key}' 임베드를 찾을 수 없어 패널 생성을 중단합니다.")
+        embed = discord.Embed.from_dict(embed_data)
+        self.view_instance = CommercePanelView(self)
+        await self.view_instance.setup_buttons()
+        self.bot.add_view(self.view_instance)
+        new_message = await channel.send(embed=embed, view=self.view_instance)
+        await save_panel_id(panel_key, new_message.id, channel.id)
+        logger.info(f"✅ 상점 패널을 성공적으로 새로 생성했습니다. (채널: #{channel.name})")
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Commerce(bot))
