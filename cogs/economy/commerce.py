@@ -1,4 +1,4 @@
-# cogs/economy/commerce.py (RPC 호출 로직 수정)
+# cogs/economy/commerce.py (UI 새로고침 로직 추가 최종본)
 
 import discord
 from discord.ext import commands
@@ -9,10 +9,7 @@ from typing import Optional, Dict
 
 logger = logging.getLogger(__name__)
 
-from utils.database import (
-    get_inventory, get_wallet, supabase, get_id,
-    get_item_database, get_config, get_string, get_panel_components_from_db
-)
+from utils.database import (get_inventory, get_wallet, supabase, get_id, get_item_database, get_config, get_string, get_panel_components_from_db)
 
 class QuantityModal(ui.Modal):
     quantity = ui.TextInput(label="数量", placeholder="例: 10", required=True, max_length=5)
@@ -80,9 +77,7 @@ class BuyItemView(ShopViewBase):
                 sell_price = 100 if current_rod and "古い" not in current_rod else 0
                 params = {'p_user_id': str(self.user.id), 'p_new_rod_name': item_name, 'p_old_rod_name': current_rod, 'p_price': item_data['price'], 'p_sell_value': sell_price}
                 res = await supabase.rpc('upgrade_rod_and_sell_old', params).execute()
-                # [핵심 수정] 반환 형식이 리스트 안의 딕셔너리로 변경됨
-                if not res.data or not res.data[0].get('success'):
-                    raise ValueError("error_insufficient_funds")
+                if not res.data or not res.data[0].get('success'): raise ValueError("error_insufficient_funds")
                 await interaction.followup.send(get_string("commerce.upgrade_success", new_item=item_name, old_item=current_rod, sell_price=sell_price, currency_icon=self.currency_icon), ephemeral=True)
             elif is_modal_needed:
                 max_buyable = balance // item_data['price'] if item_data['price'] > 0 else 999
@@ -106,6 +101,8 @@ class BuyItemView(ShopViewBase):
                     if role_id := get_id(id_key):
                         if role := interaction.guild.get_role(role_id): await self.user.add_roles(role)
                 await interaction.followup.send(get_string("commerce.purchase_success", item_name=item_name, quantity=quantity), ephemeral=True)
+            
+            # [핵심 수정] 구매 성공 후, 현재 View를 최신 정보로 새로고침합니다.
             embed, view = await self.build_embed(), await self.build_components()
             await self.message.edit(embed=embed, view=view)
         except ValueError as e:
