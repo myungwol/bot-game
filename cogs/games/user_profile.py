@@ -1,4 +1,4 @@
-# cogs/games/user_profile.py (상호작용 실패 최종 해결)
+# cogs/games/user_profile.py (Value 중복 오류 최종 해결)
 
 import discord
 from discord.ext import commands
@@ -11,7 +11,7 @@ from typing import Optional, Dict, List, Any
 from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
     save_panel_id, get_panel_id, get_id, get_embed_from_db, get_panel_components_from_db,
-    get_item_database, get_config, get_string
+    get_item_database, get_config, get_string, DEFAULT_ROD
 )
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,6 @@ class ProfileView(ui.View):
         self.build_components()
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
-    # [🔴 핵심 수정] 응답 방식을 edit_original_response로 통일
     async def update_display(self, interaction: discord.Interaction, reload_data: bool = False):
         if reload_data:
             await self.load_data()
@@ -152,7 +151,6 @@ class ProfileView(ui.View):
         if interaction.user.id != self.user.id:
             return await interaction.response.send_message("自分専用のメニューを操作してください。", ephemeral=True)
         
-        # [🔴 핵심 수정] 모든 콜백 시작 시 defer() 호출
         await interaction.response.defer()
         
         custom_id = interaction.data['custom_id']
@@ -164,7 +162,6 @@ class ProfileView(ui.View):
 
         elif custom_id.startswith("profile_change_"):
             gear_type = custom_id.split("_")[-1]
-            # GearSelectView로 넘길 때 interaction을 그대로 전달
             await GearSelectView(self, gear_type).setup_and_update(interaction)
         
         elif custom_id.startswith("profile_fish_"):
@@ -179,7 +176,6 @@ class GearSelectView(ui.View):
         self.user = parent_view.user
         self.gear_type = gear_type
 
-    # [🔴 핵심 수정] interaction을 받아 화면을 수정하도록 변경
     async def setup_and_update(self, interaction: discord.Interaction):
         inventory = self.parent_view.cached_data.get("inventory", {})
         item_db = get_item_database()
@@ -187,10 +183,19 @@ class GearSelectView(ui.View):
         category_name = "釣竿" if is_rod_change else "釣りエサ"
         
         options = []
+        # [🔴 핵심 수정] 장비 해제 옵션의 value를 상수로 명확히 함
         unequip_label_key = "gear_select_view.unequip_rod_label" if is_rod_change else "gear_select_view.unequip_bait_label"
-        unequip_value = get_config("DEFAULT_ROD", "古い釣竿") if is_rod_change else "エサなし"
-        options.append(discord.SelectOption(label=f'{get_string("gear_select_view.unequip_prefix")} {get_string(unequip_label_key)}', value=unequip_value))
+        unequip_value = DEFAULT_ROD if is_rod_change else "エサなし"
         
+        # '맨손' 상태를 위한 장비 해제 옵션을 추가합니다.
+        # 실제 장착 해제 시 DB에는 BARE_HANDS 또는 "エサなし"가 저장될 것입니다.
+        # 여기서의 value는 그냥 옵션을 구분하기 위한 용도입니다.
+        unequip_option_value = "unequip"
+        options.append(discord.SelectOption(
+            label=f'{get_string("gear_select_view.unequip_prefix")} {get_string(unequip_label_key)}',
+            value=unequip_option_value
+        ))
+
         for name, count in inventory.items():
             item_data = item_db.get(name)
             if item_data and item_data.get('category') == GEAR_CATEGORY:
@@ -207,20 +212,27 @@ class GearSelectView(ui.View):
         self.add_item(back_button)
         
         embed = discord.Embed(title=get_string("gear_select_view.embed_title", category_name=category_name), description=get_string("gear_select_view.embed_description"), color=self.user.color)
-        # 부모의 interaction을 사용해 화면을 수정
         await interaction.edit_original_response(embed=embed, view=self)
 
     async def select_callback(self, interaction: discord.Interaction):
-        # [🔴 핵심 수정] 콜백 시작 시 defer()
         await interaction.response.defer()
-        selected_item = interaction.data['values'][0]
-        await set_user_gear(str(self.user.id), **{self.gear_type: selected_item})
+        selected_option = interaction.data['values'][0]
         
-        self.parent_view.status_message = f"✅ 装備を**{selected_item}**に変更しました。"
+        is_rod_change = self.gear_type == 'rod'
+        
+        # [🔴 핵심 수정] 장비 해제 옵션을 선택했는지 확인
+        if selected_option == "unequip":
+            selected_item_name = DEFAULT_ROD if is_rod_change else "エサなし"
+            self.parent_view.status_message = f"✅ { '釣竿' if is_rod_change else 'エサ'}を外しました。"
+        else:
+            selected_item_name = selected_option
+            self.parent_view.status_message = f"✅ 装備を**{selected_item_name}**に変更しました。"
+
+        await set_user_gear(str(self.user.id), **{self.gear_type: selected_item_name})
+        
         await self.go_back_to_profile(interaction, reload_data=True)
 
     async def back_callback(self, interaction: discord.Interaction):
-        # [🔴 핵심 수정] 콜백 시작 시 defer()
         await interaction.response.defer()
         await self.go_back_to_profile(interaction)
 
