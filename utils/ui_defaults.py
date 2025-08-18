@@ -140,6 +140,15 @@ UI_STRINGS = {
             "next": "▶"
         }
     },
+     
+    "log_legendary_catch": {
+        "title": "👑 伝説の魚が釣り上げられました！ 👑",
+        "description": "今週の**ヌシ**が、**{user_mention}**さんの手によって釣り上げられました！\n\n巨大な魚影は、次の週まで姿を消します…。",
+        "color": "0xFFD700",
+        "field_name": "釣り上げられたヌシ",
+        "field_value": "{emoji} **{name}**\n**サイズ**: `{size}`cm\n**価値**: `{value}`{currency_icon}"
+    }
+}
     # --- 장비 변경(GearSelect) View 관련 문자열 ---
     "gear_select_view": {
         "embed_title": "装備変更: {category_name}",
