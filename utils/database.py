@@ -1,4 +1,4 @@
-# bot-game/utils/database.py
+# bot-game/utils/database.py (get_string 함수 수정 완료)
 
 import os
 import discord
@@ -7,22 +7,19 @@ import logging
 import asyncio
 from typing import Dict, Callable, Any, List, Optional
 from functools import wraps
-
-# [수정] ui_defaults에서 UI_STRINGS를 가져옵니다.
 from utils.ui_defaults import UI_STRINGS
 
 logger = logging.getLogger(__name__)
 
 # --- 캐시 영역 ---
-# [수정] _bot_configs_cache 이름을 _configs_cache로 변경하고, strings도 포함
 _configs_cache: Dict[str, Any] = {
-    "strings": UI_STRINGS # ui_defaults.py에서 직접 로드
+    "strings": UI_STRINGS
 }
 _channel_id_cache: Dict[str, int] = {}
 _item_database_cache: Dict[str, Dict[str, Any]] = {}
 _fishing_loot_cache: List[Dict[str, Any]] = []
 
-# ... (supabase 클라이언트 초기화 및 supabase_retry_handler 데코레이터는 이전과 동일) ...
+# --- Supabase 클라이언트 초기화 ---
 supabase: AsyncClient = None
 try:
     url: str = os.environ.get("SUPABASE_URL")
@@ -34,6 +31,7 @@ try:
 except Exception as e:
     logger.critical(f"❌ Supabase 클라이언트 생성 실패: {e}", exc_info=True)
 
+# --- 범용 재시도 핸들러 ---
 def supabase_retry_handler(retries: int = 3, delay: int = 5):
     def decorator(func: Callable):
         @wraps(func)
@@ -64,7 +62,6 @@ async def load_bot_configs_from_db():
     global _configs_cache
     response = await supabase.table('bot_configs').select('config_key, config_value').execute()
     if response and response.data:
-        # DB에서 불러온 설정을 기존 캐시에 업데이트
         for item in response.data:
             _configs_cache[item['config_key']] = item['config_value']
         logger.info(f"✅ {len(response.data)}개의 봇 설정을 DB에서 로드하고 캐시에 병합했습니다.")
@@ -72,14 +69,13 @@ async def load_bot_configs_from_db():
         logger.warning("DB 'bot_configs' 테이블에서 설정 정보를 찾을 수 없습니다.")
 
 def get_config(key: str, default: Any = None) -> Any:
-    # [수정] _configs_cache를 사용하도록 변경
     return _configs_cache.get(key, default)
 
-# --- [신규 추가] UI 문자열을 가져오는 헬퍼 함수 ---
-def get_string(key_path: str, default: str = "", **kwargs) -> str:
+# --- [핵심 수정] UI 문자열/데이터를 가져오는 헬퍼 함수 ---
+def get_string(key_path: str, default: Any = None, **kwargs) -> Any:
     """
-    'profile_view.info_tab.description' 같은 경로를 사용하여
-    _configs_cache['strings']에서 문자열을 안전하게 가져오고 포맷팅합니다.
+    'profile_view.tabs' 같은 경로를 사용하여 UI 요소(문자열, 딕셔너리 등)를 안전하게 가져옵니다.
+    값이 문자열인 경우에만 포맷팅을 적용합니다.
     """
     try:
         keys = key_path.split('.')
@@ -87,14 +83,22 @@ def get_string(key_path: str, default: str = "", **kwargs) -> str:
         for key in keys:
             value = value[key]
         
-        if isinstance(value, str):
-            return value.format_map(kwargs)
-        return str(value)
+        # 값이 문자열이고, 포맷팅할 인자가 있는 경우에만 포맷팅 수행
+        if isinstance(value, str) and kwargs:
+            # 존재하지 않는 키로 포맷팅 시도 시 오류 대신 플레이스홀더를 남기는 SafeFormatter
+            class SafeFormatter(dict):
+                def __missing__(self, key: str) -> str:
+                    return f'{{{key}}}'
+            return value.format_map(SafeFormatter(**kwargs))
+        
+        # 문자열이 아니거나(딕셔너리, 리스트 등) 포맷팅할 인자가 없으면 원본 그대로 반환
+        return value
     except (KeyError, TypeError):
-        # 키가 없는 경우, 기본값을 반환하거나 경로 자체를 반환하여 문제 파악을 돕습니다.
-        return default.format_map(kwargs) if default else f"[{key_path}]"
+        # 키를 찾지 못한 경우, 기본값을 반환하거나 경로를 반환하여 디버깅을 돕습니다.
+        return default if default is not None else f"[{key_path}]"
 
-# ... (이하 get_id, load_channel_ids_from_db 등 나머지 함수는 이전과 동일) ...
+
+# --- 나머지 함수들은 이전과 동일 ---
 @supabase_retry_handler()
 async def load_channel_ids_from_db():
     global _channel_id_cache
