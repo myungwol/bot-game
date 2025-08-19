@@ -2,7 +2,7 @@
 
 import discord
 from discord.ext import commands
-from discord import ui
+from discord import ui, app_commands # << 이렇게 수정하거나
 import random
 import asyncio
 import logging
