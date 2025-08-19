@@ -1,5 +1,3 @@
-# bot-game/main.py
-
 import discord
 from discord.ext import commands
 import os
@@ -7,7 +5,8 @@ import asyncio
 import logging
 import logging.handlers
 
-from utils.database import load_all_data_from_db
+# [🔴 핵심 추가] Supabase 클라이언트를 직접 가져옵니다.
+from utils.database import load_all_data_from_db, supabase
 
 # --- 중앙 로깅 설정 ---
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(name)s:%(lineno)d] %(message)s')
@@ -83,6 +82,16 @@ bot = MyBot(command_prefix="/", intents=intents)
 async def on_ready():
     logger.info(f'✅ {bot.user.name}(이)가 성공적으로 로그인했습니다.')
     
+    # [🔴 핵심 변경 1] DB 로드보다 먼저, 오래된 패널 요청을 청소합니다.
+    try:
+        if supabase:
+            logger.info("------ [ 오래된 패널 재설치 요청 청소 시작 ] ------")
+            await supabase.table('bot_configs').delete().like('config_key', 'panel_regenerate_request_%').execute()
+            logger.info("✅ 모든 오래된 패널 재설치 요청을 DB에서 성공적으로 삭제했습니다.")
+            logger.info("------ [ 오래된 패널 재설치 요청 청소 완료 ] ------")
+    except Exception as e:
+        logger.error(f"❌ 오래된 패널 재설치 요청 청소 중 오류 발생: {e}", exc_info=True)
+
     await load_all_data_from_db()
     
     logger.info("------ [ 모든 Cog 설정 새로고침 시작 ] ------")
@@ -97,13 +106,9 @@ async def on_ready():
     logger.info(f"✅ 총 {refreshed_cogs}개의 Cog 설정이 새로고침되었습니다.")
     logger.info("------ [ 모든 Cog 설정 새로고침 완료 ] ------")
 
-    # [추가] 패널 재생성 요청 확인 루프 시작
-    panel_updater_cog = bot.get_cog("PanelUpdater")
-    if panel_updater_cog:
-        logger.info("PanelUpdater Cog를 찾아, 패널 업데이트 확인 루프를 시작합니다.")
-        panel_updater_cog.check_for_panel_updates.start()
-    else:
-        logger.warning("PanelUpdater Cog를 찾을 수 없어, 패널 업데이트 확인 루프를 시작할 수 없습니다.")
+    # [🔴 핵심 변경 2] PanelUpdater 루프를 여기서 시작하지 않고, Cog 자체에서 시작하도록 변경합니다.
+    # panel_updater_cog = bot.get_cog("PanelUpdater")
+    # ... (관련 if/else 블록 전체 삭제) ...
 
     try:
         if TEST_GUILD_ID:
