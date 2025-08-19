@@ -17,12 +17,11 @@ from utils.database import (
 
 logger = logging.getLogger(__name__)
 
-INTERMEDIATE_ROD_NAME = "中級者の釣竿"
-# [🔴 핵심] 바다낚시에 필요한 최소 등급을 '3' (중급)으로 명확히 정의합니다.
+INTERMEDIATE_ROD_NAME = "中級者用の釣竿"
 REQUIRED_TIER_FOR_SEA = 3
 
 class FishingGameView(ui.View):
-    # ... (이 클래스는 이전 답변과 완전히 동일하므로 생략) ...
+    # ... (이 클래스는 이전과 완전히 동일하므로 생략) ...
     def __init__(self, bot: commands.Bot, user: discord.Member, used_rod: str, used_bait: str, remaining_baits: Dict[str, int], cog_instance: 'Fishing', location_type: str):
         super().__init__(timeout=35)
         self.bot = bot; self.player = user; self.message: Optional[discord.WebhookMessage] = None
@@ -53,6 +52,7 @@ class FishingGameView(ui.View):
                 catch_button.style = discord.ButtonStyle.success; catch_button.label = "釣り上げる！"
             
             embed = discord.Embed(title="❗ アタリが来た！", description="今だ！ボタンを押して釣り上げよう！", color=discord.Color.red())
+            # 입질이 왔을 때의 이미지는 계속 큰 이미지로 유지 (긴박감 강조)
             if waiting_image_url := get_config("FISHING_WAITING_IMAGE_URL"):
                 embed.set_image(url=waiting_image_url.strip('"'))
 
@@ -236,7 +236,6 @@ class FishingPanelView(ui.View):
                     max_tier = max(owned_rod_tiers) if owned_rod_tiers else 0
 
                     if max_tier < REQUIRED_TIER_FOR_SEA:
-                        # [🔴 핵심] 에러 메시지에 기준이 되는 낚싯대 이름과 등급(tier) 정보를 모두 표시
                         await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD_NAME}」(等級{REQUIRED_TIER_FOR_SEA})以上の性能を持つ釣竿が必要です。", ephemeral=True)
                         return
 
@@ -255,8 +254,9 @@ class FishingPanelView(ui.View):
                 desc = f"### {location_name}にウキを投げました。\n**🎣 使用中の釣竿:** `{rod}`\n**🐛 使用中のエサ:** `{bait}`"
                 embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
                 
+                # [🔴 핵심 수정] set_image를 set_thumbnail로 변경하여 이미지를 우측 상단에 표시합니다.
                 if waiting_image_url := get_config("FISHING_WAITING_IMAGE_URL"):
-                    embed.set_image(url=waiting_image_url.strip('"'))
+                    embed.set_thumbnail(url=waiting_image_url.strip('"'))
 
                 view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type)
                 await view.start_game(interaction, embed)
@@ -267,7 +267,7 @@ class FishingPanelView(ui.View):
 
 
 class Fishing(commands.Cog):
-    # ... (Cog의 나머지 부분은 이전과 동일하므로 생략) ...
+    # ... (Cog의 나머지 부분은 변경 없음) ...
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_fishing_sessions_by_user: Set[int] = set()
@@ -349,6 +349,7 @@ class Fishing(commands.Cog):
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Fishing(bot))
