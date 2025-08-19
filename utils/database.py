@@ -1,4 +1,4 @@
-# bot-game/utils/database.py (판매 함수 추가)
+# bot-game/utils/database.py (함수 이름 불일치 오류 해결 최종본)
 
 import os
 import discord
@@ -51,15 +51,20 @@ async def is_legendary_fish_available() -> bool:
     last_caught_timestamp = float(last_caught_str.strip('"'))
     return (time.time() - last_caught_timestamp) > ONE_MONTH_IN_SECONDS
 
-
 async def save_config(key: str, value: Any):
+    """DB와 로컬 캐시에 설정을 저장하는 통합 함수."""
     global _configs_cache
     str_value = f'"{str(value)}"'
     await supabase.table('bot_configs').upsert({"config_key": key, "config_value": str_value}).execute()
     _configs_cache[key] = str_value
     logger.info(f"설정이 업데이트되었습니다: {key} -> {str_value}")
 
+# [🔴 핵심 수정] 관리 봇과의 호환성을 위해 save_config_to_db 라는 이름도 추가합니다.
+# 실제로는 바로 위의 save_config 함수와 완전히 똑같은 기능을 합니다.
+save_config_to_db = save_config
+
 async def set_legendary_fish_cooldown():
+    """전설의 물고기 쿨타임을 지금 시간으로 설정합니다."""
     await save_config("legendary_fish_last_caught_timestamp", time.time())
 
 async def load_all_data_from_db():
@@ -217,13 +222,8 @@ async def get_cooldown(user_id_str: str, cooldown_key: str) -> float:
 async def set_cooldown(user_id_str: str, cooldown_key: str, timestamp: float):
     await supabase.table('cooldowns').upsert({"user_id": user_id_str, "cooldown_key": cooldown_key, "last_cooldown_timestamp": timestamp}).execute()
 
-# [추가] 물고기 판매를 위한 DB 함수
 @supabase_retry_handler()
 async def sell_fish_from_db(user_id_str: str, fish_ids: List[int], total_sell_price: int):
-    """
-    여러 마리의 물고기를 판매하고 재화를 얻는 RPC를 호출합니다.
-    Supabase에 'sell_fishes'라는 이름의 RPC 함수가 필요합니다.
-    """
     params = {
         'p_user_id': user_id_str,
         'p_fish_ids': fish_ids,
