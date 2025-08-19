@@ -1,5 +1,3 @@
-# cogs/games/fishing.py (최종 완성본)
-
 import discord
 from discord.ext import commands
 from discord import ui
@@ -60,14 +58,14 @@ class FishingGameView(ui.View):
                 await self._send_result(embed); self.stop()
         except asyncio.CancelledError: pass
         except Exception as e:
-            logger.error(f"{self.player.display_name}의 낚시 게임 흐름 중 오류: {e}", exc_info=True)
+            logger.error(f"{self.player.display_name}の낚시 게임 흐름 중 오류: {e}", exc_info=True)
             if not self.is_finished():
                 await self._send_result(discord.Embed(title="❌ エラー発生", description="釣りの処理中に予期せぬエラーが発生しました。", color=discord.Color.red())); self.stop()
 
     async def _handle_catch_logic(self) -> tuple[discord.Embed, bool, bool, bool]:
         all_loot = get_fishing_loot()
-        location_map = {"river": "강", "sea": "바다"}
-        current_location_name = location_map.get(self.location_type, "강")
+        location_map = {"river": "川", "sea": "海"}
+        current_location_name = location_map.get(self.location_type, "川")
         
         base_loot = [item for item in all_loot if item.get('location_type') == current_location_name or item.get('location_type') is None]
 
@@ -82,7 +80,8 @@ class FishingGameView(ui.View):
             logger.warning(f"'{current_location_name}' 장소에 대한 loot 테이블이 비어있습니다.")
             return (discord.Embed(title="エラー", description="この場所では何も釣れないようです。", color=discord.Color.red()), False, False, False)
 
-        weights = [item['weight'] * (1 + self.rod_bonus if item.get('base_value') is not None or item.get('value', 0) > 0 else 1) for item in loot_pool]
+        # [🔴 핵심 수정] (item.get('value') or 0) > 0 으로 변경하여 None 값에 대한 오류를 방지합니다.
+        weights = [item['weight'] * (1 + self.rod_bonus if item.get('base_value') is not None or (item.get('value') or 0) > 0 else 1) for item in loot_pool]
         
         catch_proto = random.choices(loot_pool, weights=weights, k=1)[0]
         
@@ -94,7 +93,7 @@ class FishingGameView(ui.View):
             log_publicly = True
             size = round(random.uniform(catch_proto["min_size"], catch_proto["max_size"]), 1)
             if is_legendary_catch: await set_legendary_fish_cooldown()
-            await add_to_aquarium(str(self.player.id), {"name": catch_proto['name'], "size": size})
+            await add_to_aquarium(str(self.player.id), {"name": catch_proto['name'], "size": size, "emoji": catch_proto.get('emoji', '🐠')})
             is_big_catch = size >= self.big_catch_threshold
             
             title = "🏆 大物を釣り上げた！ 🏆" if is_big_catch else "🎉 釣り成功！ 🎉"
@@ -103,11 +102,11 @@ class FishingGameView(ui.View):
             embed.title = title
             embed.description = f"{self.player.mention}さんが釣りに成功しました！"
             embed.color = discord.Color.gold() if is_legendary_catch else discord.Color.blue()
-            embed.add_field(name="魚", value=f"**{catch_proto['name']}**", inline=True)
+            embed.add_field(name="魚", value=f"{catch_proto.get('emoji', '🐠')} **{catch_proto['name']}**", inline=True)
             embed.add_field(name="サイズ", value=f"`{size}`cm", inline=True)
         else:
             log_publicly = catch_proto.get("log_publicly", False)
-            value = catch_proto.get('value', 0)
+            value = catch_proto.get('value') or 0 # None일 경우 0으로 처리
             if value != 0: await update_wallet(self.player, value)
             
             embed.title = catch_proto['title']
@@ -234,7 +233,7 @@ class FishingPanelView(ui.View):
 
                 location_name = "川" if location_type == "river" else "海"
                 desc = f"### {location_name}にウキを投げました。\n**🎣 使用中の釣竿:** `{rod}`\n**🐛 使用中のエサ:** `{bait}`"
-                embed = discord.Embed(title=f"🎣 {location_name}釣りを開始しました！", description=desc, color=discord.Color.light_grey())
+                embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
                 
                 if waiting_image_url := get_config("FISHING_WAITING_IMAGE_URL"):
                     embed.set_image(url=waiting_image_url.strip('"'))
@@ -276,7 +275,7 @@ class Fishing(commands.Cog):
         size_field = next((f for f in result_embed.fields if f.name == "サイズ"), None)
         if not all([fish_field, size_field]): return
 
-        fish_name_raw = fish_field.value.replace('**', '')
+        fish_name_raw = fish_field.value.split('**')[1] if '**' in fish_field.value else fish_field.value
         fish_data = next((loot for loot in get_fishing_loot() if loot['name'] == fish_name_raw), None)
         if not fish_data: return
 
@@ -327,7 +326,7 @@ class Fishing(commands.Cog):
         
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
-        logger.info(f"✅ {panel_key} 패널을 성공적으로 새로 생성했습니다. (채널: #{channel.name})")
+        logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Fishing(bot))
