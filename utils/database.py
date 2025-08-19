@@ -118,7 +118,15 @@ async def load_game_data_from_db():
     if item_response and item_response.data:
         _item_database_cache = {item.pop('name'): item for item in item_response.data}
         logger.info(f"✅ {len(_item_database_cache)}개의 아이템 정보를 DB에서 로드했습니다.")
+
     loot_response = await supabase.table('fishing_loots').select('*').execute()
+    # ================= [진단 A] =================
+    print("\n\n" + "="*20 + " [진단 A: database.py] " + "="*20)
+    print("fishing_loots 테이블에서 Supabase가 반환한 원본 데이터:")
+    print(loot_response.data)
+    print("="*65 + "\n\n")
+    # ============================================
+
     if loot_response and loot_response.data:
         _fishing_loot_cache = loot_response.data
         logger.info(f"✅ {len(_fishing_loot_cache)}개의 낚시 결과물 정보를 DB에서 로드했습니다.")
