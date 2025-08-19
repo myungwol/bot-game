@@ -17,11 +17,12 @@ from utils.database import (
 
 logger = logging.getLogger(__name__)
 
-# [🔴 핵심 추가 3] 바다낚시에 필요한 낚싯대 이름 정의
-INTERMEDIATE_ROD = "中級者用の釣竿"
+INTERMEDIATE_ROD_NAME = "中級者の釣竿"
+# [🔴 핵심] 바다낚시에 필요한 최소 등급을 '3' (중급)으로 명확히 정의합니다.
+REQUIRED_TIER_FOR_SEA = 3
 
 class FishingGameView(ui.View):
-    # ... (init, start_game, game_flow 부분은 변경 없음) ...
+    # ... (이 클래스는 이전 답변과 완전히 동일하므로 생략) ...
     def __init__(self, bot: commands.Bot, user: discord.Member, used_rod: str, used_bait: str, remaining_baits: Dict[str, int], cog_instance: 'Fishing', location_type: str):
         super().__init__(timeout=35)
         self.bot = bot; self.player = user; self.message: Optional[discord.WebhookMessage] = None
@@ -93,7 +94,6 @@ class FishingGameView(ui.View):
         embed = discord.Embed()
         
         if catch_proto.get("min_size") is not None:
-            # [🔴 핵심 수정 2] 이제 물고기를 잡았을 때만 로그가 기록됩니다.
             log_publicly = True
             size = round(random.uniform(catch_proto["min_size"], catch_proto["max_size"]), 1)
             if is_legendary_catch: await set_legendary_fish_cooldown()
@@ -109,8 +109,6 @@ class FishingGameView(ui.View):
             embed.add_field(name="魚", value=f"{catch_proto.get('emoji', '🐠')} **{catch_proto['name']}**", inline=True)
             embed.add_field(name="サイズ", value=f"`{size}`cm", inline=True)
         else:
-            # [🔴 핵심 수정 2] 잡템/돈일 경우, 공개 로그 플래그를 DB에서 읽지 않아 로그가 남지 않습니다.
-            # log_publicly = catch_proto.get("log_publicly", False) <-- 이 줄 삭제
             value = catch_proto.get('value') or 0
             if value != 0: await update_wallet(self.player, value)
             
@@ -119,7 +117,6 @@ class FishingGameView(ui.View):
             embed.color = int(catch_proto['color'], 16) if isinstance(catch_proto['color'], str) else catch_proto['color']
 
         if image_url := catch_proto.get('image_url'):
-            # [🔴 핵심 수정 1] set_image 대신 set_thumbnail을 사용하여 우측 상단에 작은 이미지로 표시합니다.
             embed.set_thumbnail(url=image_url)
             
         return embed, log_publicly, is_big_catch, is_legendary_catch
@@ -140,7 +137,6 @@ class FishingGameView(ui.View):
             await self._send_result(result_embed, log_publicly, is_big_catch, is_legendary)
         self.stop()
 
-    # ... (이하 _send_result, on_timeout, stop 메서드는 변경 없음) ...
     async def _send_result(self, embed: discord.Embed, log_publicly: bool = False, is_big_catch: bool = False, is_legendary: bool = False):
         remaining_baits_config = get_config("FISHING_REMAINING_BAITS_DISPLAY", ["一般の釣りエサ", "高級釣りエサ"])
         footer_private = f"残りのエサ: {' / '.join([f'{b}({self.remaining_baits.get(b, 0)}個)' for b in remaining_baits_config])}"
@@ -174,7 +170,7 @@ class FishingGameView(ui.View):
 
 
 class FishingPanelView(ui.View):
-    # ... (init, setup_buttons 부분은 변경 없음) ...
+    # ... (init, setup_buttons는 변경 없음) ...
     def __init__(self, bot: commands.Bot, cog_instance: 'Fishing', panel_key: str):
         super().__init__(timeout=None)
         self.bot = bot
@@ -230,10 +226,18 @@ class FishingPanelView(ui.View):
                         await interaction.followup.send("❌ プロフィール画面から釣竿を装備してください。", ephemeral=True)
                         return
                 
-                # [🔴 핵심 수정 3] 바다 낚시를 할 때 특정 낚싯대를 소지하고 있는지 확인합니다.
                 if location_type == 'sea':
-                    if INTERMEDIATE_ROD not in inventory:
-                        await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD}」を所持している必要があります。", ephemeral=True)
+                    owned_rod_tiers = [
+                        item_db.get(item, {}).get('tier', 0)
+                        for item in inventory
+                        if '竿' in item and item_db.get(item, {}).get('category') == '釣り'
+                    ]
+                    
+                    max_tier = max(owned_rod_tiers) if owned_rod_tiers else 0
+
+                    if max_tier < REQUIRED_TIER_FOR_SEA:
+                        # [🔴 핵심] 에러 메시지에 기준이 되는 낚싯대 이름과 등급(tier) 정보를 모두 표시
+                        await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD_NAME}」(等級{REQUIRED_TIER_FOR_SEA})以上の性能を持つ釣竿が必要です。", ephemeral=True)
                         return
 
                 self.fishing_cog.active_fishing_sessions_by_user.add(user_id)
@@ -263,7 +267,7 @@ class FishingPanelView(ui.View):
 
 
 class Fishing(commands.Cog):
-    # ... (Cog의 나머지 부분은 변경 없음) ...
+    # ... (Cog의 나머지 부분은 이전과 동일하므로 생략) ...
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_fishing_sessions_by_user: Set[int] = set()
@@ -345,7 +349,6 @@ class Fishing(commands.Cog):
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
-
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Fishing(bot))
