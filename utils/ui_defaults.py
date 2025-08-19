@@ -49,6 +49,16 @@ UI_EMBEDS = {
         "description": "⚙️ {admin_mention}さんが{target_mention}さんのコインを`{amount}`{currency_icon}だけ**{action}**しました。",
         "color": 0x3498DB
     },
+    "panel_fishing_river": {
+        "title": "🏞️ 강 낚시터",
+        "description": "강가에서 여유롭게 낚시를 즐겨보세요.\n아래 버튼을 눌러 낚시를 시작합니다.",
+        "color": 0x5865F2
+    },
+    "panel_fishing_sea": {
+        "title": "🌊 바다 낚시터",
+        "description": "넓은 바다에서 월척의 꿈을 펼쳐보세요!\n아래 버튼을 눌러 낚시를 시작합니다.",
+        "color": 0x3498DB
+    },
 }
 
 # ==============================================================================
@@ -89,6 +99,24 @@ UI_PANEL_COMPONENTS = [
         "label": "持ち物を見る",
         "style": "primary",
         "emoji": "📦",
+        "row": 0
+    },
+    {
+        "component_key": "start_fishing_river",
+        "panel_key": "fishing_river",
+        "component_type": "button",
+        "label": "강에서 낚시하기",
+        "style": "primary",
+        "emoji": "🏞️",
+        "row": 0
+    },
+    {
+        "component_key": "start_fishing_sea",
+        "panel_key": "fishing_sea",
+        "component_type": "button",
+        "label": "바다에서 낚시하기",
+        "style": "secondary",
+        "emoji": "🌊",
         "row": 0
     },
 ]
