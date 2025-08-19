@@ -2,11 +2,14 @@ import discord
 from discord.ext import commands
 from discord import ui
 import logging
+import asyncio # asyncio 임포트 추가
 
 from utils.database import (
     get_wallet, supabase, get_config, get_panel_components_from_db,
     save_panel_id, get_panel_id, get_embed_from_db
 )
+# [🔴 핵심 1] helpers에서 embed 포맷팅 함수를 가져옵니다.
+from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -14,10 +17,12 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
     """송금할 금액을 입력받는 Modal 클래스"""
     amount = ui.TextInput(label="金額", placeholder="送金したいコインの額を入力してください", required=True, style=discord.TextStyle.short)
 
-    def __init__(self, sender: discord.Member, recipient: discord.Member):
+    def __init__(self, sender: discord.Member, recipient: discord.Member, cog_instance: 'Atm'):
         super().__init__(timeout=180)
         self.sender = sender
         self.recipient = recipient
+        # [🔴 핵심 2] Atm Cog 인스턴스를 받아와서 패널 재설치에 사용합니다.
+        self.cog = cog_instance
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -37,11 +42,23 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
             if not response.data:
                  raise Exception("送金に失敗しました。残高不足またはデータベースエラーの可能性があります。")
 
+            # 먼저 Modal에 대한 응답으로 유저에게만 보이는 확인 메시지를 보냅니다.
+            await interaction.response.send_message("✅ 送金が完了しました。パネルを更新します。", ephemeral=True, delete_after=5)
+
+            # EconomyCore Cog를 찾아 로그 채널에 로그를 남깁니다. (기존 기능 유지)
             economy_cog = interaction.client.get_cog("EconomyCore")
             if economy_cog:
                 await economy_cog.log_coin_transfer(self.sender, self.recipient, amount_to_send)
 
-            await interaction.response.send_message(f"✅ {self.recipient.mention}さんへ `{amount_to_send:,}`{self.currency_icon} を正常に送金しました。", ephemeral=True)
+            # [🔴 핵심 3] 공개적인 임베드 결과 메시지를 ATM 채널에 보냅니다.
+            if embed_data := await get_embed_from_db("log_coin_transfer"):
+                embed = format_embed_from_db(embed_data, sender_mention=self.sender.mention, recipient_mention=self.recipient.mention, amount=f"{amount_to_send:,}", currency_icon=self.currency_icon)
+                await interaction.channel.send(embed=embed)
+
+            # [🔴 핵심 4] 패널을 자동으로 재설치합니다.
+            # 시각적인 효과를 위해 짧은 딜레이를 줍니다.
+            await asyncio.sleep(2)
+            await self.cog.regenerate_panel(interaction.channel)
 
         except ValueError:
             await interaction.response.send_message("❌ 金額は数字で入力してください。", ephemeral=True, delete_after=10)
@@ -75,12 +92,10 @@ class AtmPanelView(ui.View):
         user_select = ui.UserSelect(placeholder="コインを送る相手を選んでください...")
         
         async def select_callback(select_interaction: discord.Interaction):
-            # [🔴 핵심 수정] 유저 객체를 가져오는 방식을 올바르게 변경합니다.
             selected_user_id = int(select_interaction.data["values"][0])
             recipient = select_interaction.guild.get_member(selected_user_id)
 
             if not recipient:
-                # 드물게 발생하는 경우: 유저가 서버를 나가는 등
                 await select_interaction.response.send_message("❌ ユーザーが見つかりませんでした。", ephemeral=True, delete_after=10)
                 return
 
@@ -90,7 +105,8 @@ class AtmPanelView(ui.View):
                 await select_interaction.response.send_message("❌ 自分自身やボットには送金できません。", ephemeral=True, delete_after=10)
                 return
 
-            modal = TransferAmountModal(sender, recipient)
+            # [🔴 핵심 5] Modal을 생성할 때, Atm Cog의 인스턴스(self.cog)를 전달합니다.
+            modal = TransferAmountModal(sender, recipient, self.cog)
             await select_interaction.response.send_modal(modal)
             
             await modal.wait()
