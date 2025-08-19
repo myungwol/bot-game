@@ -13,7 +13,6 @@ from utils.helpers import format_embed_from_db
 logger = logging.getLogger(__name__)
 
 class TransferAmountModal(ui.Modal, title="送金金額の入力"):
-    """송금할 금액을 입력받는 Modal 클래스"""
     amount = ui.TextInput(label="金額", placeholder="送金したいコインの額を入力してください", required=True, style=discord.TextStyle.short)
 
     def __init__(self, sender: discord.Member, recipient: discord.Member, cog_instance: 'Atm'):
@@ -42,11 +41,6 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
 
             await interaction.response.send_message("✅ 送金が完了しました。パネルを更新します。", ephemeral=True, delete_after=5)
 
-            # [🔴 핵심 수정] EconomyCore의 로그 함수 호출 부분을 삭제하여 중복 로그를 제거합니다.
-            # economy_cog = interaction.client.get_cog("EconomyCore")
-            # if economy_cog:
-            #     await economy_cog.log_coin_transfer(self.sender, self.recipient, amount_to_send)
-
             if embed_data := await get_embed_from_db("log_coin_transfer"):
                 embed = format_embed_from_db(embed_data, sender_mention=self.sender.mention, recipient_mention=self.recipient.mention, amount=f"{amount_to_send:,}", currency_icon=self.currency_icon)
                 await interaction.channel.send(embed=embed)
@@ -62,7 +56,6 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
 
 
 class AtmPanelView(ui.View):
-    """ATM 패널의 버튼과 동작을 관리하는 영구 View"""
     def __init__(self, cog_instance: 'Atm'):
         super().__init__(timeout=None)
         self.cog = cog_instance
@@ -125,11 +118,20 @@ class Atm(commands.Cog):
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "atm"):
         embed_key = "panel_atm"
         
-        if (panel_info := get_panel_id(panel_key)) and (old_id := panel_info.get('message_id')):
-            try:
-                await (await channel.fetch_message(old_id)).delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
+        # [🔴 핵심 수정] 패널 삭제 로직을 더 안정적으로 변경
+        if panel_info := get_panel_id(panel_key):
+            old_message_id = panel_info.get('message_id')
+            old_channel_id = panel_info.get('channel_id')
+            if old_message_id and old_channel_id:
+                try:
+                    # DB에 저장된 채널 ID를 사용하여 정확한 채널 객체를 찾습니다.
+                    old_channel = self.bot.get_channel(old_channel_id)
+                    if old_channel:
+                        old_message = await old_channel.fetch_message(old_message_id)
+                        await old_message.delete()
+                except (discord.NotFound, discord.Forbidden):
+                    logger.warning(f"'{panel_key}'의 이전 패널(ID: {old_message_id})을 삭제하는 데 실패했습니다.")
+                    pass
         
         if not (embed_data := await get_embed_from_db(embed_key)):
             logger.warning(f"DB에서 '{embed_key}' 임베드 데이터를 찾을 수 없어, 패널 생성을 건너뜁니다.")
@@ -140,6 +142,7 @@ class Atm(commands.Cog):
         await view.setup_buttons()
         self.bot.add_view(view)
         
+        # 새로운 패널은 interaction이 발생한 현재 채널에 생성합니다.
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
