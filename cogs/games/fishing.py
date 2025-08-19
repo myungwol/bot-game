@@ -17,7 +17,7 @@ from utils.database import (
 
 logger = logging.getLogger(__name__)
 
-INTERMEDIATE_ROD_NAME = "中級者用の釣竿"
+INTERMEDIATE_ROD_NAME = "中級者の釣竿"
 REQUIRED_TIER_FOR_SEA = 3
 
 class FishingGameView(ui.View):
