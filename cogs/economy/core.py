@@ -1,5 +1,3 @@
-# cogs/economy/core.py
-
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands, ui
@@ -16,47 +14,7 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# --- UI 클래스 (TransferConfirmView) ---
-class TransferConfirmView(ui.View):
-    # ... (이전과 동일, 변경 없음) ...
-    def __init__(self, sender: discord.Member, recipient: discord.Member, amount: int, cog_instance: 'EconomyCore'):
-        super().__init__(timeout=60)
-        self.sender = sender
-        self.recipient = recipient
-        self.amount = amount
-        self.economy_cog = cog_instance
-        self.result_message: Optional[str] = None
-        self.currency_icon = get_config("CURRENCY_ICON", "🪙")
-
-    @ui.button(label="はい", style=discord.ButtonStyle.success)
-    async def confirm(self, interaction: discord.Interaction, button: ui.Button):
-        if interaction.user.id != self.sender.id:
-            await interaction.response.send_message("本人確認が必要です。", ephemeral=True)
-            return
-        await interaction.response.defer(thinking=True, ephemeral=True)
-        try:
-            params = {'sender_id_param': str(self.sender.id), 'recipient_id_param': str(self.recipient.id), 'amount_param': self.amount}
-            response = await supabase.rpc('transfer_coins', params).execute()
-            
-            if not response.data:
-                 raise Exception(f"송금 실패: 잔액 부족 또는 DB 오류. {getattr(response, 'error', 'N/A')}")
-                 
-            await self.economy_cog.log_coin_transfer(self.sender, self.recipient, self.amount)
-            self.result_message = f"✅ {self.recipient.mention}さんへ `{self.amount:,}`{self.currency_icon}を正常に送金しました。"
-        except Exception as e:
-            logger.error(f"송금 RPC 실행 중 오류: {e}", exc_info=True)
-            self.result_message = f"❌ 送金に失敗しました。残高が不足しているか、予期せぬエラーが発生しました。"
-        self.stop()
-
-    @ui.button(label="いいえ", style=discord.ButtonStyle.danger)
-    async def cancel(self, interaction: discord.Interaction, button: ui.Button):
-        if interaction.user.id != self.sender.id:
-            await interaction.response.send_message("本人確認が必要です。", ephemeral=True)
-            return
-        self.result_message = "❌ 送金がキャンセルされました。"
-        self.stop()
-        await interaction.response.edit_message(content=self.result_message, view=None)
-
+# --- [삭제 완료] TransferConfirmView 클래스가 있던 부분이 완전히 삭제되었습니다. ---
 
 # --- EconomyCore Cog ---
 class EconomyCore(commands.Cog):
@@ -125,7 +83,6 @@ class EconomyCore(commands.Cog):
                 for vc in guild.voice_channels:
                     if vc.id == afk_ch_id: continue
                     
-                    # [핵심 수정] 봇이 아닌 모든 멤버를 대상으로 변경
                     eligible_members = [m for m in vc.members if not m.bot]
                     
                     for member in eligible_members:
@@ -149,7 +106,6 @@ class EconomyCore(commands.Cog):
         except Exception as e:
             logger.error(f"음성 보상 루프 중 오류: {e}", exc_info=True)
         
-    # ... (이하 나머지 코드는 이전과 동일, 변경 없음) ...
     @voice_reward_loop.before_loop
     async def before_voice_reward_loop(self):
         await self.bot.wait_until_ready()
@@ -181,25 +137,7 @@ class EconomyCore(commands.Cog):
             try: await log_channel.send(embed=embed)
             except Exception as e: logger.error(f"관리자 코인 조작 로그 전송 실패: {e}", exc_info=True)
         
-    @app_commands.command(name="送金", description="他のユーザーにコインを送ります。")
-    @app_commands.describe(recipient="コインを受け取るユーザー", amount="送る金額")
-    async def transfer_command(self, interaction: discord.Interaction, recipient: discord.Member, amount: app_commands.Range[int, 1, None]):
-        sender = interaction.user
-        if recipient.bot or recipient.id == sender.id:
-            return await interaction.response.send_message("自分自身やボットには送金できません。", ephemeral=True)
-            
-        sender_wallet = await get_wallet(sender.id)
-        if sender_wallet.get('balance', 0) < amount:
-            return await interaction.response.send_message(f"残高が不足しています。 現在の残高: `{sender_wallet.get('balance', 0):,}`{self.currency_icon}", ephemeral=True)
-        
-        embed_data = await get_embed_from_db("embed_transfer_confirmation")
-        embed = format_embed_from_db(embed_data, recipient_mention=recipient.mention, amount=f"{amount:,}", currency_icon=self.currency_icon)
-
-        view = TransferConfirmView(sender, recipient, amount, self)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-        await view.wait()
-        
-        await interaction.edit_original_response(content=view.result_message, view=None, embed=None)
+    # --- [삭제 완료] /送金 명령어(transfer_command)가 있던 부분이 완전히 삭제되었습니다. ---
         
     @app_commands.command(name="コイン付与", description="[管理者専用] 特定のユーザーにコインを付与します。")
     @app_commands.checks.has_permissions(administrator=True)
