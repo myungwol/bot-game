@@ -66,19 +66,28 @@ class FishingGameView(ui.View):
             if not self.is_finished():
                 await self._send_result(discord.Embed(title="❌ エラー発生", description="釣りの処理中に予期せぬエラーが発生しました。", color=discord.Color.red())); self.stop()
 
+    # cogs/games/fishing.py 파일 안에서 이 함수를 찾아서 아래 내용으로 덮어쓰세요.
     async def _handle_catch_logic(self) -> tuple[discord.Embed, bool, bool, bool]:
         all_loot = get_fishing_loot()
         location_map = {"river": "川", "sea": "海"}
         current_location_name = location_map.get(self.location_type, "川")
-        
+
+        # ================= [진단 코드 시작] =================
+        print("-" * 50)
+        print(f"[진단] 현재 낚시 장소: {current_location_name}")
+        print(f"[진단] DB에서 로드한 전체 아이템 개수: {len(all_loot)}개")
+        # ================= [진단 코드 끝] =================
+
         base_loot = [item for item in all_loot if item.get('location_type') == current_location_name or item.get('location_type') is None]
 
         is_legendary_available = self.used_rod == "伝説の釣竿" and await is_legendary_fish_available()
         loot_pool = [item for item in base_loot if item['name'] != 'クジラ']
-        
-        if is_legendary_available:
-            if legendary_fish := next((item for item in base_loot if item['name'] == 'クジラ'), None):
-                loot_pool.append(legendary_fish)
+
+        # ================= [진단 코드 시작] =================
+        print(f"[진단] '{current_location_name}' 장소 + 잡템으로 필터링된 아이템 개수: {len(base_loot)}개")
+        print(f"[진단] 최종 뽑기 목록(loot_pool) 아이템 개수: {len(loot_pool)}개")
+        print("-" * 50)
+        # ================= [진단 코드 끝] =================
         
         if not loot_pool:
             logger.warning(f"'{current_location_name}' 장소에 대한 loot 테이블이 비어있습니다.")
@@ -119,7 +128,7 @@ class FishingGameView(ui.View):
             embed.set_thumbnail(url=image_url)
             
         return embed, log_publicly, is_big_catch, is_legendary_catch
-
+        
     @ui.button(label="待機中...", style=discord.ButtonStyle.secondary, custom_id="catch_fish_button")
     async def catch_button(self, interaction: discord.Interaction, button: ui.Button):
         if self.game_task: self.game_task.cancel()
