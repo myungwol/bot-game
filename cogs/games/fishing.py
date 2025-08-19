@@ -52,7 +52,6 @@ class FishingGameView(ui.View):
                 catch_button.style = discord.ButtonStyle.success; catch_button.label = "釣り上げる！"
             
             embed = discord.Embed(title="❗ アタリが来た！", description="今だ！ボタンを押して釣り上げよう！", color=discord.Color.red())
-            # 입질이 왔을 때의 이미지는 계속 큰 이미지로 유지 (긴박감 강조)
             if waiting_image_url := get_config("FISHING_WAITING_IMAGE_URL"):
                 embed.set_image(url=waiting_image_url.strip('"'))
 
@@ -189,7 +188,7 @@ class FishingPanelView(ui.View):
                 if key.startswith('start_fishing_'):
                     button.callback = self._start_fishing_callback
                 self.add_item(button)
-
+    
     async def _start_fishing_callback(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         lock = self.user_locks.setdefault(user_id, asyncio.Lock())
@@ -226,17 +225,15 @@ class FishingPanelView(ui.View):
                         await interaction.followup.send("❌ プロフィール画面から釣竿を装備してください。", ephemeral=True)
                         return
                 
+                # [🔴 핵심 변경] 바다낚시 조건을 '장착'한 낚싯대의 등급으로 확인합니다.
                 if location_type == 'sea':
-                    owned_rod_tiers = [
-                        item_db.get(item, {}).get('tier', 0)
-                        for item in inventory
-                        if '竿' in item and item_db.get(item, {}).get('category') == '釣り'
-                    ]
-                    
-                    max_tier = max(owned_rod_tiers) if owned_rod_tiers else 0
+                    # 현재 장착한 낚싯대의 정보를 가져옵니다.
+                    equipped_rod_data = item_db.get(rod, {})
+                    # 장착한 낚싯대의 등급(tier)을 확인합니다. 정보가 없으면 0으로 간주합니다.
+                    equipped_rod_tier = equipped_rod_data.get('tier', 0)
 
-                    if max_tier < REQUIRED_TIER_FOR_SEA:
-                        await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD_NAME}」(等級{REQUIRED_TIER_FOR_SEA})以上の性能を持つ釣竿が必要です。", ephemeral=True)
+                    if equipped_rod_tier < REQUIRED_TIER_FOR_SEA:
+                        await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD_NAME}」(等級{REQUIRED_TIER_FOR_SEA})以上の性能を持つ釣竿を**装備**する必要があります。", ephemeral=True)
                         return
 
                 self.fishing_cog.active_fishing_sessions_by_user.add(user_id)
@@ -254,7 +251,6 @@ class FishingPanelView(ui.View):
                 desc = f"### {location_name}にウキを投げました。\n**🎣 使用中の釣竿:** `{rod}`\n**🐛 使用中のエサ:** `{bait}`"
                 embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
                 
-                # [🔴 핵심 수정] set_image를 set_thumbnail로 변경하여 이미지를 우측 상단에 표시합니다.
                 if waiting_image_url := get_config("FISHING_WAITING_IMAGE_URL"):
                     embed.set_thumbnail(url=waiting_image_url.strip('"'))
 
