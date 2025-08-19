@@ -1,8 +1,7 @@
 # cogs/games/fishing.py (이미지, 강/바다, 복어 패널티 적용 최종본)
-
 import discord
 from discord.ext import commands
-from discord import ui, app_commands # << 이렇게 수정하거나
+from discord import ui
 import random
 import asyncio
 import logging
@@ -168,6 +167,7 @@ class FishingGameView(ui.View):
         self.fishing_cog.active_fishing_sessions_by_user.discard(self.player.id)
         super().stop()
 
+
 class FishingPanelView(ui.View):
     def __init__(self, bot: commands.Bot, cog_instance: 'Fishing'):
         super().__init__(timeout=None)
@@ -187,26 +187,35 @@ class FishingPanelView(ui.View):
                     button.callback = self._start_fishing_callback
                 self.add_item(button)
 
+    # [🔴 핵심 수정] 동시 클릭으로 인한 상호작용 실패 방지 로직 적용
     async def _start_fishing_callback(self, interaction: discord.Interaction):
         user_id = interaction.user.id
-        custom_id = interaction.data['custom_id']
-        location_type = custom_id.split('_')[-1]
-
-        if last_message := self.fishing_cog.last_result_messages.pop(user_id, None):
-            try: await last_message.delete()
-            except (discord.NotFound, discord.Forbidden): pass
-
         lock = self.user_locks.setdefault(user_id, asyncio.Lock())
-        if lock.locked():
-            return await interaction.response.send_message("現在、以前のリクエストを処理中です。しばらくお待ちください。", ephemeral=True)
 
+        # 만약 이 유저의 다른 낚시 작업이 이미 실행 중이라면,
+        # 기다리지 않고 즉시 응답하여 상호작용 시간 초과를 방지합니다.
+        if lock.locked():
+            await interaction.response.send_message("現在、以前のリクエストを処理中です。しばらくお待ちください。", ephemeral=True, delete_after=5)
+            return
+
+        # 이제 안전하게 잠금을 획득하고 작업을 시작합니다.
         async with lock:
+            # 작업 시작 전에 최신 상태를 다시 한번 확인
             if user_id in self.fishing_cog.active_fishing_sessions_by_user:
-                return await interaction.response.send_message("すでに釣りを開始しています。", ephemeral=True)
+                await interaction.response.send_message("すでに釣りを開始しています。", ephemeral=True, delete_after=5)
+                return
 
             await interaction.response.defer(ephemeral=True)
             
+            # 이전 낚시 결과 메시지가 있다면 삭제
+            if last_message := self.fishing_cog.last_result_messages.pop(user_id, None):
+                try: await last_message.delete()
+                except (discord.NotFound, discord.Forbidden): pass
+            
             try:
+                custom_id = interaction.data['custom_id']
+                location_type = custom_id.split('_')[-1]
+                
                 uid_str = str(user_id)
                 gear, inventory = await asyncio.gather(get_user_gear(uid_str), get_inventory(uid_str))
                 rod = gear.get('rod', BARE_HANDS)
@@ -242,6 +251,7 @@ class FishingPanelView(ui.View):
                 view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type)
                 await view.start_game(interaction, embed)
             except Exception as e:
+                # 에러 발생 시 세션에서 유저를 확실히 제거
                 self.fishing_cog.active_fishing_sessions_by_user.discard(user_id)
                 logger.error(f"낚시 게임 시작 중 예측 못한 오류: {e}", exc_info=True)
                 await interaction.followup.send(f"❌ 釣りの開始中に予期せぬエラーが発生しました。", ephemeral=True)
