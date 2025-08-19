@@ -267,8 +267,10 @@ class UserProfile(commands.Cog):
         await view.setup_buttons()
         self.bot.add_view(view)
 
-    async def regenerate_panel(self, channel: discord.TextChannel):
-        panel_key, embed_key = "profile", "panel_profile"
+    # [🔴 핵심 수정] 사용하지 않는 panel_key 인자를 받을 수 있도록 추가
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "profile"):
+        # panel_key를 직접 "profile"로 고정하여 사용
+        embed_key = "panel_profile"
         if (panel_info := get_panel_id(panel_key)) and (old_id := panel_info.get('message_id')):
             try: await (await channel.fetch_message(old_id)).delete()
             except (discord.NotFound, discord.Forbidden): pass
