@@ -1,4 +1,4 @@
-# cogs/games/fishing.py (강/바다 패널 분리 최종본)
+# cogs/games/fishing.py (최종 완성본)
 
 import discord
 from discord.ext import commands
@@ -255,11 +255,11 @@ class Fishing(commands.Cog):
         logger.info("Fishing Cog가 성공적으로 초기화되었습니다.")
 
     async def register_persistent_views(self):
-        river_view = FishingPanelView(self.bot, self, "fishing_river")
+        river_view = FishingPanelView(self.bot, self, "panel_fishing_river")
         await river_view.setup_buttons()
         self.bot.add_view(river_view)
 
-        sea_view = FishingPanelView(self.bot, self, "fishing_sea")
+        sea_view = FishingPanelView(self.bot, self, "panel_fishing_sea")
         await sea_view.setup_buttons()
         self.bot.add_view(sea_view)
 
@@ -303,20 +303,21 @@ class Fishing(commands.Cog):
             logger.error(f"전설의 물고기 공지 전송 실패: {e}", exc_info=True)
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str):
-        if panel_key == "fishing_river":
+        if panel_key == "panel_fishing_river":
             embed_key = "panel_fishing_river"
-        elif panel_key == "fishing_sea":
+        elif panel_key == "panel_fishing_sea":
             embed_key = "panel_fishing_sea"
         else:
             logger.error(f"알 수 없는 낚시 패널 키입니다: {panel_key}")
             return
-
+        
         if (panel_info := get_panel_id(panel_key)) and (old_id := panel_info.get('message_id')):
             try: await (await channel.fetch_message(old_id)).delete()
             except (discord.NotFound, discord.Forbidden): pass
         
         if not (embed_data := await get_embed_from_db(embed_key)):
-            return logger.error(f"DB에서 '{embed_key}' 임베드를 찾을 수 없어 패널 생성을 중단합니다.")
+            logger.error(f"DB에서 '{embed_key}' 임베드를 찾을 수 없어 패널 생성을 중단합니다.")
+            return
         
         embed = discord.Embed.from_dict(embed_data)
         view = FishingPanelView(self.bot, self, panel_key)
