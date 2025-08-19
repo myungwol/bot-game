@@ -1,9 +1,8 @@
-# cogs/games/fishing.py (임시 명령어 삭제 최종본)
+# cogs/games/fishing.py (강/바다 패널 분리 최종본)
 
 import discord
 from discord.ext import commands
 from discord import ui
-# [🔴 핵심 수정] app_commands import를 제거합니다.
 import random
 import asyncio
 import logging
@@ -70,11 +69,10 @@ class FishingGameView(ui.View):
         location_map = {"river": "강", "sea": "바다"}
         current_location_name = location_map.get(self.location_type, "강")
         
-        # [수정] 쓰레기는 공통으로 잡히도록 로직 변경
         base_loot = [item for item in all_loot if item.get('location_type') == current_location_name or item.get('location_type') is None]
 
         is_legendary_available = self.used_rod == "伝説の釣竿" and await is_legendary_fish_available()
-        loot_pool = [item for item in base_loot if item['name'] != 'クジラ'] # 고래는 따로 처리
+        loot_pool = [item for item in base_loot if item['name'] != 'クジラ']
         
         if is_legendary_available:
             if legendary_fish := next((item for item in base_loot if item['name'] == 'クジラ'), None):
@@ -92,12 +90,11 @@ class FishingGameView(ui.View):
         is_big_catch = log_publicly = False
         embed = discord.Embed()
         
-        # [🔴 핵심 수정] min_size가 있는지 없는지로 물고기/아이템 구분
         if catch_proto.get("min_size") is not None:
             log_publicly = True
             size = round(random.uniform(catch_proto["min_size"], catch_proto["max_size"]), 1)
             if is_legendary_catch: await set_legendary_fish_cooldown()
-            await add_to_aquarium(str(self.player.id), {"name": catch_proto['name'], "size": size}) # emoji 제외
+            await add_to_aquarium(str(self.player.id), {"name": catch_proto['name'], "size": size})
             is_big_catch = size >= self.big_catch_threshold
             
             title = "🏆 大物を釣り上げた！ 🏆" if is_big_catch else "🎉 釣り成功！ 🎉"
@@ -108,13 +105,12 @@ class FishingGameView(ui.View):
             embed.color = discord.Color.gold() if is_legendary_catch else discord.Color.blue()
             embed.add_field(name="魚", value=f"**{catch_proto['name']}**", inline=True)
             embed.add_field(name="サイズ", value=f"`{size}`cm", inline=True)
-        else: # 쓰레기 또는 복어
+        else:
             log_publicly = catch_proto.get("log_publicly", False)
             value = catch_proto.get('value', 0)
             if value != 0: await update_wallet(self.player, value)
             
             embed.title = catch_proto['title']
-            # description에 value가 음수일 경우를 대비
             embed.description = catch_proto['description'].format(user_mention=self.player.mention, value=abs(value))
             embed.color = int(catch_proto['color'], 16) if isinstance(catch_proto['color'], str) else catch_proto['color']
 
@@ -170,15 +166,16 @@ class FishingGameView(ui.View):
         super().stop()
 
 class FishingPanelView(ui.View):
-    def __init__(self, bot: commands.Bot, cog_instance: 'Fishing'):
+    def __init__(self, bot: commands.Bot, cog_instance: 'Fishing', panel_key: str):
         super().__init__(timeout=None)
         self.bot = bot
         self.fishing_cog = cog_instance
+        self.panel_key = panel_key
         self.user_locks: Dict[int, asyncio.Lock] = {}
 
     async def setup_buttons(self):
         self.clear_items()
-        components_data = await get_panel_components_from_db('fishing')
+        components_data = await get_panel_components_from_db(self.panel_key)
         for comp in components_data:
             if comp.get('component_type') == 'button' and (key := comp.get('component_key')):
                 style_str = comp.get('style', 'secondary')
@@ -188,27 +185,20 @@ class FishingPanelView(ui.View):
                     button.callback = self._start_fishing_callback
                 self.add_item(button)
 
-    # [🔴 핵심 수정] 동시 클릭으로 인한 상호작용 실패 방지 로직 적용
     async def _start_fishing_callback(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         lock = self.user_locks.setdefault(user_id, asyncio.Lock())
-
-        # 만약 이 유저의 다른 낚시 작업이 이미 실행 중이라면,
-        # 기다리지 않고 즉시 응답하여 상호작용 시간 초과를 방지합니다.
         if lock.locked():
             await interaction.response.send_message("現在、以前のリクエストを処理中です。しばらくお待ちください。", ephemeral=True, delete_after=5)
             return
 
-        # 이제 안전하게 잠금을 획득하고 작업을 시작합니다.
         async with lock:
-            # 작업 시작 전에 최신 상태를 다시 한번 확인
             if user_id in self.fishing_cog.active_fishing_sessions_by_user:
                 await interaction.response.send_message("すでに釣りを開始しています。", ephemeral=True, delete_after=5)
                 return
 
             await interaction.response.defer(ephemeral=True)
             
-            # 이전 낚시 결과 메시지가 있다면 삭제
             if last_message := self.fishing_cog.last_result_messages.pop(user_id, None):
                 try: await last_message.delete()
                 except (discord.NotFound, discord.Forbidden): pass
@@ -252,25 +242,26 @@ class FishingPanelView(ui.View):
                 view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type)
                 await view.start_game(interaction, embed)
             except Exception as e:
-                # 에러 발생 시 세션에서 유저를 확실히 제거
                 self.fishing_cog.active_fishing_sessions_by_user.discard(user_id)
                 logger.error(f"낚시 게임 시작 중 예측 못한 오류: {e}", exc_info=True)
                 await interaction.followup.send(f"❌ 釣りの開始中に予期せぬエラーが発生しました。", ephemeral=True)
-
 
 class Fishing(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_fishing_sessions_by_user: Set[int] = set()
         self.fishing_log_channel_id: Optional[int] = None
-        self.view_instance = None
         self.last_result_messages: Dict[int, discord.Message] = {}
         logger.info("Fishing Cog가 성공적으로 초기화되었습니다.")
 
     async def register_persistent_views(self):
-        self.view_instance = FishingPanelView(self.bot, self)
-        await self.view_instance.setup_buttons()
-        self.bot.add_view(self.view_instance)
+        river_view = FishingPanelView(self.bot, self, "fishing_river")
+        await river_view.setup_buttons()
+        self.bot.add_view(river_view)
+
+        sea_view = FishingPanelView(self.bot, self, "fishing_sea")
+        await sea_view.setup_buttons()
+        self.bot.add_view(sea_view)
 
     async def cog_load(self):
         await self.load_configs()
@@ -311,22 +302,31 @@ class Fishing(commands.Cog):
         except Exception as e:
             logger.error(f"전설의 물고기 공지 전송 실패: {e}", exc_info=True)
 
-    async def regenerate_panel(self, channel: discord.TextChannel):
-        panel_key, embed_key = "fishing", "panel_fishing"
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str):
+        if panel_key == "fishing_river":
+            embed_key = "panel_fishing_river"
+        elif panel_key == "fishing_sea":
+            embed_key = "panel_fishing_sea"
+        else:
+            logger.error(f"알 수 없는 낚시 패널 키입니다: {panel_key}")
+            return
+
         if (panel_info := get_panel_id(panel_key)) and (old_id := panel_info.get('message_id')):
             try: await (await channel.fetch_message(old_id)).delete()
             except (discord.NotFound, discord.Forbidden): pass
+        
         if not (embed_data := await get_embed_from_db(embed_key)):
             return logger.error(f"DB에서 '{embed_key}' 임베드를 찾을 수 없어 패널 생성을 중단합니다.")
+        
         embed = discord.Embed.from_dict(embed_data)
-        self.view_instance = FishingPanelView(self.bot, self)
-        await self.view_instance.setup_buttons()
-        self.bot.add_view(self.view_instance)
-        new_message = await channel.send(embed=embed, view=self.view_instance)
+        view = FishingPanelView(self.bot, self, panel_key)
+        await view.setup_buttons()
+        
+        self.bot.add_view(view)
+        
+        new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
-        logger.info(f"✅ 낚시터 패널을 성공적으로 새로 생성했습니다. (채널: #{channel.name})")
-
-    # [🔴 핵심 수정] /checkimages 명령어 전체를 삭제합니다.
+        logger.info(f"✅ {panel_key} 패널을 성공적으로 새로 생성했습니다. (채널: #{channel.name})")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Fishing(bot))
