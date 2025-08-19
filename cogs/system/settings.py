@@ -1,4 +1,4 @@
-# cogs/system/settings.py
+# cogs/system/settings.py (강/바다 낚시터 설정 분리 최종본)
 
 import discord
 from discord.ext import commands
@@ -14,7 +14,6 @@ class Settings(commands.Cog):
         self.bot = bot
         logger.info("Settings Cog가 성공적으로 초기화되었습니다.")
 
-    # 'setup'이라는 최상위 명령어 그룹 생성
     setup_group = app_commands.Group(name="setup", description="봇의 여러 설정을 관리합니다.")
 
     @setup_group.command(name="channel", description="[관리자] 특정 기능에 대한 채널을 설정합니다.")
@@ -23,22 +22,18 @@ class Settings(commands.Cog):
         channel="지정할 텍스트 채널을 선택하세요."
     )
     @app_commands.choices(channel_type=[
-        # 여기에 필요한 채널 설정을 계속 추가할 수 있습니다.
+        # [🔴 핵심] 이 부분이 디스코드에 표시될 선택지입니다.
+        app_commands.Choice(name="[낚시] 강 낚시터 패널", value="river_fishing_panel_channel_id"),
+        app_commands.Choice(name="[낚시] 바다 낚시터 패널", value="sea_fishing_panel_channel_id"),
         app_commands.Choice(name="코인 활동 로그", value="coin_log_channel_id"),
         app_commands.Choice(name="낚시 결과 로그", value="fishing_log_channel_id"),
     ])
     @app_commands.checks.has_permissions(administrator=True)
     async def set_channel(self, interaction: discord.Interaction, channel_type: app_commands.Choice[str], channel: discord.TextChannel):
-        """
-        관리자가 봇의 기능 채널을 설정하는 명령어입니다.
-        """
         await interaction.response.defer(ephemeral=True)
-
         key = channel_type.value
         channel_id = channel.id
-
         try:
-            # utils/database.py에 이미 만들어둔 함수를 재사용합니다.
             await save_id_to_db(key, channel_id)
             logger.info(f"관리자({interaction.user})가 채널 설정을 업데이트했습니다: {key} -> #{channel.name}({channel_id})")
             await interaction.followup.send(
