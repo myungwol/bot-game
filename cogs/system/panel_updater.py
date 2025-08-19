@@ -10,7 +10,6 @@ class PanelUpdater(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         logger.info("PanelUpdater Cog가 성공적으로 초기화되었습니다.")
-        # [🔴 핵심 추가] Cog가 초기화될 때 루프를 시작합니다.
         self.check_for_panel_updates.start()
 
     def cog_unload(self):
@@ -23,6 +22,8 @@ class PanelUpdater(commands.Cog):
             "panel_fishing_sea":   {"cog_name": "Fishing", "channel_key": "sea_fishing_panel_channel_id"},
             "panel_commerce":      {"cog_name": "Commerce", "channel_key": "commerce_panel_channel_id"},
             "panel_profile":       {"cog_name": "UserProfile", "channel_key": "profile_panel_channel_id"},
+            # [🔴 핵심 추가] ATM 패널 정보를 여기에 추가합니다.
+            "panel_atm":           {"cog_name": "Atm", "channel_key": "atm_panel_channel_id"},
         }
         
         try:
