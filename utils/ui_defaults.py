@@ -21,12 +21,6 @@ UI_EMBEDS = {
         "description": "アイテムを買ったり、釣った魚などを売ったりできます。",
         "color": 0x5865F2
     },
-    "panel_fishing": {
-        "title": "🎣 釣り場",
-        "description": ("のんびり釣りを楽しみましょう。\n"
-                        "「釣りをする」ボタンで釣りを開始します。"),
-        "color": 0x5865F2
-    },
     "panel_profile": {
         "title": "📦 持ち物",
         "description": "自分の所持金やアイテム、装備などを確認できます。",
@@ -50,13 +44,13 @@ UI_EMBEDS = {
         "color": 0x3498DB
     },
     "panel_fishing_river": {
-        "title": "🏞️ 강 낚시터",
-        "description": "강가에서 여유롭게 낚시를 즐겨보세요.\n아래 버튼을 눌러 낚시를 시작합니다.",
+        "title": "🏞️ 川の釣り場",
+        "description": "川辺でのんびり釣りを楽しみましょう。\n下のボタンを押して釣りを開始します。",
         "color": 0x5865F2
     },
     "panel_fishing_sea": {
-        "title": "🌊 바다 낚시터",
-        "description": "넓은 바다에서 월척의 꿈을 펼쳐보세요!\n아래 버튼을 눌러 낚시를 시작합니다.",
+        "title": "🌊 海の釣り場",
+        "description": "広い海で大物の夢を追いかけましょう！\n下のボタンを押して釣りを開始します。",
         "color": 0x3498DB
     },
 }
