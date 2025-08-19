@@ -42,7 +42,7 @@ class MyBot(commands.Bot):
             "UserProfile",
             "Fishing",
             "Commerce",
-            "core"
+            "Atm"
         ]
         
         registered_views = 0
