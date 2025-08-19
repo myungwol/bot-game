@@ -75,7 +75,15 @@ class AtmPanelView(ui.View):
         user_select = ui.UserSelect(placeholder="コインを送る相手を選んでください...")
         
         async def select_callback(select_interaction: discord.Interaction):
-            recipient = select_interaction.data.users[0]
+            # [🔴 핵심 수정] 유저 객체를 가져오는 방식을 올바르게 변경합니다.
+            selected_user_id = int(select_interaction.data["values"][0])
+            recipient = select_interaction.guild.get_member(selected_user_id)
+
+            if not recipient:
+                # 드물게 발생하는 경우: 유저가 서버를 나가는 등
+                await select_interaction.response.send_message("❌ ユーザーが見つかりませんでした。", ephemeral=True, delete_after=10)
+                return
+
             sender = select_interaction.user
 
             if recipient.bot or recipient.id == sender.id:
