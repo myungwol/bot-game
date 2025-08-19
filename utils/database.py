@@ -43,12 +43,14 @@ def supabase_retry_handler(retries: int = 3, delay: int = 5):
         return wrapper
     return decorator
 
-ONE_WEEK_IN_SECONDS = 7 * 24 * 60 * 60
+ONE_MONTH_IN_SECONDS = 30 * 24 * 60 * 60
 
 async def is_legendary_fish_available() -> bool:
+    """ヌシを釣る事ができる状態か確認します (月1回)."""
     last_caught_str = get_config("legendary_fish_last_caught_timestamp", '"0"')
     last_caught_timestamp = float(last_caught_str.strip('"'))
-    return (time.time() - last_caught_timestamp) > ONE_WEEK_IN_SECONDS
+    return (time.time() - last_caught_timestamp) > ONE_MONTH_IN_SECONDS
+
 
 async def save_config(key: str, value: Any):
     global _configs_cache
