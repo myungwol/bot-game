@@ -1,5 +1,3 @@
-# cogs/economy/commerce.py (재정 정보 표시 및 메시지 자동삭제 최종 완성본)
-
 import discord
 from discord.ext import commands
 from discord import ui
@@ -12,7 +10,8 @@ logger = logging.getLogger(__name__)
 from utils.database import (
     get_inventory, get_wallet, supabase, get_id, get_item_database, 
     get_config, get_string, get_panel_components_from_db,
-    get_aquarium, get_fishing_loot, sell_fish_from_db
+    get_aquarium, get_fishing_loot, sell_fish_from_db,
+    save_panel_id, get_panel_id, get_embed_from_db # [🔴 핵심] 필요한 함수 3개 추가
 )
 
 async def delete_after(message: discord.WebhookMessage, delay: int):
@@ -33,14 +32,12 @@ class QuantityModal(ui.Modal):
         try:
             q_val = int(self.quantity.value)
             if not (1 <= q_val <= self.max_value):
-                # ephemeral 메시지는 delete_after를 지원하지 않아 별도 처리 필요
-                msg = await i.response.send_message(f"1から{self.max_value}までの数字を入力してください。", ephemeral=True)
-                # asyncio.create_task(delete_after(msg, 5)) # 이 방식은 webhook 메시지에만 가능
+                msg = await i.response.send_message(f"1から{self.max_value}までの数字を入力してください。", ephemeral=True, delete_after=5)
                 return
             self.value = q_val
             await i.response.defer(ephemeral=True) 
         except ValueError: 
-            await i.response.send_message("数字のみ入力してください。", ephemeral=True)
+            await i.response.send_message("数字のみ入力してください。", ephemeral=True, delete_after=5)
         except Exception: 
             self.stop()
 
@@ -58,7 +55,7 @@ class ShopViewBase(ui.View):
             msg = await interaction.followup.send(message_content, ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
         else:
-            await interaction.response.send_message(message_content, ephemeral=True)
+            await interaction.response.send_message(message_content, ephemeral=True, delete_after=5)
 
 class BuyItemView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str):
@@ -99,7 +96,7 @@ class BuyItemView(ShopViewBase):
                 max_buyable = balance // item_data['price'] if item_data['price'] > 0 else item_data.get('max_ownable', 999)
 
                 if max_buyable == 0:
-                    await interaction.response.send_message(get_string("commerce.error_insufficient_funds"), ephemeral=True)
+                    await interaction.response.send_message(get_string("commerce.error_insufficient_funds"), ephemeral=True, delete_after=5)
                     return
                 
                 modal = QuantityModal(f"{item_name} 購入", max_buyable)
@@ -118,7 +115,6 @@ class BuyItemView(ShopViewBase):
 
                 await supabase.rpc('buy_item', {'user_id_param': str(self.user.id), 'item_name_param': item_name, 'quantity_param': quantity, 'total_price_param': total_price}).execute()
                 
-                # [🔴 핵심 수정] 잔액을 다시 가져와서 메시지 생성
                 new_wallet = await get_wallet(self.user.id)
                 new_balance = new_wallet.get('balance', 0)
                 success_message = f"✅ **{item_name}** {quantity}個を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
@@ -141,7 +137,6 @@ class BuyItemView(ShopViewBase):
                     if role_id := get_id(id_key):
                         if role := interaction.guild.get_role(role_id): await self.user.add_roles(role)
                 
-                # [🔴 핵심 수정] 잔액을 다시 가져와서 메시지 생성
                 new_wallet = await get_wallet(self.user.id)
                 new_balance = new_wallet.get('balance', 0)
                 success_message = f"✅ **{item_name}**を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
@@ -259,7 +254,6 @@ class SellFishView(ShopViewBase):
         try:
             await sell_fish_from_db(str(self.user.id), fish_ids_to_sell, total_price)
             
-            # [🔴 핵심 수정] 잔액을 다시 가져와서 메시지 생성
             new_wallet = await get_wallet(self.user.id)
             new_balance = new_wallet.get('balance', 0)
             sold_fish_count = len(fish_ids_to_sell)
@@ -298,8 +292,8 @@ class SellCategoryView(ShopViewBase):
         category = interaction.data['custom_id'].split('_')[-1]
         if category == "fish":
             view = SellFishView(self.user)
-            view.message = self.message # 기존 메시지를 넘겨줌
-            await view.refresh_view() # 새 View의 내용으로 기존 메시지를 수정
+            view.message = self.message
+            await view.refresh_view()
 
 class CommercePanelView(ui.View):
     def __init__(self, cog_instance: 'Commerce'):
@@ -342,11 +336,35 @@ class Commerce(commands.Cog):
         await view.setup_buttons()
         self.bot.add_view(view)
         
-    # [🔴 핵심 수정] 사용하지 않는 panel_key 인자를 받을 수 있도록 추가
-    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = None):
-        # commerce 패널은 로직이 복잡하지 않으므로, 기존처럼 비워둡니다.
-        # 실제 패널 재생성은 서버 관리 봇의 책임입니다.
-        pass
+    # [🔴 핵심 수정] regenerate_panel 함수를 완벽하게 구현합니다.
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "commerce"):
+        panel_key = "commerce"
+        embed_key = "panel_commerce"
+        
+        # 1. 기존 패널 메시지 삭제
+        if (panel_info := get_panel_id(panel_key)) and (old_id := panel_info.get('message_id')):
+            try:
+                old_message = await channel.fetch_message(old_id)
+                await old_message.delete()
+            except (discord.NotFound, discord.Forbidden):
+                pass
+        
+        # 2. DB에서 새 임베드 데이터 가져오기
+        if not (embed_data := await get_embed_from_db(embed_key)):
+            logger.warning(f"DB에서 '{embed_key}' 임베드 데이터를 찾을 수 없어, 패널 생성을 건너뜁니다.")
+            return
+
+        # 3. 새 패널 생성 및 전송
+        embed = discord.Embed.from_dict(embed_data)
+        view = CommercePanelView(self)
+        await view.setup_buttons()
+        self.bot.add_view(view) # 봇에 View를 다시 등록
+        
+        new_message = await channel.send(embed=embed, view=view)
+
+        # 4. 새 패널 ID를 DB에 저장
+        await save_panel_id(panel_key, new_message.id, channel.id)
+        logger.info(f"✅ {panel_key} 패널을 성공적으로 새로 생성했습니다. (채널: #{channel.name})")
 
 async def setup(bot: commands.Cog):
     await bot.add_cog(Commerce(bot))
