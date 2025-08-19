@@ -17,7 +17,11 @@ from utils.database import (
 
 logger = logging.getLogger(__name__)
 
+# [🔴 핵심 추가 3] 바다낚시에 필요한 낚싯대 이름 정의
+INTERMEDIATE_ROD = "中級者用の釣竿"
+
 class FishingGameView(ui.View):
+    # ... (init, start_game, game_flow 부분은 변경 없음) ...
     def __init__(self, bot: commands.Bot, user: discord.Member, used_rod: str, used_bait: str, remaining_baits: Dict[str, int], cog_instance: 'Fishing', location_type: str):
         super().__init__(timeout=35)
         self.bot = bot; self.player = user; self.message: Optional[discord.WebhookMessage] = None
@@ -58,7 +62,7 @@ class FishingGameView(ui.View):
                 await self._send_result(embed); self.stop()
         except asyncio.CancelledError: pass
         except Exception as e:
-            logger.error(f"{self.player.display_name}の낚시 게임 흐름 중 오류: {e}", exc_info=True)
+            logger.error(f"{self.player.display_name}의 낚시 게임 흐름 중 오류: {e}", exc_info=True)
             if not self.is_finished():
                 await self._send_result(discord.Embed(title="❌ エラー発生", description="釣りの処理中に予期せぬエラーが発生しました。", color=discord.Color.red())); self.stop()
 
@@ -79,8 +83,7 @@ class FishingGameView(ui.View):
         if not loot_pool:
             logger.warning(f"'{current_location_name}' 장소에 대한 loot 테이블이 비어있습니다.")
             return (discord.Embed(title="エラー", description="この場所では何も釣れないようです。", color=discord.Color.red()), False, False, False)
-
-        # [🔴 핵심 수정] (item.get('value') or 0) > 0 으로 변경하여 None 값에 대한 오류를 방지합니다.
+        
         weights = [item['weight'] * (1 + self.rod_bonus if item.get('base_value') is not None or (item.get('value') or 0) > 0 else 1) for item in loot_pool]
         
         catch_proto = random.choices(loot_pool, weights=weights, k=1)[0]
@@ -90,6 +93,7 @@ class FishingGameView(ui.View):
         embed = discord.Embed()
         
         if catch_proto.get("min_size") is not None:
+            # [🔴 핵심 수정 2] 이제 물고기를 잡았을 때만 로그가 기록됩니다.
             log_publicly = True
             size = round(random.uniform(catch_proto["min_size"], catch_proto["max_size"]), 1)
             if is_legendary_catch: await set_legendary_fish_cooldown()
@@ -105,8 +109,9 @@ class FishingGameView(ui.View):
             embed.add_field(name="魚", value=f"{catch_proto.get('emoji', '🐠')} **{catch_proto['name']}**", inline=True)
             embed.add_field(name="サイズ", value=f"`{size}`cm", inline=True)
         else:
-            log_publicly = catch_proto.get("log_publicly", False)
-            value = catch_proto.get('value') or 0 # None일 경우 0으로 처리
+            # [🔴 핵심 수정 2] 잡템/돈일 경우, 공개 로그 플래그를 DB에서 읽지 않아 로그가 남지 않습니다.
+            # log_publicly = catch_proto.get("log_publicly", False) <-- 이 줄 삭제
+            value = catch_proto.get('value') or 0
             if value != 0: await update_wallet(self.player, value)
             
             embed.title = catch_proto['title']
@@ -114,7 +119,8 @@ class FishingGameView(ui.View):
             embed.color = int(catch_proto['color'], 16) if isinstance(catch_proto['color'], str) else catch_proto['color']
 
         if image_url := catch_proto.get('image_url'):
-            embed.set_image(url=image_url)
+            # [🔴 핵심 수정 1] set_image 대신 set_thumbnail을 사용하여 우측 상단에 작은 이미지로 표시합니다.
+            embed.set_thumbnail(url=image_url)
             
         return embed, log_publicly, is_big_catch, is_legendary_catch
 
@@ -129,10 +135,12 @@ class FishingGameView(ui.View):
             await interaction.response.defer(); self.game_state = "finished"
             result_embed, log_publicly, is_big_catch, is_legendary = await self._handle_catch_logic()
         if result_embed:
-            if self.player.display_avatar: result_embed.set_thumbnail(url=self.player.display_avatar.url)
+            if self.player.display_avatar and not result_embed.thumbnail: 
+                result_embed.set_thumbnail(url=self.player.display_avatar.url)
             await self._send_result(result_embed, log_publicly, is_big_catch, is_legendary)
         self.stop()
 
+    # ... (이하 _send_result, on_timeout, stop 메서드는 변경 없음) ...
     async def _send_result(self, embed: discord.Embed, log_publicly: bool = False, is_big_catch: bool = False, is_legendary: bool = False):
         remaining_baits_config = get_config("FISHING_REMAINING_BAITS_DISPLAY", ["一般の釣りエサ", "高級釣りエサ"])
         footer_private = f"残りのエサ: {' / '.join([f'{b}({self.remaining_baits.get(b, 0)}個)' for b in remaining_baits_config])}"
@@ -164,7 +172,9 @@ class FishingGameView(ui.View):
         self.fishing_cog.active_fishing_sessions_by_user.discard(self.player.id)
         super().stop()
 
+
 class FishingPanelView(ui.View):
+    # ... (init, setup_buttons 부분은 변경 없음) ...
     def __init__(self, bot: commands.Bot, cog_instance: 'Fishing', panel_key: str):
         super().__init__(timeout=None)
         self.bot = bot
@@ -220,6 +230,12 @@ class FishingPanelView(ui.View):
                         await interaction.followup.send("❌ プロフィール画面から釣竿を装備してください。", ephemeral=True)
                         return
                 
+                # [🔴 핵심 수정 3] 바다 낚시를 할 때 특정 낚싯대를 소지하고 있는지 확인합니다.
+                if location_type == 'sea':
+                    if INTERMEDIATE_ROD not in inventory:
+                        await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD}」を所持している必要があります。", ephemeral=True)
+                        return
+
                 self.fishing_cog.active_fishing_sessions_by_user.add(user_id)
 
                 bait = gear.get('bait', 'エサなし')
@@ -245,7 +261,9 @@ class FishingPanelView(ui.View):
                 logger.error(f"낚시 게임 시작 중 예측 못한 오류: {e}", exc_info=True)
                 await interaction.followup.send(f"❌ 釣りの開始中に予期せぬエラーが発生しました。", ephemeral=True)
 
+
 class Fishing(commands.Cog):
+    # ... (Cog의 나머지 부분은 변경 없음) ...
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_fishing_sessions_by_user: Set[int] = set()
@@ -327,6 +345,7 @@ class Fishing(commands.Cog):
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Fishing(bot))
