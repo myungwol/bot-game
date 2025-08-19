@@ -341,7 +341,12 @@ class Commerce(commands.Cog):
         view = CommercePanelView(self)
         await view.setup_buttons()
         self.bot.add_view(view)
-    async def regenerate_panel(self, channel: discord.TextChannel): pass
+        
+    # [🔴 핵심 수정] 사용하지 않는 panel_key 인자를 받을 수 있도록 추가
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = None):
+        # commerce 패널은 로직이 복잡하지 않으므로, 기존처럼 비워둡니다.
+        # 실제 패널 재생성은 서버 관리 봇의 책임입니다.
+        pass
 
 async def setup(bot: commands.Cog):
     await bot.add_cog(Commerce(bot))
