@@ -72,7 +72,7 @@ class EconomyCore(commands.Cog):
     @tasks.loop(minutes=1)
     async def voice_reward_loop(self):
         try:
-            voice_req_min = get_config("VOICE_TIME_REQUIREMENT_MINUTES", 10)
+            voice_req_min = get_config("VOICE_TIME_REQUIREMENT_MINUTES", 1)
             voice_reward_range = get_config("VOICE_REWARD_RANGE", [10, 15])
             if not voice_reward_range or len(voice_reward_range) != 2: voice_reward_range = [10, 15]
 
