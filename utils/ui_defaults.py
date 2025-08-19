@@ -103,7 +103,7 @@ UI_PANEL_COMPONENTS = [
     },
     {
         "component_key": "start_fishing_river",
-        "panel_key": "fishing_river",
+        "panel_key": "panel_fishing_river",
         "component_type": "button",
         "label": "강에서 낚시하기",
         "style": "primary",
@@ -112,7 +112,7 @@ UI_PANEL_COMPONENTS = [
     },
     {
         "component_key": "start_fishing_sea",
-        "panel_key": "fishing_sea",
+        "panel_key": "panel_fishing_sea",
         "component_type": "button",
         "label": "바다에서 낚시하기",
         "style": "secondary",
