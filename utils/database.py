@@ -42,6 +42,11 @@ def supabase_retry_handler(retries: int = 3, delay: int = 5):
         return wrapper
     return decorator
 
+# --- [✅✅✅ 핵심 수정 ✅✅✅] ---
+# 다른 파일에서 가져다 쓸 수 있도록 기본 장비 상수를 여기에 정의하고 복원합니다.
+BARE_HANDS = "素手"
+DEFAULT_ROD = "古い釣竿"
+
 # --- [농장 시스템 함수] ---
 
 @supabase_retry_handler()
@@ -231,8 +236,6 @@ async def update_inventory(user_id_str: str, item_name: str, quantity: int):
     params = {'user_id_param': user_id_str, 'item_name_param': item_name, 'amount_param': quantity}
     await supabase.rpc('increment_inventory_quantity', params).execute()
 
-BARE_HANDS = "素手"
-
 async def get_user_gear(user_id_str: str) -> dict:
     default_bait = "エサなし"
     default_gear = {
@@ -241,7 +244,6 @@ async def get_user_gear(user_id_str: str) -> dict:
     }
     gear = await get_or_create_user('gear_setups', user_id_str, default_gear)
     inv = await get_inventory(user_id_str)
-
     gear_to_check = {
         "rod": BARE_HANDS, "bait": default_bait,
         "hoe": BARE_HANDS, "watering_can": BARE_HANDS
@@ -255,7 +257,6 @@ async def get_user_gear(user_id_str: str) -> dict:
             
     if updated:
         await set_user_gear(user_id_str, **gear)
-
     return gear
 
 @supabase_retry_handler()
