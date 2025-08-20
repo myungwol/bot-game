@@ -1,3 +1,5 @@
+# cogs/games/fishing.py
+
 import discord
 from discord.ext import commands
 from discord import ui
@@ -64,7 +66,7 @@ class FishingGameView(ui.View):
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error(f"{self.player.display_name}の낚시 게임 흐름 중 오류: {e}", exc_info=True)
+            logger.error(f"{self.player.display_name}의낚시 게임 흐름 중 오류: {e}", exc_info=True)
             if not self.is_finished():
                 await self._send_result(discord.Embed(title="❌ エラー発生", description="釣りの処理中に予期せぬエラーが発生しました。", color=discord.Color.red())); self.stop()
 
@@ -73,28 +75,11 @@ class FishingGameView(ui.View):
         location_map = {"river": "川", "sea": "海"}
         current_location_name = location_map.get(self.location_type, "川")
         
-        # ================= [진단 B] =================
-        print("\n\n" + "="*20 + " [진단 B: fishing.py] " + "="*20)
-        print(f"1. 현재 낚시 장소: '{current_location_name}'")
-        print(f"2. DB 캐시에서 가져온 전체 아이템 목록 (총 {len(all_loot)}개):")
-        print(all_loot)
-        # ============================================
-
+        # [✅ 수정] 진단용 print 구문 제거
         base_loot = [item for item in all_loot if item.get('location_type') == current_location_name or item.get('location_type') is None]
-
-        # ================= [진단 C] =================
-        print(f"\n3. '{current_location_name}' 또는 '장소 없음'으로 필터링된 아이템 목록 (총 {len(base_loot)}개):")
-        print(base_loot)
-        # ============================================
         
         is_legendary_available = self.used_rod == "伝説の釣竿" and await is_legendary_fish_available()
         loot_pool = [item for item in base_loot if item['name'] != 'クジラ']
-
-        # ================= [진단 D] =================
-        print(f"\n4. 최종 뽑기 목록 (고래 제외) (총 {len(loot_pool)}개):")
-        print(loot_pool)
-        print("="*62 + "\n\n")
-        # ============================================
 
         if not loot_pool:
             logger.warning(f"'{current_location_name}' 장소에 대한 loot 테이블이 비어있습니다.")
