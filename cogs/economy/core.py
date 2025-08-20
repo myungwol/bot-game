@@ -8,7 +8,8 @@ from typing import Optional, Dict
 
 from utils.database import (
     get_wallet, update_wallet,
-    get_id, supabase, get_embed_from_db, get_config
+    get_id, supabase, get_embed_from_db, get_config,
+    increment_progress # [✅ 추가] 퀘스트 진행도 증가 함수 import
 )
 from utils.helpers import format_embed_from_db
 
@@ -47,16 +48,23 @@ class EconomyCore(commands.Cog):
             return
         
         user = message.author
-        chat_req = get_config("CHAT_MESSAGE_REQUIREMENT", 10)
-        chat_reward_range = get_config("CHAT_REWARD_RANGE", [5, 10])
-        if not chat_reward_range or len(chat_reward_range) != 2: chat_reward_range = [5, 10]
+        # 이 부분은 현재 퀘스트와 직접적인 관련이 없으므로 그대로 둡니다.
+        # 만약 '채팅 퀘스트'를 추가한다면, 이곳에 increment_progress를 호출하는 로직을 추가할 수 있습니다.
+        chat_req_config = get_config("CHAT_MESSAGE_REQUIREMENT")
+        chat_req = int(chat_req_config) if chat_req_config else 10
+        
+        chat_reward_range_config = get_config("CHAT_REWARD_RANGE")
+        chat_reward_range = chat_reward_range_config if chat_reward_range_config and len(chat_reward_range_config) == 2 else [5, 10]
+
 
         try:
+            # 이 RPC는 Supabase 함수이므로, 퀘스트와는 별개로 작동합니다.
+            # 그대로 두어도 문제 없습니다.
             params = {'p_user_id': str(user.id), 'p_chat_increment': 1}
             response = await supabase.rpc('increment_user_progress', params).execute()
 
-            if response.data:
-                current_progress = response.data[0]['new_chat_progress']
+            if response.data and response.data[0]:
+                current_progress = response.data[0].get('new_chat_progress', 0)
                 
                 if current_progress >= chat_req:
                     reward = random.randint(chat_reward_range[0], chat_reward_range[1])
@@ -71,24 +79,30 @@ class EconomyCore(commands.Cog):
     @tasks.loop(minutes=1)
     async def voice_reward_loop(self):
         try:
-            voice_req_min = get_config("VOICE_TIME_REQUIREMENT_MINUTES", 10)
-            voice_reward_range = get_config("VOICE_REWARD_RANGE", [10, 15])
-            if not voice_reward_range or len(voice_reward_range) != 2: voice_reward_range = [10, 15]
+            voice_req_min_config = get_config("VOICE_TIME_REQUIREMENT_MINUTES")
+            voice_req_min = int(voice_req_min_config) if voice_req_min_config else 10
+
+            voice_reward_range_config = get_config("VOICE_REWARD_RANGE")
+            voice_reward_range = voice_reward_range_config if voice_reward_range_config and len(voice_reward_range_config) == 2 else [10, 15]
 
             for guild in self.bot.guilds:
                 afk_ch_id = guild.afk_channel.id if guild.afk_channel else None
                 for vc in guild.voice_channels:
                     if vc.id == afk_ch_id: continue
                     
-                    eligible_members = [m for m in vc.members if not m.bot]
+                    eligible_members = [m for m in vc.members if not m.bot and not m.voice.self_deaf and not m.voice.self_mute]
                     
                     for member in eligible_members:
                         try:
+                            # [✅ 수정] 음성 활동 퀘스트 카운트를 1분씩 증가시킵니다.
+                            await increment_progress(member.id, voice_minutes=1)
+                            
+                            # 기존 코인 보상 로직은 그대로 유지됩니다.
                             params = {'p_user_id': str(member.id), 'p_voice_increment': 1}
                             response = await supabase.rpc('increment_user_progress', params).execute()
                             
-                            if response.data:
-                                current_progress = response.data[0]['new_voice_progress']
+                            if response.data and response.data[0]:
+                                current_progress = response.data[0].get('new_voice_progress', 0)
                                 
                                 if current_progress >= voice_req_min:
                                     reward = random.randint(voice_reward_range[0], voice_reward_range[1])
@@ -131,7 +145,6 @@ class EconomyCore(commands.Cog):
                 embed.set_thumbnail(url=user.display_avatar.url)
             
             try: 
-                # [🔴 핵심 수정] content와 allowed_mentions를 제거하여 맨션을 보내지 않습니다.
                 await log_channel.send(embed=embed)
             except Exception as e: 
                 logger.error(f"코인 활동 로그 전송 실패: {e}", exc_info=True)
