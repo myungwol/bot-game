@@ -128,7 +128,6 @@ class BuyItemView(ShopViewBase):
         if not item_data: return
 
         try:
-            # [✅ MODIFIED] 농장 확장권과 같은 즉시 사용 아이템 처리
             if item_data.get('instant_use'):
                 await self.handle_instant_use_item(interaction, item_name, item_data)
                 return
@@ -161,18 +160,18 @@ class BuyItemView(ShopViewBase):
             if size_x >= 4 and size_y >= 4:
                 return await interaction.followup.send("❌ 農場はすでに最大サイズです。", ephemeral=True)
             
-            # 더 작은 쪽을 먼저 확장
             new_x, new_y = size_x, size_y
-            if size_x < size_y or (size_x == size_y and size_x < 4):
-                new_x += 1
-            elif size_y < 4:
-                new_y += 1
-            
+            if size_x <= size_y and size_x < 4: new_x += 1
+            elif size_y < 4: new_y += 1
+            else: new_x +=1
+
             await expand_farm_db(farm_data['id'], new_x, new_y)
             await update_wallet(self.user, -item_data['price'])
-            await interaction.followup.send(f"✅ 農場が **{new_x}x{new_y}**サイズに拡張されました！", ephemeral=True)
+            await interaction.followup.send(f"✅ 農場が **{new_x}x{new_y}**サイズに拡張されました！", ephemeral=True, delete_after=10)
         else:
             await interaction.followup.send("❓ 未知の即時使用アイテムです。", ephemeral=True)
+        
+        await self.update_view(interaction)
 
     async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         wallet = await get_wallet(self.user.id)
@@ -384,7 +383,7 @@ class SellCropView(ShopViewBase):
         if crop_items:
             for name, qty in crop_items.items():
                 item_data = item_db.get(name, {})
-                price = int(item_data.get('price', 10) * 0.8) 
+                price = int(item_data.get('sell_price', item_data.get('price', 10) * 0.8)) 
                 self.crop_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
                 
                 options.append(discord.SelectOption(
