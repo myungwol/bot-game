@@ -7,7 +7,7 @@ import asyncio
 from typing import Optional
 
 from utils.database import (
-    get_wallet, update_wallet, get_config, get_panel_components_from_db,
+    get_wallet, update_wallet, get_config,
     save_panel_id, get_panel_id, get_embed_from_db
 )
 from utils.helpers import format_embed_from_db
@@ -147,6 +147,10 @@ class SlotMachineGameView(ui.View):
             if r[0] == '7️⃣': return 2.0, "トリプルセブン"
             if r[0] == '5️⃣': return 1.5, "数字揃い"
             return 1.0, "フルーツ揃い"
+        
+        if r.count('🍒') == 2:
+            return 0.2, "チェリー賞"
+
         return 0.0, "ハズレ"
 
     async def on_timeout(self):
@@ -163,16 +167,14 @@ class SlotMachinePanelView(ui.View):
         super().__init__(timeout=None)
         self.cog = cog_instance
 
-    async def setup_buttons(self):
-        self.clear_items()
-        components = await get_panel_components_from_db("panel_slot_machine")
-        for button_info in components:
-            button = ui.Button(
-                label=button_info.get('label'), style=discord.ButtonStyle.success,
-                emoji=button_info.get('emoji'), custom_id=button_info.get('component_key')
-            )
-            button.callback = self.start_game_callback
-            self.add_item(button)
+        slot_button = ui.Button(
+            label="スロットをプレイ",
+            style=discord.ButtonStyle.success,
+            emoji="🎰",
+            custom_id="slot_machine_play_button"
+        )
+        slot_button.callback = self.start_game_callback
+        self.add_item(slot_button)
 
     async def start_game_callback(self, interaction: discord.Interaction):
         if len(self.cog.active_sessions) >= MAX_ACTIVE_SLOTS:
@@ -188,50 +190,67 @@ class SlotMachine(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_sessions = set()
-        # [✅ 수정] self.panel_message 캐시는 삭제하고, DB를 신뢰하도록 변경
-    
-    # ... cog_load, _fetch_panel_message, update_panel_embed 삭제 ...
+        self.panel_message: Optional[discord.Message] = None
 
-    async def register_persistent_views(self):
-        view = SlotMachinePanelView(self)
-        await view.setup_buttons()
-        self.bot.add_view(view)
+    async def cog_load(self):
+        self.bot.loop.create_task(self._fetch_panel_message())
 
-    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_slot_machine", last_game_log: Optional[discord.Embed] = None):
-        embed_key = "panel_slot_machine"
-        
-        # [✅ 수정] RPSGame, ATM과 동일한, 가장 안정적인 삭제 로직으로 통일합니다.
-        if panel_info := get_panel_id(panel_key):
-            old_message_id = panel_info.get('message_id')
-            old_channel_id = panel_info.get('channel_id')
-            
-            if old_message_id and old_channel_id and (old_channel := self.bot.get_channel(old_channel_id)):
-                try:
-                    message_to_delete = await old_channel.fetch_message(old_message_id)
-                    await message_to_delete.delete()
-                    logger.info(f"✅ 이전 슬롯머신 패널(ID: {old_message_id})을 채널 #{old_channel.name}에서 성공적으로 삭제했습니다.")
-                except (discord.NotFound, discord.Forbidden):
-                    logger.warning(f"이전 슬롯머신 패널(ID: {old_message_id})을 원래 위치인 채널 #{old_channel.name}에서도 찾을 수 없었습니다.")
-        
-        if last_game_log:
-            try: await channel.send(embed=last_game_log)
-            except Exception as e: logger.error(f"슬롯게임 로그 메시지 전송에 실패: {e}")
+    async def _fetch_panel_message(self):
+        await self.bot.wait_until_ready()
+        panel_info = get_panel_id("panel_slot_machine")
+        if panel_info and panel_info.get("channel_id") and panel_info.get("message_id"):
+            try:
+                channel = self.bot.get_channel(panel_info["channel_id"])
+                if channel:
+                    self.panel_message = await channel.fetch_message(panel_info["message_id"])
+                    await self.update_panel_embed()
+            except (discord.NotFound, discord.Forbidden):
+                self.panel_message = None
+                logger.warning("スロットマシンのパネルメッセージが見つからないか、アクセスできませんでした。")
 
-        embed_data = await get_embed_from_db(embed_key)
+    async def update_panel_embed(self):
+        if not self.panel_message: return
+
+        embed_data = await get_embed_from_db("panel_slot_machine")
         if not embed_data: return
 
-        # [✅ 수정] 실시간 상태 표시는 재생성 시에만 적용
         current_players = len(self.active_sessions)
         status_line = f"\n\n**[現在使用中のマシン: {current_players}/{MAX_ACTIVE_SLOTS}]**"
+        
         embed_data['description'] += status_line
+        new_embed = discord.Embed.from_dict(embed_data)
+        
+        try:
+            await self.panel_message.edit(embed=new_embed)
+        except discord.NotFound:
+            await self._fetch_panel_message()
+        except Exception as e:
+            logger.error(f"スロットパネルの更新中にエラー: {e}")
+
+    async def register_persistent_views(self):
+        self.bot.add_view(SlotMachinePanelView(self))
+
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_slot_machine", last_game_log: Optional[discord.Embed] = None):
+        if last_game_log:
+            try: await channel.send(embed=last_game_log)
+            except Exception as e: logger.error(f"スロットゲームのログメッセージ送信に失敗: {e}")
+
+        if panel_info := get_panel_id(panel_key):
+            if (old_channel := self.bot.get_channel(panel_info['channel_id'])) and (old_message_id := panel_info.get('message_id')):
+                try: await (await old_channel.fetch_message(old_message_id)).delete()
+                except (discord.NotFound, discord.Forbidden): pass
+
+        embed_data = await get_embed_from_db(panel_key)
+        if not embed_data: return
 
         embed = discord.Embed.from_dict(embed_data)
         view = SlotMachinePanelView(self)
-        await view.setup_buttons()
-        self.bot.add_view(view)
         
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
+        
+        self.panel_message = new_message
+        await self.update_panel_embed()
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。(チャンネル: #{channel.name})")
 
 async def setup(bot: commands.Bot):
