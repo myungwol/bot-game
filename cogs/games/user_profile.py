@@ -1,5 +1,3 @@
-# cogs/games/user_profile.py (Value 중복 오류 최종 해결)
-
 import discord
 from discord.ext import commands
 from discord import ui
@@ -88,9 +86,10 @@ class ProfileView(ui.View):
             embed.description = description
 
         elif self.current_page == "item":
+            excluded_categories = [GEAR_CATEGORY, "農場_道具", "農場_種", "農場_作物"]
             general_items = {
                 name: count for name, count in inventory.items()
-                if item_db.get(name, {}).get('category') != GEAR_CATEGORY
+                if item_db.get(name, {}).get('category') not in excluded_categories
             }
             item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`個" for n, c in general_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items"))
@@ -118,6 +117,22 @@ class ProfileView(ui.View):
                 embed.description = description + "\n".join([f"{f['emoji']} **{f['name']}**: `{f['size']}`cm" for f in fish_on_page])
                 embed.set_footer(text=get_string("profile_view.fish_tab.pagination_footer", current_page=self.fish_page_index + 1, total_pages=total_pages))
         
+        elif self.current_page == "seed":
+            seed_items = {
+                name: count for name, count in inventory.items()
+                if item_db.get(name, {}).get('category') == "農場_種"
+            }
+            item_list = [f"{item_db.get(n,{}).get('emoji','🌱')} **{n}**: `{c}`個" for n, c in seed_items.items()]
+            embed.description = description + ("\n".join(item_list) or get_string("profile_view.seed_tab.no_items"))
+
+        elif self.current_page == "crop":
+            crop_items = {
+                name: count for name, count in inventory.items()
+                if item_db.get(name, {}).get('category') == "農場_作物"
+            }
+            item_list = [f"{item_db.get(n,{}).get('emoji','🌾')} **{n}**: `{c}`個" for n, c in crop_items.items()]
+            embed.description = description + ("\n".join(item_list) or get_string("profile_view.crop_tab.no_items"))
+
         elif self.current_page in get_string("profile_view.tabs", {}):
             embed.description = description + get_string("profile_view.wip_tab.description")
             
@@ -126,14 +141,20 @@ class ProfileView(ui.View):
     def build_components(self):
         self.clear_items()
         tabs_config = get_string("profile_view.tabs", {})
-        row_counter = 0
-        for i, (key, config) in enumerate(tabs_config.items()):
-            current_row = i // 4
-            style = discord.ButtonStyle.primary if self.current_page == key else discord.ButtonStyle.secondary
-            self.add_item(ui.Button(label=config.get("label"), style=style, custom_id=f"profile_tab_{key}", emoji=config.get("emoji"), row=current_row))
-            row_counter = max(row_counter, current_row)
         
-        row_counter += 1
+        row_counter = 0
+        # 탭 버튼들을 먼저 추가합니다. (최대 5개씩 한 줄에)
+        tab_buttons_in_row = 0
+        for key, config in tabs_config.items():
+            if tab_buttons_in_row >= 5:
+                row_counter += 1
+                tab_buttons_in_row = 0
+            
+            style = discord.ButtonStyle.primary if self.current_page == key else discord.ButtonStyle.secondary
+            self.add_item(ui.Button(label=config.get("label"), style=style, custom_id=f"profile_tab_{key}", emoji=config.get("emoji"), row=row_counter))
+            tab_buttons_in_row += 1
+
+        row_counter += 1 # 탭 버튼들 다음 줄로 이동
         if self.current_page == "gear":
             self.add_item(ui.Button(label=get_string("profile_view.gear_tab.change_rod_button"), style=discord.ButtonStyle.success, custom_id="profile_change_rod", emoji="🎣", row=row_counter))
             self.add_item(ui.Button(label=get_string("profile_view.gear_tab.change_bait_button"), style=discord.ButtonStyle.success, custom_id="profile_change_bait", emoji="🐛", row=row_counter))
@@ -158,7 +179,7 @@ class ProfileView(ui.View):
         if custom_id.startswith("profile_tab_"):
             self.current_page = custom_id.split("_")[-1]
             if self.current_page == 'fish': self.fish_page_index = 0
-            await self.update_display(interaction, reload_data=True) 
+            await self.update_display(interaction, reload_data=False) 
 
         elif custom_id.startswith("profile_change_"):
             gear_type = custom_id.split("_")[-1]
@@ -183,13 +204,9 @@ class GearSelectView(ui.View):
         category_name = "釣竿" if is_rod_change else "釣りエサ"
         
         options = []
-        # [🔴 핵심 수정] 장비 해제 옵션의 value를 상수로 명확히 함
         unequip_label_key = "gear_select_view.unequip_rod_label" if is_rod_change else "gear_select_view.unequip_bait_label"
         unequip_value = DEFAULT_ROD if is_rod_change else "エサなし"
         
-        # '맨손' 상태를 위한 장비 해제 옵션을 추가합니다.
-        # 실제 장착 해제 시 DB에는 BARE_HANDS 또는 "エサなし"가 저장될 것입니다.
-        # 여기서의 value는 그냥 옵션을 구분하기 위한 용도입니다.
         unequip_option_value = "unequip"
         options.append(discord.SelectOption(
             label=f'{get_string("gear_select_view.unequip_prefix")} {get_string(unequip_label_key)}',
@@ -220,7 +237,6 @@ class GearSelectView(ui.View):
         
         is_rod_change = self.gear_type == 'rod'
         
-        # [🔴 핵심 수정] 장비 해제 옵션을 선택했는지 확인
         if selected_option == "unequip":
             selected_item_name = DEFAULT_ROD if is_rod_change else "エサなし"
             self.parent_view.status_message = f"✅ { '釣竿' if is_rod_change else 'エサ'}を外しました。"
@@ -267,9 +283,7 @@ class UserProfile(commands.Cog):
         await view.setup_buttons()
         self.bot.add_view(view)
 
-    # [🔴 핵심 수정] 사용하지 않는 panel_key 인자를 받을 수 있도록 추가
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "profile"):
-        # panel_key를 직접 "profile"로 고정하여 사용
         embed_key = "panel_profile"
         if (panel_info := get_panel_id(panel_key)) and (old_id := panel_info.get('message_id')):
             try: await (await channel.fetch_message(old_id)).delete()
