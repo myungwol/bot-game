@@ -9,8 +9,15 @@ import time
 from typing import Dict, Callable, Any, List, Optional
 from functools import wraps
 from utils.ui_defaults import UI_STRINGS
+# [✅ 추가] 캐싱을 위한 라이브러리 import
+from cachetools import TTLCache, cached
+from cachetools.keys import hashkey
 
 logger = logging.getLogger(__name__)
+
+# [✅ 추가] 각 함수별 캐시를 분리하여 관리
+wallet_cache = TTLCache(maxsize=512, ttl=60)
+inventory_cache = TTLCache(maxsize=512, ttl=60)
 
 # --- 캐시 영역 및 클라이언트 초기화 ---
 _configs_cache: Dict[str, Any] = {"strings": UI_STRINGS}
@@ -159,14 +166,22 @@ async def get_or_create_user(table_name: str, user_id_str: str, default_data: di
     response = await supabase.table(table_name).insert(insert_data, returning="representation").execute()
     return response.data[0] if response and response.data else default_data
 
-async def get_wallet(user_id: int) -> dict: return await get_or_create_user('wallets', str(user_id), {"balance": 0})
+@cached(wallet_cache, key=lambda user_id: hashkey(user_id))
+async def get_wallet(user_id: int) -> dict: 
+    return await get_or_create_user('wallets', str(user_id), {"balance": 0})
 
 @supabase_retry_handler()
 async def update_wallet(user: discord.User, amount: int) -> Optional[dict]:
     params = {'user_id_param': str(user.id), 'amount_param': amount}
     response = await supabase.rpc('increment_wallet_balance', params).execute()
-    return response.data[0] if response and response.data else None
+    if response and response.data:
+        # 캐시 무효화
+        if hashkey(user.id) in wallet_cache:
+            del wallet_cache[hashkey(user.id)]
+        return response.data[0]
+    return None
 
+@cached(inventory_cache, key=lambda user_id_str: hashkey(user_id_str))
 @supabase_retry_handler()
 async def get_inventory(user_id_str: str) -> dict:
     response = await supabase.table('inventories').select('item_name, quantity').eq('user_id', user_id_str).gt('quantity', 0).execute()
@@ -176,6 +191,9 @@ async def get_inventory(user_id_str: str) -> dict:
 async def update_inventory(user_id_str: str, item_name: str, quantity: int):
     params = {'user_id_param': user_id_str, 'item_name_param': item_name, 'amount_param': quantity}
     await supabase.rpc('increment_inventory_quantity', params).execute()
+    # 캐시 무효화
+    if hashkey(user_id_str) in inventory_cache:
+        del inventory_cache[hashkey(user_id_str)]
 
 BARE_HANDS = "素手"
 DEFAULT_ROD = "古い釣竿"
