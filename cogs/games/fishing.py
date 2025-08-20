@@ -1,389 +1,267 @@
 import discord
 from discord.ext import commands
 from discord import ui
-import logging
+import random
 import asyncio
-from typing import Optional, Dict, List, Any
+import logging
+from typing import Optional, Set, Dict
+
+from utils.database import (
+    update_wallet, get_inventory, update_inventory, add_to_aquarium,
+    get_user_gear, set_user_gear, save_panel_id, get_panel_id, get_id,
+    get_embed_from_db,
+    get_item_database, get_fishing_loot, get_config, get_string,
+    is_legendary_fish_available, set_legendary_fish_cooldown,
+    BARE_HANDS, DEFAULT_ROD,
+    increment_progress
+)
 
 logger = logging.getLogger(__name__)
 
-from utils.database import (
-    get_inventory, get_wallet, supabase, get_id, get_item_database, 
-    get_config, get_string,
-    get_aquarium, get_fishing_loot, sell_fish_from_db,
-    save_panel_id, get_panel_id, get_embed_from_db
-)
+INTERMEDIATE_ROD_NAME = "中級者の釣竿"
+REQUIRED_TIER_FOR_SEA = 3
 
-async def delete_after(message: discord.WebhookMessage, delay: int):
-    await asyncio.sleep(delay)
-    try:
-        await message.delete()
-    except (discord.NotFound, discord.Forbidden):
-        pass
-
-class QuantityModal(ui.Modal):
-    quantity = ui.TextInput(label="数量", placeholder="例: 10", required=True, max_length=5)
-    def __init__(self, title: str, max_value: int):
-        super().__init__(title=title)
-        self.quantity.placeholder = f"最大 {max_value}個まで"
-        self.max_value = max_value
-        self.value: Optional[int] = None
-    async def on_submit(self, i: discord.Interaction):
-        try:
-            q_val = int(self.quantity.value)
-            if not (1 <= q_val <= self.max_value):
-                await i.response.send_message(f"1から{self.max_value}までの数字を入力してください。", ephemeral=True, delete_after=5)
-                return
-            self.value = q_val
-            await i.response.defer(ephemeral=True) 
-        except ValueError: 
-            await i.response.send_message("数字のみ入力してください。", ephemeral=True, delete_after=5)
-        except Exception: 
-            self.stop()
-
-class ShopViewBase(ui.View):
-    def __init__(self, user: discord.Member):
-        super().__init__(timeout=300)
-        self.user = user
-        self.currency_icon = get_config("CURRENCY_ICON", "🪙")
-        self.message: Optional[discord.WebhookMessage] = None
-
-    async def update_view(self, interaction: discord.Interaction):
-        embed = await self.build_embed()
-        await self.build_components()
-        await interaction.edit_original_response(embed=embed, view=self)
-
-    async def build_embed(self) -> discord.Embed:
-        raise NotImplementedError
-
-    async def build_components(self):
-        raise NotImplementedError
-    
-    async def handle_error(self, interaction: discord.Interaction, error: Exception, custom_message: str = ""):
-        logger.error(f"상점 처리 중 오류 발생: {error}", exc_info=False)
-        message_content = custom_message or "❌ 処理中にエラーが発生しました。"
-        if interaction.response.is_done():
-            msg = await interaction.followup.send(message_content, ephemeral=True)
-            asyncio.create_task(delete_after(msg, 5))
-        else:
-            await interaction.response.send_message(message_content, ephemeral=True, delete_after=5)
-
-class BuyItemView(ShopViewBase):
-    def __init__(self, user: discord.Member, category: str):
-        super().__init__(user)
-        self.category = category
-        self.items_in_category = sorted(
-            [(n, d) for n, d in get_item_database().items() if d.get('buyable') and d.get('category') == self.category],
-            key=lambda item: item[1].get('price', 0)
-        )
-
-    async def build_embed(self) -> discord.Embed:
-        wallet = await get_wallet(self.user.id)
-        balance = wallet.get('balance', 0)
-        
-        embed = discord.Embed(
-            title=get_string("commerce.item_view_title", category=self.category),
-            description=get_string("commerce.item_view_desc", balance=f"{balance:,}", currency_icon=self.currency_icon),
-            color=discord.Color.blue()
-        )
-
-        if not self.items_in_category:
-            embed.add_field(name="準備中", value=get_string("commerce.wip_category", default="このカテゴリーの商品は現在準備中です。"))
-        else:
-            for name, data in self.items_in_category:
-                field_name = f"{data.get('emoji', '📦')} {name}"
-                field_value = (
-                    f"**価格:** `{data.get('price', 0):,}`{self.currency_icon}\n"
-                    f"> {data.get('description', '説明がありません。')}"
-                )
-                embed.add_field(name=field_name, value=field_value, inline=False)
-        
-        return embed
-
-    async def build_components(self):
-        self.clear_items()
-        
-        if self.items_in_category:
-            options = [
-                discord.SelectOption(
-                    label=name, 
-                    value=name, 
-                    description=f"価格: {data['price']:,}{self.currency_icon}", 
-                    emoji=data.get('emoji')
-                ) for name, data in self.items_in_category
-            ]
-            select = ui.Select(placeholder=f"購入したい「{self.category}」の商品を選択...", options=options)
-            select.callback = self.select_callback
-            self.add_item(select)
-
-        back_button = ui.Button(label=get_string("commerce.back_button"), style=discord.ButtonStyle.grey, row=1)
-        back_button.callback = self.back_callback
-        self.add_item(back_button)
-
-    async def select_callback(self, interaction: discord.Interaction):
-        item_name = interaction.data['values'][0]
-        item_data = get_item_database().get(item_name)
-        if not item_data: return
-
-        is_modal_needed = item_data.get('max_ownable', 1) > 1
-
-        try:
-            if is_modal_needed:
-                wallet = await get_wallet(self.user.id)
-                balance = wallet.get('balance', 0)
-                max_buyable = balance // item_data['price'] if item_data['price'] > 0 else item_data.get('max_ownable', 999)
-
-                if max_buyable == 0:
-                    await interaction.response.send_message(get_string("commerce.error_insufficient_funds"), ephemeral=True, delete_after=5)
-                    return
-                
-                modal = QuantityModal(f"{item_name} 購入", max_buyable)
-                await interaction.response.send_modal(modal)
-                await modal.wait()
-
-                if modal.value is None:
-                    msg = await interaction.followup.send("購入がキャンセルされました。", ephemeral=True)
-                    asyncio.create_task(delete_after(msg, 5))
-                    return
-
-                quantity, total_price = modal.value, item_data['price'] * modal.value
-                wallet_after_modal = await get_wallet(self.user.id)
-                if wallet_after_modal.get('balance', 0) < total_price:
-                     raise ValueError("error_insufficient_funds")
-
-                await supabase.rpc('buy_item', {'user_id_param': str(self.user.id), 'item_name_param': item_name, 'quantity_param': quantity, 'total_price_param': total_price}).execute()
-                
-                new_wallet = await get_wallet(self.user.id)
-                new_balance = new_wallet.get('balance', 0)
-                success_message = f"✅ **{item_name}** {quantity}個を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-                msg = await interaction.followup.send(success_message, ephemeral=True)
-                asyncio.create_task(delete_after(msg, 5))
-            else:
-                await interaction.response.defer(ephemeral=True)
-                wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(str(self.user.id)))
-                
-                if inventory.get(item_name, 0) > 0 and item_data.get('max_ownable', 1) == 1:
-                    raise ValueError("error_already_owned")
-                
-                total_price, quantity = item_data['price'], 1
-                if wallet.get('balance', 0) < total_price:
-                    raise ValueError("error_insufficient_funds")
-                
-                await supabase.rpc('buy_item', {'user_id_param': str(self.user.id), 'item_name_param': item_name, 'quantity_param': quantity, 'total_price_param': total_price}).execute()
-                
-                if id_key := item_data.get('id_key'):
-                    if role_id := get_id(id_key):
-                        if role := interaction.guild.get_role(role_id): await self.user.add_roles(role)
-                
-                new_wallet = await get_wallet(self.user.id)
-                new_balance = new_wallet.get('balance', 0)
-                success_message = f"✅ **{item_name}**を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-                msg = await interaction.followup.send(success_message, ephemeral=True)
-                asyncio.create_task(delete_after(msg, 5))
-
-            await self.update_view(interaction)
-
-        except ValueError as e:
-            await self.handle_error(interaction, e, get_string(f"commerce.{e}", default=str(e)))
-        except Exception as e:
-            await self.handle_error(interaction, e)
-
-    async def back_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        category_view = BuyCategoryView(self.user)
-        category_view.message = self.message
-        await category_view.update_view(interaction)
-
-class BuyCategoryView(ShopViewBase):
-    async def build_embed(self) -> discord.Embed:
-        return discord.Embed(title=get_string("commerce.category_view_title"), description=get_string("commerce.category_view_desc"), color=discord.Color.green())
-    
-    async def build_components(self):
-        self.clear_items()
+class FishingGameView(ui.View):
+    def __init__(self, bot: commands.Bot, user: discord.Member, used_rod: str, used_bait: str, remaining_baits: Dict[str, int], cog_instance: 'Fishing', location_type: str):
+        super().__init__(timeout=35)
+        self.bot = bot; self.player = user; self.message: Optional[discord.WebhookMessage] = None
+        self.game_state = "waiting"; self.game_task: Optional[asyncio.Task] = None
+        self.used_rod = used_rod; self.used_bait = used_bait; self.remaining_baits = remaining_baits
+        self.fishing_cog = cog_instance
+        self.location_type = location_type
         item_db = get_item_database()
-        categories = sorted(list(set(
-            d['category'] for d in item_db.values() if d.get('buyable') and d.get('category')
-        )))
-        
-        if not categories:
-            self.add_item(ui.Button(label="販売中の商品がありません。", disabled=True))
-            return
+        rod_data = item_db.get(self.used_rod, {})
+        bait_data = item_db.get(self.used_bait, {})
+        self.rod_bonus = rod_data.get("good_fish_bonus", 0.0)
+        self.bite_range = bait_data.get("bite_time_range") if bait_data and bait_data.get("bite_time_range") else [10.0, 15.0]
+        self.bite_reaction_time = get_config("FISHING_BITE_REACTION_TIME", 3.0)
+        self.big_catch_threshold = get_config("FISHING_BIG_CATCH_THRESHOLD", 70.0)
 
-        for category_name in categories:
-            button = ui.Button(label=category_name, custom_id=f"buy_category_{category_name}")
-            button.callback = self.category_callback
-            self.add_item(button)
-    
-    async def category_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        category = interaction.data['custom_id'].split('buy_category_')[-1]
-        item_view = BuyItemView(self.user, category)
-        item_view.message = self.message
-        await item_view.update_view(interaction)
+    async def start_game(self, interaction: discord.Interaction, embed: discord.Embed):
+        self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
+        self.game_task = asyncio.create_task(self.game_flow())
 
-class SellFishView(ShopViewBase):
-    def __init__(self, user: discord.Member):
-        super().__init__(user)
-        self.fish_data_map: Dict[str, Dict[str, Any]] = {}
-
-    async def refresh_view(self, interaction: discord.Interaction):
-        embed = await self.build_embed()
-        await self.build_components()
-        await interaction.edit_original_response(embed=embed, view=self)
-    
-    async def build_embed(self) -> discord.Embed:
-        wallet = await get_wallet(self.user.id)
-        balance = wallet.get('balance', 0)
-        embed = discord.Embed(title="🎣 買取ボックス - 魚", description=f"現在の所持金: `{balance:,}`{self.currency_icon}\n売却したい魚を下のメニューから複数選択してください。", color=discord.Color.blue())
-        return embed
-
-    async def build_components(self):
-        self.clear_items()
-        aquarium = await get_aquarium(str(self.user.id))
-        loot_db = {loot['name']: loot for loot in get_fishing_loot()}
-        self.fish_data_map.clear()
-        
-        options = []
-        if aquarium:
-            for fish in aquarium:
-                fish_id = str(fish['id'])
-                loot_info = loot_db.get(fish['name'], {})
-                base_value = loot_info.get('base_value', 0)
-                size_multiplier = loot_info.get('size_multiplier', 0)
-                price = int(base_value + (fish['size'] * size_multiplier))
-                self.fish_data_map[fish_id] = {'price': price, 'name': fish['name']}
-                
-                # [✅✅✅ 핵심 수정 ✅✅✅] emoji 파라미터를 완전히 제거합니다.
-                options.append(discord.SelectOption(
-                    label=f"{fish['name']} ({fish['size']}cm)", 
-                    value=fish_id, 
-                    description=f"{price}{self.currency_icon}"
-                ))
-
-        if options:
-            max_select = min(len(options), 25)
-            select = ui.Select(placeholder="売却する魚を選択...", options=options, min_values=1, max_values=max_select)
-            select.callback = self.on_select
-            self.add_item(select)
-        
-        sell_button = ui.Button(label="選択した魚を売却", style=discord.ButtonStyle.success, disabled=True, custom_id="sell_fish_confirm")
-        sell_button.callback = self.sell_fish
-        self.add_item(sell_button)
-        back_button = ui.Button(label="カテゴリー選択に戻る", style=discord.ButtonStyle.grey)
-        back_button.callback = self.go_back
-        self.add_item(back_button)
-
-    async def on_select(self, interaction: discord.Interaction):
-        sell_button = next(c for c in self.children if isinstance(c, ui.Button) and c.custom_id == "sell_fish_confirm")
-        sell_button.disabled = False
-        await interaction.response.edit_message(view=self)
-
-    async def sell_fish(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        select_menu = next((c for c in self.children if isinstance(c, ui.Select)), None)
-        if not select_menu or not select_menu.values:
-            msg = await interaction.followup.send("❌ 売却する魚が選択されていません。", ephemeral=True)
-            asyncio.create_task(delete_after(msg, 5))
-            return
-        
-        fish_ids_to_sell = [int(val) for val in select_menu.values]
-        total_price = sum(self.fish_data_map[val]['price'] for val in select_menu.values)
-        
+    async def game_flow(self):
         try:
-            await sell_fish_from_db(str(self.user.id), fish_ids_to_sell, total_price)
-            
-            new_wallet = await get_wallet(self.user.id)
-            new_balance = new_wallet.get('balance', 0)
-            sold_fish_count = len(fish_ids_to_sell)
-            
-            success_message = f"✅ 魚{sold_fish_count}匹を`{total_price:,}`{self.currency_icon}で売却しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-            msg = await interaction.followup.send(success_message, ephemeral=True)
-            asyncio.create_task(delete_after(msg, 5))
-            
-            await self.refresh_view(interaction)
+            await asyncio.sleep(random.uniform(*self.bite_range))
+            if self.is_finished(): return
+            self.game_state = "biting"
+            if self.children and isinstance(catch_button := self.children[0], ui.Button):
+                catch_button.style = discord.ButtonStyle.success; catch_button.label = "釣り上げる！"
+            embed = discord.Embed(title="❗ アタリが来た！", description="今だ！ボタンを押して釣り上げよう！", color=discord.Color.red())
+            if waiting_image_url := get_config("FISHING_WAITING_IMAGE_URL"):
+                embed.set_image(url=waiting_image_url.strip('"'))
+            if self.message: await self.message.edit(embed=embed, view=self)
+            await asyncio.sleep(self.bite_reaction_time)
+            if not self.is_finished() and self.game_state == "biting":
+                embed = discord.Embed(title="💧 逃げられた…", description=f"{self.player.mention}さんは反応が遅れてしまいました。", color=discord.Color.greyple())
+                await self._send_result(embed); self.stop()
+        except asyncio.CancelledError: pass
         except Exception as e:
-            logger.error(f"물고기 판매 중 오류: {e}", exc_info=True)
-            await self.handle_error(interaction, e)
-    
-    async def go_back(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        view = SellCategoryView(self.user)
-        view.message = self.message
-        await view.update_view(interaction)
+            logger.error(f"{self.player.display_name}の낚시 게임 흐름 중 오류: {e}", exc_info=True)
+            if not self.is_finished():
+                await self._send_result(discord.Embed(title="❌ エラー発生", description="釣りの処理中に予期せぬエラーが発生しました。", color=discord.Color.red())); self.stop()
 
-class SellCategoryView(ShopViewBase):
-    async def build_embed(self) -> discord.Embed:
-        return discord.Embed(title="📦 買取ボックス - カテゴリー選択", description="売却したいアイテムのカテゴリーを選択してください。", color=discord.Color.green())
+    async def _handle_catch_logic(self) -> tuple[discord.Embed, bool, bool, bool]:
+        all_loot = get_fishing_loot()
+        location_map = {"river": "川", "sea": "海"}
+        current_location_name = location_map.get(self.location_type, "川")
+        base_loot = [item for item in all_loot if item.get('location_type') == current_location_name or item.get('location_type') is None]
+        is_legendary_available = self.used_rod == "伝説の釣竿" and await is_legendary_fish_available()
+        loot_pool = [item for item in base_loot if item['name'] != 'クジラ']
+        if not loot_pool:
+            return (discord.Embed(title="エラー", description="この場所では何も釣れないようです。", color=discord.Color.red()), False, False, False)
+        weights = [item['weight'] * (1 + self.rod_bonus if item.get('base_value') is not None or (item.get('value') or 0) > 0 else 1) for item in loot_pool]
+        catch_proto = random.choices(loot_pool, weights=weights, k=1)[0]
+        is_legendary_catch, is_big_catch, log_publicly = catch_proto['name'] == 'クジラ', False, False
+        embed = discord.Embed()
+        if catch_proto.get("min_size") is not None:
+            log_publicly = True
+            size = round(random.uniform(catch_proto["min_size"], catch_proto["max_size"]), 1)
+            if is_legendary_catch: await set_legendary_fish_cooldown()
+            await add_to_aquarium(str(self.player.id), {"name": catch_proto['name'], "size": size, "emoji": catch_proto.get('emoji', '🐠')})
+            is_big_catch = size >= self.big_catch_threshold
+            await increment_progress(self.player.id, fish_count=1)
+            title = "🏆 大物を釣り上げた！ 🏆" if is_big_catch else "🎉 釣り成功！ 🎉"
+            if is_legendary_catch: title = "👑 伝説の魚を釣り上げた！！ 👑"
+            embed.title, embed.description, embed.color = title, f"{self.player.mention}さんが釣りに成功しました！", discord.Color.gold() if is_legendary_catch else discord.Color.blue()
+            embed.add_field(name="魚", value=f"{catch_proto.get('emoji', '🐠')} **{catch_proto['name']}**", inline=True)
+            embed.add_field(name="サイズ", value=f"`{size}`cm", inline=True)
+        else:
+            value = catch_proto.get('value') or 0
+            if value != 0: await update_wallet(self.player, value)
+            embed.title, embed.description, embed.color = catch_proto['title'], catch_proto['description'].format(user_mention=self.player.mention, value=abs(value)), int(catch_proto['color'], 16) if isinstance(catch_proto['color'], str) else catch_proto['color']
+        if image_url := catch_proto.get('image_url'):
+            embed.set_thumbnail(url=image_url)
+        return embed, log_publicly, is_big_catch, is_legendary_catch
 
-    async def build_components(self):
-        self.clear_items()
-        self.add_item(ui.Button(label="装備", custom_id="sell_category_gear", disabled=True))
-        self.add_item(ui.Button(label="魚", custom_id="sell_category_fish"))
-        self.add_item(ui.Button(label="作物", custom_id="sell_category_crop", disabled=True))
-        for child in self.children:
-            if isinstance(child, ui.Button):
-                child.callback = self.on_button_click
+    @ui.button(label="待機中...", style=discord.ButtonStyle.secondary, custom_id="catch_fish_button")
+    async def catch_button(self, interaction: discord.Interaction, button: ui.Button):
+        if self.game_task: self.game_task.cancel()
+        result_embed, log_publicly, is_big_catch, is_legendary = None, False, False, False
+        if self.game_state == "waiting":
+            await interaction.response.defer()
+            result_embed = discord.Embed(title="❌ 早すぎ！", description=f"{interaction.user.mention}さんは焦ってしまい、魚に気づかれてしまいました…", color=discord.Color.dark_grey())
+        elif self.game_state == "biting":
+            await interaction.response.defer(); self.game_state = "finished"
+            result_embed, log_publicly, is_big_catch, is_legendary = await self._handle_catch_logic()
+        if result_embed:
+            if self.player.display_avatar and not result_embed.thumbnail: 
+                result_embed.set_thumbnail(url=self.player.display_avatar.url)
+            await self._send_result(result_embed, log_publicly, is_big_catch, is_legendary)
+        self.stop()
 
-    async def on_button_click(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        category = interaction.data['custom_id'].split('_')[-1]
-        if category == "fish":
-            view = SellFishView(self.user)
-            view.message = self.message
-            await view.refresh_view(interaction)
+    async def _send_result(self, embed: discord.Embed, log_publicly: bool = False, is_big_catch: bool = False, is_legendary: bool = False):
+        remaining_baits_config = get_config("FISHING_REMAINING_BAITS_DISPLAY", ["一般の釣りエサ", "高級釣りエサ"])
+        footer_private = f"残りのエサ: {' / '.join([f'{b}({self.remaining_baits.get(b, 0)}個)' for b in remaining_baits_config])}"
+        footer_public = f"使用した装備: {self.used_rod} / {self.used_bait}"
+        if log_publicly:
+            if is_legendary:
+                await self.bot.get_cog("Fishing").log_legendary_catch(self.player, embed)
+            elif (fishing_cog := self.bot.get_cog("Fishing")) and (log_ch_id := fishing_cog.fishing_log_channel_id) and (log_ch := self.bot.get_channel(log_ch_id)):
+                public_embed = embed.copy()
+                public_embed.set_footer(text=footer_public)
+                content = self.player.mention if is_big_catch else None
+                try: await log_ch.send(content=content, embed=public_embed, allowed_mentions=discord.AllowedMentions(users=is_big_catch))
+                except Exception as e: logger.error(f"공개 낚시 로그 전송 실패: {e}", exc_info=True)
+        embed.set_footer(text=f"{footer_public}\n{footer_private}")
+        if self.message:
+            try:
+                await self.message.edit(embed=embed, view=None)
+                self.fishing_cog.last_result_messages[self.player.id] = self.message
+            except (discord.NotFound, AttributeError, discord.HTTPException): pass
 
-class CommercePanelView(ui.View):
-    def __init__(self, cog_instance: 'Commerce'):
+    async def on_timeout(self):
+        if self.game_state != "finished":
+            embed = discord.Embed(title="⏱️ 時間切れ", description=f"{self.player.mention}さんは時間内に反応がありませんでした。", color=discord.Color.darker_grey())
+            await self._send_result(embed)
+        self.stop()
+
+    def stop(self):
+        if self.game_task and not self.game_task.done(): self.game_task.cancel()
+        self.fishing_cog.active_fishing_sessions_by_user.discard(self.player.id)
+        super().stop()
+
+class FishingPanelView(ui.View):
+    def __init__(self, bot: commands.Bot, cog_instance: 'Fishing', panel_key: str):
         super().__init__(timeout=None)
-        self.commerce_cog = cog_instance
-        
-        shop_button = ui.Button(label="商店 (アイテム購入)", style=discord.ButtonStyle.success, emoji="🏪", custom_id="commerce_open_shop")
-        shop_button.callback = self.open_shop
-        self.add_item(shop_button)
-
-        market_button = ui.Button(label="買取ボックス (アイテム売却)", style=discord.ButtonStyle.danger, emoji="📦", custom_id="commerce_open_market")
-        market_button.callback = self.open_market
-        self.add_item(market_button)
-
-    async def open_shop(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        view = BuyCategoryView(interaction.user)
-        embed = await view.build_embed()
-        await view.build_components()
-        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-        view.message = message
-
-    async def open_market(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        view = SellCategoryView(interaction.user)
-        embed = await view.build_embed()
-        await view.build_components()
-        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-        view.message = message
-
-class Commerce(commands.Cog):
-    def __init__(self, bot: commands.Cog):
         self.bot = bot
+        self.fishing_cog = cog_instance
+        self.panel_key = panel_key
+        self.user_locks: Dict[int, asyncio.Lock] = {}
+
+        if panel_key == "panel_fishing_river":
+            river_button = ui.Button(label="川で釣りをする", style=discord.ButtonStyle.primary, emoji="🏞️", custom_id="start_fishing_river")
+            river_button.callback = self._start_fishing_callback
+            self.add_item(river_button)
+        elif panel_key == "panel_fishing_sea":
+            sea_button = ui.Button(label="海で釣りをする", style=discord.ButtonStyle.primary, emoji="🌊", custom_id="start_fishing_sea")
+            sea_button.callback = self._start_fishing_callback
+            self.add_item(sea_button)
+    
+    async def _start_fishing_callback(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        lock = self.user_locks.setdefault(user_id, asyncio.Lock())
+        if lock.locked():
+            return await interaction.response.send_message("現在、以前のリクエストを処理中です。しばらくお待ちください。", ephemeral=True, delete_after=5)
+
+        async with lock:
+            if user_id in self.fishing_cog.active_fishing_sessions_by_user:
+                return await interaction.response.send_message("すでに釣りを開始しています。", ephemeral=True, delete_after=5)
+
+            await interaction.response.defer(ephemeral=True)
+            if last_message := self.fishing_cog.last_result_messages.pop(user_id, None):
+                try: await last_message.delete()
+                except (discord.NotFound, discord.Forbidden): pass
+            
+            try:
+                custom_id, location_type = interaction.data['custom_id'], interaction.data['custom_id'].split('_')[-1]
+                uid_str = str(user_id)
+                gear, inventory = await asyncio.gather(get_user_gear(uid_str), get_inventory(uid_str))
+                rod, item_db = gear.get('rod', BARE_HANDS), get_item_database()
+                if rod == BARE_HANDS:
+                    if any('竿' in item_name for item_name in inventory if item_db.get(item_name, {}).get('category') == '釣り'):
+                        return await interaction.followup.send("❌ プロフィール画面から釣竿を装備してください。", ephemeral=True)
+                    return await interaction.followup.send(f"❌ 釣りをするには、まず商店で「{DEFAULT_ROD}」を購入してください。", ephemeral=True)
+                if location_type == 'sea' and item_db.get(rod, {}).get('tier', 0) < REQUIRED_TIER_FOR_SEA:
+                    return await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD_NAME}」(等級{REQUIRED_TIER_FOR_SEA})以上の性能を持つ釣竿を**装備**する必要があります。", ephemeral=True)
+
+                self.fishing_cog.active_fishing_sessions_by_user.add(user_id)
+                bait = gear.get('bait', 'エサなし')
+                if bait != "エサなし":
+                    if inventory.get(bait, 0) > 0:
+                        await update_inventory(uid_str, bait, -1)
+                        inventory[bait] -= 1
+                    else:
+                        bait = "エサなし"
+                        await set_user_gear(uid_str, bait="エサなし")
+
+                location_name = "川" if location_type == "river" else "海"
+                desc = f"### {location_name}にウキを投げました。\n**🎣 使用中の釣竿:** `{rod}`\n**🐛 使用中のエサ:** `{bait}`"
+                embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
+                if waiting_image_url := get_config("FISHING_WAITING_IMAGE_URL"):
+                    embed.set_thumbnail(url=waiting_image_url.strip('"'))
+                view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type)
+                await view.start_game(interaction, embed)
+            except Exception as e:
+                self.fishing_cog.active_fishing_sessions_by_user.discard(user_id)
+                logger.error(f"낚시 게임 시작 중 예측 못한 오류: {e}", exc_info=True)
+                await interaction.followup.send(f"❌ 釣りの開始中に予期せぬエラーが発生しました。", ephemeral=True)
+
+class Fishing(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.active_fishing_sessions_by_user: Set[int] = set()
+        self.fishing_log_channel_id: Optional[int] = None
+        self.last_result_messages: Dict[int, discord.Message] = {}
+        logger.info("Fishing Cog가 성공적으로 초기화되었습니다.")
+
     async def register_persistent_views(self):
-        self.bot.add_view(CommercePanelView(self))
-        
-    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "commerce"):
-        embed_key = "panel_commerce"
+        self.bot.add_view(FishingPanelView(self.bot, self, "panel_fishing_river"))
+        self.bot.add_view(FishingPanelView(self.bot, self, "panel_fishing_sea"))
+
+    async def cog_load(self): await self.load_configs()
+    async def load_configs(self): self.fishing_log_channel_id = get_id("fishing_log_channel_id")
+
+    async def log_legendary_catch(self, user: discord.Member, result_embed: discord.Embed):
+        if not self.fishing_log_channel_id or not (log_channel := self.bot.get_channel(self.fishing_log_channel_id)): return
+        fish_field = next((f for f in result_embed.fields if f.name == "魚"), None)
+        size_field = next((f for f in result_embed.fields if f.name == "サイズ"), None)
+        if not all([fish_field, size_field]): return
+        fish_name_raw = fish_field.value.split('**')[1] if '**' in fish_field.value else fish_field.value
+        fish_data = next((loot for loot in get_fishing_loot() if loot['name'] == fish_name_raw), None)
+        if not fish_data: return
+        size_cm_str, size_cm = size_field.value.strip('`cm`'), float(size_cm_str)
+        value = int(fish_data.get("base_value", 0) + (size_cm * fish_data.get("size_multiplier", 0)))
+        field_value = get_string("log_legendary_catch.field_value", emoji=fish_data.get('emoji','👑'), name=fish_name_raw, size=size_cm_str, value=f"{value:,}", currency_icon=get_config('CURRENCY_ICON', '🪙'))
+        embed = discord.Embed(
+            title=get_string("log_legendary_catch.title"),
+            description=get_string("log_legendary_catch.description", user_mention=user.mention),
+            color=int(get_string("log_legendary_catch.color", "0xFFD700").replace("0x", ""), 16)
+        )
+        embed.add_field(name=get_string("log_legendary_catch.field_name"), value=field_value)
+        if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
+        if image_url := fish_data.get('image_url'):
+            embed.set_image(url=image_url)
+        try:
+            await log_channel.send(content="@here", embed=embed, allowed_mentions=discord.AllowedMentions(everyone=True))
+        except Exception as e:
+            logger.error(f"전설의 물고기 공지 전송 실패: {e}", exc_info=True)
+
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str):
+        if panel_key not in ["panel_fishing_river", "panel_fishing_sea"]: return
         if (panel_info := get_panel_id(panel_key)):
             if (old_channel_id := panel_info.get("channel_id")) and (old_channel := self.bot.get_channel(old_channel_id)):
-                try:
-                    old_message = await old_channel.fetch_message(panel_info["message_id"])
-                    await old_message.delete()
+                try: await (await old_channel.fetch_message(panel_info.get('message_id'))).delete()
                 except (discord.NotFound, discord.Forbidden): pass
         
-        if not (embed_data := await get_embed_from_db(embed_key)): return
-
+        embed_data = await get_embed_from_db(panel_key)
+        if not embed_data: return
         embed = discord.Embed.from_dict(embed_data)
-        view = CommercePanelView(self)
-        
+        view = FishingPanelView(self.bot, self, panel_key)
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
 
-async def setup(bot: commands.Cog):
-    await bot.add_cog(Commerce(bot))
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Fishing(bot))
