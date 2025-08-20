@@ -47,7 +47,7 @@ class EconomyCore(commands.Cog):
             return
         
         user = message.author
-        chat_req = get_config("CHAT_MESSAGE_REQUIREMENT", 1)
+        chat_req = get_config("CHAT_MESSAGE_REQUIREMENT", 10)
         chat_reward_range = get_config("CHAT_REWARD_RANGE", [5, 10])
         if not chat_reward_range or len(chat_reward_range) != 2: chat_reward_range = [5, 10]
 
@@ -71,7 +71,7 @@ class EconomyCore(commands.Cog):
     @tasks.loop(minutes=1)
     async def voice_reward_loop(self):
         try:
-            voice_req_min = get_config("VOICE_TIME_REQUIREMENT_MINUTES", 1)
+            voice_req_min = get_config("VOICE_TIME_REQUIREMENT_MINUTES", 10)
             voice_reward_range = get_config("VOICE_REWARD_RANGE", [10, 15])
             if not voice_reward_range or len(voice_reward_range) != 2: voice_reward_range = [10, 15]
 
