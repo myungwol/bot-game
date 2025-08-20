@@ -112,7 +112,10 @@ class FishingGameView(ui.View):
         self.stop()
 
     async def _send_result(self, embed: discord.Embed, log_publicly: bool = False, is_big_catch: bool = False, is_legendary: bool = False):
-        remaining_baits_config, footer_private = get_config("FISHING_REMAINING_BAITS_DISPLAY", ["一般の釣りエサ", "高級釣りエサ"]), f"残りのエサ: {' / '.join([f'{b}({self.remaining_baits.get(b, 0)}個)' for b in remaining_baits_config])}"
+        # [✅✅✅ 핵심 수정 ✅✅✅] 문제의 한 줄 코드를 두 줄로 분리합니다.
+        remaining_baits_config = get_config("FISHING_REMAINING_BAITS_DISPLAY", ["一般の釣りエサ", "高級釣りエサ"])
+        footer_private = f"残りのエサ: {' / '.join([f'{b}({self.remaining_baits.get(b, 0)}個)' for b in remaining_baits_config])}"
+
         footer_public = f"使用した装備: {self.used_rod} / {self.used_bait}"
         if log_publicly:
             if is_legendary:
@@ -224,21 +227,15 @@ class Fishing(commands.Cog):
 
     async def log_legendary_catch(self, user: discord.Member, result_embed: discord.Embed):
         if not self.fishing_log_channel_id or not (log_channel := self.bot.get_channel(self.fishing_log_channel_id)): return
-
         fish_field = next((f for f in result_embed.fields if f.name == "魚"), None)
         size_field = next((f for f in result_embed.fields if f.name == "サイズ"), None)
         if not all([fish_field, size_field]): return
-
         fish_name_raw = fish_field.value.split('**')[1] if '**' in fish_field.value else fish_field.value
         fish_data = next((loot for loot in get_fishing_loot() if loot['name'] == fish_name_raw), None)
         if not fish_data: return
-
-        size_cm_str = size_field.value.strip('`cm`')
-        size_cm = float(size_cm_str)
+        size_cm_str, size_cm = size_field.value.strip('`cm`'), float(size_cm_str)
         value = int(fish_data.get("base_value", 0) + (size_cm * fish_data.get("size_multiplier", 0)))
-
         field_value = get_string("log_legendary_catch.field_value", emoji=fish_data.get('emoji','👑'), name=fish_name_raw, size=size_cm_str, value=f"{value:,}", currency_icon=get_config('CURRENCY_ICON', '🪙'))
-
         embed = discord.Embed(
             title=get_string("log_legendary_catch.title"),
             description=get_string("log_legendary_catch.description", user_mention=user.mention),
@@ -246,10 +243,8 @@ class Fishing(commands.Cog):
         )
         embed.add_field(name=get_string("log_legendary_catch.field_name"), value=field_value)
         if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
-
         if image_url := fish_data.get('image_url'):
             embed.set_image(url=image_url)
-
         try:
             await log_channel.send(content="@here", embed=embed, allowed_mentions=discord.AllowedMentions(everyone=True))
         except Exception as e:
@@ -257,9 +252,9 @@ class Fishing(commands.Cog):
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str):
         if panel_key not in ["panel_fishing_river", "panel_fishing_sea"]: return
-        if (panel_info := get_panel_id(panel_key)) and (old_id := panel_info.get('message_id')):
+        if (panel_info := get_panel_id(panel_key)):
             if (old_channel_id := panel_info.get("channel_id")) and (old_channel := self.bot.get_channel(old_channel_id)):
-                try: await (await old_channel.fetch_message(old_id)).delete()
+                try: await (await old_channel.fetch_message(panel_info.get('message_id'))).delete()
                 except (discord.NotFound, discord.Forbidden): pass
         
         embed_data = await get_embed_from_db(panel_key)
