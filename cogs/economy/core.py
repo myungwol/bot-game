@@ -14,7 +14,6 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# --- EconomyCore Cog ---
 class EconomyCore(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -72,7 +71,7 @@ class EconomyCore(commands.Cog):
     @tasks.loop(minutes=1)
     async def voice_reward_loop(self):
         try:
-            voice_req_min = get_config("VOICE_TIME_REQUIREMENT_MINUTES", 1)
+            voice_req_min = get_config("VOICE_TIME_REQUIREMENT_MINUTES", 10)
             voice_reward_range = get_config("VOICE_REWARD_RANGE", [10, 15])
             if not voice_reward_range or len(voice_reward_range) != 2: voice_reward_range = [10, 15]
 
@@ -112,18 +111,15 @@ class EconomyCore(commands.Cog):
         if not self.coin_log_channel_id or not (log_channel := self.bot.get_channel(self.coin_log_channel_id)): return
         
         if embed_data := await get_embed_from_db("log_coin_gain"):
-            # 원본 embed_data를 복사하여 사용
             formatted_embed_data = embed_data.copy()
             
-            # 보상 이유(reason)에 따라 제목과 설명을 동적으로 변경
             if reason == "チャット活動報酬":
                 formatted_embed_data['title'] = "💬 チャット活動報酬"
                 formatted_embed_data['description'] = f"{user.mention}さんがチャット活動でコインを獲得しました。"
-            else: # 보이스 활동 보상 또는 기타
+            else: 
                 formatted_embed_data['title'] = "🎙️ ボイスチャット活動報酬"
                 formatted_embed_data['description'] = f"{user.mention}さんがVC活動でコインを獲得しました。"
 
-            # 포맷팅 함수 호출
             embed = format_embed_from_db(
                 formatted_embed_data, 
                 user_mention=user.mention, 
@@ -131,15 +127,33 @@ class EconomyCore(commands.Cog):
                 currency_icon=self.currency_icon
             )
 
-            # 썸네일 추가
             if user.display_avatar:
                 embed.set_thumbnail(url=user.display_avatar.url)
             
             try: 
-                # 유저를 태그하기 위해 content에 user.mention 추가
-                await log_channel.send(content=user.mention, embed=embed, allowed_mentions=discord.AllowedMentions(users=True))
+                # [🔴 핵심 수정] content와 allowed_mentions를 제거하여 맨션을 보내지 않습니다.
+                await log_channel.send(embed=embed)
             except Exception as e: 
                 logger.error(f"코인 활동 로그 전송 실패: {e}", exc_info=True)
+
+    async def log_coin_transfer(self, sender: discord.Member, recipient: discord.Member, amount: int):
+        if not self.coin_log_channel_id or not (log_channel := self.bot.get_channel(self.coin_log_channel_id)): return
+        
+        if embed_data := await get_embed_from_db("log_coin_transfer"):
+            embed = format_embed_from_db(embed_data, sender_mention=sender.mention, recipient_mention=recipient.mention, amount=f"{amount:,}", currency_icon=self.currency_icon)
+            try: await log_channel.send(embed=embed)
+            except Exception as e: logger.error(f"코인 송금 로그 전송 실패: {e}", exc_info=True)
+        
+    async def log_admin_action(self, admin: discord.Member, target: discord.Member, amount: int, action: str):
+        if not self.coin_log_channel_id or not (log_channel := self.bot.get_channel(self.coin_log_channel_id)): return
+        
+        if embed_data := await get_embed_from_db("log_coin_admin"):
+            action_color = 0x3498DB if amount > 0 else 0xE74C3C
+            amount_str = f"+{amount:,}" if amount > 0 else f"{amount:,}"
+            embed = format_embed_from_db(embed_data, action=action, target_mention=target.mention, amount=amount_str, currency_icon=self.currency_icon, admin_mention=admin.mention)
+            embed.color = discord.Color(action_color)
+            try: await log_channel.send(embed=embed)
+            except Exception as e: logger.error(f"관리자 코인 조작 로그 전송 실패: {e}", exc_info=True)
         
     @app_commands.command(name="コイン付与", description="[管理者専用] 特定のユーザーにコインを付与します。")
     @app_commands.checks.has_permissions(administrator=True)
