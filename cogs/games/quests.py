@@ -13,8 +13,6 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# --- 퀘스트 정의 ---
-# 목표치는 나중에 DB에서 관리할 수도 있습니다.
 DAILY_QUESTS = {
     "attendance": {"name": "出席チェックをする", "goal": 1},
     "voice": {"name": "ボイスチャンネルに10分間参加する", "goal": 10},
@@ -31,12 +29,15 @@ class QuestView(ui.View):
         super().__init__(timeout=180)
         self.user = user
         self.cog = cog_instance
-        self.current_tab = "daily" # or "weekly"
+        self.current_tab = "daily"
 
+    # [✅✅✅ 핵심 수정 ✅✅✅]
+    # '상호작용 실패'를 방지하기 위해 defer()를 먼저 호출합니다.
     async def update_view(self, interaction: discord.Interaction):
+        await interaction.response.defer() # 응답을 먼저 보냅니다.
         embed = await self.build_embed()
         self.update_components()
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self) # followup으로 메시지를 수정합니다.
 
     async def build_embed(self) -> discord.Embed:
         progress = await get_user_progress(self.user.id)
@@ -48,7 +49,6 @@ class QuestView(ui.View):
         if self.current_tab == "daily":
             embed.title = "📅 デイリークエスト"
             quests_to_show = DAILY_QUESTS
-            # 일일 퀘스트 진행도 계산
             progress_values = {
                 "attendance": 1 if has_attended_today else 0,
                 "voice": progress.get('daily_voice_minutes', 0),
@@ -57,7 +57,6 @@ class QuestView(ui.View):
         else: # weekly
             embed.title = "🗓️ ウィークリークエスト"
             quests_to_show = WEEKLY_QUESTS
-            # 주간 퀘스트 진행도 계산
             progress_values = {
                 "attendance": progress.get('weekly_attendance_count', 0),
                 "voice": progress.get('weekly_voice_minutes', 0),
@@ -77,7 +76,6 @@ class QuestView(ui.View):
         return embed
 
     def update_components(self):
-        # 탭 버튼 상태 업데이트
         for item in self.children:
             if isinstance(item, ui.Button):
                 if item.custom_id == f"tab_{self.current_tab}":
@@ -113,10 +111,13 @@ class QuestPanelView(ui.View):
             button.callback = self.open_quest_view
             self.add_item(button)
 
+    # [✅✅✅ 핵심 수정 ✅✅✅]
+    # 처음 퀘스트 창을 열 때도 DB 조회가 있으므로 defer()를 적용합니다.
     async def open_quest_view(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True) # 응답을 먼저 보냅니다.
         view = QuestView(interaction.user, self.cog)
         embed = await view.build_embed()
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True) # followup으로 메시지를 보냅니다.
 
 class Quests(commands.Cog):
     def __init__(self, bot: commands.Bot):
