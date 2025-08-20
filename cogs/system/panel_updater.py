@@ -19,7 +19,6 @@ class PanelUpdater(commands.Cog):
 
     @tasks.loop(seconds=10.0)
     async def check_for_panel_updates(self):
-        # [✅✅✅ 핵심 수정 ✅✅✅] panel_map에 DiceGame 정보를 추가합니다.
         panel_map = {
             "panel_fishing_river": {"cog_name": "Fishing", "channel_key": "river_fishing_panel_channel_id"},
             "panel_fishing_sea":   {"cog_name": "Fishing", "channel_key": "sea_fishing_panel_channel_id"},
@@ -27,6 +26,8 @@ class PanelUpdater(commands.Cog):
             "panel_profile":       {"cog_name": "UserProfile", "channel_key": "profile_panel_channel_id"},
             "panel_atm":           {"cog_name": "Atm", "channel_key": "atm_panel_channel_id"},
             "panel_dice_game":     {"cog_name": "DiceGame", "channel_key": "dice_game_panel_channel_id"},
+            # [✅ 추가] 슬롯머신 패널 정보를 추가합니다.
+            "panel_slot_machine":  {"cog_name": "SlotMachine", "channel_key": "slot_machine_panel_channel_id"},
         }
         
         try:
