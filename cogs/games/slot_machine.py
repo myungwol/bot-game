@@ -18,6 +18,7 @@ REEL_SYMBOLS = ['🍒', '🍊', '🍇', '🍋', '🔔', '5️⃣', '7️⃣']
 FRUIT_SYMBOLS = ['🍒', '🍊', '🍇', '🍋', '🔔']
 SPIN_ANIMATION_FRAMES = 5
 SPIN_ANIMATION_SPEED = 0.4
+MAX_ACTIVE_SLOTS = 5 # 최대 동시 플레이 인원 설정
 
 class BetAmountModal(ui.Modal, title="ベット額の入力 (スロット)"):
     amount = ui.TextInput(label="金額 (100コイン単位)", placeholder="例: 1000", required=True)
@@ -52,7 +53,7 @@ class BetAmountModal(ui.Modal, title="ベット額の入力 (スロット)"):
 
 class SlotMachineGameView(ui.View):
     def __init__(self, user: discord.Member, bet_amount: int, cog_instance: 'SlotMachine'):
-        super().__init__(timeout=30) # 타임아웃을 짧게 조정
+        super().__init__(timeout=30)
         self.user = user
         self.bet_amount = bet_amount
         self.cog = cog_instance
@@ -77,7 +78,6 @@ class SlotMachineGameView(ui.View):
     async def spin_button(self, interaction: discord.Interaction, button: ui.Button):
         button.disabled = True
         button.label = "回転中..."
-        # [✅ 수정] 애니메이션 시작 전에 즉시 응답합니다.
         await interaction.response.edit_message(embed=self.create_embed("リールが回転中..."), view=self)
 
         if random.random() < 0.50:
@@ -98,7 +98,6 @@ class SlotMachineGameView(ui.View):
                 if i < 1: self.reels[0] = random.choice(REEL_SYMBOLS)
                 if i < 2: self.reels[1] = random.choice(REEL_SYMBOLS)
                 self.reels[2] = random.choice(REEL_SYMBOLS)
-                # [✅ 수정] edit_original_response 사용
                 await interaction.edit_original_response(embed=self.create_embed("リールが回転中..."))
                 await asyncio.sleep(SPIN_ANIMATION_SPEED)
 
@@ -155,7 +154,6 @@ class SlotMachineGameView(ui.View):
             except discord.NotFound:
                 pass
 
-# 메인 패널 View
 class SlotMachinePanelView(ui.View):
     def __init__(self, cog_instance: 'SlotMachine'):
         super().__init__(timeout=None)
@@ -173,12 +171,15 @@ class SlotMachinePanelView(ui.View):
             self.add_item(button)
 
     async def start_game_callback(self, interaction: discord.Interaction):
+        if len(self.cog.active_sessions) >= MAX_ACTIVE_SLOTS:
+            await interaction.response.send_message(f"❌ すべてのスロットマシンが使用中です。しばらく待ってからもう一度お試しください。({len(self.cog.active_sessions)}/{MAX_ACTIVE_SLOTS})", ephemeral=True, delete_after=10)
+            return
+
         if interaction.user.id in self.cog.active_sessions:
             await interaction.response.send_message("❌ すでにゲームをプレイ中です。", ephemeral=True, delete_after=5)
             return
         await interaction.response.send_modal(BetAmountModal(self.cog))
 
-# 메인 Cog
 class SlotMachine(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
