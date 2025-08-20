@@ -4,7 +4,7 @@ import os
 import asyncio
 import logging
 import logging.handlers
-# [🔴 핵심 추가] Supabase 클라이언트를 직접 가져옵니다.
+
 from utils.database import load_all_data_from_db, supabase
 
 # --- 중앙 로깅 설정 ---
@@ -38,10 +38,9 @@ class MyBot(commands.Bot):
         await self.load_all_extensions()
         
         cogs_with_persistent_views = [
-            "UserProfile",
-            "Fishing",
-            "Commerce",
-            "Atm"
+            "UserProfile", "Fishing", "Commerce", "Atm",
+            "DiceGame", "SlotMachine", "RPSGame",
+            "DailyCheck", "Quests", "Farm"
         ]
         
         registered_views = 0
@@ -58,22 +57,20 @@ class MyBot(commands.Bot):
 
     async def load_all_extensions(self):
         logger.info("------ [ Cog 로드 시작 ] ------")
-        cogs_dir = './cogs'
-        if not os.path.exists(cogs_dir):
-            logger.error(f"Cogs 디렉토리를 찾을 수 없습니다: {cogs_dir}")
-            return
-        for folder in sorted(os.listdir(cogs_dir)):
-            folder_path = os.path.join(cogs_dir, folder)
-            if os.path.isdir(folder_path):
-                for filename in os.listdir(folder_path):
-                    if filename.endswith('.py') and not filename.startswith('__'):
-                        try:
-                            extension_path = f'cogs.{folder}.{filename[:-3]}'
-                            await self.load_extension(extension_path)
-                            logger.info(f'✅ Cog 로드 성공: {extension_path}')
-                        except Exception as e:
-                            logger.error(f'❌ Cog 로드 실패: {extension_path} | {e}', exc_info=True)
+        # cogs 폴더와 그 하위 폴더들을 모두 탐색
+        for root, dirs, files in os.walk('./cogs'):
+            for filename in files:
+                if filename.endswith('.py') and not filename.startswith('__'):
+                    # 경로를 Python 모듈 경로 형식으로 변환 (e.g., cogs.games.fishing)
+                    path = os.path.join(root, filename)
+                    extension_path = path.replace(os.path.sep, '.')[:-3].lstrip('.')
+                    try:
+                        await self.load_extension(extension_path)
+                        logger.info(f'✅ Cog 로드 성공: {extension_path}')
+                    except Exception as e:
+                        logger.error(f'❌ Cog 로드 실패: {extension_path} | {e}', exc_info=True)
         logger.info("------ [ Cog 로드 완료 ] ------")
+
 
 bot = MyBot(command_prefix="/", intents=intents)
 
@@ -81,7 +78,6 @@ bot = MyBot(command_prefix="/", intents=intents)
 async def on_ready():
     logger.info(f'✅ {bot.user.name}(이)가 성공적으로 로그인했습니다.')
     
-    # [🔴 핵심 변경 1] DB 로드보다 먼저, 오래된 패널 요청을 청소합니다.
     try:
         if supabase:
             logger.info("------ [ 오래된 패널 재설치 요청 청소 시작 ] ------")
@@ -104,10 +100,6 @@ async def on_ready():
                 logger.error(f"❌ '{cog_name}' Cog 설정 새로고침 중 오류: {e}", exc_info=True)
     logger.info(f"✅ 총 {refreshed_cogs}개의 Cog 설정이 새로고침되었습니다.")
     logger.info("------ [ 모든 Cog 설정 새로고침 완료 ] ------")
-
-    # [🔴 핵심 변경 2] PanelUpdater 루프를 여기서 시작하지 않고, Cog 자체에서 시작하도록 변경합니다.
-    # panel_updater_cog = bot.get_cog("PanelUpdater")
-    # ... (관련 if/else 블록 전체 삭제) ...
 
     try:
         if TEST_GUILD_ID:
