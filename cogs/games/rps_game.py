@@ -317,39 +317,62 @@ class RPSGame(commands.Cog):
             await self.resolve_round(channel_id)
             
     def build_lobby_embed(self, host: discord.User, bet: int, players: List[discord.Member]) -> discord.Embed:
-        embed = discord.Embed(title="✊✌️✋ じゃんけん参加者募集中！", color=0x9B59B6)
-        embed.description = f"**部屋主:** {host.mention}\n**ベット額:** `{bet}`{self.currency_icon}"
-        player_list = "\n".join([p.display_name for p in players]) or "まだいません"
-        embed.add_field(name=f"参加者 ({len(players)}/{MAX_PLAYERS})", value=player_list)
-        embed.set_footer(text="30秒後に自動で開始します。")
+        embed = discord.Embed(title="⚔️ じゃんけん参加者募集中！ ⚔️", color=0x9B59B6)
+        
+        description = (
+            f"・**主催者:** {host.mention}\n"
+            f"・**ベット額:** `{bet:,}` {self.currency_icon}"
+        )
+        embed.description = description
+        
+        player_list = "\n".join([f"・{p.display_name}" for p in players]) or "> まだ誰もいません..."
+        embed.add_field(name=f"**参加者リスト ({len(players)}/{MAX_PLAYERS})**", value=player_list, inline=False)
+        
+        embed.set_footer(text="⏳ 30秒後、または部屋主が開始するとゲームが始まります。")
         return embed
 
+    # [🎨 UI 수정] 게임 진행 임베드 디자인 개선
     def build_game_embed(self, game: Dict, result: str = "") -> discord.Embed:
-        embed = discord.Embed(title=f"じゃんけん勝負！ - ラウンド {game['round']}", color=0x3498DB)
-        player_list = "\n".join([p.display_name for p in game["players"].values()])
-        embed.add_field(name="現在のプレイヤー", value=player_list, inline=False)
+        embed = discord.Embed(title=f"🔥 じゃんけん勝負！ - ラウンド {game['round']} 🔥", color=0x3498DB)
+        embed.description = "> 各自、下のボタンから手を選択してください！"
+
+        player_list = "\n".join([f"・**{p.display_name}**" for p in game["players"].values()])
+        embed.add_field(name="**生き残りプレイヤー**", value=player_list, inline=False)
+        
         if result:
-            embed.add_field(name="ラウンド結果", value=result, inline=False)
-        embed.set_footer(text="30秒以内に手を選択してください。")
+            embed.add_field(name="**━━━━━━━━結果━━━━━━━━**", value=result, inline=False)
+            
+        embed.set_footer(text="🕒 30秒以内に選択してください。")
         return embed
 
+    # [🎨 UI 수정] 라운드 결과 텍스트 포맷 개선
     def format_round_result(self, game: Dict, winners: Set[int], losers: Set[int]) -> str:
         lines = []
         for pid, choice in game["choices"].items():
             user = self.bot.get_user(pid)
-            if user: lines.append(f"{user.display_name}: {HAND_EMOJIS[choice]}")
+            if user: 
+                lines.append(f"・{user.display_name}: {HAND_EMOJIS[choice]}")
         
+        # 선택 안 한 사람 표시
+        unchosen_players = set(game["players"].keys()) - set(game["choices"].keys())
+        for pid in unchosen_players:
+            user = self.bot.get_user(pid)
+            if user:
+                lines.append(f"・{user.display_name}: `時間切れ`")
+
+        lines.append("\n**──────────────**")
+
         participants_in_round = set(game["choices"].keys())
         if not winners and participants_in_round:
-            lines.append("\n**引き分け！** (あいこでしょ！)")
+            lines.append(" risultato: **引き分け！** (あいこでしょ！)")
         
-        winner_mentions = [self.bot.get_user(wid).display_name for wid in winners if self.bot.get_user(wid)]
+        winner_mentions = [f"**{self.bot.get_user(wid).display_name}**" for wid in winners if self.bot.get_user(wid)]
         if winner_mentions:
-            lines.append(f"\n**勝者:** {', '.join(winner_mentions)}")
+            lines.append(f"🏆 **勝者:** {', '.join(winner_mentions)}")
         
         loser_mentions = [self.bot.get_user(lid).display_name for lid in losers if self.bot.get_user(lid)]
         if loser_mentions:
-            lines.append(f"**敗者:** {', '.join(loser_mentions)}")
+            lines.append(f"💧 **敗者:** {', '.join(loser_mentions)}")
 
         return "\n".join(lines)
     
