@@ -1,3 +1,6 @@
 discord.py
 supabase
 flask
+asyncio
+python-dotenv
+cachetools
