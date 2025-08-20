@@ -1,4 +1,3 @@
-
 import discord
 from discord.ext import commands, tasks
 from discord import ui
@@ -25,7 +24,7 @@ class BetAmountModal(ui.Modal, title="ベット額の入力 (じゃんけん)"):
 
     async def on_submit(self, interaction: discord.Interaction):
         cog = interaction.client.get_cog("RPSGame")
-        if not cog: return await interaction.response.send_message("エラー: ゲームCogが見つかりません。", ephemeral=True)
+        if not cog: return await interaction.response.send_message("エラー: ゲームCogが見つかりません。", ephemeral=True, delete_after=5)
         
         try:
             bet_amount = int(self.amount.value)
@@ -36,15 +35,20 @@ class BetAmountModal(ui.Modal, title="ベット額の入力 (じゃんけん)"):
             if wallet.get('balance', 0) < bet_amount:
                 raise ValueError(f"残高が不足しています。(現在の残高: {wallet.get('balance', 0):,})")
 
-            await interaction.response.defer(ephemeral=True) # Defer before starting the game
+            # [✅ 수정] Defer를 먼저 호출하여 안정성을 높입니다.
+            await interaction.response.defer(ephemeral=True, thinking=True)
             await cog.create_game_lobby(interaction, bet_amount)
 
         except ValueError as e:
-            await interaction.response.send_message(f"❌ {e}", ephemeral=True, delete_after=10)
+            # [✅ 수정] 에러 메시지도 5초 뒤 삭제되도록 합니다.
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"❌ {e}", ephemeral=True, delete_after=5)
+            else:
+                await interaction.followup.send(f"❌ {e}", ephemeral=True, delete_after=5)
         except Exception as e:
             logger.error(f"じゃんけんのベット処理中にエラー: {e}", exc_info=True)
             if not interaction.response.is_done():
-                await interaction.response.send_message("❌ 処理中にエラーが発生しました。", ephemeral=True)
+                await interaction.response.send_message("❌ 処理中にエラーが発生しました。", ephemeral=True, delete_after=5)
 
 class RPSLobbyView(ui.View):
     def __init__(self, cog, channel_id: int):
@@ -100,7 +104,7 @@ class RPSGame(commands.Cog):
         host = interaction.user
 
         if channel_id in self.active_games:
-            await interaction.followup.send("❌ このチャンネルでは既にゲームが進行中です。", ephemeral=True)
+            await interaction.followup.send("❌ このチャンネルでは既にゲームが進行中です。", ephemeral=True, delete_after=5)
             return
 
         lobby_embed = self.build_lobby_embed(host, bet_amount, [host])
@@ -118,7 +122,8 @@ class RPSGame(commands.Cog):
             "choices": {},
             "task": self.bot.loop.create_task(self.lobby_countdown(channel_id, 30))
         }
-        await interaction.followup.send(f"✅ じゃんけん部屋を作成しました！ ベット額: `{bet_amount}`{self.currency_icon}", ephemeral=True)
+        # [✅ 수정] 확인 메시지도 5초 뒤 삭제되도록 합니다.
+        await interaction.followup.send(f"✅ じゃんけん部屋を作成しました！ ベット額: `{bet_amount}`{self.currency_icon}", ephemeral=True, delete_after=5)
 
     async def start_new_round(self, channel_id: int):
         game = self.active_games[channel_id]
@@ -127,7 +132,6 @@ class RPSGame(commands.Cog):
         
         players_in_round = list(game["players"].values())
         
-        # 1명만 남으면 즉시 우승 처리
         if len(players_in_round) <= 1:
             winner = players_in_round[0] if players_in_round else None
             await self.end_game(channel_id, winner)
@@ -157,46 +161,34 @@ class RPSGame(commands.Cog):
         participants_in_round = set(choices.keys())
         all_players_in_round = set(players.keys())
         
-        # 시간 초과로 선택 안 한 유저 자동 패배 처리
         losers = all_players_in_round - participants_in_round
         
-        # 가위바위보 로직
-        if len(made_choices) in [1, 3]: # 무승부 (모두 같거나, 3개 다 나옴)
+        if len(made_choices) in [1, 3]:
             winners = participants_in_round
         elif len(made_choices) == 2:
             c1, c2 = list(made_choices)
-            if (c1 == "rock" and c2 == "scissors") or \
-               (c1 == "scissors" and c2 == "paper") or \
-               (c1 == "paper" and c2 == "rock"):
-                winning_hand = c1
-            else:
-                winning_hand = c2
-            
+            winning_hand = c1 if (c1, c2) in [("rock", "scissors"), ("scissors", "paper"), ("paper", "rock")] else c2
             winners = {uid for uid, hand in choices.items() if hand == winning_hand}
             round_losers = {uid for uid, hand in choices.items() if hand != winning_hand}
             losers.update(round_losers)
-
-        else: # 아무도 선택 안함
+        else:
             winners = set()
 
-        # 패자 제외
         for loser_id in losers:
             players.pop(loser_id, None)
 
-        # 결과 메시지 업데이트
         result_text = self.format_round_result(game, winners, losers)
         game_embed = self.build_game_embed(game, result_text)
         if game.get("game_message"):
             await game["game_message"].edit(embed=game_embed, view=None)
 
-        await asyncio.sleep(5) # 결과 보여주고 5초 대기
+        await asyncio.sleep(5)
         await self.start_new_round(channel_id)
 
     async def end_game(self, channel_id: int, winner: Optional[discord.Member]):
         game = self.active_games.get(channel_id)
         if not game: return
 
-        # 메시지 삭제
         for msg_key in ["lobby_message", "game_message"]:
             if msg := game.get(msg_key):
                 try: await msg.delete()
@@ -205,7 +197,7 @@ class RPSGame(commands.Cog):
         log_embed = None
         if winner:
             total_pot = game["bet_amount"] * len(game.get("initial_players", [winner]))
-            await update_wallet(winner, total_pot) # DB 처리
+            await update_wallet(winner, total_pot)
             
             if embed_data := await get_embed_from_db("log_rps_game_end"):
                 participants_list = ", ".join([p.mention for p in game.get("initial_players", [])])
@@ -214,10 +206,7 @@ class RPSGame(commands.Cog):
                     total_pot=total_pot, bet_amount=game["bet_amount"],
                     participants_list=participants_list, currency_icon=self.currency_icon
                 )
-        else: # 승자 없이 종료
-            # 베팅 금액 환불 로직 추가 가능 (현재는 소멸)
-            pass
-
+        
         await self.regenerate_panel(self.bot.get_channel(channel_id), last_game_log=log_embed)
         self.active_games.pop(channel_id, None)
 
@@ -226,13 +215,13 @@ class RPSGame(commands.Cog):
     async def handle_join(self, interaction: discord.Interaction, channel_id: int):
         game = self.active_games.get(channel_id)
         user = interaction.user
-        if not game: return await interaction.response.send_message("❌ 募集が終了したゲームです。", ephemeral=True)
-        if user.id in game["players"]: return await interaction.response.send_message("❌ すで参加しています。", ephemeral=True)
-        if len(game["players"]) >= MAX_PLAYERS: return await interaction.response.send_message("❌ 満員です。", ephemeral=True)
+        if not game: return await interaction.response.send_message("❌ 募集が終了したゲームです。", ephemeral=True, delete_after=5)
+        if user.id in game["players"]: return await interaction.response.send_message("❌ すで参加しています。", ephemeral=True, delete_after=5)
+        if len(game["players"]) >= MAX_PLAYERS: return await interaction.response.send_message("❌ 満員です。", ephemeral=True, delete_after=5)
 
         wallet = await get_wallet(user.id)
         if wallet.get('balance', 0) < game["bet_amount"]:
-            return await interaction.response.send_message(f"❌ コインが不足しています。(必要: {game['bet_amount']}{self.currency_icon})", ephemeral=True)
+            return await interaction.response.send_message(f"❌ コインが不足しています。(必要: {game['bet_amount']}{self.currency_icon})", ephemeral=True, delete_after=5)
 
         game["players"][user.id] = user
         embed = self.build_lobby_embed(self.bot.get_user(game["host_id"]), game["bet_amount"], list(game["players"].values()))
@@ -242,14 +231,13 @@ class RPSGame(commands.Cog):
     async def handle_start_manually(self, interaction: discord.Interaction, channel_id: int):
         game = self.active_games.get(channel_id)
         if not game or interaction.user.id != game["host_id"]:
-            return await interaction.response.send_message("❌ 部屋主のみがゲームを開始できます。", ephemeral=True)
+            return await interaction.response.send_message("❌ 部屋主のみがゲームを開始できます。", ephemeral=True, delete_after=5)
         if len(game["players"]) < 2:
-            return await interaction.response.send_message("❌ 参加者が2人以上必要です。", ephemeral=True)
+            return await interaction.response.send_message("❌ 参加者が2人以上必要です。", ephemeral=True, delete_after=5)
 
         await interaction.response.defer()
         if game["task"]: game["task"].cancel()
         
-        # 시작 시점의 플레이어 목록 저장
         game["initial_players"] = list(game["players"].values())
         
         await game["lobby_message"].delete()
@@ -259,7 +247,7 @@ class RPSGame(commands.Cog):
     async def handle_cancel(self, interaction: discord.Interaction, channel_id: int):
         game = self.active_games.get(channel_id)
         if not game or interaction.user.id != game["host_id"]:
-            return await interaction.response.send_message("❌ 部屋主のみがゲームを中止できます。", ephemeral=True)
+            return await interaction.response.send_message("❌ 部屋主のみがゲームを中止できます。", ephemeral=True, delete_after=5)
 
         await interaction.response.defer()
         if game["task"]: game["task"].cancel()
@@ -274,7 +262,7 @@ class RPSGame(commands.Cog):
             return await interaction.response.send_message("❌ すでに選択済みです。", ephemeral=True, delete_after=5)
 
         game["choices"][user_id] = choice
-        await interaction.response.send_message(f"✅ {HAND_NAMES[choice]}を出しました。", ephemeral=True, delete_after=10)
+        await interaction.response.send_message(f"✅ {HAND_NAMES[choice]}を出しました。", ephemeral=True, delete_after=5)
 
         if len(game["choices"]) == len(game["players"]):
             if game["task"]: game["task"].cancel()
@@ -288,12 +276,14 @@ class RPSGame(commands.Cog):
         if not game: return
 
         if len(game["players"]) < 2:
+            if game.get("lobby_message"):
+                await game["lobby_message"].channel.send("参加者が集まらなかったため、ゲームは中止されました。", delete_after=10)
             await self.end_game(channel_id, None)
-            await self.bot.get_channel(channel_id).send("参加者が集まらなかったため、ゲームは中止されました。", delete_after=10)
         else:
             game["initial_players"] = list(game["players"].values())
-            await game["lobby_message"].delete()
-            game["lobby_message"] = None
+            if game.get("lobby_message"):
+                await game["lobby_message"].delete()
+                game["lobby_message"] = None
             await self.start_new_round(channel_id)
 
     async def choice_countdown(self, channel_id: int, seconds: int):
@@ -306,8 +296,8 @@ class RPSGame(commands.Cog):
     def build_lobby_embed(self, host: discord.User, bet: int, players: List[discord.Member]) -> discord.Embed:
         embed = discord.Embed(title="✊✌️✋ じゃんけん参加者募集中！", color=0x9B59B6)
         embed.description = f"**部屋主:** {host.mention}\n**ベット額:** `{bet}`{self.currency_icon}"
-        player_list = "\n".join([p.display_name for p in players])
-        embed.add_field(name=f"参加者 ({len(players)}/{MAX_PLAYERS})", value=player_list or "まだいません")
+        player_list = "\n".join([p.display_name for p in players]) or "まだいません"
+        embed.add_field(name=f"参加者 ({len(players)}/{MAX_PLAYERS})", value=player_list)
         embed.set_footer(text="30秒後に自動で開始します。")
         return embed
 
@@ -324,15 +314,17 @@ class RPSGame(commands.Cog):
         lines = []
         for pid, choice in game["choices"].items():
             user = self.bot.get_user(pid)
-            lines.append(f"{user.display_name}: {HAND_EMOJIS[choice]}")
+            if user: lines.append(f"{user.display_name}: {HAND_EMOJIS[choice]}")
         
-        if not winners and not losers: return "\n".join(lines) + "\n\n**引き分け！** (あいこでしょ！)"
+        if not winners and participants_in_round := set(game["choices"].keys()):
+            if len(participants_in_round) > 0:
+                 lines.append("\n**引き分け！** (あいこでしょ！)")
         
-        winner_mentions = [self.bot.get_user(wid).display_name for wid in winners]
+        winner_mentions = [self.bot.get_user(wid).display_name for wid in winners if self.bot.get_user(wid)]
         if winner_mentions:
             lines.append(f"\n**勝者:** {', '.join(winner_mentions)}")
         
-        loser_mentions = [self.bot.get_user(lid).display_name for lid in losers]
+        loser_mentions = [self.bot.get_user(lid).display_name for lid in losers if self.bot.get_user(lid)]
         if loser_mentions:
             lines.append(f"**敗者:** {', '.join(loser_mentions)}")
 
