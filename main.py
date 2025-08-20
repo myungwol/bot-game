@@ -4,7 +4,6 @@ import os
 import asyncio
 import logging
 import logging.handlers
-import cachetools
 # [🔴 핵심 추가] Supabase 클라이언트를 직접 가져옵니다.
 from utils.database import load_all_data_from_db, supabase
 
