@@ -34,6 +34,7 @@ class QuantityModal(ui.Modal):
         try:
             q_val = int(self.quantity.value)
             if not (1 <= q_val <= self.max_value):
+                # 모달에서의 응답은 delete_after를 지원합니다.
                 await i.response.send_message(f"1から{self.max_value}までの数字を入力してください。", ephemeral=True, delete_after=5)
                 return
             self.value = q_val
@@ -154,11 +155,15 @@ class BuyItemView(ShopViewBase):
         if item_data.get('effect_type') == 'expand_farm':
             farm_data = await get_farm_data(self.user.id)
             if not farm_data:
-                return await interaction.followup.send("❌ 農場をまず作成してください。", ephemeral=True)
+                msg = await interaction.followup.send("❌ 農場をまず作成してください。", ephemeral=True)
+                asyncio.create_task(delete_after(msg, 5))
+                return
             
             size_x, size_y = farm_data['size_x'], farm_data['size_y']
             if size_x >= 4 and size_y >= 4:
-                return await interaction.followup.send("❌ 農場はすでに最大サイズです。", ephemeral=True)
+                msg = await interaction.followup.send("❌ 農場はすでに最大サイズです。", ephemeral=True)
+                asyncio.create_task(delete_after(msg, 5))
+                return
             
             new_x, new_y = size_x, size_y
             if size_x <= size_y and size_x < 4: new_x += 1
@@ -167,9 +172,11 @@ class BuyItemView(ShopViewBase):
 
             await expand_farm_db(farm_data['id'], new_x, new_y)
             await update_wallet(self.user, -item_data['price'])
-            await interaction.followup.send(f"✅ 農場が **{new_x}x{new_y}**サイズに拡張されました！", ephemeral=True, delete_after=10)
+            msg = await interaction.followup.send(f"✅ 農場が **{new_x}x{new_y}**サイズに拡張されました！", ephemeral=True)
+            asyncio.create_task(delete_after(msg, 10))
         else:
-            await interaction.followup.send("❓ 未知の即時使用アイテムです。", ephemeral=True)
+            msg = await interaction.followup.send("❓ 未知の即時使用アイテムです。", ephemeral=True)
+            asyncio.create_task(delete_after(msg, 5))
         
         await self.update_view(interaction)
 
@@ -179,14 +186,16 @@ class BuyItemView(ShopViewBase):
         max_buyable = balance // item_data['price'] if item_data['price'] > 0 else item_data.get('max_ownable', 999)
 
         if max_buyable == 0:
-            return await interaction.response.send_message(get_string("commerce.error_insufficient_funds"), ephemeral=True, delete_after=5)
+            await interaction.response.send_message(get_string("commerce.error_insufficient_funds"), ephemeral=True, delete_after=5)
+            return
         
         modal = QuantityModal(f"{item_name} 購入", max_buyable)
         await interaction.response.send_modal(modal)
         await modal.wait()
 
         if modal.value is None:
-            await interaction.followup.send("購入がキャンセルされました。", ephemeral=True, delete_after=5)
+            msg = await interaction.followup.send("購入がキャンセルされました。", ephemeral=True)
+            asyncio.create_task(delete_after(msg, 5))
             return
 
         quantity, total_price = modal.value, item_data['price'] * modal.value
@@ -200,7 +209,10 @@ class BuyItemView(ShopViewBase):
         new_wallet = await get_wallet(self.user.id)
         new_balance = new_wallet.get('balance', 0)
         success_message = f"✅ **{item_name}** {quantity}個を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-        await interaction.followup.send(success_message, ephemeral=True, delete_after=10)
+        
+        # [✅ FIX] `delete_after`를 사용하지 않고 헬퍼 함수를 사용하도록 수정
+        msg = await interaction.followup.send(success_message, ephemeral=True)
+        asyncio.create_task(delete_after(msg, 10))
     
     async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         await interaction.response.defer(ephemeral=True)
@@ -223,7 +235,10 @@ class BuyItemView(ShopViewBase):
         new_wallet = await get_wallet(self.user.id)
         new_balance = new_wallet.get('balance', 0)
         success_message = f"✅ **{item_name}**を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-        await interaction.followup.send(success_message, ephemeral=True, delete_after=10)
+        
+        # [✅ FIX] `delete_after`를 사용하지 않고 헬퍼 함수를 사용하도록 수정
+        msg = await interaction.followup.send(success_message, ephemeral=True)
+        asyncio.create_task(delete_after(msg, 10))
 
     async def back_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -319,8 +334,9 @@ class SellFishView(ShopViewBase):
         self.add_item(back_button)
 
     async def on_select(self, interaction: discord.Interaction):
-        sell_button = next(c for c in self.children if isinstance(c, ui.Button) and c.custom_id == "sell_fish_confirm")
-        sell_button.disabled = False
+        sell_button = next((c for c in self.children if isinstance(c, ui.Button) and c.custom_id == "sell_fish_confirm"), None)
+        if sell_button:
+            sell_button.disabled = False
         await interaction.response.edit_message(view=self)
 
     async def sell_fish(self, interaction: discord.Interaction):
@@ -328,7 +344,8 @@ class SellFishView(ShopViewBase):
         select_menu = next((c for c in self.children if isinstance(c, ui.Select)), None)
         if not select_menu or not select_menu.values:
             msg = await interaction.followup.send("❌ 売却する魚が選択されていません。", ephemeral=True)
-            return await asyncio.create_task(delete_after(msg, 5))
+            asyncio.create_task(delete_after(msg, 5))
+            return
         
         fish_ids_to_sell = [int(val) for val in select_menu.values]
         total_price = sum(self.fish_data_map[val]['price'] for val in select_menu.values)
@@ -342,7 +359,7 @@ class SellFishView(ShopViewBase):
             
             success_message = f"✅ 魚{sold_fish_count}匹を`{total_price:,}`{self.currency_icon}で売却しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
             msg = await interaction.followup.send(success_message, ephemeral=True)
-            asyncio.create_task(delete_after(msg, 5))
+            asyncio.create_task(delete_after(msg, 10))
             
             await self.refresh_view(interaction)
         except Exception as e:
@@ -412,7 +429,8 @@ class SellCropView(ShopViewBase):
         await modal.wait()
 
         if modal.value is None:
-            await interaction.followup.send("売却がキャンセルされました。", ephemeral=True, delete_after=5)
+            msg = await interaction.followup.send("売却がキャンセルされました。", ephemeral=True)
+            asyncio.create_task(delete_after(msg, 5))
             return
 
         quantity_to_sell = modal.value
@@ -425,7 +443,8 @@ class SellCropView(ShopViewBase):
             new_wallet = await get_wallet(self.user.id)
             new_balance = new_wallet.get('balance', 0)
             success_message = f"✅ **{selected_crop}** {quantity_to_sell}個を`{total_price:,}`{self.currency_icon}で売却しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-            await interaction.followup.send(success_message, ephemeral=True, delete_after=10)
+            msg = await interaction.followup.send(success_message, ephemeral=True)
+            asyncio.create_task(delete_after(msg, 10))
             
             await self.refresh_view(interaction)
         except Exception as e:
