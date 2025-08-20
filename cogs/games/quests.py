@@ -16,8 +16,8 @@ from utils.helpers import format_embed_from_db
 logger = logging.getLogger(__name__)
 
 QUEST_REWARDS = {
-    "daily": {"attendance": 100, "voice": 150, "fishing": 200, "all_complete": 500},
-    "weekly": {"attendance": 500, "voice": 750, "fishing": 1000, "all_complete": 2500}
+    "daily": {"attendance": 10, "voice": 55, "fishing": 35, "all_complete": 100},
+    "weekly": {"attendance": 100, "voice": 550, "fishing": 350, "all_complete": 1000}
 }
 DAILY_QUESTS = {
     "attendance": {"name": "出席チェックをする", "goal": 1},
