@@ -1,4 +1,4 @@
-# bot-game/utils/database.py (함수 이름 불일치 오류 해결 최종본)
+# utils/database.py
 
 import os
 import discord
@@ -59,8 +59,6 @@ async def save_config(key: str, value: Any):
     _configs_cache[key] = str_value
     logger.info(f"설정이 업데이트되었습니다: {key} -> {str_value}")
 
-# [🔴 핵심 수정] 관리 봇과의 호환성을 위해 save_config_to_db 라는 이름도 추가합니다.
-# 실제로는 바로 위의 save_config 함수와 완전히 똑같은 기능을 합니다.
 save_config_to_db = save_config
 
 async def set_legendary_fish_cooldown():
@@ -120,13 +118,8 @@ async def load_game_data_from_db():
         logger.info(f"✅ {len(_item_database_cache)}개의 아이템 정보를 DB에서 로드했습니다.")
 
     loot_response = await supabase.table('fishing_loots').select('*').execute()
-    # ================= [진단 A] =================
-    print("\n\n" + "="*20 + " [진단 A: database.py] " + "="*20)
-    print("fishing_loots 테이블에서 Supabase가 반환한 원본 데이터:")
-    print(loot_response.data)
-    print("="*65 + "\n\n")
-    # ============================================
-
+    
+    # [✅ 수정] 진단용 print 구문 제거
     if loot_response and loot_response.data:
         _fishing_loot_cache = loot_response.data
         logger.info(f"✅ {len(_fishing_loot_cache)}개의 낚시 결과물 정보를 DB에서 로드했습니다.")
