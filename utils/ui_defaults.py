@@ -1,4 +1,3 @@
-# bot-game/utils/ui_defaults.py (최종 수정본)
 """
 [게임 봇 전용]
 이 파일은 게임 봇이 사용하는 UI 요소(임베드, 버튼, 문자열)의 기본값을 정의합니다.
@@ -59,13 +58,12 @@ UI_EMBEDS = {
 # 3. 패널 컴포넌트(Panel Components) 기본값 - 게임/경제 관련만 남김
 # ==============================================================================
 UI_PANEL_COMPONENTS = [
-    # [✅ 수정] open_shop (구매)를 open_market (판매) 보다 앞으로 이동합니다.
     {
         "component_key": "open_shop",
         "panel_key": "commerce",
         "component_type": "button",
         "label": "商店 (アイテム購入)",
-        "style": "primary", # 초록색 계열
+        "style": "primary",
         "emoji": "🏪",
         "row": 0
     },
@@ -74,7 +72,7 @@ UI_PANEL_COMPONENTS = [
         "panel_key": "commerce",
         "component_type": "button",
         "label": "買取ボックス (アイテム売却)",
-        "style": "secondary", # 회색/빨간색 계열
+        "style": "secondary",
         "emoji": "📦",
         "row": 0
     },
@@ -120,7 +118,6 @@ UI_PANEL_COMPONENTS = [
 # 4. UI 텍스트 문자열 (UI Strings)
 # ==============================================================================
 UI_STRINGS = {
-    # --- 프로필(UserProfile) Cog 관련 문자열 ---
     "profile_view": {
         "base_title": "{user_name}さんのプロフィール",
         "tabs": {
@@ -128,10 +125,8 @@ UI_STRINGS = {
             "item": {"title_suffix": " - アイテム", "label": "アイテム", "emoji": "📦"},
             "gear": {"title_suffix": " - 装備", "label": "装備", "emoji": "⚙️"},
             "fish": {"title_suffix": " - 魚", "label": "魚", "emoji": "🐠"},
-            "seed": {"title_suffix": " - シード", "label": "シード", "emoji": "🌱"},
-            "crop": {"title_suffix": " - 作物", "label": "作物", "emoji": "🌾"},
-            "feed": {"title_suffix": " - 餌", "label": "餌", "emoji": "🍖"}
-             
+            "seed": {"title_suffix": " - 種", "label": "種", "emoji": "🌱"},
+            "crop": {"title_suffix": " - 作物", "label": "作物", "emoji": "🌾"}
         },
         "info_tab": {
             "field_balance": "💰 所持金",
@@ -153,6 +148,12 @@ UI_STRINGS = {
             "no_fish": "水槽に魚がいません。",
             "pagination_footer": "ページ {current_page} / {total_pages}"
         },
+        "seed_tab": {
+            "no_items": "所持している種がありません。"
+        },
+        "crop_tab": {
+            "no_items": "所持している作物がありません。"
+        },
         "wip_tab": {
             "description": "この機能は現在準備中です。"
         },
@@ -161,8 +162,6 @@ UI_STRINGS = {
             "next": "▶"
         }
     },
-     
-    # --- 장비 변경(GearSelect) View 관련 문자열 ---
     "gear_select_view": {
         "embed_title": "装備変更: {category_name}",
         "embed_description": "インベントリから装着するアイテムを選択してください。",
@@ -172,8 +171,6 @@ UI_STRINGS = {
         "unequip_prefix": "✋",
         "back_button": "戻る"
     },
-
-    # --- 상점(Commerce) Cog 관련 문자열 ---
     "commerce": {
         "category_view_title": "🏪 Dico森商店 - カテゴリー選択",
         "category_view_desc": "購入したいアイテムのカテゴリーを選択してください。",
@@ -194,8 +191,6 @@ UI_STRINGS = {
         "error_upgrade_needed": "❌ より下位の装備を先に購入してください。",
         "error_already_have_better": "❌ すでにその装備またはより良い装備を持っています。"
     },
-
-    # --- 낚시(Fishing) Cog 관련 문자열 ---
     "log_legendary_catch": {
         "title": "👑 伝説の魚が釣り上げられました！ 👑",
         "description": "今週の**ヌシ**が、**{user_mention}**さんの手によって釣り上げられました！\n\n巨大な魚影は、次の週まで姿を消します…。",
