@@ -200,18 +200,39 @@ class BuyCategoryView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
         return discord.Embed(title=get_string("commerce.category_view_title"), description=get_string("commerce.category_view_desc"), color=discord.Color.green())
     
+    # [✅✅✅ 핵심 수정 ✅✅✅]
+    # 버튼 순서를 고정하기 위해 정렬 로직을 변경합니다.
     async def build_components(self):
         self.clear_items()
         item_db = get_item_database()
-        categories = sorted(list(set(
-            d['category'] for d in item_db.values() if d.get('buyable') and d.get('category')
-        )))
         
-        if not categories:
+        # 1. DB에 존재하는 모든 구매 가능 카테고리를 가져옵니다.
+        available_categories = set(
+            d['category'] for d in item_db.values() if d.get('buyable') and d.get('category')
+        )
+        
+        # 2. 원하는 버튼 순서를 정의합니다.
+        #    - 원하는 순서대로 여기에 카테고리 이름을 나열합니다.
+        #    - 이 목록에 없는 카테고리는 자동으로 뒤에 추가됩니다.
+        preferred_order = ["アイテム", "釣り", "農場_道具", "農場_種"]
+        
+        # 3. 정의된 순서대로 버튼을 정렬합니다.
+        sorted_categories = []
+        # 먼저, 정의된 순서 목록에 있는 카테고리만 골라서 추가
+        for category in preferred_order:
+            if category in available_categories:
+                sorted_categories.append(category)
+                available_categories.remove(category) # 중복 추가 방지
+        
+        # 그 다음, 정의된 목록에 없었던 나머지 카테고리들을 가나다순으로 정렬하여 추가
+        sorted_categories.extend(sorted(list(available_categories)))
+
+        if not sorted_categories:
             self.add_item(ui.Button(label="販売中の商品がありません。", disabled=True))
             return
 
-        for category_name in categories:
+        # 4. 정렬된 순서대로 버튼을 생성합니다.
+        for category_name in sorted_categories:
             button = ui.Button(label=category_name, custom_id=f"buy_category_{category_name}")
             button.callback = self.category_callback
             self.add_item(button)
@@ -222,7 +243,7 @@ class BuyCategoryView(ShopViewBase):
         item_view = BuyItemView(self.user, category)
         item_view.message = self.message
         await item_view.update_view(interaction)
-
+        
 class SellFishView(ShopViewBase):
     def __init__(self, user: discord.Member):
         super().__init__(user)
