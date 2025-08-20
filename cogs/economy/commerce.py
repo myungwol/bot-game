@@ -5,11 +5,9 @@ import logging
 import asyncio
 from typing import Optional, Dict, List, Any
 
-logger = logging.getLogger(__name__)
-
 from utils.database import (
     get_inventory, get_wallet, supabase, get_id, get_item_database, 
-    get_config, get_string, get_panel_components_from_db,
+    get_config, get_string,
     get_aquarium, get_fishing_loot, sell_fish_from_db,
     save_panel_id, get_panel_id, get_embed_from_db
 )
@@ -336,18 +334,14 @@ class CommercePanelView(ui.View):
     def __init__(self, cog_instance: 'Commerce'):
         super().__init__(timeout=None)
         self.commerce_cog = cog_instance
-    async def setup_buttons(self):
-        self.clear_items()
-        components_data = await get_panel_components_from_db('commerce')
-        for comp in components_data:
-            key = comp.get('component_key')
-            if comp.get('component_type') == 'button' and key:
-                style_str = comp.get('style', 'success' if key == 'open_shop' else 'danger')
-                style = discord.ButtonStyle[style_str] if hasattr(discord.ButtonStyle, style_str) else discord.ButtonStyle.secondary
-                button = ui.Button(label=comp.get('label'), style=style, emoji=comp.get('emoji'), custom_id=key)
-                if key == 'open_shop': button.callback = self.open_shop
-                elif key == 'open_market': button.callback = self.open_market
-                self.add_item(button)
+        
+        shop_button = ui.Button(label="商店 (アイテム購入)", style=discord.ButtonStyle.success, emoji="🏪", custom_id="commerce_open_shop")
+        shop_button.callback = self.open_shop
+        self.add_item(shop_button)
+
+        market_button = ui.Button(label="買取ボックス (アイテム売却)", style=discord.ButtonStyle.danger, emoji="📦", custom_id="commerce_open_market")
+        market_button.callback = self.open_market
+        self.add_item(market_button)
 
     async def open_shop(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -369,34 +363,20 @@ class Commerce(commands.Cog):
     def __init__(self, bot: commands.Cog):
         self.bot = bot
     async def register_persistent_views(self):
-        view = CommercePanelView(self)
-        await view.setup_buttons()
-        self.bot.add_view(view)
+        self.bot.add_view(CommercePanelView(self))
         
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "commerce"):
-        panel_key = "commerce"
         embed_key = "panel_commerce"
-        
         if (panel_info := get_panel_id(panel_key)):
-            old_message_id = panel_info.get('message_id')
-            old_channel_id = panel_info.get('channel_id')
-            if old_message_id and old_channel_id:
+            if (old_channel_id := panel_info.get("channel_id")) and (old_channel := self.bot.get_channel(old_channel_id)):
                 try:
-                    old_channel = self.bot.get_channel(old_channel_id)
-                    if old_channel:
-                        old_message = await old_channel.fetch_message(old_message_id)
-                        await old_message.delete()
-                except (discord.NotFound, discord.Forbidden):
-                    pass
+                    old_message = await old_channel.fetch_message(panel_info["message_id"])
+                    await old_message.delete()
+                except (discord.NotFound, discord.Forbidden): pass
         
-        if not (embed_data := await get_embed_from_db(embed_key)):
-            return
-
+        if not (embed_data := await get_embed_from_db(embed_key)): return
         embed = discord.Embed.from_dict(embed_data)
         view = CommercePanelView(self)
-        await view.setup_buttons()
-        self.bot.add_view(view)
-        
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
