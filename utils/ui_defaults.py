@@ -53,25 +53,7 @@ UI_EMBEDS = {
         "description": "広い海で大物の夢を追いかけましょう！\n下のボタンを押して釣りを開始します。",
         "color": 0x3498DB
     },
-    "panel_dice_game": {"title": "🎲 サイコロゲーム", "description": "運を試してみませんか？\n下のボタンを押してゲームを開始し、10コイン単位でベットできます。", "color": 0xE91E63},
-    "log_dice_game_win": {
-        "title": "🎉 サイコロゲーム勝利！ 🎉",
-        "description": "{user_mention}さんが予測に成功し、**{reward_amount:,}**{currency_icon}を獲得しました！",
-        "color": 0x2ECC71,
-        "fields": [
-            {"name": "ベット額", "value": "`{bet_amount:,}`{currency_icon}", "inline": True},
-            {"name": "選んだ数字 / 結果", "value": "`{chosen_number}` / `🎲 {dice_result}`", "inline": True}
-        ]
-    },
-    "log_dice_game_lose": {
-        "title": "💧 サイコロゲーム敗北 💧",
-        "description": "{user_mention}さんは予測に失敗し、**{bet_amount:,}**{currency_icon}を失いました。",
-        "color": 0xE74C3C,
-        "fields": [
-            {"name": "ベット額", "value": "`{bet_amount:,}`{currency_icon}", "inline": True},
-            {"name": "選んだ数字 / 結果", "value": "`{chosen_number}` / `🎲 {dice_result}`", "inline": True}
-        ]
-    },
+}
 
 # ==============================================================================
 # 3. 패널 컴포넌트(Panel Components) 기본값 - 게임/경제 관련만 남김
