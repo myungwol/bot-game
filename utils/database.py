@@ -1,5 +1,3 @@
-# utils/database.py
-
 import os
 import discord
 from supabase import create_client, AsyncClient
@@ -9,15 +7,16 @@ import time
 from typing import Dict, Callable, Any, List, Optional
 from functools import wraps
 from utils.ui_defaults import UI_STRINGS
-# [✅ 추가] 캐싱을 위한 라이브러리 import
 from cachetools import TTLCache, cached
 from cachetools.keys import hashkey
 
 logger = logging.getLogger(__name__)
 
-# [✅ 추가] 각 함수별 캐시를 분리하여 관리
+# --- Caches ---
 wallet_cache = TTLCache(maxsize=512, ttl=60)
 inventory_cache = TTLCache(maxsize=512, ttl=60)
+# [✅ 추가] 퀘스트 진행상황 캐시
+progress_cache = TTLCache(maxsize=512, ttl=60) 
 
 # --- 캐시 영역 및 클라이언트 초기화 ---
 _configs_cache: Dict[str, Any] = {"strings": UI_STRINGS}
@@ -236,6 +235,44 @@ async def get_cooldown(user_id_str: str, cooldown_key: str) -> float:
     if response and response.data and response.data[0].get('last_cooldown_timestamp') is not None:
         return float(response.data[0]['last_cooldown_timestamp'])
     return 0.0
+
+@supabase_retry_handler()
+async def has_checked_in_today(user_id: int) -> bool:
+    response = await supabase.table('attendance_logs').select('id').eq('user_id', user_id).gte('checked_in_at', 'today').limit(1).execute()
+    return bool(response.data)
+
+# [✅ 추가] 출석체크 기록 추가 함수
+@supabase_retry_handler()
+async def record_attendance(user_id: int):
+    await supabase.table('attendance_logs').insert({'user_id': user_id}).execute()
+    # 주간 출석 횟수 증가
+    await supabase.rpc('increment_user_progress', {'p_user_id': user_id, 'p_attendance_count': 1}).execute()
+    # 관련 캐시 무효화
+    if hashkey(user_id) in progress_cache:
+        del progress_cache[hashkey(user_id)]
+
+# [✅ 추가] 퀘스트 진행상황 조회 함수
+@cached(progress_cache, key=lambda user_id: hashkey(user_id))
+@supabase_retry_handler()
+async def get_user_progress(user_id: int) -> Dict[str, Any]:
+    default_progress = {
+        'daily_voice_minutes': 0, 'daily_fish_count': 0,
+        'weekly_attendance_count': 0, 'weekly_voice_minutes': 0, 'weekly_fish_count': 0,
+        'last_daily_reset': None, 'last_weekly_reset': None
+    }
+    response = await supabase.table('user_progress').select('*').eq('user_id', user_id).maybe_single().execute()
+    return response.data if response.data else default_progress
+
+# [✅ 추가] 퀘스트 카운트 증가 함수
+async def increment_progress(user_id: int, fish_count: int = 0, voice_minutes: int = 0):
+    await supabase.rpc('increment_user_progress', {
+        'p_user_id': user_id,
+        'p_fish_count': fish_count,
+        'p_voice_minutes': voice_minutes
+    }).execute()
+    # 관련 캐시 무효화
+    if hashkey(user_id) in progress_cache:
+        del progress_cache[hashkey(user_id)]
 
 @supabase_retry_handler()
 async def set_cooldown(user_id_str: str, cooldown_key: str, timestamp: float):
