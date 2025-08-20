@@ -7,10 +7,10 @@ import time
 from typing import Dict, Callable, Any, List, Optional
 from functools import wraps
 from utils.ui_defaults import UI_STRINGS
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-# [✅ 수정] 캐시 관련 변수들을 모두 제거했습니다.
 _configs_cache: Dict[str, Any] = {"strings": UI_STRINGS}
 _channel_id_cache: Dict[str, int] = {}
 _item_database_cache: Dict[str, Dict[str, Any]] = {}
@@ -27,6 +27,7 @@ try:
 except Exception as e:
     logger.critical(f"❌ Supabase 클라이언트 생성 실패: {e}", exc_info=True)
 
+
 def supabase_retry_handler(retries: int = 3, delay: int = 5):
     def decorator(func: Callable):
         @wraps(func)
@@ -41,7 +42,40 @@ def supabase_retry_handler(retries: int = 3, delay: int = 5):
         return wrapper
     return decorator
 
+# --- [농장 시스템 함수] ---
+
 @supabase_retry_handler()
+async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
+    """유저의 농장 기본 정보와 모든 칸(plot)들의 정보를 함께 가져옵니다."""
+    response = await supabase.table('farms').select('*, farm_plots(*)').eq('user_id', user_id).maybe_single().execute()
+    return response.data if response.data else None
+
+@supabase_retry_handler()
+async def create_farm(user_id: int) -> Optional[Dict[str, Any]]:
+    """유저를 위한 새로운 농장을 생성하고, 생성된 농장 정보를 반환합니다."""
+    response = await supabase.rpc('create_farm_for_user', {'p_user_id': user_id}).execute()
+    if response.data:
+        return await get_farm_data(user_id)
+    return None
+
+@supabase_retry_handler()
+async def expand_farm_db(farm_id: int, new_size_x: int, new_size_y: int):
+    """DB에 농장 확장을 요청합니다."""
+    await supabase.rpc('expand_farm', {'p_farm_id': farm_id, 'new_size_x': new_size_x, 'new_size_y': new_size_y}).execute()
+
+@supabase_retry_handler()
+async def update_plot(plot_id: int, updates: Dict[str, Any]):
+    """특정 칸(plot)의 상태를 업데이트합니다."""
+    await supabase.table('farm_plots').update(updates).eq('id', plot_id).execute()
+
+@supabase_retry_handler()
+async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
+    """농사 관련 아이템의 상세 정보를 가져옵니다."""
+    response = await supabase.table('farmable_items').select('*').eq('item_name', item_name).maybe_single().execute()
+    return response.data if response.data else None
+
+# --- [퀘스트 및 출석체크 함수] ---
+
 @supabase_retry_handler()
 async def has_checked_in_today(user_id: int) -> bool:
     response = await supabase.table('attendance_logs').select('id', count='exact').eq('user_id', user_id).gte('checked_in_at', 'today').limit(1).execute()
@@ -68,6 +102,8 @@ async def increment_progress(user_id: int, fish_count: int = 0, voice_minutes: i
         'p_fish_count': fish_count,
         'p_voice_minutes': voice_minutes
     }).execute()
+
+# --- [공용 및 기타 게임 함수] ---
 
 ONE_MONTH_IN_SECONDS = 30 * 24 * 60 * 60
 
@@ -236,19 +272,10 @@ async def add_to_aquarium(user_id_str: str, fish_data: dict):
     await supabase.table('aquariums').insert({"user_id": user_id_str, **fish_data}).execute()
 
 @supabase_retry_handler()
-async def sell_fish_from_db(user_id_str: str, fish_ids: List[int], total_sell_price: int):
-    params = {
-        'p_user_id': user_id_str,
-        'p_fish_ids': fish_ids,
-        'p_total_value': total_sell_price
-    }
-@supabase_retry_handler()
 async def get_cooldown(user_id_str: str, cooldown_key: str) -> float:
     response = await supabase.table('cooldowns').select('last_cooldown_timestamp').eq('user_id', user_id_str).eq('cooldown_key', cooldown_key).limit(1).execute()
-    # [✅✅✅ 핵심 수정 ✅✅✅] DB에서 받은 문자열 시간을 파이썬 숫자 시간으로 변환합니다.
     if response and response.data and (ts_str := response.data[0].get('last_cooldown_timestamp')):
         try:
-            # ISO 8601 형식의 문자열을 datetime 객체로 변환 후, Unix 타임스탬프(숫자)로 변환
             return datetime.fromisoformat(ts_str).timestamp()
         except (ValueError, TypeError):
             return 0.0
@@ -256,13 +283,18 @@ async def get_cooldown(user_id_str: str, cooldown_key: str) -> float:
 
 @supabase_retry_handler()
 async def set_cooldown(user_id_str: str, cooldown_key: str, timestamp: float):
-    # [✅✅✅ 핵심 수정 ✅✅✅] 파이썬 숫자 시간을 DB가 이해하는 문자열 시간으로 변환합니다.
-    # Unix 타임스탬프(숫자)를 UTC 기준 datetime 객체로 만들고, ISO 8601 형식 문자열로 변환
     iso_timestamp = datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
     await supabase.table('cooldowns').upsert({
         "user_id": user_id_str, 
         "cooldown_key": cooldown_key, 
         "last_cooldown_timestamp": iso_timestamp
     }).execute()
-    
+
+@supabase_retry_handler()
+async def sell_fish_from_db(user_id_str: str, fish_ids: List[int], total_sell_price: int):
+    params = {
+        'p_user_id': user_id_str,
+        'p_fish_ids': fish_ids,
+        'p_total_value': total_sell_price
+    }
     await supabase.rpc('sell_fishes', params).execute()
