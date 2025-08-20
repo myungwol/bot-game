@@ -6,14 +6,13 @@ from typing import Optional, Dict, List
 
 from utils.database import (
     get_farm_data, create_farm, get_config,
-    get_panel_components_from_db, save_panel_id, get_panel_id, get_embed_from_db,
+    save_panel_id, get_panel_id, get_embed_from_db,
     supabase
 )
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# 농장 이름 변경을 위한 모달
 class FarmNameModal(ui.Modal, title="農場の新しい名前"):
     new_name = ui.TextInput(label="農場の名前を入力してください", placeholder="例: さわやかな農場", required=True, max_length=30)
 
@@ -40,7 +39,6 @@ class FarmNameModal(ui.Modal, title="農場の新しい名前"):
         await self.cog.update_farm_ui(interaction.channel, interaction.user)
         await interaction.followup.send(f"✅ 農場の名前を「{name_to_set}」に変更しました。", ephemeral=True)
 
-# 농장 공유 설정을 위한 View
 class FarmShareSettingsView(ui.View):
     def __init__(self, original_interaction: discord.Interaction):
         super().__init__(timeout=180)
@@ -59,7 +57,6 @@ class FarmShareSettingsView(ui.View):
         except discord.NotFound:
             pass
 
-# 농장 내부 UI
 class FarmUIView(ui.View):
     def __init__(self, cog_instance: 'Farm', farm_data: Dict):
         super().__init__(timeout=None)
@@ -110,22 +107,19 @@ class FarmUIView(ui.View):
         modal = FarmNameModal(self.cog, self.farm_data)
         await interaction.response.send_modal(modal)
 
-# 농장 생성 패널의 View
 class FarmCreationPanelView(ui.View):
     def __init__(self, cog_instance: 'Farm'):
         super().__init__(timeout=None)
         self.cog = cog_instance
 
-    async def setup_buttons(self):
-        self.clear_items()
-        components = await get_panel_components_from_db("panel_farm_creation")
-        for button_info in components:
-            button = ui.Button(
-                label=button_info.get('label'), style=discord.ButtonStyle.success,
-                emoji=button_info.get('emoji'), custom_id=button_info.get('component_key')
-            )
-            button.callback = self.create_farm_callback
-            self.add_item(button)
+        create_button = ui.Button(
+            label="農場を作る",
+            style=discord.ButtonStyle.success,
+            emoji="🌱",
+            custom_id="farm_create_button"
+        )
+        create_button.callback = self.create_farm_callback
+        self.add_item(create_button)
 
     async def create_farm_callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -152,13 +146,13 @@ class FarmCreationPanelView(ui.View):
         else:
             await self.cog.create_new_farm_thread(interaction, user)
 
-
-# 메인 Farm Cog
 class Farm(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # [✅✅✅ 핵심 수정 ✅✅✅] 농장 UI를 특수문자로 꾸미는 로직
+    async def register_persistent_views(self):
+        self.bot.add_view(FarmCreationPanelView(self))
+
     def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         size_x = farm_data.get('size_x', 1)
         size_y = farm_data.get('size_y', 1)
@@ -166,34 +160,27 @@ class Farm(commands.Cog):
         
         sorted_plots = {(p['pos_x'], p['pos_y']): p for p in plots}
 
-        # 그리드 라인 생성
         lines = []
-        # 1. 상단 테두리
         top_border = "┍" + "┯".join(["━━━"] * size_x) + "┑"
         lines.append(top_border)
 
         for y in range(size_y):
-            # 2. 작물/땅 이모티콘 라인
             plot_row = []
             for x in range(size_x):
                 plot = sorted_plots.get((x, y))
                 if not plot:
                     plot_row.append('❓')
                     continue
-                
                 state = plot['state']
-                # TODO: 나중에 작물별, 성장 단계별 이모티콘으로 변경
                 if state == 'default': plot_row.append('🟤')
                 elif state == 'tilled': plot_row.append('🟫')
                 else: plot_row.append('🌱')
             lines.append("│ " + " │ ".join(plot_row) + " │")
 
-            # 3. 하단 구분선 (마지막 줄 제외)
             if y < size_y - 1:
                 mid_border = "┝" + "┼".join(["━━━"] * size_x) + "┥"
                 lines.append(mid_border)
 
-        # 4. 최종 하단 테두리
         bottom_border = "┕" + "┷".join(["━━━"] * size_x) + "┙"
         lines.append(bottom_border)
 
@@ -202,14 +189,12 @@ class Farm(commands.Cog):
         farm_name = farm_data.get('name') or user.display_name
         
         embed = discord.Embed(title=f"**{farm_name}の農場**", color=0x8BC34A)
-        # description을 제거하고, 필드에 코드 블록으로 넣어 글꼴을 고정시킵니다.
         embed.add_field(name="⠀", value=f"```\n{farm_str}\n```", inline=False)
         return embed
 
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User):
         farm_data = await get_farm_data(user.id)
-        if not farm_data:
-            return
+        if not farm_data: return
 
         async for message in thread.history(limit=50):
             if message.author.id == self.bot.user.id and message.components:
@@ -220,11 +205,6 @@ class Farm(commands.Cog):
                     await message.edit(embed=embed, view=view)
                     return
 
-    async def register_persistent_views(self):
-        view = FarmCreationPanelView(self)
-        await view.setup_buttons()
-        self.bot.add_view(view)
-
     async def create_new_farm_thread(self, interaction: discord.Interaction, user: discord.Member):
         try:
             panel_channel = interaction.channel
@@ -233,11 +213,7 @@ class Farm(commands.Cog):
             farm_name = farm_data_pre.get('name') if farm_data_pre else user.display_name
             
             thread_name = f"🌱｜{farm_name}"
-            farm_thread = await panel_channel.create_thread(
-                name=thread_name,
-                type=discord.ChannelType.private_thread,
-                invitable=False
-            )
+            farm_thread = await panel_channel.create_thread(name=thread_name, type=discord.ChannelType.private_thread, invitable=False)
             
             farm_data = farm_data_pre or await create_farm(user.id)
             
@@ -273,8 +249,6 @@ class Farm(commands.Cog):
 
         embed = discord.Embed.from_dict(embed_data)
         view = FarmCreationPanelView(self)
-        await view.setup_buttons()
-        self.bot.add_view(view)
         
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
