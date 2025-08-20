@@ -4,10 +4,11 @@ from discord import ui
 import logging
 import asyncio
 from typing import Optional, Dict, List, Set
+from datetime import datetime, timezone, timedelta
 
 from utils.database import (
     get_wallet, update_wallet, get_config, get_panel_components_from_db,
-    save_panel_id, get_panel_id, get_embed_from_db, supabase
+    save_panel_id, get_panel_id, get_embed_from_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -87,34 +88,64 @@ class RPSGame(commands.Cog):
         self.bot = bot
         self.active_games: Dict[int, Dict] = {}
         self.currency_icon = "🪙"
+        self.user_locks: Dict[int, asyncio.Lock] = {}
+        self.cleanup_stale_games.start()
+
+    def cog_unload(self):
+        self.cleanup_stale_games.cancel()
+
+    @tasks.loop(minutes=30)
+    async def cleanup_stale_games(self):
+        logger.info("古いじゃんけんゲームセッションのクリーンアップを開始します...")
+        now = datetime.now(timezone.utc)
+        stale_game_channels = []
+        for channel_id, game in self.active_games.items():
+            created_at = game.get("created_at", now)
+            if now - created_at > timedelta(minutes=30):
+                stale_game_channels.append(channel_id)
+        
+        for channel_id in stale_game_channels:
+            logger.warning(f"チャンネル {channel_id} の古いゲームを強制的に終了します。")
+            await self.end_game(channel_id, None)
+        logger.info(f"クリーンアップ完了。{len(stale_game_channels)}個のゲームを終了しました。")
+    
+    @cleanup_stale_games.before_loop
+    async def before_cleanup(self):
+        await self.bot.wait_until_ready()
 
     async def cog_load(self):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
 
     async def create_game_lobby(self, interaction: discord.Interaction, bet_amount: int):
-        channel_id = interaction.channel.id
-        host = interaction.user
+        user_lock = self.user_locks.setdefault(interaction.user.id, asyncio.Lock())
+        if user_lock.locked():
+            return await interaction.followup.send("❌ 現在、他の操作を処理中です。しばらくお待ちください。", ephemeral=True, delete_after=5)
 
-        if channel_id in self.active_games:
-            await interaction.followup.send("❌ このチャンネルでは既にゲームが進行中です。", ephemeral=True, delete_after=5)
-            return
+        async with user_lock:
+            channel_id = interaction.channel.id
+            host = interaction.user
 
-        lobby_embed = self.build_lobby_embed(host, bet_amount, [host])
-        view = RPSLobbyView(self, channel_id)
-        
-        lobby_message = await interaction.channel.send(embed=lobby_embed, view=view)
+            if channel_id in self.active_games:
+                await interaction.followup.send("❌ このチャンネルでは既にゲームが進行中です。", ephemeral=True, delete_after=5)
+                return
 
-        self.active_games[channel_id] = {
-            "host_id": host.id,
-            "bet_amount": bet_amount,
-            "players": {host.id: host},
-            "lobby_message": lobby_message,
-            "game_message": None,
-            "round": 0,
-            "choices": {},
-            "task": self.bot.loop.create_task(self.lobby_countdown(channel_id, 30))
-        }
-        await interaction.followup.send(f"✅ じゃんけん部屋を作成しました！ ベット額: `{bet_amount}`{self.currency_icon}", ephemeral=True, delete_after=5)
+            lobby_embed = self.build_lobby_embed(host, bet_amount, [host])
+            view = RPSLobbyView(self, channel_id)
+            
+            lobby_message = await interaction.channel.send(embed=lobby_embed, view=view)
+
+            self.active_games[channel_id] = {
+                "host_id": host.id,
+                "bet_amount": bet_amount,
+                "players": {host.id: host},
+                "lobby_message": lobby_message,
+                "game_message": None,
+                "round": 0,
+                "choices": {},
+                "task": self.bot.loop.create_task(self.lobby_countdown(channel_id, 30)),
+                "created_at": datetime.now(timezone.utc)
+            }
+            await interaction.followup.send(f"✅ じゃんけん部屋を作成しました！ ベット額: `{bet_amount}`{self.currency_icon}", ephemeral=True, delete_after=5)
 
     async def start_new_round(self, channel_id: int):
         game = self.active_games.get(channel_id)
@@ -204,20 +235,25 @@ class RPSGame(commands.Cog):
         self.active_games.pop(channel_id, None)
 
     async def handle_join(self, interaction: discord.Interaction, channel_id: int):
-        game = self.active_games.get(channel_id)
-        user = interaction.user
-        if not game: return await interaction.response.send_message("❌ 募集が終了したゲームです。", ephemeral=True, delete_after=5)
-        if user.id in game["players"]: return await interaction.response.send_message("❌ すで参加しています。", ephemeral=True, delete_after=5)
-        if len(game["players"]) >= MAX_PLAYERS: return await interaction.response.send_message("❌ 満員です。", ephemeral=True, delete_after=5)
+        user_lock = self.user_locks.setdefault(interaction.user.id, asyncio.Lock())
+        if user_lock.locked():
+            return await interaction.response.send_message("❌ 現在、他の操作を処理中です。しばらくお待ちください。", ephemeral=True, delete_after=5)
 
-        wallet = await get_wallet(user.id)
-        if wallet.get('balance', 0) < game["bet_amount"]:
-            return await interaction.response.send_message(f"❌ コインが不足しています。(必要: {game['bet_amount']}{self.currency_icon})", ephemeral=True, delete_after=5)
+        async with user_lock:
+            game = self.active_games.get(channel_id)
+            user = interaction.user
+            if not game: return await interaction.response.send_message("❌ 募集が終了したゲームです。", ephemeral=True, delete_after=5)
+            if user.id in game["players"]: return await interaction.response.send_message("❌ すで参加しています。", ephemeral=True, delete_after=5)
+            if len(game["players"]) >= MAX_PLAYERS: return await interaction.response.send_message("❌ 満員です。", ephemeral=True, delete_after=5)
 
-        game["players"][user.id] = user
-        embed = self.build_lobby_embed(self.bot.get_user(game["host_id"]), game["bet_amount"], list(game["players"].values()))
-        await game["lobby_message"].edit(embed=embed)
-        await interaction.response.send_message("✅ ゲームに参加しました！", ephemeral=True, delete_after=5)
+            wallet = await get_wallet(user.id)
+            if wallet.get('balance', 0) < game["bet_amount"]:
+                return await interaction.response.send_message(f"❌ コインが不足しています。(必要: {game['bet_amount']}{self.currency_icon})", ephemeral=True, delete_after=5)
+
+            game["players"][user.id] = user
+            embed = self.build_lobby_embed(self.bot.get_user(game["host_id"]), game["bet_amount"], list(game["players"].values()))
+            await game["lobby_message"].edit(embed=embed)
+            await interaction.response.send_message("✅ ゲームに参加しました！", ephemeral=True, delete_after=5)
 
     async def handle_start_manually(self, interaction: discord.Interaction, channel_id: int):
         game = self.active_games.get(channel_id)
@@ -303,7 +339,6 @@ class RPSGame(commands.Cog):
             user = self.bot.get_user(pid)
             if user: lines.append(f"{user.display_name}: {HAND_EMOJIS[choice]}")
         
-        # [✅ 수정] Walrus operator를 사용하지 않는 안전한 코드로 변경합니다.
         participants_in_round = set(game["choices"].keys())
         if not winners and participants_in_round:
             lines.append("\n**引き分け！** (あいこでしょ！)")
@@ -362,10 +397,15 @@ class RPSGamePanelView(ui.View):
             self.add_item(button)
 
     async def create_room_callback(self, interaction: discord.Interaction):
-        if interaction.channel.id in self.cog.active_games:
-            await interaction.response.send_message("❌ このチャンネルでは既にゲームが進行中です。", ephemeral=True, delete_after=5)
-            return
-        await interaction.response.send_modal(BetAmountModal())
+        user_lock = self.cog.user_locks.setdefault(interaction.user.id, asyncio.Lock())
+        if user_lock.locked():
+            return await interaction.response.send_message("❌ 現在、他の操作を処理中です。しばらくお待ちください。", ephemeral=True, delete_after=5)
+
+        async with user_lock:
+            if interaction.channel.id in self.cog.active_games:
+                await interaction.response.send_message("❌ このチャンネルでは既にゲームが進行中です。", ephemeral=True, delete_after=5)
+                return
+            await interaction.response.send_modal(BetAmountModal())
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(RPSGame(bot))
