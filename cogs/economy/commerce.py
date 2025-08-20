@@ -48,19 +48,15 @@ class ShopViewBase(ui.View):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.message: Optional[discord.WebhookMessage] = None
 
-    # [🔴 핵심 추가] View를 새로고침하는 헬퍼 함수
     async def update_view(self, interaction: discord.Interaction):
-        """현재 View의 임베드와 컴포넌트를 다시 빌드하여 메시지를 수정합니다."""
         embed = await self.build_embed()
         await self.build_components()
         await interaction.edit_original_response(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
-        # 이 메소드는 각 하위 클래스에서 구현됩니다.
         raise NotImplementedError
 
     async def build_components(self):
-        # 이 메소드는 각 하위 클래스에서 구현됩니다.
         raise NotImplementedError
     
     async def handle_error(self, interaction: discord.Interaction, error: Exception, custom_message: str = ""):
@@ -72,7 +68,6 @@ class ShopViewBase(ui.View):
         else:
             await interaction.response.send_message(message_content, ephemeral=True, delete_after=5)
 
-# [🔴 핵심 변경] BuyItemView 클래스 전체를 아래 내용으로 교체합니다.
 class BuyItemView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str):
         super().__init__(user)
@@ -186,7 +181,6 @@ class BuyItemView(ShopViewBase):
                 msg = await interaction.followup.send(success_message, ephemeral=True)
                 asyncio.create_task(delete_after(msg, 5))
 
-            # 구매 후 상점 View를 새로고침하여 잔액 등을 업데이트
             await self.update_view(interaction)
 
         except ValueError as e:
@@ -227,17 +221,15 @@ class BuyCategoryView(ShopViewBase):
         item_view.message = self.message
         await item_view.update_view(interaction)
 
-# ... (SellFishView, SellCategoryView, CommercePanelView, Commerce Cog는 변경 없음) ...
 class SellFishView(ShopViewBase):
     def __init__(self, user: discord.Member):
         super().__init__(user)
         self.fish_data_map: Dict[str, Dict[str, Any]] = {}
 
-    async def refresh_view(self):
+    async def refresh_view(self, interaction: discord.Interaction):
         embed = await self.build_embed()
         await self.build_components()
-        if self.message:
-            await self.message.edit(embed=embed, view=self)
+        await interaction.edit_original_response(embed=embed, view=self)
     
     async def build_embed(self) -> discord.Embed:
         wallet = await get_wallet(self.user.id)
@@ -260,7 +252,13 @@ class SellFishView(ShopViewBase):
                 size_multiplier = loot_info.get('size_multiplier', 0)
                 price = int(base_value + (fish['size'] * size_multiplier))
                 self.fish_data_map[fish_id] = {'price': price, 'name': fish['name']}
-                options.append(discord.SelectOption(label=f"{fish['name']} ({fish['size']}cm)", value=fish_id, description=f"{price}{self.currency_icon}", emoji=fish['emoji']))
+                
+                # [🔴 핵심 수정] emoji 파라미터를 완전히 제거합니다.
+                options.append(discord.SelectOption(
+                    label=f"{fish['name']} ({fish['size']}cm)", 
+                    value=fish_id, 
+                    description=f"{price}{self.currency_icon}"
+                ))
 
         if options:
             max_select = min(len(options), 25)
@@ -302,7 +300,9 @@ class SellFishView(ShopViewBase):
             msg = await interaction.followup.send(success_message, ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
             
-            await self.refresh_view()
+            # 판매 후 View를 새로고침하여 판매된 물고기를 목록에서 제거합니다.
+            # 이 때, 원래의 인터랙션이 아니라 새로운 defer된 인터랙션을 사용해야 합니다.
+            await self.refresh_view(interaction)
         except Exception as e:
             logger.error(f"물고기 판매 중 오류: {e}", exc_info=True)
             await self.handle_error(interaction, e)
@@ -311,13 +311,12 @@ class SellFishView(ShopViewBase):
         await interaction.response.defer()
         view = SellCategoryView(self.user)
         view.message = self.message
-        embed = await view.build_embed()
-        await view.build_components()
-        await self.message.edit(embed=embed, view=view)
+        await view.update_view(interaction)
 
 class SellCategoryView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
         return discord.Embed(title="📦 買取ボックス - カテゴリー選択", description="売却したいアイテムのカテゴリーを選択してください。", color=discord.Color.green())
+
     async def build_components(self):
         self.clear_items()
         self.add_item(ui.Button(label="装備", custom_id="sell_category_gear", disabled=True))
@@ -333,8 +332,9 @@ class SellCategoryView(ShopViewBase):
         if category == "fish":
             view = SellFishView(self.user)
             view.message = self.message
-            await view.refresh_view()
+            await view.refresh_view(interaction)
 
+# ... (CommercePanelView, Commerce Cog는 변경 없음) ...
 class CommercePanelView(ui.View):
     def __init__(self, cog_instance: 'Commerce'):
         super().__init__(timeout=None)
@@ -345,7 +345,7 @@ class CommercePanelView(ui.View):
         for comp in components_data:
             key = comp.get('component_key')
             if comp.get('component_type') == 'button' and key:
-                style_str = comp.get('style', 'secondary')
+                style_str = comp.get('style', 'success' if key == 'open_shop' else 'danger')
                 style = discord.ButtonStyle[style_str] if hasattr(discord.ButtonStyle, style_str) else discord.ButtonStyle.secondary
                 button = ui.Button(label=comp.get('label'), style=style, emoji=comp.get('emoji'), custom_id=key)
                 if key == 'open_shop': button.callback = self.open_shop
@@ -380,14 +380,18 @@ class Commerce(commands.Cog):
         panel_key = "commerce"
         embed_key = "panel_commerce"
         
-        if (panel_info := get_panel_id(panel_key)) and (old_id := panel_info.get('message_id')):
-            try:
-                old_channel = self.bot.get_channel(panel_info['channel_id'])
-                if old_channel:
-                    old_message = await old_channel.fetch_message(old_id)
-                    await old_message.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
+        if (panel_info := get_panel_id(panel_key)):
+            old_message_id = panel_info.get('message_id')
+            old_channel_id = panel_info.get('channel_id')
+            if old_message_id and old_channel_id:
+                try:
+                    old_channel = self.bot.get_channel(old_channel_id)
+                    if old_channel:
+                        old_message = await old_channel.fetch_message(old_message_id)
+                        await old_message.delete()
+                except (discord.NotFound, discord.Forbidden):
+                    logger.warning(f"'{panel_key}'의 이전 패널(ID: {old_message_id})을 삭제하는 데 실패했습니다.")
+                    pass
         
         if not (embed_data := await get_embed_from_db(embed_key)):
             logger.warning(f"DB에서 '{embed_key}' 임베드 데이터를 찾을 수 없어, 패널 생성을 건너뜁니다.")
@@ -400,7 +404,7 @@ class Commerce(commands.Cog):
         
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
-        logger.info(f"✅ {panel_key} 패널을 성공적으로 새로 생성했습니다. (채널: #{channel.name})")
+        logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
 
 async def setup(bot: commands.Cog):
     await bot.add_cog(Commerce(bot))
