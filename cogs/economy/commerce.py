@@ -8,7 +8,7 @@ from typing import Optional, Dict, List, Any
 logger = logging.getLogger(__name__)
 
 from utils.database import (
-    get_inventory, get_wallet, supabase, get_id, get_item_database, 
+    get_inventory, get_wallet, supabase, get_id, get_item_database,
     get_config, get_string,
     get_aquarium, get_fishing_loot, sell_fish_from_db,
     save_panel_id, get_panel_id, get_embed_from_db,
@@ -34,14 +34,13 @@ class QuantityModal(ui.Modal):
         try:
             q_val = int(self.quantity.value)
             if not (1 <= q_val <= self.max_value):
-                # 모달에서의 응답은 delete_after를 지원합니다.
                 await i.response.send_message(f"1から{self.max_value}までの数字を入力してください。", ephemeral=True, delete_after=5)
                 return
             self.value = q_val
-            await i.response.defer(ephemeral=True) 
-        except ValueError: 
+            await i.response.defer(ephemeral=True)
+        except ValueError:
             await i.response.send_message("数字のみ入力してください。", ephemeral=True, delete_after=5)
-        except Exception: 
+        except Exception:
             self.stop()
 
 class ShopViewBase(ui.View):
@@ -61,7 +60,7 @@ class ShopViewBase(ui.View):
 
     async def build_components(self):
         raise NotImplementedError("build_components must be implemented in subclasses")
-    
+
     async def handle_error(self, interaction: discord.Interaction, error: Exception, custom_message: str = ""):
         logger.error(f"상점 처리 중 오류 발생: {error}", exc_info=True)
         message_content = custom_message or "❌ 処理中にエラーが発生しました。"
@@ -83,7 +82,7 @@ class BuyItemView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
-        
+
         embed = discord.Embed(
             title=get_string("commerce.item_view_title", category=self.category),
             description=get_string("commerce.item_view_desc", balance=f"{balance:,}", currency_icon=self.currency_icon),
@@ -100,18 +99,18 @@ class BuyItemView(ShopViewBase):
                     f"> {data.get('description', '説明がありません。')}"
                 )
                 embed.add_field(name=field_name, value=field_value, inline=False)
-        
+
         return embed
 
     async def build_components(self):
         self.clear_items()
-        
+
         if self.items_in_category:
             options = [
                 discord.SelectOption(
-                    label=name, 
-                    value=name, 
-                    description=f"価格: {data['price']:,}{self.currency_icon}", 
+                    label=name,
+                    value=name,
+                    description=f"価格: {data['price']:,}{self.currency_icon}",
                     emoji=data.get('emoji')
                 ) for name, data in self.items_in_category
             ]
@@ -141,16 +140,17 @@ class BuyItemView(ShopViewBase):
 
             await self.update_view(interaction)
 
-        except ValueError as e:
-            await self.handle_error(interaction, e, get_string(f"commerce.{e}", default=str(e)))
         except Exception as e:
-            await self.handle_error(interaction, e)
-    
+            # ValueError를 여기서 잡지 않고 handle_error에서 처리하도록 남겨둠
+            await self.handle_error(interaction, e, str(e))
+
     async def handle_instant_use_item(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         await interaction.response.defer(ephemeral=True)
         wallet = await get_wallet(self.user.id)
         if wallet.get('balance', 0) < item_data['price']:
-            raise ValueError("error_insufficient_funds")
+            msg = await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
+            asyncio.create_task(delete_after(msg, 5))
+            return
 
         if item_data.get('effect_type') == 'expand_farm':
             farm_data = await get_farm_data(self.user.id)
@@ -158,13 +158,13 @@ class BuyItemView(ShopViewBase):
                 msg = await interaction.followup.send("❌ 農場をまず作成してください。", ephemeral=True)
                 asyncio.create_task(delete_after(msg, 5))
                 return
-            
+
             size_x, size_y = farm_data['size_x'], farm_data['size_y']
             if size_x >= 4 and size_y >= 4:
                 msg = await interaction.followup.send("❌ 農場はすでに最大サイズです。", ephemeral=True)
                 asyncio.create_task(delete_after(msg, 5))
                 return
-            
+
             new_x, new_y = size_x, size_y
             if size_x <= size_y and size_x < 4: new_x += 1
             elif size_y < 4: new_y += 1
@@ -177,7 +177,7 @@ class BuyItemView(ShopViewBase):
         else:
             msg = await interaction.followup.send("❓ 未知の即時使用アイテムです。", ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
-        
+
         await self.update_view(interaction)
 
     async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
@@ -186,9 +186,9 @@ class BuyItemView(ShopViewBase):
         max_buyable = balance // item_data['price'] if item_data['price'] > 0 else item_data.get('max_ownable', 999)
 
         if max_buyable == 0:
-            await interaction.response.send_message(get_string("commerce.error_insufficient_funds"), ephemeral=True, delete_after=5)
+            await interaction.response.send_message("❌ 残高が不足しています。", ephemeral=True, delete_after=5)
             return
-        
+
         modal = QuantityModal(f"{item_name} 購入", max_buyable)
         await interaction.response.send_modal(modal)
         await modal.wait()
@@ -201,7 +201,9 @@ class BuyItemView(ShopViewBase):
         quantity, total_price = modal.value, item_data['price'] * modal.value
         wallet_after_modal = await get_wallet(self.user.id)
         if wallet_after_modal.get('balance', 0) < total_price:
-             raise ValueError("error_insufficient_funds")
+            msg = await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
+            asyncio.create_task(delete_after(msg, 5))
+            return
 
         await update_inventory(str(self.user.id), item_name, quantity)
         await update_wallet(self.user, -total_price)
@@ -210,33 +212,37 @@ class BuyItemView(ShopViewBase):
         new_balance = new_wallet.get('balance', 0)
         success_message = f"✅ **{item_name}** {quantity}個を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
         
-        # [✅ FIX] `delete_after`를 사용하지 않고 헬퍼 함수를 사용하도록 수정
         msg = await interaction.followup.send(success_message, ephemeral=True)
         asyncio.create_task(delete_after(msg, 10))
-    
+
     async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         await interaction.response.defer(ephemeral=True)
         wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(str(self.user.id)))
-        
+
+        # [✅ FIX] 에러를 발생시키는 대신, 사용자에게 직접 안내 메시지를 보내고 함수를 종료합니다.
         if inventory.get(item_name, 0) > 0 and item_data.get('max_ownable', 1) == 1:
-            raise ValueError("error_already_owned")
-        
-        total_price, quantity = item_data['price'], 1
+            error_message = f"❌ 「{item_name}」は既に所持しています。1つしか持てません。"
+            msg = await interaction.followup.send(error_message, ephemeral=True)
+            asyncio.create_task(delete_after(msg, 5))
+            return
+
+        total_price = item_data['price']
         if wallet.get('balance', 0) < total_price:
-            raise ValueError("error_insufficient_funds")
-        
-        await update_inventory(str(self.user.id), item_name, quantity)
+            msg = await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
+            asyncio.create_task(delete_after(msg, 5))
+            return
+
+        await update_inventory(str(self.user.id), item_name, 1)
         await update_wallet(self.user, -total_price)
-        
+
         if id_key := item_data.get('id_key'):
             if role_id := get_id(id_key):
                 if role := interaction.guild.get_role(role_id): await self.user.add_roles(role)
-        
+
         new_wallet = await get_wallet(self.user.id)
         new_balance = new_wallet.get('balance', 0)
         success_message = f"✅ **{item_name}**を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
         
-        # [✅ FIX] `delete_after`를 사용하지 않고 헬퍼 함수를 사용하도록 수정
         msg = await interaction.followup.send(success_message, ephemeral=True)
         asyncio.create_task(delete_after(msg, 10))
 
@@ -245,6 +251,8 @@ class BuyItemView(ShopViewBase):
         category_view = BuyCategoryView(self.user)
         category_view.message = self.message
         await category_view.update_view(interaction)
+
+# --- (이후의 다른 클래스들은 변경사항이 없습니다) ---
 
 class BuyCategoryView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
