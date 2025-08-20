@@ -1,4 +1,3 @@
-
 import discord
 from discord.ext import commands
 from discord import ui
@@ -53,30 +52,39 @@ class NumberSelectView(ui.View):
         self.bet_amount = bet_amount
         self.cog = cog_instance
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
+        self.message: Optional[discord.InteractionMessage] = None
 
-        # 1から6までのボタンを動的に追加
         for i in range(1, 7):
-            button = ui.Button(label=str(i), style=discord.ButtonStyle.secondary, emoji="🎲")
+            button = ui.Button(label=str(i), style=discord.ButtonStyle.secondary, emoji="🎲", custom_id=f"dice_choice_{i}")
             button.callback = self.button_callback
             self.add_item(button)
 
     async def button_callback(self, interaction: discord.Interaction):
-        # [✅ 수정] interaction.data['label'] 대신 interaction.data['custom_id']를 사용합니다.
-        # discord.py v2.5.0 이상에서는 label이 data에 포함되지 않을 수 있습니다. custom_id를 사용하는 것이 더 안정적입니다.
-        # 버튼 생성 시 custom_id를 명시적으로 설정합니다.
         chosen_number = int(interaction.data['custom_id'].split('_')[-1])
-        dice_result = random.randint(1, 6)
 
-        # ボタンを無効化
+        # [✅ 확률 조정] 주사위 결과 로직 수정
+        # 30% 확률로 사용자가 선택한 숫자가 나옵니다.
+        if random.random() < 0.30:
+            dice_result = chosen_number
+        else:
+            # 70% 확률로 사용자가 선택하지 않은 다른 숫자 중 하나가 나옵니다.
+            possible_outcomes = [1, 2, 3, 4, 5, 6]
+            possible_outcomes.remove(chosen_number)
+            dice_result = random.choice(possible_outcomes)
+
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(content=f"あなたは `{chosen_number}` を選択しました。サイコロを振っています...", view=self)
-
+        
+        try:
+            await interaction.response.edit_message(content=f"あなたは `{chosen_number}` を選択しました。サイコロを振っています...", view=self)
+        except discord.NotFound:
+            self.stop()
+            return
+        
         result_embed = None
-        # 勝利
         if chosen_number == dice_result:
             reward_amount = self.bet_amount * 2
-            await update_wallet(self.user, self.bet_amount) # 純利益はベット額
+            await update_wallet(self.user, self.bet_amount)
             if embed_data := await get_embed_from_db("log_dice_game_win"):
                 result_embed = format_embed_from_db(
                     embed_data, user_mention=self.user.mention,
@@ -84,7 +92,6 @@ class NumberSelectView(ui.View):
                     chosen_number=chosen_number, dice_result=dice_result,
                     currency_icon=self.currency_icon
                 )
-        # 敗北
         else:
             await update_wallet(self.user, -self.bet_amount)
             if embed_data := await get_embed_from_db("log_dice_game_lose"):
@@ -95,17 +102,22 @@ class NumberSelectView(ui.View):
                     currency_icon=self.currency_icon
                 )
         
-        # 結果ログを投稿し、パネルを最下部に再設置
+        self.cog.active_sessions.discard(self.user.id)
         await self.cog.regenerate_panel(interaction.channel, last_game_log=result_embed)
-
-        # 一時的なメッセージを削除
-        await interaction.delete_original_response()
+        
+        try:
+            await interaction.delete_original_response()
+        except discord.NotFound:
+            pass
         self.stop()
     
     async def on_timeout(self):
         self.cog.active_sessions.discard(self.user.id)
-        # タイムアウトしたことをユーザーに知らせるメッセージを追加するとなお良い
-        # 예: await self.message.edit(content="時間切れになりました。", view=None)
+        if self.message:
+            try:
+                await self.message.edit(content="時間切れになりました。", view=None)
+            except discord.NotFound:
+                pass
 
 # メインパネルのView
 class DiceGamePanelView(ui.View):
