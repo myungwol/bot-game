@@ -129,7 +129,6 @@ class RPSGame(commands.Cog):
                 await interaction.followup.send("❌ このチャンネルでは既にゲームが進行中です。", ephemeral=True, delete_after=5)
                 return
 
-            # 참가 전에 돈을 먼저 뺍니다.
             await update_wallet(host, -bet_amount)
 
             lobby_embed = self.build_lobby_embed(host, bet_amount, [host])
@@ -141,7 +140,7 @@ class RPSGame(commands.Cog):
                 "host_id": host.id,
                 "bet_amount": bet_amount,
                 "players": {host.id: host},
-                "initial_players": [host], # 환불 대상을 위해 초기 멤버 기록
+                "initial_players": [host],
                 "lobby_message": lobby_message,
                 "game_message": None,
                 "round": 0,
@@ -375,7 +374,6 @@ class RPSGame(commands.Cog):
     
     async def register_persistent_views(self):
         view = RPSGamePanelView(self)
-        await view.setup_buttons()
         self.bot.add_view(view)
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_rps_game", last_game_log: Optional[discord.Embed] = None):
@@ -401,9 +399,9 @@ class RPSGamePanelView(ui.View):
     def __init__(self, cog_instance: 'RPSGame'):
         super().__init__(timeout=None)
         self.cog = cog_instance
-        quest_button = ui.Button(label="部屋を作る", style=discord.ButtonStyle.secondary, emoji="✊", custom_id="rps_create_room")
-        quest_button.callback = self.create_room_callback
-        self.add_item(quest_button)
+        create_button = ui.Button(label="部屋を作る", style=discord.ButtonStyle.secondary, emoji="✊", custom_id="rps_create_room_button")
+        create_button.callback = self.create_room_callback
+        self.add_item(create_button)
 
     async def create_room_callback(self, interaction: discord.Interaction):
         user_lock = self.cog.user_locks.setdefault(interaction.user.id, asyncio.Lock())
