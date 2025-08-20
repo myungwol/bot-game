@@ -74,6 +74,36 @@ async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
     response = await supabase.table('farmable_items').select('*').eq('item_name', item_name).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
 
+# [✅ NEW] 작물 뽑기 기능을 위한 함수
+@supabase_retry_handler()
+async def clear_plots_db(plot_ids: List[int]):
+    """선택된 밭들의 상태를 초기화합니다."""
+    await supabase.table('farm_plots').update({
+        'state': 'tilled',
+        'planted_item_name': None,
+        'planted_at': None,
+        'last_watered_at': None,
+        'water_count': 0,
+        'growth_stage': 0
+    }).in_('id', plot_ids).execute()
+
+# [✅ NEW] 농장 권한 확인을 위한 함수
+@supabase_retry_handler()
+async def check_farm_permission(farm_id: int, user_id: int) -> bool:
+    """사용자가 해당 농장에 editor 권한이 있는지 확인합니다."""
+    response = await supabase.table('farm_permissions').select('permission_level', count='exact').eq('farm_id', farm_id).eq('user_id', user_id).eq('permission_level', 'editor').execute()
+    return response.count > 0
+
+# [✅ NEW] 농장 권한 부여를 위한 함수
+@supabase_retry_handler()
+async def grant_farm_permission(farm_id: int, user_id: int):
+    """사용자에게 농장 editor 권한을 부여합니다."""
+    await supabase.table('farm_permissions').upsert({
+        'farm_id': farm_id,
+        'user_id': user_id,
+        'permission_level': 'editor'
+    }).execute()
+
 # --- [퀘스트 및 출석체크 함수] ---
 
 @supabase_retry_handler()
