@@ -1,3 +1,5 @@
+# (게임 봇)/cogs/games/panel_updater.py (최종 수정)
+
 import discord
 from discord.ext import commands, tasks
 import logging
@@ -17,14 +19,14 @@ class PanelUpdater(commands.Cog):
 
     @tasks.loop(seconds=10.0)
     async def check_for_panel_updates(self):
+        # [✅✅✅ 핵심 수정 ✅✅✅] panel_map에 DiceGame 정보를 추가합니다.
         panel_map = {
             "panel_fishing_river": {"cog_name": "Fishing", "channel_key": "river_fishing_panel_channel_id"},
             "panel_fishing_sea":   {"cog_name": "Fishing", "channel_key": "sea_fishing_panel_channel_id"},
             "panel_commerce":      {"cog_name": "Commerce", "channel_key": "commerce_panel_channel_id"},
             "panel_profile":       {"cog_name": "UserProfile", "channel_key": "profile_panel_channel_id"},
-            # [✅ 수정] ATM 패널 정보를 여기에 추가합니다.
             "panel_atm":           {"cog_name": "Atm", "channel_key": "atm_panel_channel_id"},
-            "panel_dice_game":     {"cog_name": "dice_game", "channel_key": "atm_panel_channel_id"},
+            "panel_dice_game":     {"cog_name": "DiceGame", "channel_key": "dice_game_panel_channel_id"},
         }
         
         try:
@@ -46,6 +48,7 @@ class PanelUpdater(commands.Cog):
             if db_key in db_requests:
                 logger.info(f"DB에서 `{panel_key}` 패널에 대한 재설치 요청을 발견했습니다.")
                 
+                # [✅ 수정] info에서 정확한 Cog 이름을 가져옵니다. (ex: "DiceGame")
                 cog = self.bot.get_cog(info["cog_name"])
                 channel_id = get_id(info["channel_key"])
 
@@ -58,7 +61,6 @@ class PanelUpdater(commands.Cog):
                     continue
                 
                 try:
-                    # [✅ 수정] panel_key를 명시적으로 전달합니다.
                     await cog.regenerate_panel(channel, panel_key=panel_key)
                     logger.info(f"✅ `{panel_key}` 패널을 성공적으로 재설치했습니다.")
 
