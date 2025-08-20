@@ -1,10 +1,9 @@
-# (게임 봇)/cogs/games/panel_updater.py (최종 수정)
-
 import discord
 from discord.ext import commands, tasks
 import logging
 
-from utils.database import supabase, get_id
+# [✅✅✅ 핵심 수정 ✅✅✅] 실시간으로 DB 정보를 다시 불러올 함수를 import 합니다.
+from utils.database import supabase, get_id, load_channel_ids_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +25,6 @@ class PanelUpdater(commands.Cog):
             "panel_profile":       {"cog_name": "UserProfile", "channel_key": "profile_panel_channel_id"},
             "panel_atm":           {"cog_name": "Atm", "channel_key": "atm_panel_channel_id"},
             "panel_dice_game":     {"cog_name": "DiceGame", "channel_key": "dice_game_panel_channel_id"},
-            # [✅ 추가] 슬롯머신 패널 정보를 추가합니다.
             "panel_slot_machine":  {"cog_name": "SlotMachine", "channel_key": "slot_machine_panel_channel_id"},
         }
         
@@ -38,6 +36,11 @@ class PanelUpdater(commands.Cog):
                 return
 
             db_requests = {item['config_key'] for item in response.data}
+            
+            # [✅✅✅ 핵심 수정 ✅✅✅] 재설치 요청이 하나라도 있다면, DB에서 최신 채널 ID 목록을 즉시 새로고침합니다.
+            if db_requests:
+                logger.info("새로운 패널 재설치 요청을 감지하여, DB로부터 모든 채널 ID를 새로고침합니다.")
+                await load_channel_ids_from_db()
 
         except Exception as e:
             logger.error(f"패널 업데이트 요청 확인 중 DB 오류 발생: {e}")
@@ -49,8 +52,8 @@ class PanelUpdater(commands.Cog):
             if db_key in db_requests:
                 logger.info(f"DB에서 `{panel_key}` 패널에 대한 재설치 요청을 발견했습니다.")
                 
-                # [✅ 수정] info에서 정확한 Cog 이름을 가져옵니다. (ex: "DiceGame")
                 cog = self.bot.get_cog(info["cog_name"])
+                # 이제 이 get_id는 방금 새로고침된 최신 정보를 사용합니다.
                 channel_id = get_id(info["channel_key"])
 
                 if not cog or not hasattr(cog, 'regenerate_panel'):
@@ -58,7 +61,7 @@ class PanelUpdater(commands.Cog):
                     continue
                 
                 if not channel_id or not (channel := self.bot.get_channel(channel_id)):
-                    logger.error(f"'{panel_key}' 패널의 채널(ID: {channel_id})을 찾을 수 없습니다. `/setup`으로 채널을 먼저 설정해주세요.")
+                    logger.error(f"'{panel_key}' 패널의 채널(ID: {channel_id or 'None'})을 찾을 수 없습니다. `/setup`으로 채널을 먼저 설정해주세요.")
                     continue
                 
                 try:
