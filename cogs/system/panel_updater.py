@@ -27,6 +27,9 @@ class PanelUpdater(commands.Cog):
             "panel_dice_game":     {"cog_name": "DiceGame", "channel_key": "dice_game_panel_channel_id"},
             "panel_slot_machine":  {"cog_name": "SlotMachine", "channel_key": "slot_machine_panel_channel_id"},
             "panel_rps_game":      {"cog_name": "RPSGame", "channel_key": "rps_game_panel_channel_id"},
+            "panel_rps_game":      {"cog_name": "RPSGame", "channel_key": "rps_game_panel_channel_id"},
+            "panel_daily_check":   {"cog_name": "DailyCheck", "channel_key": "daily_check_panel_channel_id"},
+            "panel_quests":        {"cog_name": "Quests", "channel_key": "quests_panel_channel_id"},
         }
         
         try:
