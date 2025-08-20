@@ -2,15 +2,43 @@ import discord
 from discord.ext import commands, tasks
 from discord import ui
 import logging
-from typing import Optional
+from typing import Optional, Dict, List
 
 from utils.database import (
     get_farm_data, create_farm, get_config,
-    get_panel_components_from_db, save_panel_id, get_panel_id, get_embed_from_db
+    get_panel_components_from_db, save_panel_id, get_panel_id, get_embed_from_db,
+    supabase # thread_id 저장을 위해 import
 )
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
+
+# 농장 내부 UI (밭 갈기, 씨앗 심기 등 버튼)
+class FarmUIView(ui.View):
+    def __init__(self, cog_instance: 'Farm', farm_data: Dict):
+        super().__init__(timeout=None)
+        self.cog = cog_instance
+        self.farm_data = farm_data
+
+    @ui.button(label="畑を耕す", style=discord.ButtonStyle.secondary, emoji="🪓")
+    async def till_button(self, interaction: discord.Interaction, button: ui.Button):
+        # TODO: 다음 단계에서 괭이 등급별 밭 갈기 로직 구현
+        await interaction.response.send_message("現在、畑を耕す機能を開発中です。", ephemeral=True)
+
+    @ui.button(label="種を植える", style=discord.ButtonStyle.success, emoji="🌱")
+    async def plant_button(self, interaction: discord.Interaction, button: ui.Button):
+        # TODO: 다음 단계에서 씨앗 심기 로직 구현
+        await interaction.response.send_message("現在、種を植える機能を開発中です。", ephemeral=True)
+
+    @ui.button(label="水をやる", style=discord.ButtonStyle.primary, emoji="💧")
+    async def water_button(self, interaction: discord.Interaction, button: ui.Button):
+        # TODO: 다음 단계에서 물뿌리개 등급별 물 주기 로직 구현
+        await interaction.response.send_message("現在、水をやる機能を開発中です。", ephemeral=True)
+
+    @ui.button(label="収穫する", style=discord.ButtonStyle.success, emoji="🧺")
+    async def harvest_button(self, interaction: discord.Interaction, button: ui.Button):
+        # TODO: 다음 단계에서 수확 로직 구현
+        await interaction.response.send_message("現在、収穫機能を開発中です。", ephemeral=True)
 
 # 농장 생성 패널의 View
 class FarmCreationPanelView(ui.View):
@@ -41,16 +69,17 @@ class FarmCreationPanelView(ui.View):
             return
 
         if farm_data:
-            # 이미 농장이 있는 경우, 기존 스레드로 초대
             farm_thread_id = farm_data.get('thread_id')
             if farm_thread_id and (thread := self.cog.bot.get_channel(farm_thread_id)):
                 await interaction.followup.send(f"✅ あなたの農場はこちらです: {thread.mention}", ephemeral=True)
-                await thread.send(f"{user.mention}さんが農場にやってきました！")
+                try:
+                    await thread.send(f"{user.mention}さんが農場にやってきました！")
+                except discord.Forbidden:
+                    await thread.add_user(user)
+                    await thread.send(f"ようこそ、{user.mention}さん！")
             else:
-                # DB에는 있지만 스레드가 없는 경우 (삭제된 경우) - 새로 생성
                 await self.cog.create_new_farm_thread(interaction, user)
         else:
-            # 새로운 농장 생성
             await self.cog.create_new_farm_thread(interaction, user)
 
 
@@ -58,6 +87,40 @@ class FarmCreationPanelView(ui.View):
 class Farm(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
+        """이모티콘 그리드로 농장 UI를 생성합니다."""
+        size_x = farm_data['size_x']
+        size_y = farm_data['size_y']
+        plots = farm_data['farm_plots']
+        
+        # 정렬된 plots 딕셔너리 생성
+        sorted_plots = {(p['pos_x'], p['pos_y']): p for p in plots}
+
+        farm_grid = []
+        for y in range(size_y):
+            row = []
+            for x in range(size_x):
+                plot = sorted_plots.get((x, y))
+                if not plot:
+                    row.append('❓') # 데이터가 없는 경우
+                    continue
+                
+                state = plot['state']
+                if state == 'default':
+                    row.append('🟤')
+                elif state == 'tilled':
+                    row.append('🟫')
+                # TODO: 심겨진 작물에 따른 이모티콘 추가
+                else:
+                    row.append('🌱') # 임시
+            farm_grid.append(" ".join(row))
+        
+        farm_str = "\n".join(farm_grid)
+        
+        embed = discord.Embed(title=f"🌱｜{user.display_name}の農場", description="畑を耕し、作物を育てましょう！", color=0x8BC34A)
+        embed.add_field(name="農場の様子", value=farm_str, inline=False)
+        return embed
 
     async def register_persistent_views(self):
         view = FarmCreationPanelView(self)
@@ -67,31 +130,30 @@ class Farm(commands.Cog):
     async def create_new_farm_thread(self, interaction: discord.Interaction, user: discord.Member):
         try:
             panel_channel = interaction.channel
-            # 비공개 스레드 생성
             farm_thread = await panel_channel.create_thread(
                 name=f"🌱｜{user.display_name}の農場",
                 type=discord.ChannelType.private_thread,
-                invitable=False # 관리자만 초대 가능하도록 설정
+                invitable=False
             )
             
-            # DB에 농장 정보 생성/업데이트
             farm_data = await get_farm_data(user.id)
             if not farm_data:
                 farm_data = await create_farm(user.id)
             
-            # DB의 farms 테이블에 thread_id를 저장할 컬럼이 필요합니다.
-            # 이 부분은 다음 단계에서 DB 스키마 수정으로 해결합니다.
-            # await supabase.table('farms').update({'thread_id': farm_thread.id}).eq('user_id', user.id).execute()
+            # [✅] DB에 생성된 스레드 ID를 저장합니다.
+            await supabase.table('farms').update({'thread_id': farm_thread.id}).eq('user_id', user.id).execute()
+            # 최신 정보를 다시 불러옵니다.
+            farm_data = await get_farm_data(user.id)
 
-            # 스레드에 환영 메시지와 농장 UI 전송
             welcome_embed_data = await get_embed_from_db("farm_thread_welcome")
             if welcome_embed_data:
                 welcome_embed = format_embed_from_db(welcome_embed_data, user_name=user.display_name)
                 await farm_thread.send(embed=welcome_embed)
             
-            # TODO: 여기에 농장 UI (밭, 버튼 등)를 전송하는 로직 추가
-            # farm_ui_embed = self.build_farm_ui(farm_data)
-            # await farm_thread.send(embed=farm_ui_embed, view=FarmUIView(...))
+            # 농장 UI 전송
+            farm_embed = self.build_farm_embed(farm_data, user)
+            farm_view = FarmUIView(self, farm_data)
+            await farm_thread.send(embed=farm_embed, view=farm_view)
             
             await farm_thread.add_user(user)
             await interaction.followup.send(f"✅ あなただけの農場を作成しました！ {farm_thread.mention} を確認してください。", ephemeral=True)
