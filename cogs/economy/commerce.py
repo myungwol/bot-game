@@ -1,18 +1,18 @@
 import discord
 from discord.ext import commands
 from discord import ui
-import logging # [✅ 추가] logging 라이브러리 import
+import logging
 import asyncio
 from typing import Optional, Dict, List, Any
 
-# [✅✅✅ 핵심 수정 ✅✅✅] logger 객체를 생성합니다.
 logger = logging.getLogger(__name__)
 
 from utils.database import (
     get_inventory, get_wallet, supabase, get_id, get_item_database, 
     get_config, get_string,
     get_aquarium, get_fishing_loot, sell_fish_from_db,
-    save_panel_id, get_panel_id, get_embed_from_db
+    save_panel_id, get_panel_id, get_embed_from_db,
+    update_inventory # [✅ 추가] 작물 판매 시 인벤토리 차감을 위해 import
 )
 
 async def delete_after(message: discord.WebhookMessage, delay: int):
@@ -311,7 +311,120 @@ class SellFishView(ShopViewBase):
         view = SellCategoryView(self.user)
         view.message = self.message
         await view.update_view(interaction)
+class SellCropView(ShopViewBase):
+    def __init__(self, user: discord.Member):
+        super().__init__(user)
+        self.crop_data_map: Dict[str, Dict[str, Any]] = {}
 
+    async def refresh_view(self, interaction: discord.Interaction):
+        embed = await self.build_embed()
+        await self.build_components()
+        await interaction.edit_original_response(embed=embed, view=self)
+    
+    async def build_embed(self) -> discord.Embed:
+        wallet = await get_wallet(self.user.id)
+        balance = wallet.get('balance', 0)
+        embed = discord.Embed(title="🌾 買取ボックス - 作物", description=f"現在の所持金: `{balance:,}`{self.currency_icon}\n売却したい作物を下のメニューから選択してください。", color=discord.Color.green())
+        return embed
+
+    async def build_components(self):
+        self.clear_items()
+        inventory = await get_inventory(str(self.user.id))
+        item_db = get_item_database()
+        self.crop_data_map.clear()
+        
+        options = []
+        # 인벤토리에서 '농장_작물' 카테고리의 아이템만 필터링
+        crop_items = {name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category') == '農場_作物'}
+
+        if crop_items:
+            for name, qty in crop_items.items():
+                item_data = item_db.get(name, {})
+                # 판매가는 구매가의 80%로 임시 설정 (나중에 DB에 sell_price 컬럼 추가 가능)
+                price = int(item_data.get('price', 10) * 0.8) 
+                self.crop_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
+                
+                options.append(discord.SelectOption(
+                    label=f"{name} (所持: {qty}個)", 
+                    value=name, 
+                    description=f"単価: {price}{self.currency_icon}",
+                    emoji=item_data.get('emoji')
+                ))
+
+        if options:
+            select = ui.Select(placeholder="売却する作物を選択...", options=options)
+            select.callback = self.on_select
+            self.add_item(select)
+        
+        back_button = ui.Button(label="カテゴリー選択に戻る", style=discord.ButtonStyle.grey, row=1)
+        back_button.callback = self.go_back
+        self.add_item(back_button)
+
+    async def on_select(self, interaction: discord.Interaction):
+        selected_crop = interaction.data['values'][0]
+        crop_info = self.crop_data_map.get(selected_crop)
+        if not crop_info: return
+
+        modal = QuantityModal(f"「{selected_crop}」売却", crop_info['max_qty'])
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+
+        if modal.value is None:
+            return await interaction.followup.send("売却がキャンセルされました。", ephemeral=True, delete_after=5)
+
+        quantity_to_sell = modal.value
+        total_price = crop_info['price'] * quantity_to_sell
+        
+        try:
+            # 1. 인벤토리에서 작물 차감
+            await update_inventory(str(self.user.id), selected_crop, -quantity_to_sell)
+            # 2. 지갑에 돈 추가
+            await update_wallet(self.user, total_price)
+
+            new_wallet = await get_wallet(self.user.id)
+            new_balance = new_wallet.get('balance', 0)
+            success_message = f"✅ **{selected_crop}** {quantity_to_sell}個を`{total_price:,}`{self.currency_icon}で売却しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
+            await interaction.followup.send(success_message, ephemeral=True)
+            
+            await self.refresh_view(interaction)
+        except Exception as e:
+            logger.error(f"작물 판매 중 오류: {e}", exc_info=True)
+            await self.handle_error(interaction, e)
+
+    async def go_back(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        view = SellCategoryView(self.user)
+        view.message = self.message
+        await view.update_view(interaction)
+
+class SellCategoryView(ShopViewBase):
+    async def build_embed(self) -> discord.Embed:
+        return discord.Embed(title="📦 買取ボックス - カテゴリー選択", description="売却したいアイテムのカテゴリーを選択してください。", color=discord.Color.green())
+
+    async def build_components(self):
+        self.clear_items()
+        self.add_item(ui.Button(label="装備", custom_id="sell_category_gear", disabled=True))
+        self.add_item(ui.Button(label="魚", custom_id="sell_category_fish"))
+        # [✅✅✅ 핵심 수정 2 ✅✅✅] 작물 판매 버튼을 활성화합니다.
+        self.add_item(ui.Button(label="作物", custom_id="sell_category_crop"))
+        for child in self.children:
+            if isinstance(child, ui.Button):
+                child.callback = self.on_button_click
+
+    async def on_button_click(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        category = interaction.data['custom_id'].split('_')[-1]
+        
+        if category == "fish":
+            view = SellFishView(self.user)
+        elif category == "crop":
+            view = SellCropView(self.user)
+        else:
+            return
+
+        view.message = self.message
+        await view.refresh_view(interaction)
+        
 class SellCategoryView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
         return discord.Embed(title="📦 買取ボックス - カテゴリー選択", description="売却したいアイテムのカテゴリーを選択してください。", color=discord.Color.green())
