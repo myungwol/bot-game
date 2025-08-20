@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-# (기존 _configs_cache, supabase 클라이언트 초기화 등은 그대로)
 _configs_cache: Dict[str, Any] = {"strings": UI_STRINGS}
 _channel_id_cache: Dict[str, int] = {}
 _item_database_cache: Dict[str, Dict[str, Any]] = {}
@@ -47,41 +46,31 @@ def supabase_retry_handler(retries: int = 3, delay: int = 5):
 
 @supabase_retry_handler()
 async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
-    """유저의 농장 기본 정보와 모든 칸(plot)들의 정보를 함께 가져옵니다."""
     response = await supabase.table('farms').select('*, farm_plots(*)').eq('user_id', user_id).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
 
 @supabase_retry_handler()
 async def create_farm(user_id: int) -> Optional[Dict[str, Any]]:
-    """유저를 위한 새로운 농장을 생성하고, 생성된 농장 정보를 반환합니다."""
-    # [✅✅✅ 핵심 수정 ✅✅✅]
-    # DB 함수는 farm_id(숫자)를 반환합니다. response.data가 아닌 response.data[0]을 직접 사용합니다.
-    # supabase-py v1에서는 response.data로 접근해야 할 수 있습니다. v2에서는 다를 수 있습니다.
-    # 가장 안전한 방법은 rpc 호출 후 get_farm_data를 다시 호출하는 것입니다.
     rpc_response = await supabase.rpc('create_farm_for_user', {'p_user_id': user_id}).execute()
     if rpc_response and rpc_response.data:
-        # DB 함수가 성공적으로 실행되면, 새로 생성된 농장의 전체 데이터를 다시 조회합니다.
         return await get_farm_data(user_id)
     return None
 
 @supabase_retry_handler()
 async def expand_farm_db(farm_id: int, new_size_x: int, new_size_y: int):
-    """DB에 농장 확장을 요청합니다."""
     await supabase.rpc('expand_farm', {'p_farm_id': farm_id, 'new_size_x': new_size_x, 'new_size_y': new_size_y}).execute()
 
 @supabase_retry_handler()
 async def update_plot(plot_id: int, updates: Dict[str, Any]):
-    """특정 칸(plot)의 상태를 업데이트합니다."""
     await supabase.table('farm_plots').update(updates).eq('id', plot_id).execute()
 
 @supabase_retry_handler()
 async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
-    """농사 관련 아이템의 상세 정보를 가져옵니다."""
     response = await supabase.table('farmable_items').select('*').eq('item_name', item_name).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
 
 # --- [퀘스트 및 출석체크 함수] ---
-# ... (이하 모든 기존 함수들은 이전과 동일하며, 오류가 없으므로 생략하지 않고 모두 포함합니다) ...
+
 @supabase_retry_handler()
 async def has_checked_in_today(user_id: int) -> bool:
     response = await supabase.table('attendance_logs').select('id', count='exact').eq('user_id', user_id).gte('checked_in_at', 'today').limit(1).execute()
@@ -108,6 +97,8 @@ async def increment_progress(user_id: int, fish_count: int = 0, voice_minutes: i
         'p_fish_count': fish_count,
         'p_voice_minutes': voice_minutes
     }).execute()
+
+# --- [공용 및 기타 게임 함수] ---
 
 ONE_MONTH_IN_SECONDS = 30 * 24 * 60 * 60
 
@@ -241,28 +232,40 @@ async def update_inventory(user_id_str: str, item_name: str, quantity: int):
     await supabase.rpc('increment_inventory_quantity', params).execute()
 
 BARE_HANDS = "素手"
-DEFAULT_ROD = "古い釣竿"
 
 async def get_user_gear(user_id_str: str) -> dict:
     default_bait = "エサなし"
-    default_gear = {"rod": BARE_HANDS, "bait": default_bait}
+    default_gear = {
+        "rod": BARE_HANDS, "bait": default_bait,
+        "hoe": BARE_HANDS, "watering_can": BARE_HANDS
+    }
     gear = await get_or_create_user('gear_setups', user_id_str, default_gear)
     inv = await get_inventory(user_id_str)
-    rod = gear.get('rod', BARE_HANDS)
-    if rod != BARE_HANDS and inv.get(rod, 0) <= 0:
-        rod = BARE_HANDS
-        await set_user_gear(user_id_str, rod=BARE_HANDS)
-    bait = gear.get('bait', default_bait)
-    if bait != default_bait and inv.get(bait, 0) <= 0:
-        bait = default_bait
-        await set_user_gear(user_id_str, bait=default_bait)
-    return {"rod": rod, "bait": bait}
+
+    gear_to_check = {
+        "rod": BARE_HANDS, "bait": default_bait,
+        "hoe": BARE_HANDS, "watering_can": BARE_HANDS
+    }
+    updated = False
+    for gear_type, default_item in gear_to_check.items():
+        equipped_item = gear.get(gear_type, default_item)
+        if equipped_item != default_item and inv.get(equipped_item, 0) <= 0:
+            gear[gear_type] = default_item
+            updated = True
+            
+    if updated:
+        await set_user_gear(user_id_str, **gear)
+
+    return gear
 
 @supabase_retry_handler()
-async def set_user_gear(user_id_str: str, rod: str = None, bait: str = None):
+async def set_user_gear(user_id_str: str, rod: str = None, bait: str = None, hoe: str = None, watering_can: str = None):
     data_to_update = {}
     if rod is not None: data_to_update['rod'] = rod
     if bait is not None: data_to_update['bait'] = bait
+    if hoe is not None: data_to_update['hoe'] = hoe
+    if watering_can is not None: data_to_update['watering_can'] = watering_can
+    
     if data_to_update:
         await supabase.table('gear_setups').update(data_to_update).eq('user_id', user_id_str).execute()
 
