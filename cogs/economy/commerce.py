@@ -253,11 +253,11 @@ class SellFishView(ShopViewBase):
                 price = int(base_value + (fish['size'] * size_multiplier))
                 self.fish_data_map[fish_id] = {'price': price, 'name': fish['name']}
                 
-                # [🔴 핵심 수정] emoji 파라미터를 완전히 제거합니다.
                 options.append(discord.SelectOption(
                     label=f"{fish['name']} ({fish['size']}cm)", 
                     value=fish_id, 
-                    description=f"{price}{self.currency_icon}"
+                    description=f"{price}{self.currency_icon}",
+                    emoji=fish.get('emoji')
                 ))
 
         if options:
@@ -300,8 +300,6 @@ class SellFishView(ShopViewBase):
             msg = await interaction.followup.send(success_message, ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
             
-            # 판매 후 View를 새로고침하여 판매된 물고기를 목록에서 제거합니다.
-            # 이 때, 원래의 인터랙션이 아니라 새로운 defer된 인터랙션을 사용해야 합니다.
             await self.refresh_view(interaction)
         except Exception as e:
             logger.error(f"물고기 판매 중 오류: {e}", exc_info=True)
@@ -334,7 +332,6 @@ class SellCategoryView(ShopViewBase):
             view.message = self.message
             await view.refresh_view(interaction)
 
-# ... (CommercePanelView, Commerce Cog는 변경 없음) ...
 class CommercePanelView(ui.View):
     def __init__(self, cog_instance: 'Commerce'):
         super().__init__(timeout=None)
@@ -390,11 +387,9 @@ class Commerce(commands.Cog):
                         old_message = await old_channel.fetch_message(old_message_id)
                         await old_message.delete()
                 except (discord.NotFound, discord.Forbidden):
-                    logger.warning(f"'{panel_key}'의 이전 패널(ID: {old_message_id})을 삭제하는 데 실패했습니다.")
                     pass
         
         if not (embed_data := await get_embed_from_db(embed_key)):
-            logger.warning(f"DB에서 '{embed_key}' 임베드 데이터를 찾을 수 없어, 패널 생성을 건너뜁니다.")
             return
 
         embed = discord.Embed.from_dict(embed_data)
