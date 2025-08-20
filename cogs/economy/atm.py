@@ -2,11 +2,12 @@ import discord
 from discord.ext import commands
 from discord import ui
 import logging
+import asyncio
 from typing import Optional
 
 from utils.database import (
     get_wallet, supabase, get_config,
-    save_panel_id, get_panel_id, get_embed_from_db
+    save_panel_id, get_panel_id, get_embed_from_db, update_wallet
 )
 from utils.helpers import format_embed_from_db
 
@@ -56,7 +57,6 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
             else:
                 await interaction.followup.send("❌ 送金中に予期せぬエラーが発生しました。", ephemeral=True, delete_after=10)
 
-
 class AtmPanelView(ui.View):
     def __init__(self, cog_instance: 'Atm'):
         super().__init__(timeout=None)
@@ -70,8 +70,32 @@ class AtmPanelView(ui.View):
         view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="コインを送る相手を選んでください...")
         
+        # [✅✅✅ 핵심 수정 ✅✅✅] 누락되었던 함수의 내용을 복원합니다.
         async def select_callback(select_interaction: discord.Interaction):
-            # ... (이전과 동일) ...
+            try:
+                selected_user_id = int(select_interaction.data["values"][0])
+                recipient = select_interaction.guild.get_member(selected_user_id)
+
+                if not recipient:
+                    await select_interaction.response.send_message("❌ ユーザーが見つかりませんでした。", ephemeral=True, delete_after=10)
+                    return
+
+                sender = select_interaction.user
+
+                if recipient.bot or recipient.id == sender.id:
+                    await select_interaction.response.send_message("❌ 自分自身やボットには送金できません。", ephemeral=True, delete_after=10)
+                    return
+
+                modal = TransferAmountModal(sender, recipient, self.cog)
+                await select_interaction.response.send_modal(modal)
+                
+                await modal.wait()
+                await interaction.delete_original_response()
+            except discord.NotFound:
+                pass
+            except Exception as e:
+                logger.error(f"ATM 유저 선택 콜백 중 오류: {e}", exc_info=True)
+
         user_select.callback = select_callback
         view.add_item(user_select)
         await interaction.response.send_message("誰にコインを送りますか？", view=view, ephemeral=True)
@@ -85,18 +109,24 @@ class Atm(commands.Cog):
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "atm", last_transfer_log: Optional[discord.Embed] = None):
         embed_key = "panel_atm"
+        
         if panel_info := get_panel_id(panel_key):
-            if (old_channel_id := panel_info.get("channel_id")) and (old_channel := self.bot.get_channel(old_channel_id)):
+            old_message_id = panel_info.get('message_id')
+            old_channel_id = panel_info.get('channel_id')
+            
+            if old_message_id and old_channel_id and (old_channel := self.bot.get_channel(old_channel_id)):
                 try:
-                    old_message = await old_channel.fetch_message(panel_info["message_id"])
-                    await old_message.delete()
-                except (discord.NotFound, discord.Forbidden): pass
+                    message_to_delete = await old_channel.fetch_message(old_message_id)
+                    await message_to_delete.delete()
+                except (discord.NotFound, discord.Forbidden):
+                    logger.warning(f"이전 ATM 패널(ID: {old_message_id})을 원래 위치인 채널 #{old_channel.name}에서도 찾을 수 없었습니다.")
         
         if last_transfer_log:
             try: await channel.send(embed=last_transfer_log)
             except Exception as e: logger.error(f"ATM 송금 로그 메시지 전송 실패: {e}")
 
-        if not (embed_data := await get_embed_from_db(embed_key)): return
+        if not (embed_data := await get_embed_from_db(embed_key)):
+            return
 
         embed = discord.Embed.from_dict(embed_data)
         view = AtmPanelView(self)
