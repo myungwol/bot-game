@@ -12,7 +12,7 @@ from utils.database import (
     get_config, get_string,
     get_aquarium, get_fishing_loot, sell_fish_from_db,
     save_panel_id, get_panel_id, get_embed_from_db,
-    update_inventory, update_wallet
+    update_inventory, update_wallet, get_farm_data, expand_farm_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -127,61 +127,17 @@ class BuyItemView(ShopViewBase):
         item_data = get_item_database().get(item_name)
         if not item_data: return
 
-        is_modal_needed = item_data.get('max_ownable', 1) > 1
-
         try:
+            # [✅ MODIFIED] 농장 확장권과 같은 즉시 사용 아이템 처리
+            if item_data.get('instant_use'):
+                await self.handle_instant_use_item(interaction, item_name, item_data)
+                return
+
+            is_modal_needed = item_data.get('max_ownable', 1) > 1
             if is_modal_needed:
-                wallet = await get_wallet(self.user.id)
-                balance = wallet.get('balance', 0)
-                max_buyable = balance // item_data['price'] if item_data['price'] > 0 else item_data.get('max_ownable', 999)
-
-                if max_buyable == 0:
-                    return await interaction.response.send_message(get_string("commerce.error_insufficient_funds"), ephemeral=True, delete_after=5)
-                
-                modal = QuantityModal(f"{item_name} 購入", max_buyable)
-                await interaction.response.send_modal(modal)
-                await modal.wait()
-
-                if modal.value is None:
-                    msg = await interaction.followup.send("購入がキャンセルされました。", ephemeral=True)
-                    return await asyncio.create_task(delete_after(msg, 5))
-
-                quantity, total_price = modal.value, item_data['price'] * modal.value
-                wallet_after_modal = await get_wallet(self.user.id)
-                if wallet_after_modal.get('balance', 0) < total_price:
-                     raise ValueError("error_insufficient_funds")
-
-                await update_inventory(str(self.user.id), item_name, quantity)
-                await update_wallet(self.user, -total_price)
-
-                new_wallet = await get_wallet(self.user.id)
-                new_balance = new_wallet.get('balance', 0)
-                success_message = f"✅ **{item_name}** {quantity}個を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-                msg = await interaction.followup.send(success_message, ephemeral=True)
-                asyncio.create_task(delete_after(msg, 5))
+                await self.handle_quantity_purchase(interaction, item_name, item_data)
             else:
-                await interaction.response.defer(ephemeral=True)
-                wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(str(self.user.id)))
-                
-                if inventory.get(item_name, 0) > 0 and item_data.get('max_ownable', 1) == 1:
-                    raise ValueError("error_already_owned")
-                
-                total_price, quantity = item_data['price'], 1
-                if wallet.get('balance', 0) < total_price:
-                    raise ValueError("error_insufficient_funds")
-                
-                await update_inventory(str(self.user.id), item_name, quantity)
-                await update_wallet(self.user, -total_price)
-                
-                if id_key := item_data.get('id_key'):
-                    if role_id := get_id(id_key):
-                        if role := interaction.guild.get_role(role_id): await self.user.add_roles(role)
-                
-                new_wallet = await get_wallet(self.user.id)
-                new_balance = new_wallet.get('balance', 0)
-                success_message = f"✅ **{item_name}**を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-                msg = await interaction.followup.send(success_message, ephemeral=True)
-                asyncio.create_task(delete_after(msg, 5))
+                await self.handle_single_purchase(interaction, item_name, item_data)
 
             await self.update_view(interaction)
 
@@ -189,6 +145,86 @@ class BuyItemView(ShopViewBase):
             await self.handle_error(interaction, e, get_string(f"commerce.{e}", default=str(e)))
         except Exception as e:
             await self.handle_error(interaction, e)
+    
+    async def handle_instant_use_item(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
+        await interaction.response.defer(ephemeral=True)
+        wallet = await get_wallet(self.user.id)
+        if wallet.get('balance', 0) < item_data['price']:
+            raise ValueError("error_insufficient_funds")
+
+        if item_data.get('effect_type') == 'expand_farm':
+            farm_data = await get_farm_data(self.user.id)
+            if not farm_data:
+                return await interaction.followup.send("❌ 農場をまず作成してください。", ephemeral=True)
+            
+            size_x, size_y = farm_data['size_x'], farm_data['size_y']
+            if size_x >= 4 and size_y >= 4:
+                return await interaction.followup.send("❌ 農場はすでに最大サイズです。", ephemeral=True)
+            
+            # 더 작은 쪽을 먼저 확장
+            new_x, new_y = size_x, size_y
+            if size_x < size_y or (size_x == size_y and size_x < 4):
+                new_x += 1
+            elif size_y < 4:
+                new_y += 1
+            
+            await expand_farm_db(farm_data['id'], new_x, new_y)
+            await update_wallet(self.user, -item_data['price'])
+            await interaction.followup.send(f"✅ 農場が **{new_x}x{new_y}**サイズに拡張されました！", ephemeral=True)
+        else:
+            await interaction.followup.send("❓ 未知の即時使用アイテムです。", ephemeral=True)
+
+    async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
+        wallet = await get_wallet(self.user.id)
+        balance = wallet.get('balance', 0)
+        max_buyable = balance // item_data['price'] if item_data['price'] > 0 else item_data.get('max_ownable', 999)
+
+        if max_buyable == 0:
+            return await interaction.response.send_message(get_string("commerce.error_insufficient_funds"), ephemeral=True, delete_after=5)
+        
+        modal = QuantityModal(f"{item_name} 購入", max_buyable)
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+
+        if modal.value is None:
+            await interaction.followup.send("購入がキャンセルされました。", ephemeral=True, delete_after=5)
+            return
+
+        quantity, total_price = modal.value, item_data['price'] * modal.value
+        wallet_after_modal = await get_wallet(self.user.id)
+        if wallet_after_modal.get('balance', 0) < total_price:
+             raise ValueError("error_insufficient_funds")
+
+        await update_inventory(str(self.user.id), item_name, quantity)
+        await update_wallet(self.user, -total_price)
+
+        new_wallet = await get_wallet(self.user.id)
+        new_balance = new_wallet.get('balance', 0)
+        success_message = f"✅ **{item_name}** {quantity}個を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
+        await interaction.followup.send(success_message, ephemeral=True, delete_after=10)
+    
+    async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
+        await interaction.response.defer(ephemeral=True)
+        wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(str(self.user.id)))
+        
+        if inventory.get(item_name, 0) > 0 and item_data.get('max_ownable', 1) == 1:
+            raise ValueError("error_already_owned")
+        
+        total_price, quantity = item_data['price'], 1
+        if wallet.get('balance', 0) < total_price:
+            raise ValueError("error_insufficient_funds")
+        
+        await update_inventory(str(self.user.id), item_name, quantity)
+        await update_wallet(self.user, -total_price)
+        
+        if id_key := item_data.get('id_key'):
+            if role_id := get_id(id_key):
+                if role := interaction.guild.get_role(role_id): await self.user.add_roles(role)
+        
+        new_wallet = await get_wallet(self.user.id)
+        new_balance = new_wallet.get('balance', 0)
+        success_message = f"✅ **{item_name}**を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
+        await interaction.followup.send(success_message, ephemeral=True, delete_after=10)
 
     async def back_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -200,38 +236,26 @@ class BuyCategoryView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
         return discord.Embed(title=get_string("commerce.category_view_title"), description=get_string("commerce.category_view_desc"), color=discord.Color.green())
     
-    # [✅✅✅ 핵심 수정 ✅✅✅]
-    # 버튼 순서를 고정하기 위해 정렬 로직을 변경합니다.
     async def build_components(self):
         self.clear_items()
         item_db = get_item_database()
         
-        # 1. DB에 존재하는 모든 구매 가능 카테고리를 가져옵니다.
         available_categories = set(
             d['category'] for d in item_db.values() if d.get('buyable') and d.get('category')
         )
-        
-        # 2. 원하는 버튼 순서를 정의합니다.
-        #    - 원하는 순서대로 여기에 카테고리 이름을 나열합니다.
-        #    - 이 목록에 없는 카테고리는 자동으로 뒤에 추가됩니다.
         preferred_order = ["アイテム", "釣り", "農場_道具", "農場_種"]
         
-        # 3. 정의된 순서대로 버튼을 정렬합니다.
         sorted_categories = []
-        # 먼저, 정의된 순서 목록에 있는 카테고리만 골라서 추가
         for category in preferred_order:
             if category in available_categories:
                 sorted_categories.append(category)
-                available_categories.remove(category) # 중복 추가 방지
-        
-        # 그 다음, 정의된 목록에 없었던 나머지 카테고리들을 가나다순으로 정렬하여 추가
+                available_categories.remove(category)
         sorted_categories.extend(sorted(list(available_categories)))
 
         if not sorted_categories:
             self.add_item(ui.Button(label="販売中の商品がありません。", disabled=True))
             return
 
-        # 4. 정렬된 순서대로 버튼을 생성합니다.
         for category_name in sorted_categories:
             button = ui.Button(label=category_name, custom_id=f"buy_category_{category_name}")
             button.callback = self.category_callback
@@ -389,7 +413,8 @@ class SellCropView(ShopViewBase):
         await modal.wait()
 
         if modal.value is None:
-            return await interaction.followup.send("売却がキャンセルされました。", ephemeral=True, delete_after=5)
+            await interaction.followup.send("売却がキャンセルされました。", ephemeral=True, delete_after=5)
+            return
 
         quantity_to_sell = modal.value
         total_price = crop_info['price'] * quantity_to_sell
@@ -401,7 +426,7 @@ class SellCropView(ShopViewBase):
             new_wallet = await get_wallet(self.user.id)
             new_balance = new_wallet.get('balance', 0)
             success_message = f"✅ **{selected_crop}** {quantity_to_sell}個を`{total_price:,}`{self.currency_icon}で売却しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-            await interaction.followup.send(success_message, ephemeral=True)
+            await interaction.followup.send(success_message, ephemeral=True, delete_after=10)
             
             await self.refresh_view(interaction)
         except Exception as e:
