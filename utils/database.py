@@ -148,7 +148,7 @@ async def get_embed_from_db(embed_key: str) -> Optional[dict]:
 
 @supabase_retry_handler()
 async def get_panel_components_from_db(panel_key: str) -> list:
-    response = await supabase.table('panel_components').select('*').eq('panel_key', panel_key).order('row', desc=False).execute()
+    response = await supabase.table('panel_components').select('*').eq('panel_key', panel_key).order('row', desc=False).order('order_in_row', desc=False).execute()
     return response.data if response and response.data else []
 
 @supabase_retry_handler()
