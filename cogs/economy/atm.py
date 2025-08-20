@@ -136,19 +136,20 @@ class Atm(commands.Cog):
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "atm", last_transfer_log: Optional[discord.Embed] = None):
         embed_key = "panel_atm"
         
+        # [✅✅✅ 핵심 수정 ✅✅✅]
+        # 복잡한 로직 대신, 다른 Cog들처럼 단순하고 확실한 방식으로 수정합니다.
+        # "새 패널이 생성될 'channel'에서 이전 패널을 찾아서 삭제한다"
         if panel_info := get_panel_id(panel_key):
-            old_message_id = panel_info.get('message_id')
-            # [✅ 수정] 이전 패널이 있던 채널 ID를 정확히 사용합니다.
-            old_channel_id = panel_info.get('channel_id') 
-            if old_message_id and old_channel_id and (old_channel := self.bot.get_channel(old_channel_id)):
+            if old_message_id := panel_info.get('message_id'):
                 try:
-                    old_message = await old_channel.fetch_message(old_message_id)
+                    # DB에서 가져온 채널 ID가 아닌, 현재 함수가 받은 'channel' 객체를 직접 사용합니다.
+                    old_message = await channel.fetch_message(old_message_id)
                     await old_message.delete()
                 except (discord.NotFound, discord.Forbidden):
-                    logger.warning(f"'{panel_key}'의 이전 패널(ID: {old_message_id})을 삭제하는 데 실패했습니다.")
+                    # 메시지를 못 찾아도 괜찮습니다. 다른 채널에 있거나 이미 삭제된 경우입니다.
+                    logger.warning(f"'{panel_key}'의 이전 패널(ID: {old_message_id})을 채널 #{channel.name}에서 찾을 수 없거나 삭제할 수 없습니다.")
                     pass
         
-        # [✅ 수정] 인자로 받은 로그 임베드가 있다면, 패널을 보내기 전에 먼저 보냅니다.
         if last_transfer_log:
             try:
                 await channel.send(embed=last_transfer_log)
@@ -165,6 +166,7 @@ class Atm(commands.Cog):
         self.bot.add_view(view)
         
         new_message = await channel.send(embed=embed, view=view)
+        # 새 패널의 정보는 항상 올바른 'channel.id'와 함께 저장됩니다.
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
 
