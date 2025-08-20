@@ -8,13 +8,14 @@ from typing import Optional, Dict, List, Any
 
 from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
-    save_panel_id, get_panel_id, get_id, get_embed_from_db, get_panel_components_from_db,
-    get_item_database, get_config, get_string, DEFAULT_ROD
+    save_panel_id, get_panel_id, get_id, get_embed_from_db,
+    get_item_database, get_config, get_string, BARE_HANDS
 )
 
 logger = logging.getLogger(__name__)
 
-GEAR_CATEGORY = "釣り" 
+FISHING_GEAR_CATEGORIES = ["釣り"]
+FARM_GEAR_CATEGORIES = ["農場_道具"]
 
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
@@ -62,7 +63,7 @@ class ProfileView(ui.View):
         item_db = get_item_database()
         
         base_title = get_string("profile_view.base_title", user_name=self.user.display_name)
-        title_suffix = get_string(f"profile_view.tabs.{self.current_page}.title_suffix")
+        title_suffix = get_string(f"profile_view.tabs.{self.current_page}.title_suffix", default="")
         embed = discord.Embed(title=f"{base_title}{title_suffix}", color=self.user.color)
         
         if self.user.display_avatar:
@@ -86,7 +87,7 @@ class ProfileView(ui.View):
             embed.description = description
 
         elif self.current_page == "item":
-            excluded_categories = [GEAR_CATEGORY, "農場_道具", "農場_種", "農場_作物"]
+            excluded_categories = FISHING_GEAR_CATEGORIES + FARM_GEAR_CATEGORIES + ["農場_種", "農場_作物"]
             general_items = {
                 name: count for name, count in inventory.items()
                 if item_db.get(name, {}).get('category') not in excluded_categories
@@ -95,16 +96,31 @@ class ProfileView(ui.View):
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items"))
 
         elif self.current_page == "gear":
-            rod_name, bait_name = gear.get('rod', '古い釣竿'), gear.get('bait', 'エサなし')
-            rod_emoji, bait_emoji = item_db.get(rod_name, {}).get('emoji', '🎣'), item_db.get(bait_name, {}).get('emoji', '🐛')
-            embed.add_field(name=get_string("profile_view.gear_tab.current_gear_field"), value=f"{rod_emoji} **釣竿**: {rod_name}\n{bait_emoji} **エサ**: {bait_name}", inline=False)
-            
-            gear_items = {
-                name: count for name, count in inventory.items()
-                if item_db.get(name, {}).get('category') == GEAR_CATEGORY
+            gear_categories = {
+                "釣り": {"rod": "🎣 釣竿", "bait": "🐛 エサ"},
+                "農場": {"hoe": "🪓 クワ", "watering_can": "💧 じょうろ"}
             }
-            gear_list = [f"{item_db.get(n,{}).get('emoji','🔧')} **{n}**: `{c}`個" for n, c in gear_items.items()]
-            embed.add_field(name=get_string("profile_view.gear_tab.owned_gear_field"), value="\n".join(gear_list) or get_string("profile_view.gear_tab.no_owned_gear"), inline=False)
+            
+            for category_name, items in gear_categories.items():
+                field_lines = []
+                for key, label in items.items():
+                    equipped_item = gear.get(key, BARE_HANDS)
+                    field_lines.append(f"**{label}:** {equipped_item}")
+                
+                embed.add_field(name=f"**[ 現在の装備: {category_name} ]**", value="\n".join(field_lines), inline=True)
+            
+            all_gear_categories = FISHING_GEAR_CATEGORIES + FARM_GEAR_CATEGORIES
+            owned_gear_items = {
+                name: count for name, count in inventory.items()
+                if item_db.get(name, {}).get('category') in all_gear_categories
+            }
+            
+            if owned_gear_items:
+                gear_list = [f"{item_db.get(n,{}).get('emoji','🔧')} **{n}**: `{c}`個" for n, c in owned_gear_items.items()]
+                embed.add_field(name="\n**[ 所持している装備 ]**", value="\n".join(gear_list), inline=False)
+            else:
+                embed.add_field(name="\n**[ 所持している装備 ]**", value=get_string("profile_view.gear_tab.no_owned_gear"), inline=False)
+            
             embed.description = description
 
         elif self.current_page == "fish":
@@ -132,8 +148,7 @@ class ProfileView(ui.View):
             }
             item_list = [f"{item_db.get(n,{}).get('emoji','🌾')} **{n}**: `{c}`個" for n, c in crop_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.crop_tab.no_items"))
-
-        elif self.current_page in get_string("profile_view.tabs", {}):
+        else:
             embed.description = description + get_string("profile_view.wip_tab.description")
             
         return embed
@@ -143,7 +158,6 @@ class ProfileView(ui.View):
         tabs_config = get_string("profile_view.tabs", {})
         
         row_counter = 0
-        # 탭 버튼들을 먼저 추가합니다. (최대 5개씩 한 줄에)
         tab_buttons_in_row = 0
         for key, config in tabs_config.items():
             if tab_buttons_in_row >= 5:
@@ -154,10 +168,14 @@ class ProfileView(ui.View):
             self.add_item(ui.Button(label=config.get("label"), style=style, custom_id=f"profile_tab_{key}", emoji=config.get("emoji"), row=row_counter))
             tab_buttons_in_row += 1
 
-        row_counter += 1 # 탭 버튼들 다음 줄로 이동
+        row_counter += 1
         if self.current_page == "gear":
-            self.add_item(ui.Button(label=get_string("profile_view.gear_tab.change_rod_button"), style=discord.ButtonStyle.success, custom_id="profile_change_rod", emoji="🎣", row=row_counter))
-            self.add_item(ui.Button(label=get_string("profile_view.gear_tab.change_bait_button"), style=discord.ButtonStyle.success, custom_id="profile_change_bait", emoji="🐛", row=row_counter))
+            self.add_item(ui.Button(label="釣竿を変更", style=discord.ButtonStyle.blurple, custom_id="profile_change_rod", emoji="🎣", row=row_counter))
+            self.add_item(ui.Button(label="エサを変更", style=discord.ButtonStyle.blurple, custom_id="profile_change_bait", emoji="🐛", row=row_counter))
+            
+            row_counter += 1
+            self.add_item(ui.Button(label="クワを変更", style=discord.ButtonStyle.success, custom_id="profile_change_hoe", emoji="🪓", row=row_counter))
+            self.add_item(ui.Button(label="じょうろを変更", style=discord.ButtonStyle.success, custom_id="profile_change_watering_can", emoji="💧", row=row_counter))
         
         if self.current_page == "fish" and self.cached_data.get("aquarium"):
             if math.ceil(len(self.cached_data["aquarium"]) / 10) > 1:
@@ -197,55 +215,61 @@ class GearSelectView(ui.View):
         self.user = parent_view.user
         self.gear_type = gear_type
 
+        if self.gear_type in ["rod", "bait"]:
+            self.db_categories = FISHING_GEAR_CATEGORIES
+            self.category_name = "釣竿" if self.gear_type == "rod" else "釣りエサ"
+            self.unequip_label = "釣竿を外す" if self.gear_type == "rod" else "エサを外す"
+            self.default_item = BARE_HANDS if self.gear_type == "rod" else "エサなし"
+        else:
+            self.db_categories = FARM_GEAR_CATEGORIES
+            self.category_name = "クワ" if self.gear_type == "hoe" else "じょうろ"
+            self.unequip_label = "クワを外す" if self.gear_type == "hoe" else "じょうろを外す"
+            self.default_item = BARE_HANDS
+
     async def setup_and_update(self, interaction: discord.Interaction):
         inventory = self.parent_view.cached_data.get("inventory", {})
         item_db = get_item_database()
-        is_rod_change = self.gear_type == 'rod'
-        category_name = "釣竿" if is_rod_change else "釣りエサ"
         
         options = []
-        unequip_label_key = "gear_select_view.unequip_rod_label" if is_rod_change else "gear_select_view.unequip_bait_label"
-        unequip_value = DEFAULT_ROD if is_rod_change else "エサなし"
-        
-        unequip_option_value = "unequip"
-        options.append(discord.SelectOption(
-            label=f'{get_string("gear_select_view.unequip_prefix")} {get_string(unequip_label_key)}',
-            value=unequip_option_value
-        ))
+        options.append(discord.SelectOption(label=f'✋ {self.unequip_label}', value="unequip"))
 
         for name, count in inventory.items():
             item_data = item_db.get(name)
-            if item_data and item_data.get('category') == GEAR_CATEGORY:
-                is_rod_item = '竿' in name
-                if (is_rod_change and is_rod_item) or (not is_rod_change and not is_rod_item):
+            if item_data and item_data.get('category') in self.db_categories:
+                is_rod = '釣竿' in name
+                is_bait = 'エサ' in name
+                is_hoe = 'クワ' in name
+                is_wc = 'じょうろ' in name
+
+                if (self.gear_type == 'rod' and is_rod) or \
+                   (self.gear_type == 'bait' and is_bait) or \
+                   (self.gear_type == 'hoe' and is_hoe) or \
+                   (self.gear_type == 'watering_can' and is_wc):
                      options.append(discord.SelectOption(label=f"{name} ({count}個)", value=name, emoji=item_data.get('emoji')))
 
-        select = ui.Select(placeholder=get_string("gear_select_view.placeholder", category_name=category_name), options=options)
+        select = ui.Select(placeholder=f"新しい{self.category_name}を選択してください...", options=options)
         select.callback = self.select_callback
         self.add_item(select)
         
-        back_button = ui.Button(label=get_string("gear_select_view.back_button"), style=discord.ButtonStyle.grey, row=1, custom_id="back")
+        back_button = ui.Button(label="戻る", style=discord.ButtonStyle.grey, row=1)
         back_button.callback = self.back_callback
         self.add_item(back_button)
         
-        embed = discord.Embed(title=get_string("gear_select_view.embed_title", category_name=category_name), description=get_string("gear_select_view.embed_description"), color=self.user.color)
+        embed = discord.Embed(title=f"装備変更: {self.category_name}", description="インベントリから装着するアイテムを選択してください。", color=self.user.color)
         await interaction.edit_original_response(embed=embed, view=self)
 
     async def select_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         selected_option = interaction.data['values'][0]
         
-        is_rod_change = self.gear_type == 'rod'
-        
         if selected_option == "unequip":
-            selected_item_name = DEFAULT_ROD if is_rod_change else "エサなし"
-            self.parent_view.status_message = f"✅ { '釣竿' if is_rod_change else 'エサ'}を外しました。"
+            selected_item_name = self.default_item
+            self.parent_view.status_message = f"✅ {self.category_name}を外しました。"
         else:
             selected_item_name = selected_option
             self.parent_view.status_message = f"✅ 装備を**{selected_item_name}**に変更しました。"
 
         await set_user_gear(str(self.user.id), **{self.gear_type: selected_item_name})
-        
         await self.go_back_to_profile(interaction, reload_data=True)
 
     async def back_callback(self, interaction: discord.Interaction):
@@ -279,18 +303,19 @@ class UserProfile(commands.Cog):
         self.bot = bot
 
     async def register_persistent_views(self):
-        view = UserProfilePanelView(self)
-        await view.setup_buttons()
-        self.bot.add_view(view)
+        self.bot.add_view(UserProfilePanelView(self))
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "profile"):
         embed_key = "panel_profile"
-        if (panel_info := get_panel_id(panel_key)) and (old_id := panel_info.get('message_id')):
-            try: await (await channel.fetch_message(old_id)).delete()
-            except (discord.NotFound, discord.Forbidden): pass
+        if (panel_info := get_panel_id(panel_key)):
+            if (old_channel_id := panel_info.get("channel_id")) and (old_channel := self.bot.get_channel(old_channel_id)):
+                try:
+                    old_message = await old_channel.fetch_message(panel_info["message_id"])
+                    await old_message.delete()
+                except (discord.NotFound, discord.Forbidden): pass
         
         if not (embed_data := await get_embed_from_db(embed_key)):
-            return logger.warning(f"DB에서 '{embed_key}' 임베드 데이터를 찾을 수 없어, 패널 생성을 건너뜁니다.")
+            return
         
         embed = discord.Embed.from_dict(embed_data)
         view = UserProfilePanelView(self)
