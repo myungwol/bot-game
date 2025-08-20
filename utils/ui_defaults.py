@@ -59,12 +59,13 @@ UI_EMBEDS = {
 # 3. 패널 컴포넌트(Panel Components) 기본값 - 게임/경제 관련만 남김
 # ==============================================================================
 UI_PANEL_COMPONENTS = [
+    # [✅ 수정] open_shop (구매)를 open_market (판매) 보다 앞으로 이동합니다.
     {
         "component_key": "open_shop",
         "panel_key": "commerce",
         "component_type": "button",
         "label": "商店 (アイテム購入)",
-        "style": "primary",
+        "style": "primary", # 초록색 계열
         "emoji": "🏪",
         "row": 0
     },
@@ -73,7 +74,7 @@ UI_PANEL_COMPONENTS = [
         "panel_key": "commerce",
         "component_type": "button",
         "label": "買取ボックス (アイテム売却)",
-        "style": "secondary",
+        "style": "secondary", # 회색/빨간색 계열
         "emoji": "📦",
         "row": 0
     },
