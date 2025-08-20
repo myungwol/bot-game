@@ -118,7 +118,7 @@ class Atm(commands.Cog):
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "atm"):
         embed_key = "panel_atm"
         
-        # [🔴 핵심 수정] 패널 삭제 로직을 더 안정적으로 변경
+        # [🔴 핵심 수정] 패널 삭제 로직을 다른 Cog들과 동일하게 수정합니다.
         if panel_info := get_panel_id(panel_key):
             old_message_id = panel_info.get('message_id')
             old_channel_id = panel_info.get('channel_id')
@@ -142,7 +142,7 @@ class Atm(commands.Cog):
         await view.setup_buttons()
         self.bot.add_view(view)
         
-        # 새로운 패널은 interaction이 발생한 현재 채널에 생성합니다.
+        # 새로운 패널은 항상 이 함수가 호출될 때 지정된 'channel'에 생성됩니다.
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
