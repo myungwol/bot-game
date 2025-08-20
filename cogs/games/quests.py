@@ -3,6 +3,7 @@ from discord.ext import commands, tasks
 from discord import ui
 import logging
 from typing import Optional, Dict, List, Any
+import time # [✅✅✅ 핵심 수정 ✅✅✅] time 라이브러리를 import합니다.
 
 from utils.database import (
     get_user_progress, has_checked_in_today,
@@ -155,7 +156,6 @@ class QuestView(ui.View):
                 continue
 
             cooldown_key = f"quest_claimed_{self.current_tab}_{key}"
-            # 퀘스트 초기화 기능이 없으므로, 일단 타임스탬프 0 이상이면 받은 것으로 간주
             last_claimed_timestamp = await get_cooldown(str(self.user.id), cooldown_key)
             if last_claimed_timestamp > 0:
                 continue
