@@ -17,8 +17,6 @@ HAND_EMOJIS = {"rock": "✊", "scissors": "✌️", "paper": "✋"}
 HAND_NAMES = {"rock": "グー", "scissors": "チョキ", "paper": "パー"}
 MAX_PLAYERS = 5
 
-# --- Views & Modals ---
-
 class BetAmountModal(ui.Modal, title="ベット額の入力 (じゃんけん)"):
     amount = ui.TextInput(label="金額 (10円単位)", placeholder="例: 100", required=True)
 
@@ -35,12 +33,10 @@ class BetAmountModal(ui.Modal, title="ベット額の入力 (じゃんけん)"):
             if wallet.get('balance', 0) < bet_amount:
                 raise ValueError(f"残高が不足しています。(現在の残高: {wallet.get('balance', 0):,})")
 
-            # [✅ 수정] Defer를 먼저 호출하여 안정성을 높입니다.
             await interaction.response.defer(ephemeral=True, thinking=True)
             await cog.create_game_lobby(interaction, bet_amount)
 
         except ValueError as e:
-            # [✅ 수정] 에러 메시지도 5초 뒤 삭제되도록 합니다.
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"❌ {e}", ephemeral=True, delete_after=5)
             else:
@@ -86,18 +82,14 @@ class RPSGameView(ui.View):
     async def paper_button(self, interaction: discord.Interaction, button: ui.Button):
         await self.cog.handle_choice(interaction, self.channel_id, "paper")
 
-# --- Main Cog ---
-
 class RPSGame(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.active_games: Dict[int, Dict] = {} # Key: channel_id
+        self.active_games: Dict[int, Dict] = {}
         self.currency_icon = "🪙"
 
     async def cog_load(self):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
-
-    # --- Game Flow Management ---
 
     async def create_game_lobby(self, interaction: discord.Interaction, bet_amount: int):
         channel_id = interaction.channel.id
@@ -122,11 +114,12 @@ class RPSGame(commands.Cog):
             "choices": {},
             "task": self.bot.loop.create_task(self.lobby_countdown(channel_id, 30))
         }
-        # [✅ 수정] 확인 메시지도 5초 뒤 삭제되도록 합니다.
         await interaction.followup.send(f"✅ じゃんけん部屋を作成しました！ ベット額: `{bet_amount}`{self.currency_icon}", ephemeral=True, delete_after=5)
 
     async def start_new_round(self, channel_id: int):
-        game = self.active_games[channel_id]
+        game = self.active_games.get(channel_id)
+        if not game: return
+        
         game["round"] += 1
         game["choices"] = {}
         
@@ -210,8 +203,6 @@ class RPSGame(commands.Cog):
         await self.regenerate_panel(self.bot.get_channel(channel_id), last_game_log=log_embed)
         self.active_games.pop(channel_id, None)
 
-    # --- Event Handlers & Callbacks ---
-
     async def handle_join(self, interaction: discord.Interaction, channel_id: int):
         game = self.active_games.get(channel_id)
         user = interaction.user
@@ -268,8 +259,6 @@ class RPSGame(commands.Cog):
             if game["task"]: game["task"].cancel()
             await self.resolve_round(channel_id)
 
-    # --- Countdowns ---
-    
     async def lobby_countdown(self, channel_id: int, seconds: int):
         await asyncio.sleep(seconds)
         game = self.active_games.get(channel_id)
@@ -291,8 +280,6 @@ class RPSGame(commands.Cog):
         if channel_id in self.active_games:
             await self.resolve_round(channel_id)
             
-    # --- Embed Builders & Formatters ---
-
     def build_lobby_embed(self, host: discord.User, bet: int, players: List[discord.Member]) -> discord.Embed:
         embed = discord.Embed(title="✊✌️✋ じゃんけん参加者募集中！", color=0x9B59B6)
         embed.description = f"**部屋主:** {host.mention}\n**ベット額:** `{bet}`{self.currency_icon}"
@@ -316,9 +303,10 @@ class RPSGame(commands.Cog):
             user = self.bot.get_user(pid)
             if user: lines.append(f"{user.display_name}: {HAND_EMOJIS[choice]}")
         
-        if not winners and participants_in_round := set(game["choices"].keys()):
-            if len(participants_in_round) > 0:
-                 lines.append("\n**引き分け！** (あいこでしょ！)")
+        # [✅ 수정] Walrus operator를 사용하지 않는 안전한 코드로 변경합니다.
+        participants_in_round = set(game["choices"].keys())
+        if not winners and participants_in_round:
+            lines.append("\n**引き分け！** (あいこでしょ！)")
         
         winner_mentions = [self.bot.get_user(wid).display_name for wid in winners if self.bot.get_user(wid)]
         if winner_mentions:
@@ -329,8 +317,6 @@ class RPSGame(commands.Cog):
             lines.append(f"**敗者:** {', '.join(loser_mentions)}")
 
         return "\n".join(lines)
-
-    # --- Panel Management ---
     
     async def register_persistent_views(self):
         view = RPSGamePanelView(self)
@@ -380,7 +366,6 @@ class RPSGamePanelView(ui.View):
             await interaction.response.send_message("❌ このチャンネルでは既にゲームが進行中です。", ephemeral=True, delete_after=5)
             return
         await interaction.response.send_modal(BetAmountModal())
-
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(RPSGame(bot))
