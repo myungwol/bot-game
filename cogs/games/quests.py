@@ -17,16 +17,16 @@ logger = logging.getLogger(__name__)
 # --- 퀘스트 정의 및 보상 ---
 QUEST_REWARDS = {
     "daily": {
-        "attendance": 100,
-        "voice": 150,
-        "fishing": 200,
-        "all_complete": 500
+        "attendance": 20,
+        "voice": 50,
+        "fishing": 30,
+        "all_complete": 100
     },
     "weekly": {
-        "attendance": 500,
-        "voice": 750,
-        "fishing": 1000,
-        "all_complete": 2500
+        "attendance": 200,
+        "voice": 500,
+        "fishing": 300,
+        "all_complete": 1000
     }
 }
 
