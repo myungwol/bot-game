@@ -30,6 +30,7 @@ class PanelUpdater(commands.Cog):
             "panel_rps_game":      {"cog_name": "RPSGame", "channel_key": "rps_game_panel_channel_id"},
             "panel_daily_check":   {"cog_name": "DailyCheck", "channel_key": "daily_check_panel_channel_id"},
             "panel_quests":        {"cog_name": "Quests", "channel_key": "quests_panel_channel_id"},
+            "panel_farm_creation": {"cog_name": "Farm", "channel_key": "farm_creation_panel_channel_id"},
         }
         
         try:
