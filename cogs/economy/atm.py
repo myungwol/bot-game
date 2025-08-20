@@ -1,8 +1,11 @@
+# cogs/games/atm.py
+
 import discord
 from discord.ext import commands
 from discord import ui
 import logging
 import asyncio
+from typing import Optional
 
 from utils.database import (
     get_wallet, supabase, get_config, get_panel_components_from_db,
@@ -41,18 +44,28 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
 
             await interaction.response.send_message("✅ 送金が完了しました。パネルを更新します。", ephemeral=True, delete_after=5)
 
+            # [✅ 수정] 로그 임베드를 여기서 생성만 하고 보내지는 않습니다.
+            log_embed = None
             if embed_data := await get_embed_from_db("log_coin_transfer"):
-                embed = format_embed_from_db(embed_data, sender_mention=self.sender.mention, recipient_mention=self.recipient.mention, amount=f"{amount_to_send:,}", currency_icon=self.currency_icon)
-                await interaction.channel.send(embed=embed)
-
-            await asyncio.sleep(2)
-            await self.cog.regenerate_panel(interaction.channel)
+                log_embed = format_embed_from_db(
+                    embed_data, 
+                    sender_mention=self.sender.mention, 
+                    recipient_mention=self.recipient.mention, 
+                    amount=f"{amount_to_send:,}", 
+                    currency_icon=self.currency_icon
+                )
+            
+            # [✅ 수정] regenerate_panel 함수에 로그 임베드를 인자로 전달하여 순서를 보장합니다.
+            await self.cog.regenerate_panel(interaction.channel, last_transfer_log=log_embed)
 
         except ValueError:
             await interaction.response.send_message("❌ 金額は数字で入力してください。", ephemeral=True, delete_after=10)
         except Exception as e:
             logger.error(f"송금 처리 중 오류 발생: {e}", exc_info=True)
-            await interaction.response.send_message("❌ 送金中に予期せぬエラーが発生しました。", ephemeral=True, delete_after=10)
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ 送金中に予期せぬエラーが発生しました。", ephemeral=True, delete_after=10)
+            else:
+                await interaction.followup.send("❌ 送金中に予期せぬエラーが発生しました。", ephemeral=True, delete_after=10)
 
 
 class AtmPanelView(ui.View):
@@ -79,27 +92,31 @@ class AtmPanelView(ui.View):
         user_select = ui.UserSelect(placeholder="コインを送る相手を選んでください...")
         
         async def select_callback(select_interaction: discord.Interaction):
-            selected_user_id = int(select_interaction.data["values"][0])
-            recipient = select_interaction.guild.get_member(selected_user_id)
-
-            if not recipient:
-                await select_interaction.response.send_message("❌ ユーザーが見つかりませんでした。", ephemeral=True, delete_after=10)
-                return
-
-            sender = select_interaction.user
-
-            if recipient.bot or recipient.id == sender.id:
-                await select_interaction.response.send_message("❌ 自分自身やボットには送金できません。", ephemeral=True, delete_after=10)
-                return
-
-            modal = TransferAmountModal(sender, recipient, self.cog)
-            await select_interaction.response.send_modal(modal)
-            
-            await modal.wait()
             try:
+                selected_user_id = int(select_interaction.data["values"][0])
+                recipient = select_interaction.guild.get_member(selected_user_id)
+
+                if not recipient:
+                    await select_interaction.response.send_message("❌ ユーザーが見つかりませんでした。", ephemeral=True, delete_after=10)
+                    return
+
+                sender = select_interaction.user
+
+                if recipient.bot or recipient.id == sender.id:
+                    await select_interaction.response.send_message("❌ 自分自身やボットには送金できません。", ephemeral=True, delete_after=10)
+                    return
+
+                modal = TransferAmountModal(sender, recipient, self.cog)
+                await select_interaction.response.send_modal(modal)
+                
+                await modal.wait()
+                # 모달이 닫힌 후 임시 선택 메뉴 메시지 삭제
                 await interaction.delete_original_response()
             except discord.NotFound:
-                pass
+                pass # 이미 삭제되었거나 상호작용이 만료된 경우
+            except Exception as e:
+                logger.error(f"ATM 유저 선택 콜백 중 오류: {e}", exc_info=True)
+
 
         user_select.callback = select_callback
         view.add_item(user_select)
@@ -115,24 +132,29 @@ class Atm(commands.Cog):
         await view.setup_buttons()
         self.bot.add_view(view)
 
-    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "atm"):
+    # [✅ 수정] last_transfer_log 인자를 추가하여 로그 메시지를 먼저 보내도록 합니다.
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "atm", last_transfer_log: Optional[discord.Embed] = None):
         embed_key = "panel_atm"
         
-        # [🔴 핵심 수정] 패널 삭제 로직을 다른 Cog들과 동일하게 수정합니다.
         if panel_info := get_panel_id(panel_key):
             old_message_id = panel_info.get('message_id')
-            old_channel_id = panel_info.get('channel_id')
-            if old_message_id and old_channel_id:
+            # [✅ 수정] 이전 패널이 있던 채널 ID를 정확히 사용합니다.
+            old_channel_id = panel_info.get('channel_id') 
+            if old_message_id and old_channel_id and (old_channel := self.bot.get_channel(old_channel_id)):
                 try:
-                    # DB에 저장된 채널 ID를 사용하여 정확한 채널 객체를 찾습니다.
-                    old_channel = self.bot.get_channel(old_channel_id)
-                    if old_channel:
-                        old_message = await old_channel.fetch_message(old_message_id)
-                        await old_message.delete()
+                    old_message = await old_channel.fetch_message(old_message_id)
+                    await old_message.delete()
                 except (discord.NotFound, discord.Forbidden):
                     logger.warning(f"'{panel_key}'의 이전 패널(ID: {old_message_id})을 삭제하는 데 실패했습니다.")
                     pass
         
+        # [✅ 수정] 인자로 받은 로그 임베드가 있다면, 패널을 보내기 전에 먼저 보냅니다.
+        if last_transfer_log:
+            try:
+                await channel.send(embed=last_transfer_log)
+            except Exception as e:
+                logger.error(f"ATM 송금 로그 메시지 전송 실패: {e}")
+
         if not (embed_data := await get_embed_from_db(embed_key)):
             logger.warning(f"DB에서 '{embed_key}' 임베드 데이터를 찾을 수 없어, 패널 생성을 건너뜁니다.")
             return
@@ -142,7 +164,6 @@ class Atm(commands.Cog):
         await view.setup_buttons()
         self.bot.add_view(view)
         
-        # 새로운 패널은 항상 이 함수가 호출될 때 지정된 'channel'에 생성됩니다.
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
