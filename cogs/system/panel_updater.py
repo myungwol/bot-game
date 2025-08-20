@@ -22,7 +22,7 @@ class PanelUpdater(commands.Cog):
             "panel_fishing_sea":   {"cog_name": "Fishing", "channel_key": "sea_fishing_panel_channel_id"},
             "panel_commerce":      {"cog_name": "Commerce", "channel_key": "commerce_panel_channel_id"},
             "panel_profile":       {"cog_name": "UserProfile", "channel_key": "profile_panel_channel_id"},
-            # [🔴 핵심 추가] ATM 패널 정보를 여기에 추가합니다.
+            # [✅ 수정] ATM 패널 정보를 여기에 추가합니다.
             "panel_atm":           {"cog_name": "Atm", "channel_key": "atm_panel_channel_id"},
         }
         
@@ -57,6 +57,7 @@ class PanelUpdater(commands.Cog):
                     continue
                 
                 try:
+                    # [✅ 수정] panel_key를 명시적으로 전달합니다.
                     await cog.regenerate_panel(channel, panel_key=panel_key)
                     logger.info(f"✅ `{panel_key}` 패널을 성공적으로 재설치했습니다.")
 
