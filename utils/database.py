@@ -42,15 +42,14 @@ def supabase_retry_handler(retries: int = 3, delay: int = 5):
     return decorator
 
 @supabase_retry_handler()
+@supabase_retry_handler()
 async def has_checked_in_today(user_id: int) -> bool:
-    # Supabase는 'today'를 해당 타임존의 자정으로 인식합니다.
     response = await supabase.table('attendance_logs').select('id', count='exact').eq('user_id', user_id).gte('checked_in_at', 'today').limit(1).execute()
     return response.count > 0
 
 @supabase_retry_handler()
 async def record_attendance(user_id: int):
     await supabase.table('attendance_logs').insert({'user_id': user_id}).execute()
-    # 주간 출석 횟수 증가 RPC 호출
     await supabase.rpc('increment_user_progress', {'p_user_id': user_id, 'p_attendance_count': 1}).execute()
 
 @supabase_retry_handler()
@@ -237,21 +236,33 @@ async def add_to_aquarium(user_id_str: str, fish_data: dict):
     await supabase.table('aquariums').insert({"user_id": user_id_str, **fish_data}).execute()
 
 @supabase_retry_handler()
-async def get_cooldown(user_id_str: str, cooldown_key: str) -> float:
-    response = await supabase.table('cooldowns').select('last_cooldown_timestamp').eq('user_id', user_id_str).eq('cooldown_key', cooldown_key).limit(1).execute()
-    if response and response.data and response.data[0].get('last_cooldown_timestamp') is not None:
-        return float(response.data[0]['last_cooldown_timestamp'])
-    return 0.0
-
-@supabase_retry_handler()
-async def set_cooldown(user_id_str: str, cooldown_key: str, timestamp: float):
-    await supabase.table('cooldowns').upsert({"user_id": user_id_str, "cooldown_key": cooldown_key, "last_cooldown_timestamp": timestamp}).execute()
-
-@supabase_retry_handler()
 async def sell_fish_from_db(user_id_str: str, fish_ids: List[int], total_sell_price: int):
     params = {
         'p_user_id': user_id_str,
         'p_fish_ids': fish_ids,
         'p_total_value': total_sell_price
     }
+@supabase_retry_handler()
+async def get_cooldown(user_id_str: str, cooldown_key: str) -> float:
+    response = await supabase.table('cooldowns').select('last_cooldown_timestamp').eq('user_id', user_id_str).eq('cooldown_key', cooldown_key).limit(1).execute()
+    # [✅✅✅ 핵심 수정 ✅✅✅] DB에서 받은 문자열 시간을 파이썬 숫자 시간으로 변환합니다.
+    if response and response.data and (ts_str := response.data[0].get('last_cooldown_timestamp')):
+        try:
+            # ISO 8601 형식의 문자열을 datetime 객체로 변환 후, Unix 타임스탬프(숫자)로 변환
+            return datetime.fromisoformat(ts_str).timestamp()
+        except (ValueError, TypeError):
+            return 0.0
+    return 0.0
+
+@supabase_retry_handler()
+async def set_cooldown(user_id_str: str, cooldown_key: str, timestamp: float):
+    # [✅✅✅ 핵심 수정 ✅✅✅] 파이썬 숫자 시간을 DB가 이해하는 문자열 시간으로 변환합니다.
+    # Unix 타임스탬프(숫자)를 UTC 기준 datetime 객체로 만들고, ISO 8601 형식 문자열로 변환
+    iso_timestamp = datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+    await supabase.table('cooldowns').upsert({
+        "user_id": user_id_str, 
+        "cooldown_key": cooldown_key, 
+        "last_cooldown_timestamp": iso_timestamp
+    }).execute()
+    
     await supabase.rpc('sell_fishes', params).execute()
