@@ -7,18 +7,10 @@ import time
 from typing import Dict, Callable, Any, List, Optional
 from functools import wraps
 from utils.ui_defaults import UI_STRINGS
-from cachetools import TTLCache, cached
-from cachetools.keys import hashkey
 
 logger = logging.getLogger(__name__)
 
-# --- Caches ---
-wallet_cache = TTLCache(maxsize=512, ttl=60)
-inventory_cache = TTLCache(maxsize=512, ttl=60)
-# [✅ 추가] 퀘스트 진행상황 캐시
-progress_cache = TTLCache(maxsize=512, ttl=60) 
-
-# --- 캐시 영역 및 클라이언트 초기화 ---
+# [✅ 수정] 캐시 관련 변수들을 모두 제거했습니다.
 _configs_cache: Dict[str, Any] = {"strings": UI_STRINGS}
 _channel_id_cache: Dict[str, int] = {}
 _item_database_cache: Dict[str, Dict[str, Any]] = {}
@@ -49,16 +41,43 @@ def supabase_retry_handler(retries: int = 3, delay: int = 5):
         return wrapper
     return decorator
 
+@supabase_retry_handler()
+async def has_checked_in_today(user_id: int) -> bool:
+    # Supabase는 'today'를 해당 타임존의 자정으로 인식합니다.
+    response = await supabase.table('attendance_logs').select('id', count='exact').eq('user_id', user_id).gte('checked_in_at', 'today').limit(1).execute()
+    return response.count > 0
+
+@supabase_retry_handler()
+async def record_attendance(user_id: int):
+    await supabase.table('attendance_logs').insert({'user_id': user_id}).execute()
+    # 주간 출석 횟수 증가 RPC 호출
+    await supabase.rpc('increment_user_progress', {'p_user_id': user_id, 'p_attendance_count': 1}).execute()
+
+@supabase_retry_handler()
+async def get_user_progress(user_id: int) -> Dict[str, Any]:
+    default_progress = {
+        'daily_voice_minutes': 0, 'daily_fish_count': 0,
+        'weekly_attendance_count': 0, 'weekly_voice_minutes': 0, 'weekly_fish_count': 0,
+        'last_daily_reset': None, 'last_weekly_reset': None
+    }
+    response = await supabase.table('user_progress').select('*').eq('user_id', user_id).maybe_single().execute()
+    return response.data if response.data else default_progress
+
+async def increment_progress(user_id: int, fish_count: int = 0, voice_minutes: int = 0):
+    await supabase.rpc('increment_user_progress', {
+        'p_user_id': user_id,
+        'p_fish_count': fish_count,
+        'p_voice_minutes': voice_minutes
+    }).execute()
+
 ONE_MONTH_IN_SECONDS = 30 * 24 * 60 * 60
 
 async def is_legendary_fish_available() -> bool:
-    """ヌシを釣る事ができる状態か確認します (月1回)."""
     last_caught_str = get_config("legendary_fish_last_caught_timestamp", '"0"')
     last_caught_timestamp = float(last_caught_str.strip('"'))
     return (time.time() - last_caught_timestamp) > ONE_MONTH_IN_SECONDS
 
 async def save_config(key: str, value: Any):
-    """DB와 로컬 캐시에 설정을 저장하는 통합 함수."""
     global _configs_cache
     str_value = f'"{str(value)}"'
     await supabase.table('bot_configs').upsert({"config_key": key, "config_value": str_value}).execute()
@@ -68,7 +87,6 @@ async def save_config(key: str, value: Any):
 save_config_to_db = save_config
 
 async def set_legendary_fish_cooldown():
-    """전설의 물고기 쿨타임을 지금 시간으로 설정합니다."""
     await save_config("legendary_fish_last_caught_timestamp", time.time())
 
 async def load_all_data_from_db():
@@ -125,7 +143,6 @@ async def load_game_data_from_db():
 
     loot_response = await supabase.table('fishing_loots').select('*').execute()
     
-    # [✅ 수정] 진단용 print 구문 제거
     if loot_response and loot_response.data:
         _fishing_loot_cache = loot_response.data
         logger.info(f"✅ {len(_fishing_loot_cache)}개의 낚시 결과물 정보를 DB에서 로드했습니다.")
@@ -165,22 +182,15 @@ async def get_or_create_user(table_name: str, user_id_str: str, default_data: di
     response = await supabase.table(table_name).insert(insert_data, returning="representation").execute()
     return response.data[0] if response and response.data else default_data
 
-@cached(wallet_cache, key=lambda user_id: hashkey(user_id))
-async def get_wallet(user_id: int) -> dict: 
+async def get_wallet(user_id: int) -> dict:
     return await get_or_create_user('wallets', str(user_id), {"balance": 0})
 
 @supabase_retry_handler()
 async def update_wallet(user: discord.User, amount: int) -> Optional[dict]:
     params = {'user_id_param': str(user.id), 'amount_param': amount}
     response = await supabase.rpc('increment_wallet_balance', params).execute()
-    if response and response.data:
-        # 캐시 무효화
-        if hashkey(user.id) in wallet_cache:
-            del wallet_cache[hashkey(user.id)]
-        return response.data[0]
-    return None
+    return response.data[0] if response and response.data else None
 
-@cached(inventory_cache, key=lambda user_id_str: hashkey(user_id_str))
 @supabase_retry_handler()
 async def get_inventory(user_id_str: str) -> dict:
     response = await supabase.table('inventories').select('item_name, quantity').eq('user_id', user_id_str).gt('quantity', 0).execute()
@@ -190,9 +200,6 @@ async def get_inventory(user_id_str: str) -> dict:
 async def update_inventory(user_id_str: str, item_name: str, quantity: int):
     params = {'user_id_param': user_id_str, 'item_name_param': item_name, 'amount_param': quantity}
     await supabase.rpc('increment_inventory_quantity', params).execute()
-    # 캐시 무효화
-    if hashkey(user_id_str) in inventory_cache:
-        del inventory_cache[hashkey(user_id_str)]
 
 BARE_HANDS = "素手"
 DEFAULT_ROD = "古い釣竿"
@@ -235,44 +242,6 @@ async def get_cooldown(user_id_str: str, cooldown_key: str) -> float:
     if response and response.data and response.data[0].get('last_cooldown_timestamp') is not None:
         return float(response.data[0]['last_cooldown_timestamp'])
     return 0.0
-
-@supabase_retry_handler()
-async def has_checked_in_today(user_id: int) -> bool:
-    response = await supabase.table('attendance_logs').select('id').eq('user_id', user_id).gte('checked_in_at', 'today').limit(1).execute()
-    return bool(response.data)
-
-# [✅ 추가] 출석체크 기록 추가 함수
-@supabase_retry_handler()
-async def record_attendance(user_id: int):
-    await supabase.table('attendance_logs').insert({'user_id': user_id}).execute()
-    # 주간 출석 횟수 증가
-    await supabase.rpc('increment_user_progress', {'p_user_id': user_id, 'p_attendance_count': 1}).execute()
-    # 관련 캐시 무효화
-    if hashkey(user_id) in progress_cache:
-        del progress_cache[hashkey(user_id)]
-
-# [✅ 추가] 퀘스트 진행상황 조회 함수
-@cached(progress_cache, key=lambda user_id: hashkey(user_id))
-@supabase_retry_handler()
-async def get_user_progress(user_id: int) -> Dict[str, Any]:
-    default_progress = {
-        'daily_voice_minutes': 0, 'daily_fish_count': 0,
-        'weekly_attendance_count': 0, 'weekly_voice_minutes': 0, 'weekly_fish_count': 0,
-        'last_daily_reset': None, 'last_weekly_reset': None
-    }
-    response = await supabase.table('user_progress').select('*').eq('user_id', user_id).maybe_single().execute()
-    return response.data if response.data else default_progress
-
-# [✅ 추가] 퀘스트 카운트 증가 함수
-async def increment_progress(user_id: int, fish_count: int = 0, voice_minutes: int = 0):
-    await supabase.rpc('increment_user_progress', {
-        'p_user_id': user_id,
-        'p_fish_count': fish_count,
-        'p_voice_minutes': voice_minutes
-    }).execute()
-    # 관련 캐시 무효화
-    if hashkey(user_id) in progress_cache:
-        del progress_cache[hashkey(user_id)]
 
 @supabase_retry_handler()
 async def set_cooldown(user_id_str: str, cooldown_key: str, timestamp: float):
