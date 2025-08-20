@@ -12,8 +12,9 @@ from utils.database import (
     get_config, get_string,
     get_aquarium, get_fishing_loot, sell_fish_from_db,
     save_panel_id, get_panel_id, get_embed_from_db,
-    update_inventory # [✅ 추가] 작물 판매 시 인벤토리 차감을 위해 import
+    update_inventory, update_wallet
 )
+from utils.helpers import format_embed_from_db
 
 async def delete_after(message: discord.WebhookMessage, delay: int):
     await asyncio.sleep(delay)
@@ -55,13 +56,13 @@ class ShopViewBase(ui.View):
         await interaction.edit_original_response(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
-        raise NotImplementedError
+        raise NotImplementedError("build_embed must be implemented in subclasses")
 
     async def build_components(self):
-        raise NotImplementedError
+        raise NotImplementedError("build_components must be implemented in subclasses")
     
     async def handle_error(self, interaction: discord.Interaction, error: Exception, custom_message: str = ""):
-        logger.error(f"상점 처리 중 오류 발생: {error}", exc_info=False)
+        logger.error(f"상점 처리 중 오류 발생: {error}", exc_info=True)
         message_content = custom_message or "❌ 処理中にエラーが発生しました。"
         if interaction.response.is_done():
             msg = await interaction.followup.send(message_content, ephemeral=True)
@@ -135,8 +136,7 @@ class BuyItemView(ShopViewBase):
                 max_buyable = balance // item_data['price'] if item_data['price'] > 0 else item_data.get('max_ownable', 999)
 
                 if max_buyable == 0:
-                    await interaction.response.send_message(get_string("commerce.error_insufficient_funds"), ephemeral=True, delete_after=5)
-                    return
+                    return await interaction.response.send_message(get_string("commerce.error_insufficient_funds"), ephemeral=True, delete_after=5)
                 
                 modal = QuantityModal(f"{item_name} 購入", max_buyable)
                 await interaction.response.send_modal(modal)
@@ -144,16 +144,16 @@ class BuyItemView(ShopViewBase):
 
                 if modal.value is None:
                     msg = await interaction.followup.send("購入がキャンセルされました。", ephemeral=True)
-                    asyncio.create_task(delete_after(msg, 5))
-                    return
+                    return await asyncio.create_task(delete_after(msg, 5))
 
                 quantity, total_price = modal.value, item_data['price'] * modal.value
                 wallet_after_modal = await get_wallet(self.user.id)
                 if wallet_after_modal.get('balance', 0) < total_price:
                      raise ValueError("error_insufficient_funds")
 
-                await supabase.rpc('buy_item', {'user_id_param': str(self.user.id), 'item_name_param': item_name, 'quantity_param': quantity, 'total_price_param': total_price}).execute()
-                
+                await update_inventory(str(self.user.id), item_name, quantity)
+                await update_wallet(self.user, -total_price)
+
                 new_wallet = await get_wallet(self.user.id)
                 new_balance = new_wallet.get('balance', 0)
                 success_message = f"✅ **{item_name}** {quantity}個を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
@@ -170,7 +170,8 @@ class BuyItemView(ShopViewBase):
                 if wallet.get('balance', 0) < total_price:
                     raise ValueError("error_insufficient_funds")
                 
-                await supabase.rpc('buy_item', {'user_id_param': str(self.user.id), 'item_name_param': item_name, 'quantity_param': quantity, 'total_price_param': total_price}).execute()
+                await update_inventory(str(self.user.id), item_name, quantity)
+                await update_wallet(self.user, -total_price)
                 
                 if id_key := item_data.get('id_key'):
                     if role_id := get_id(id_key):
@@ -257,8 +258,7 @@ class SellFishView(ShopViewBase):
                 options.append(discord.SelectOption(
                     label=f"{fish['name']} ({fish['size']}cm)", 
                     value=fish_id, 
-                    description=f"{price}{self.currency_icon}",
-                    emoji=fish.get('emoji')
+                    description=f"{price}{self.currency_icon}"
                 ))
 
         if options:
@@ -284,8 +284,7 @@ class SellFishView(ShopViewBase):
         select_menu = next((c for c in self.children if isinstance(c, ui.Select)), None)
         if not select_menu or not select_menu.values:
             msg = await interaction.followup.send("❌ 売却する魚が選択されていません。", ephemeral=True)
-            asyncio.create_task(delete_after(msg, 5))
-            return
+            return await asyncio.create_task(delete_after(msg, 5))
         
         fish_ids_to_sell = [int(val) for val in select_menu.values]
         total_price = sum(self.fish_data_map[val]['price'] for val in select_menu.values)
@@ -311,6 +310,7 @@ class SellFishView(ShopViewBase):
         view = SellCategoryView(self.user)
         view.message = self.message
         await view.update_view(interaction)
+
 class SellCropView(ShopViewBase):
     def __init__(self, user: discord.Member):
         super().__init__(user)
@@ -334,13 +334,11 @@ class SellCropView(ShopViewBase):
         self.crop_data_map.clear()
         
         options = []
-        # 인벤토리에서 '농장_작물' 카테고리의 아이템만 필터링
         crop_items = {name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category') == '農場_作物'}
 
         if crop_items:
             for name, qty in crop_items.items():
                 item_data = item_db.get(name, {})
-                # 판매가는 구매가의 80%로 임시 설정 (나중에 DB에 sell_price 컬럼 추가 가능)
                 price = int(item_data.get('price', 10) * 0.8) 
                 self.crop_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
                 
@@ -376,9 +374,7 @@ class SellCropView(ShopViewBase):
         total_price = crop_info['price'] * quantity_to_sell
         
         try:
-            # 1. 인벤토리에서 작물 차감
             await update_inventory(str(self.user.id), selected_crop, -quantity_to_sell)
-            # 2. 지갑에 돈 추가
             await update_wallet(self.user, total_price)
 
             new_wallet = await get_wallet(self.user.id)
@@ -405,7 +401,6 @@ class SellCategoryView(ShopViewBase):
         self.clear_items()
         self.add_item(ui.Button(label="装備", custom_id="sell_category_gear", disabled=True))
         self.add_item(ui.Button(label="魚", custom_id="sell_category_fish"))
-        # [✅✅✅ 핵심 수정 2 ✅✅✅] 작물 판매 버튼을 활성화합니다.
         self.add_item(ui.Button(label="作物", custom_id="sell_category_crop"))
         for child in self.children:
             if isinstance(child, ui.Button):
@@ -415,36 +410,12 @@ class SellCategoryView(ShopViewBase):
         await interaction.response.defer()
         category = interaction.data['custom_id'].split('_')[-1]
         
-        if category == "fish":
-            view = SellFishView(self.user)
-        elif category == "crop":
-            view = SellCropView(self.user)
-        else:
-            return
+        if category == "fish": view = SellFishView(self.user)
+        elif category == "crop": view = SellCropView(self.user)
+        else: return
 
         view.message = self.message
         await view.refresh_view(interaction)
-        
-class SellCategoryView(ShopViewBase):
-    async def build_embed(self) -> discord.Embed:
-        return discord.Embed(title="📦 買取ボックス - カテゴリー選択", description="売却したいアイテムのカテゴリーを選択してください。", color=discord.Color.green())
-
-    async def build_components(self):
-        self.clear_items()
-        self.add_item(ui.Button(label="装備", custom_id="sell_category_gear", disabled=True))
-        self.add_item(ui.Button(label="魚", custom_id="sell_category_fish"))
-        self.add_item(ui.Button(label="作物", custom_id="sell_category_crop", disabled=True))
-        for child in self.children:
-            if isinstance(child, ui.Button):
-                child.callback = self.on_button_click
-
-    async def on_button_click(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        category = interaction.data['custom_id'].split('_')[-1]
-        if category == "fish":
-            view = SellFishView(self.user)
-            view.message = self.message
-            await view.refresh_view(interaction)
 
 class CommercePanelView(ui.View):
     def __init__(self, cog_instance: 'Commerce'):
@@ -497,7 +468,6 @@ class Commerce(commands.Cog):
         
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
-        # 이제 logger가 정의되었으므로 이 줄은 정상 작동합니다.
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
 
 async def setup(bot: commands.Cog):
