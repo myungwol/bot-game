@@ -1,9 +1,12 @@
 import discord
 from discord.ext import commands
 from discord import ui
-import logging
+import logging # [✅ 추가] logging 라이브러리 import
 import asyncio
 from typing import Optional, Dict, List, Any
+
+# [✅✅✅ 핵심 수정 ✅✅✅] logger 객체를 생성합니다.
+logger = logging.getLogger(__name__)
 
 from utils.database import (
     get_inventory, get_wallet, supabase, get_id, get_item_database, 
@@ -375,10 +378,13 @@ class Commerce(commands.Cog):
                 except (discord.NotFound, discord.Forbidden): pass
         
         if not (embed_data := await get_embed_from_db(embed_key)): return
+
         embed = discord.Embed.from_dict(embed_data)
         view = CommercePanelView(self)
+        
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
+        # 이제 logger가 정의되었으므로 이 줄은 정상 작동합니다.
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
 
 async def setup(bot: commands.Cog):
