@@ -29,20 +29,15 @@ class FarmNameModal(ui.Modal, title="農場の新しい名前"):
             await interaction.followup.send("❌ 名前は空にできません。", ephemeral=True)
             return
 
-        # 1. DB 업데이트
         await supabase.table('farms').update({'name': name_to_set}).eq('id', self.farm_data['id']).execute()
         
-        # 2. 스레드 이름 변경
         try:
-            # interaction.channel은 스레드를 가리킵니다.
             if isinstance(interaction.channel, discord.Thread):
                 await interaction.channel.edit(name=f"🌱｜{name_to_set}")
         except Exception as e:
             logger.error(f"농장 스레드 이름 변경 실패: {e}")
 
-        # 3. 농장 UI 업데이트
         await self.cog.update_farm_ui(interaction.channel, interaction.user)
-
         await interaction.followup.send(f"✅ 農場の名前を「{name_to_set}」に変更しました。", ephemeral=True)
 
 # 농장 공유 설정을 위한 View
@@ -57,7 +52,6 @@ class FarmShareSettingsView(ui.View):
         max_values=5
     )
     async def user_select(self, interaction: discord.Interaction, select: ui.UserSelect):
-        # TODO: 선택된 유저에게 권한을 부여하는 DB 로직 추가
         selected_users = ", ".join(user.mention for user in select.values)
         await interaction.response.send_message(f"{selected_users} に農場の編集権限を付与しました。", ephemeral=True)
         try:
@@ -113,7 +107,6 @@ class FarmUIView(ui.View):
         if not updated_farm_data:
              return await interaction.response.send_message("❌ 農場データが見つかりませんでした。", ephemeral=True, delete_after=5)
         self.farm_data = updated_farm_data
-
         modal = FarmNameModal(self.cog, self.farm_data)
         await interaction.response.send_modal(modal)
 
@@ -165,6 +158,7 @@ class Farm(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    # [✅✅✅ 핵심 수정 ✅✅✅] 농장 UI를 특수문자로 꾸미는 로직
     def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         size_x = farm_data.get('size_x', 1)
         size_y = farm_data.get('size_y', 1)
@@ -172,26 +166,44 @@ class Farm(commands.Cog):
         
         sorted_plots = {(p['pos_x'], p['pos_y']): p for p in plots}
 
-        farm_grid = []
+        # 그리드 라인 생성
+        lines = []
+        # 1. 상단 테두리
+        top_border = "┍" + "┯".join(["━━━"] * size_x) + "┑"
+        lines.append(top_border)
+
         for y in range(size_y):
-            row = []
+            # 2. 작물/땅 이모티콘 라인
+            plot_row = []
             for x in range(size_x):
                 plot = sorted_plots.get((x, y))
                 if not plot:
-                    row.append('❓')
+                    plot_row.append('❓')
                     continue
+                
                 state = plot['state']
-                if state == 'default': row.append('🟤')
-                elif state == 'tilled': row.append('🟫')
-                else: row.append('🌱')
-            farm_grid.append(" ".join(row))
-        
-        farm_str = "\n".join(farm_grid)
+                # TODO: 나중에 작물별, 성장 단계별 이모티콘으로 변경
+                if state == 'default': plot_row.append('🟤')
+                elif state == 'tilled': plot_row.append('🟫')
+                else: plot_row.append('🌱')
+            lines.append("│ " + " │ ".join(plot_row) + " │")
+
+            # 3. 하단 구분선 (마지막 줄 제외)
+            if y < size_y - 1:
+                mid_border = "┝" + "┼".join(["━━━"] * size_x) + "┥"
+                lines.append(mid_border)
+
+        # 4. 최종 하단 테두리
+        bottom_border = "┕" + "┷".join(["━━━"] * size_x) + "┙"
+        lines.append(bottom_border)
+
+        farm_str = "\n".join(lines)
         
         farm_name = farm_data.get('name') or user.display_name
         
-        embed = discord.Embed(title=f"🌱｜{farm_name}の農場", description="畑を耕し、作物を育てましょう！", color=0x8BC34A)
-        embed.add_field(name="農場の様子", value=farm_str, inline=False)
+        embed = discord.Embed(title=f"**{farm_name}の農場**", color=0x8BC34A)
+        # description을 제거하고, 필드에 코드 블록으로 넣어 글꼴을 고정시킵니다.
+        embed.add_field(name="⠀", value=f"```\n{farm_str}\n```", inline=False)
         return embed
 
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User):
