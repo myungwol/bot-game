@@ -7,11 +7,28 @@ from typing import Optional, Dict, List, Any
 from utils.database import (
     get_user_progress, has_checked_in_today,
     get_config, get_panel_components_from_db,
-    save_panel_id, get_panel_id, get_embed_from_db
+    save_panel_id, get_panel_id, get_embed_from_db,
+    update_wallet, set_cooldown, get_cooldown
 )
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
+
+# --- 퀘스트 정의 및 보상 ---
+QUEST_REWARDS = {
+    "daily": {
+        "attendance": 100,
+        "voice": 150,
+        "fishing": 200,
+        "all_complete": 500
+    },
+    "weekly": {
+        "attendance": 500,
+        "voice": 750,
+        "fishing": 1000,
+        "all_complete": 2500
+    }
+}
 
 DAILY_QUESTS = {
     "attendance": {"name": "出席チェックをする", "goal": 1},
@@ -31,13 +48,11 @@ class QuestView(ui.View):
         self.cog = cog_instance
         self.current_tab = "daily"
 
-    # [✅✅✅ 핵심 수정 ✅✅✅]
-    # '상호작용 실패'를 방지하기 위해 defer()를 먼저 호출합니다.
     async def update_view(self, interaction: discord.Interaction):
-        await interaction.response.defer() # 응답을 먼저 보냅니다.
+        await interaction.response.defer()
         embed = await self.build_embed()
         self.update_components()
-        await interaction.edit_original_response(embed=embed, view=self) # followup으로 메시지를 수정합니다.
+        await interaction.edit_original_response(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
         progress = await get_user_progress(self.user.id)
@@ -46,38 +61,49 @@ class QuestView(ui.View):
         embed = discord.Embed(color=0x2ECC71)
         embed.set_author(name=f"{self.user.display_name}さんのクエスト", icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
 
-        if self.current_tab == "daily":
-            embed.title = "📅 デイリークエスト"
-            quests_to_show = DAILY_QUESTS
-            progress_values = {
+        quests_to_show = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
+        rewards = QUEST_REWARDS[self.current_tab]
+        
+        progress_values = {
+            "daily": {
                 "attendance": 1 if has_attended_today else 0,
                 "voice": progress.get('daily_voice_minutes', 0),
                 "fishing": progress.get('daily_fish_count', 0),
-            }
-        else: # weekly
-            embed.title = "🗓️ ウィークリークエスト"
-            quests_to_show = WEEKLY_QUESTS
-            progress_values = {
+            },
+            "weekly": {
                 "attendance": progress.get('weekly_attendance_count', 0),
                 "voice": progress.get('weekly_voice_minutes', 0),
                 "fishing": progress.get('weekly_fish_count', 0),
             }
+        }[self.current_tab]
 
+        embed.title = "📅 デイリークエスト" if self.current_tab == "daily" else "🗓️ ウィークリークエスト"
+
+        all_complete = True
         for key, quest in quests_to_show.items():
             current = progress_values.get(key, 0)
             goal = quest["goal"]
+            reward = rewards.get(key, 0)
             is_complete = current >= goal
             
+            if not is_complete:
+                all_complete = False
+
             emoji = "✅" if is_complete else "❌"
             field_name = f"{emoji} {quest['name']}"
-            field_value = f"> ` {min(current, goal)} / {goal} `"
+            field_value = f"> ` {min(current, goal)} / {goal} `\n> **報酬:** `{reward:,}` {self.cog.currency_icon}"
             embed.add_field(name=field_name, value=field_value, inline=False)
+
+        if all_complete:
+            embed.set_footer(text=f"🎉 すべてのクエスト完了！追加報酬: {rewards['all_complete']:,}コイン")
+        else:
+            embed.set_footer(text="クエストを完了して報酬を獲得しましょう！")
 
         return embed
 
     def update_components(self):
         for item in self.children:
-            if isinstance(item, ui.Button):
+            if isinstance(item, ui.Button) and item.custom_id.startswith("tab_"):
                 if item.custom_id == f"tab_{self.current_tab}":
                     item.style = discord.ButtonStyle.primary
                     item.disabled = True
@@ -95,6 +121,73 @@ class QuestView(ui.View):
         self.current_tab = "weekly"
         await self.update_view(interaction)
 
+    @ui.button(label="完了したクエストの報酬を受け取る", style=discord.ButtonStyle.success, emoji="💰", row=1)
+    async def claim_rewards_button(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
+        progress = await get_user_progress(self.user.id)
+        has_attended_today = await has_checked_in_today(self.user.id)
+        
+        total_reward = 0
+        reward_details = []
+
+        quests_to_check = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
+        rewards = QUEST_REWARDS[self.current_tab]
+        
+        progress_values = {
+            "daily": {
+                "attendance": 1 if has_attended_today else 0,
+                "voice": progress.get('daily_voice_minutes', 0),
+                "fishing": progress.get('daily_fish_count', 0),
+            },
+            "weekly": {
+                "attendance": progress.get('weekly_attendance_count', 0),
+                "voice": progress.get('weekly_voice_minutes', 0),
+                "fishing": progress.get('weekly_fish_count', 0),
+            }
+        }[self.current_tab]
+
+        all_quests_complete = True
+        for key, quest in quests_to_check.items():
+            is_complete = progress_values.get(key, 0) >= quest["goal"]
+            if not is_complete:
+                all_quests_complete = False
+                continue
+
+            cooldown_key = f"quest_claimed_{self.current_tab}_{key}"
+            # 퀘스트 초기화 기능이 없으므로, 일단 타임스탬프 0 이상이면 받은 것으로 간주
+            last_claimed_timestamp = await get_cooldown(str(self.user.id), cooldown_key)
+            if last_claimed_timestamp > 0:
+                continue
+
+            reward = rewards.get(key, 0)
+            total_reward += reward
+            reward_details.append(f"・{quest['name']}: `{reward:,}`")
+            await set_cooldown(str(self.user.id), cooldown_key, time.time())
+
+        if all_quests_complete:
+            cooldown_key = f"quest_claimed_{self.current_tab}_all"
+            last_claimed_timestamp = await get_cooldown(str(self.user.id), cooldown_key)
+            if last_claimed_timestamp == 0:
+                reward = rewards.get("all_complete", 0)
+                total_reward += reward
+                reward_details.append(f"・全クエスト完了ボーナス: `{reward:,}`")
+                await set_cooldown(str(self.user.id), cooldown_key, time.time())
+
+        if total_reward > 0:
+            await update_wallet(self.user, total_reward)
+            details_text = "\n".join(reward_details)
+            await interaction.followup.send(
+                f"🎉 **以下の報酬を受け取りました！**\n{details_text}\n\n**合計:** `{total_reward:,}` {self.cog.currency_icon}",
+                ephemeral=True
+            )
+        else:
+            await interaction.followup.send("❌ 受け取れる報酬がありません。", ephemeral=True)
+
+        embed = await self.build_embed()
+        self.update_components()
+        await interaction.edit_original_response(embed=embed, view=self)
+
 class QuestPanelView(ui.View):
     def __init__(self, cog_instance: 'Quests'):
         super().__init__(timeout=None)
@@ -111,17 +204,19 @@ class QuestPanelView(ui.View):
             button.callback = self.open_quest_view
             self.add_item(button)
 
-    # [✅✅✅ 핵심 수정 ✅✅✅]
-    # 처음 퀘스트 창을 열 때도 DB 조회가 있으므로 defer()를 적용합니다.
     async def open_quest_view(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True) # 응답을 먼저 보냅니다.
+        await interaction.response.defer(ephemeral=True)
         view = QuestView(interaction.user, self.cog)
         embed = await view.build_embed()
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True) # followup으로 메시지를 보냅니다.
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 class Quests(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.currency_icon = "🪙"
+    
+    async def cog_load(self):
+        self.currency_icon = get_config("CURRENCY_ICON", "🪙")
 
     async def register_persistent_views(self):
         view = QuestPanelView(self)
