@@ -1,5 +1,3 @@
-# cogs/games/fishing.py
-
 import discord
 from discord.ext import commands
 from discord import ui
@@ -14,7 +12,8 @@ from utils.database import (
     get_embed_from_db, get_panel_components_from_db,
     get_item_database, get_fishing_loot, get_config, get_string,
     is_legendary_fish_available, set_legendary_fish_cooldown,
-    BARE_HANDS, DEFAULT_ROD
+    BARE_HANDS, DEFAULT_ROD,
+    increment_progress # [✅ 추가] 퀘스트 진행도 증가 함수 import
 )
 
 logger = logging.getLogger(__name__)
@@ -66,7 +65,7 @@ class FishingGameView(ui.View):
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.error(f"{self.player.display_name}의낚시 게임 흐름 중 오류: {e}", exc_info=True)
+            logger.error(f"{self.player.display_name}の낚시 게임 흐름 중 오류: {e}", exc_info=True)
             if not self.is_finished():
                 await self._send_result(discord.Embed(title="❌ エラー発生", description="釣りの処理中に予期せぬエラーが発生しました。", color=discord.Color.red())); self.stop()
 
@@ -75,7 +74,6 @@ class FishingGameView(ui.View):
         location_map = {"river": "川", "sea": "海"}
         current_location_name = location_map.get(self.location_type, "川")
         
-        # [✅ 수정] 진단용 print 구문 제거
         base_loot = [item for item in all_loot if item.get('location_type') == current_location_name or item.get('location_type') is None]
         
         is_legendary_available = self.used_rod == "伝説の釣竿" and await is_legendary_fish_available()
@@ -100,6 +98,9 @@ class FishingGameView(ui.View):
             await add_to_aquarium(str(self.player.id), {"name": catch_proto['name'], "size": size, "emoji": catch_proto.get('emoji', '🐠')})
             is_big_catch = size >= self.big_catch_threshold
             
+            # [✅ 수정] 낚시 퀘스트 카운트를 증가시킵니다.
+            await increment_progress(self.player.id, fish_count=1)
+
             title = "🏆 大物を釣り上げた！ 🏆" if is_big_catch else "🎉 釣り成功！ 🎉"
             if is_legendary_catch: title = "👑 伝説の魚を釣り上げた！！ 👑"
 
@@ -317,11 +318,7 @@ class Fishing(commands.Cog):
             logger.error(f"전설의 물고기 공지 전송 실패: {e}", exc_info=True)
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str):
-        if panel_key == "panel_fishing_river":
-            embed_key = "panel_fishing_river"
-        elif panel_key == "panel_fishing_sea":
-            embed_key = "panel_fishing_sea"
-        else:
+        if panel_key not in ["panel_fishing_river", "panel_fishing_sea"]:
             logger.error(f"알 수 없는 낚시 패널 키입니다: {panel_key}")
             return
         
@@ -329,8 +326,9 @@ class Fishing(commands.Cog):
             try: await (await channel.fetch_message(old_id)).delete()
             except (discord.NotFound, discord.Forbidden): pass
         
-        if not (embed_data := await get_embed_from_db(embed_key)):
-            logger.error(f"DB에서 '{embed_key}' 임베드를 찾을 수 없어 패널 생성을 중단합니다.")
+        embed_data = await get_embed_from_db(panel_key)
+        if not embed_data:
+            logger.error(f"DB에서 '{panel_key}' 임베드를 찾을 수 없어 패널 생성을 중단합니다.")
             return
         
         embed = discord.Embed.from_dict(embed_data)
