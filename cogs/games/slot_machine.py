@@ -1,4 +1,3 @@
-
 import discord
 from discord.ext import commands
 from discord import ui
@@ -16,9 +15,10 @@ from utils.helpers import format_embed_from_db
 logger = logging.getLogger(__name__)
 
 # --- 슬롯머신 설정 ---
-REEL_SYMBOLS = ['🍒', '🍊', '🍇', '🍋', '🔔', '5️⃣', '🍒', '🍊', '🍇', '7️⃣']
+REEL_SYMBOLS = ['🍒', '🍊', '🍇', '🍋', '🔔', '5️⃣', '7️⃣']
+FRUIT_SYMBOLS = ['🍒', '🍊', '🍇', '🍋', '🔔'] # 과일/벨 심볼만 따로 정의
 SPIN_ANIMATION_FRAMES = 5
-SPIN_ANIMATION_SPEED = 0.4 # 초
+SPIN_ANIMATION_SPEED = 0.4
 
 # 베팅 금액을 입력받는 모달
 class BetAmountModal(ui.Modal, title="ベット額の入力 (スロット)"):
@@ -60,7 +60,7 @@ class SlotMachineGameView(ui.View):
         self.cog = cog_instance
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.reels = ['❓', '❓', '❓']
-        self.final_reels = [random.choice(REEL_SYMBOLS) for _ in range(3)]
+        self.final_reels = ['❓', '❓', '❓'] # 스핀 시 결정되므로 초기화
 
     async def start_game(self, interaction: discord.Interaction):
         embed = self.create_embed("下のボタンでスロットを開始！")
@@ -79,6 +79,29 @@ class SlotMachineGameView(ui.View):
         button.label = "回転中..."
         await interaction.response.edit_message(view=self)
 
+        # [✅ 확률 조정] 최종 릴 결과를 새로운 확률 모델에 따라 먼저 결정합니다.
+        # 1. 50% 확률로 당첨 여부 결정
+        if random.random() < 0.50: # 50% 확률로 당첨
+            # 2. 당첨된 경우, 가중치에 따라 당첨 종류 결정
+            win_types = ['fruit', 'number', 'seven']
+            weights = [30, 15, 5] # 과일: 30, 숫자: 15, 777: 5
+            chosen_win = random.choices(win_types, weights=weights, k=1)[0]
+
+            if chosen_win == 'fruit':
+                symbol = random.choice(FRUIT_SYMBOLS)
+                self.final_reels = [symbol, symbol, symbol]
+            elif chosen_win == 'number':
+                self.final_reels = ['5️⃣', '5️⃣', '5️⃣']
+            else: # 'seven'
+                self.final_reels = ['7️⃣', '7️⃣', '7️⃣']
+        else: # 50% 확률로 꽝
+            # 꽝이 보장되는 릴을 생성합니다. (3개가 모두 같지 않도록)
+            while True:
+                reels = [random.choice(REEL_SYMBOLS) for _ in range(3)]
+                if not (reels[0] == reels[1] == reels[2]):
+                    self.final_reels = reels
+                    break
+
         # 애니메이션: 왼쪽 릴부터 하나씩 멈춤
         for i in range(3):
             for _ in range(SPIN_ANIMATION_FRAMES):
@@ -93,7 +116,8 @@ class SlotMachineGameView(ui.View):
             self.reels[i] = self.final_reels[i]
             embed = self.create_embed("リールが回転中...")
             await interaction.edit_original_response(embed=embed)
-            await asyncio.sleep(0.5) # 멈춘 후 잠시 대기
+            await asyncio.sleep(0.5)
+
 
         # 최종 결과 처리
         payout_rate, payout_name = self._calculate_payout()
