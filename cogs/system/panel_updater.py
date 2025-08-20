@@ -24,6 +24,7 @@ class PanelUpdater(commands.Cog):
             "panel_profile":       {"cog_name": "UserProfile", "channel_key": "profile_panel_channel_id"},
             # [✅ 수정] ATM 패널 정보를 여기에 추가합니다.
             "panel_atm":           {"cog_name": "Atm", "channel_key": "atm_panel_channel_id"},
+            "panel_dice_game":     {"cog_name": "dice_game", "channel_key": "atm_panel_channel_id"},
         }
         
         try:
