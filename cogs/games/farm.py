@@ -1,4 +1,4 @@
-# cogs/games/farm.py (정보 표시 기능이 추가된 최종 완성본)
+# cogs/games/farm.py
 
 import discord
 from discord.ext import commands, tasks
@@ -311,7 +311,6 @@ class FarmUIView(ui.View):
         action_view = FarmActionView(self.cog, self.farm_data, interaction.user, "plant_seed")
         await action_view.send_initial_message(interaction)
 
-    # [✅ 최종 수정 2] 물주기 로직을 "하루에 한 번"으로 변경합니다.
     async def on_farm_water_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         gear = await get_user_gear(interaction.user)
@@ -330,7 +329,6 @@ class FarmUIView(ui.View):
 
         for plot in self.farm_data.get('farm_plots', []):
             if plot['state'] == 'planted' and watered_count < wc_power:
-                # 마지막으로 물 준 시간이 오늘 자정 이전이거나, 한 번도 준 적 없다면 물을 줄 수 있음
                 can_water = False
                 if plot.get('last_watered_at') is None:
                     can_water = True
@@ -457,6 +455,30 @@ class Farm(commands.Cog):
     def cog_unload(self):
         self.daily_crop_update.cancel()
 
+    # [✅ 최종 수정] on_message 이벤트 리스너를 추가하여 메시지를 관리합니다.
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        # 봇 자신의 메시지이거나 DM인 경우 무시
+        if message.author.bot or not message.guild:
+            return
+
+        # 메시지가 스레드에서 전송되었는지 확인
+        if not isinstance(message.channel, discord.Thread):
+            return
+
+        # 이 스레드가 DB에 등록된 농장 스레드인지 확인
+        owner_id = await get_farm_owner_by_thread(message.channel.id)
+        if not owner_id:
+            return
+
+        # 농장 스레드라면, 사용자가 보낸 메시지를 삭제
+        try:
+            await message.delete()
+            # 사용자에게 안내 메시지를 보냈다가 10초 뒤에 삭제 (선택 사항)
+            await message.channel.send(f"{message.author.mention}さん、このスレッドではメッセージを送信できません。ボタンを使用してください。", delete_after=10)
+        except (discord.NotFound, discord.Forbidden):
+            pass # 메시지가 이미 삭제되었거나 권한이 없는 경우 무시
+
     async def register_persistent_views(self):
         self.bot.add_view(FarmCreationPanelView(self))
         self.bot.add_view(FarmUIView(self))
@@ -548,8 +570,7 @@ class Farm(commands.Cog):
                 if (x, y) in processed_plots: continue
                 plot = plots_map.get((x, y))
                 
-                # --- 1. 밭 이모지 그리기 ---
-                plot_emoji = '🟤' # 기본값 (갈지 않은 밭)
+                plot_emoji = '🟤'
                 if plot:
                     if plot['state'] == 'tilled': plot_emoji = '🟫'
                     elif plot['state'] == 'withered': plot_emoji = '🥀'
@@ -576,30 +597,27 @@ class Farm(commands.Cog):
                 if not (x,y) in processed_plots:
                     grid[y][x] = plot_emoji
 
-                # --- 2. 정보 텍스트 생성 ---
                 if plot and plot['state'] == 'planted':
                     farmable_info = farmable_info_map.get(plot['planted_item_name'])
                     if not farmable_info: continue
 
-                    # 오늘 물 줬는지 확인
-                    watered_today_emoji = '❌'
+                    watered_today_emoji = '➖'
                     if plot.get('last_watered_at'):
                         if datetime.fromisoformat(plot['last_watered_at']) >= today_kst_midnight:
                             watered_today_emoji = '💧'
 
                     info_text = f"{plot_emoji} **{plot['planted_item_name']}** (水: {watered_today_emoji}): "
                     
-                    # 수확까지 남은 시간 계산
-                    if plot['growth_stage'] < 3: # 아직 다 자라지 않음
+                    if plot['growth_stage'] < 3:
                         planted_at = datetime.fromisoformat(plot['planted_at'])
                         growth_days = farmable_info.get('growth_days', 3)
                         days_passed = (now_utc - planted_at).days
                         days_left = max(0, growth_days - days_passed)
                         info_text += f"収穫まであと約 {days_left}日"
                     
-                    elif farmable_info.get('is_tree'): # 다 자란 나무
+                    elif farmable_info.get('is_tree'):
                         regrowth_hours = farmable_info.get('regrowth_hours', 24)
-                        last_harvest_time = datetime.fromisoformat(plot['planted_at']) # 수확 후 planted_at이 갱신됨
+                        last_harvest_time = datetime.fromisoformat(plot['planted_at'])
                         next_harvest_time = last_harvest_time + timedelta(hours=regrowth_hours)
                         time_left = next_harvest_time - now_utc
                         if time_left.total_seconds() > 0:
@@ -607,7 +625,7 @@ class Farm(commands.Cog):
                             info_text += f"次の実まであと約 {hours_left}時間"
                         else:
                             info_text += "実の収穫可能！ 🧺"
-                    else: # 다 자란 일반 작물
+                    else:
                         info_text += "収穫可能！ 🧺"
                     
                     info_lines.append(info_text)
@@ -636,10 +654,21 @@ class Farm(commands.Cog):
             farm_data = await get_farm_data(user.id)
             if not farm_data or not farm_data.get("farm_message_id"): return
             try:
-                farm_message = await thread.fetch_message(farm_data["farm_message_id"])
+                # [✅ 최종 수정] 패널을 항상 최신으로 유지하기 위해, 기존 패널을 먼저 삭제합니다.
+                if old_message_id := farm_data.get("farm_message_id"):
+                    try:
+                        old_message = await thread.fetch_message(old_message_id)
+                        await old_message.delete()
+                    except (discord.NotFound, discord.Forbidden):
+                        pass # 이미 없거나 권한이 없으면 무시
+
                 embed = await self.build_farm_embed(farm_data, user)
                 view = FarmUIView(self)
-                await farm_message.edit(embed=embed, view=view)
+                
+                # 새로운 패널을 생성하고 DB에 ID를 업데이트합니다.
+                new_message = await thread.send(embed=embed, view=view)
+                await supabase.table('farms').update({'farm_message_id': new_message.id}).eq('id', farm_data['id']).execute()
+
             except (discord.NotFound, discord.Forbidden): pass
             except Exception as e:
                 logger.error(f"농장 UI 업데이트 중 오류: {e}", exc_info=True)
@@ -681,4 +710,4 @@ class Farm(commands.Cog):
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。(チャンネル: #{channel.name})")
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(Farm(bot))
+    await bot.add_cog(Farm(bot))```
