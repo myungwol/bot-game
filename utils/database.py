@@ -6,7 +6,7 @@ from supabase import create_client, AsyncClient
 import logging
 import asyncio
 import time
-from typing import Dict, Callable, Any, List, Optional
+from typing import Dict, Callable, Any, List, Optional, Union
 from functools import wraps
 from utils.ui_defaults import UI_STRINGS
 from datetime import datetime, timezone
