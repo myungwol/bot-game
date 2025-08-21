@@ -370,9 +370,13 @@ class FarmUIView(ui.View):
             final_yield = max(1, int(base_yield * yield_multiplier))
             harvest_name = farmable_info['harvest_item_name']
             harvested_items[harvest_name] = harvested_items.get(harvest_name, 0) + final_yield
-            if not farmable_info['is_tree']: plots_to_reset.extend(plot_ids)
+            if not farmable_info.get('is_tree'): 
+                plots_to_reset.extend(plot_ids)
             else:
-                for pid in plot_ids: trees_to_update[pid] = farmable_info.get('regrowth_hours', 24)
+                regrowth_hours = farmable_info.get('regrowth_hours', 24)
+                for pid in plot_ids:
+                    trees_to_update[pid] = regrowth_hours
+
         if not harvested_items:
             msg = await interaction.followup.send("ℹ️ 収穫できる作物がありません。", ephemeral=True)
             asyncio.create_task(delete_after_helper(msg, 10)); return
@@ -380,7 +384,15 @@ class FarmUIView(ui.View):
         if plots_to_reset: update_tasks.append(clear_plots_db(plots_to_reset))
         if trees_to_update:
             now = datetime.now(timezone.utc)
-            update_tasks.extend([update_plot(pid, {'growth_stage': 2, 'planted_at': now.isoformat(), 'water_count': 0, 'last_watered_at': now.isoformat(), 'quality': 5}) for pid, hours in trees_to_update.items()])
+            update_tasks.extend([
+                update_plot(pid, {
+                    'growth_stage': 2, 
+                    'planted_at': now.isoformat(), 
+                    'water_count': 0, 
+                    'last_watered_at': now.isoformat(), 
+                    'quality': 5
+                }) for pid in trees_to_update.keys()
+            ])
         await asyncio.gather(*update_tasks)
         result_str = ", ".join([f"**{name}** {qty}個" for name, qty in harvested_items.items()])
         msg = await interaction.followup.send(f"🎉 **{result_str}**を収穫しました！", ephemeral=True)
@@ -437,7 +449,7 @@ class FarmCreationPanelView(ui.View):
         if not isinstance(panel_channel, discord.TextChannel):
             await interaction.followup.send("❌ このコマンドはテキストチャンネルでのみ使用できます。", ephemeral=True); return
         if farm_data and farm_data.get('thread_id'):
-            if thread := self.cog.bot.get_channel(farm_data['thread_id']):
+            if thread := self.bot.get_channel(farm_data['thread_id']):
                 await interaction.followup.send(f"✅ あなたの農場はこちらです: {thread.mention}", ephemeral=True)
                 try: await thread.add_user(user)
                 except: pass
@@ -455,29 +467,19 @@ class Farm(commands.Cog):
     def cog_unload(self):
         self.daily_crop_update.cancel()
 
-    # [✅ 최종 수정] on_message 이벤트 리스너를 추가하여 메시지를 관리합니다.
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # 봇 자신의 메시지이거나 DM인 경우 무시
-        if message.author.bot or not message.guild:
+        if message.author.bot or not message.guild or not isinstance(message.channel, discord.Thread):
             return
 
-        # 메시지가 스레드에서 전송되었는지 확인
-        if not isinstance(message.channel, discord.Thread):
-            return
-
-        # 이 스레드가 DB에 등록된 농장 스레드인지 확인
         owner_id = await get_farm_owner_by_thread(message.channel.id)
         if not owner_id:
             return
 
-        # 농장 스레드라면, 사용자가 보낸 메시지를 삭제
         try:
             await message.delete()
-            # 사용자에게 안내 메시지를 보냈다가 10초 뒤에 삭제 (선택 사항)
-            await message.channel.send(f"{message.author.mention}さん、このスレッドではメッセージを送信できません。ボタンを使用してください。", delete_after=10)
         except (discord.NotFound, discord.Forbidden):
-            pass # 메시지가 이미 삭제되었거나 권한이 없는 경우 무시
+            pass
 
     async def register_persistent_views(self):
         self.bot.add_view(FarmCreationPanelView(self))
@@ -509,14 +511,12 @@ class Farm(commands.Cog):
                 planted_at = datetime.fromisoformat(plot['planted_at'])
                 growth_days = farmable_info.get('growth_days', 999)
 
-                # --- 1. 성장 판정 ---
                 if plot['growth_stage'] < 3:
                     time_since_planting = now_utc - planted_at
                     if time_since_planting.days >= growth_days:
                         updates['growth_stage'] = 3
                         logger.info(f"작물 성장: {plot['planted_item_name']} (ID: {plot['id']})가 다 자랐습니다.")
 
-                # --- 2. 시듦 판정 (다 자라지 않은 작물만) ---
                 if updates.get('growth_stage') != 3 and plot['growth_stage'] < 3:
                     last_wet_time = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else planted_at
                     time_since_last_water = now_utc - last_wet_time
@@ -526,7 +526,6 @@ class Farm(commands.Cog):
                         updates['state'] = 'withered'
                         logger.warning(f"작물 시듦: {plot['planted_item_name']} (ID: {plot['id']})가 물을 제때 받지 못해 시들었습니다.")
 
-                # --- 3. 비 오는 날 자동 물주기 판정 (시들지 않은 작물만) ---
                 if is_raining and updates.get('state') != 'withered':
                     can_water_today = plot.get('last_watered_at') is None or datetime.fromisoformat(plot['last_watered_at']) < today_kst_midnight
                     if can_water_today:
@@ -654,18 +653,16 @@ class Farm(commands.Cog):
             farm_data = await get_farm_data(user.id)
             if not farm_data or not farm_data.get("farm_message_id"): return
             try:
-                # [✅ 최종 수정] 패널을 항상 최신으로 유지하기 위해, 기존 패널을 먼저 삭제합니다.
                 if old_message_id := farm_data.get("farm_message_id"):
                     try:
                         old_message = await thread.fetch_message(old_message_id)
                         await old_message.delete()
                     except (discord.NotFound, discord.Forbidden):
-                        pass # 이미 없거나 권한이 없으면 무시
+                        pass
 
                 embed = await self.build_farm_embed(farm_data, user)
                 view = FarmUIView(self)
                 
-                # 새로운 패널을 생성하고 DB에 ID를 업데이트합니다.
                 new_message = await thread.send(embed=embed, view=view)
                 await supabase.table('farms').update({'farm_message_id': new_message.id}).eq('id', farm_data['id']).execute()
 
@@ -710,4 +707,4 @@ class Farm(commands.Cog):
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。(チャンネル: #{channel.name})")
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(Farm(bot))```
+    await bot.add_cog(Farm(bot))
