@@ -1,3 +1,22 @@
+            # ...
+            if not plot: grid[y][x] = '🟫'; continue
+            if plot['state'] == 'default': grid[y][x] = '🟫'  # <--- 'default' 상태에 'tilled' 이모지 사용
+            elif plot['state'] == 'tilled': grid[y][x] = '🟫' # <--- 'tilled' 상태에도 'tilled' 이모지 사용
+            # ...```
+
+이 때문에 새로 만들어진 밭(`default`)이 처음부터 이미 갈려있는 것처럼 보였고, '밭 갈기' 버튼을 눌러 상태가 `tilled`로 바뀌어도 시각적인 변화가 없었던 것입니다.
+
+### **완벽한 최종 해결책**
+
+`default` 상태일 때 다른 이모지를 사용하도록 `build_farm_embed` 함수만 수정하면 모든 문제가 해결됩니다. `default`는 흙더미(`🟤`), `tilled`는 갈아놓은 밭(`🟫`)으로 구분하는 것이 좋습니다.
+
+아래는 이 시각적 버그를 수정한 `cogs/games/farm.py`의 최종 완성본입니다. 이 코드로 교체해주세요.
+
+---
+
+### **`cogs/games/farm.py` (최종 수정 완료된 전체 코드)**
+
+```python
 # cogs/games/farm.py
 
 import discord
@@ -96,7 +115,6 @@ class FarmActionView(ui.View):
 
     async def _build_seed_select(self):
         inventory = await get_inventory(self.user)
-        
         farmable_items_in_inv = {name: qty for name, qty in inventory.items() if get_item_database().get(name, {}).get('category') == '農場_種'}
         if not farmable_items_in_inv:
             self.add_item(ui.Button(label="植えられる種がありません。", disabled=True)); return
@@ -144,10 +162,7 @@ class FarmActionView(ui.View):
         await asyncio.gather(*update_tasks)
         await update_inventory(str(self.user.id), self.selected_item, -1)
         farm_owner = await self.cog.get_farm_owner(interaction)
-        
-        # [✅ 최종 수정] 불필요한 interaction 인자 제거
         await self.cog.update_farm_ui(interaction.channel, farm_owner)
-        
         await interaction.followup.send(f"✅ 「{self.selected_item}」を植えました。", ephemeral=True, delete_after=5)
         await interaction.delete_original_response()
 
@@ -183,10 +198,7 @@ class FarmActionView(ui.View):
         if confirm_view.value:
             await clear_plots_db(plot_ids)
             farm_owner = await self.cog.get_farm_owner(interaction)
-            
-            # [✅ 최종 수정] 불필요한 interaction 인자 제거
             await self.cog.update_farm_ui(interaction.channel, farm_owner)
-            
             await interaction.edit_original_response(content="✅ 作物を撤去しました。", view=None)
         else:
             await interaction.edit_original_response(content="キャンセルしました。", view=None)
@@ -222,10 +234,7 @@ class FarmNameModal(ui.Modal, title="農場の新しい名前"):
         except Exception as e:
             logger.error(f"농장 스레드 이름 변경 실패: {e}")
         farm_owner = await self.cog.get_farm_owner(interaction)
-        
-        # [✅ 최종 수정] 불필요한 interaction 인자 제거
         await self.cog.update_farm_ui(interaction.channel, farm_owner)
-        
         await interaction.followup.send(f"✅ 農場の名前を「{name_to_set}」に変更しました。", ephemeral=True, delete_after=10)
 
 class FarmUIView(ui.View):
@@ -255,6 +264,9 @@ class FarmUIView(ui.View):
             await interaction.response.send_message("❌ この農場の情報を見つけられませんでした。", ephemeral=True, delete_after=10); return False
         
         self.farm_owner = self.cog.bot.get_user(farm_owner_id)
+        if not self.farm_owner:
+            await interaction.response.send_message("❌ 農場の所有者情報を見つけられませんでした。", ephemeral=True, delete_after=10); return False
+            
         self.farm_data = await get_farm_data(farm_owner_id)
 
         if interaction.user.id == self.farm_owner.id: return True
@@ -504,8 +516,10 @@ class Farm(commands.Cog):
             for x in range(size_x):
                 if (x, y) in processed_plots: continue
                 plot = plots_map.get((x, y))
-                if not plot: grid[y][x] = '🟫'; continue
-                if plot['state'] == 'default': grid[y][x] = '🟫'
+                if not plot: grid[y][x] = '🟤'; continue # 없는 밭은 갈지 않은 흙으로 표시
+                
+                # [✅ 최종 수정] 'default' 상태일 때 흙더미 이모지(🟤)를 사용하도록 수정
+                if plot['state'] == 'default': grid[y][x] = '🟤'
                 elif plot['state'] == 'tilled': grid[y][x] = '🟫'
                 elif plot['state'] == 'withered': grid[y][x] = '🥀'
                 elif plot['state'] == 'planted':
@@ -536,6 +550,9 @@ class Farm(commands.Cog):
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User):
         lock = self.thread_locks.setdefault(thread.id, asyncio.Lock())
         async with lock:
+            if user is None:
+                logger.warning(f"농장 UI 업데이트 시도 실패: 유저 정보를 찾을 수 없습니다 (스레드 ID: {thread.id})")
+                return
             farm_data = await get_farm_data(user.id)
             if not farm_data or not farm_data.get("farm_message_id"): return
             try:
@@ -570,9 +587,6 @@ class Farm(commands.Cog):
         except Exception as e:
             logger.error(f"농장 생성 중 오류 발생: {e}", exc_info=True)
             await interaction.followup.send("❌ 農場の作成中にエラーが発生しました。", ephemeral=True)
-
-    # [✅ 코드 정리] 불필요한 handle_... 함수들을 모두 제거했습니다.
-    # 모든 로직은 이제 FarmUIView 클래스 내부에서 처리됩니다.
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_farm_creation", **kwargs):
         if panel_info := get_panel_id(panel_key):
