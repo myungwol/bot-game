@@ -213,6 +213,7 @@ async def get_inventory(user_id_str: str) -> dict:
 async def update_inventory(user_id_str: str, item_name: str, quantity: int):
     params = {'user_id_param': user_id_str, 'item_name_param': item_name, 'amount_param': quantity}
     await supabase.rpc('increment_inventory_quantity', params).execute()
+
 async def get_user_gear(user_id_str: str) -> dict:
     default_bait = "エサなし"
     default_gear = {"rod": BARE_HANDS, "bait": default_bait, "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
@@ -226,10 +227,11 @@ async def get_user_gear(user_id_str: str) -> dict:
             gear[gear_type] = default_item
             updated = True
     if updated:
-        # --- [핵심 수정] ---
-        # 주석: set_user_gear 함수는 첫 번째 인자로 user_id_str을 직접 받으므로, 키워드를 제거합니다.
+        # --- [오류 수정] ---
+        # 주석: set_user_gear 함수는 첫 번째 인자로 user_id_str을 직접 받으므로, 불필요한 키워드를 제거합니다.
         await set_user_gear(user_id_str, **gear)
     return gear
+
 @supabase_retry_handler()
 async def set_user_gear(user_id_str: str, rod: str = None, bait: str = None, hoe: str = None, watering_can: str = None):
     data_to_update = {}
