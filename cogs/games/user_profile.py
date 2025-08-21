@@ -16,9 +16,8 @@ from utils.database import (
 
 logger = logging.getLogger(__name__)
 
-# 주석: 상점 카테고리와 일치하도록 '装備'로 변경합니다.
-# 이제 프로필의 '장비' 탭은 category가 '装備'인 아이템들만 보여줍니다.
 GEAR_CATEGORIES = ["装備"]
+BAIT_CATEGORY = "エサ"
 
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
@@ -57,11 +56,9 @@ class ProfileView(ui.View):
         self.cached_data = {"wallet": wallet_data, "inventory": inventory, "aquarium": aquarium, "gear": gear}
 
     async def build_embed(self) -> discord.Embed:
-        wallet_data = self.cached_data.get("wallet", {})
         inventory = self.cached_data.get("inventory", {})
-        aquarium = self.cached_data.get("aquarium", [])
         gear = self.cached_data.get("gear", {})
-        balance = wallet_data.get('balance', 0)
+        balance = self.cached_data.get("wallet", {}).get('balance', 0)
         item_db = get_item_database()
         base_title = get_string("profile_view.base_title", user_name=self.user.display_name)
         title_suffix = get_string(f"profile_view.tabs.{self.current_page}.title_suffix", default="")
@@ -84,15 +81,15 @@ class ProfileView(ui.View):
             description += get_string("profile_view.info_tab.description")
             embed.description = description
         elif self.current_page == "item":
-            excluded_categories = GEAR_CATEGORIES + ["農場_種", "農場_作物", "エサ"]
+            excluded_categories = GEAR_CATEGORIES + ["農場_種", "農場_作物", BAIT_CATEGORY]
             general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
             item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`個" for n, c in general_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items"))
         elif self.current_page == "gear":
             gear_categories = {"釣り": {"rod": "🎣 釣竿", "bait": "🐛 エサ"}, "農場": {"hoe": "🪓 クワ", "watering_can": "💧 じょうろ"}}
             for category_name, items in gear_categories.items():
-                field_lines = [f"**{label}:** {gear.get(key, BARE_HANDS)}" for key, label in items.items()]
-                embed.add_field(name=f"**[ 現在の装備: {category_name} ]**", value="\n".join(field_lines), inline=True)
+                field_lines = [f"**{label}:** `{gear.get(key, BARE_HANDS)}`" for key, label in items.items()]
+                embed.add_field(name=f"**[ 現在の装備: {category_name} ]**", value="\n".join(field_lines), inline=False)
             
             owned_gear_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') in GEAR_CATEGORIES}
             if owned_gear_items:
@@ -102,6 +99,7 @@ class ProfileView(ui.View):
                 embed.add_field(name="\n**[ 所持している装備 ]**", value=get_string("profile_view.gear_tab.no_owned_gear"), inline=False)
             embed.description = description
         elif self.current_page == "fish":
+            aquarium = self.cached_data.get("aquarium", [])
             if not aquarium:
                 embed.description = description + get_string("profile_view.fish_tab.no_fish")
             else:
@@ -127,9 +125,7 @@ class ProfileView(ui.View):
         tabs_config = get_string("profile_view.tabs", {})
         row_counter, tab_buttons_in_row = 0, 0
         for key, config in tabs_config.items():
-            if tab_buttons_in_row >= 5:
-                row_counter += 1
-                tab_buttons_in_row = 0
+            if tab_buttons_in_row >= 5: row_counter += 1; tab_buttons_in_row = 0
             style = discord.ButtonStyle.primary if self.current_page == key else discord.ButtonStyle.secondary
             self.add_item(ui.Button(label=config.get("label"), style=style, custom_id=f"profile_tab_{key}", emoji=config.get("emoji"), row=row_counter))
             tab_buttons_in_row += 1
@@ -172,12 +168,11 @@ class GearSelectView(ui.View):
         self.user = parent_view.user
         self.gear_type = gear_type
         
-        # 주석: gear_type에 따라 카테고리, 이름 등을 동적으로 설정합니다.
         if self.gear_type == 'bait':
-            self.db_category = "エサ"
+            self.db_category = BAIT_CATEGORY
             self.category_name, self.unequip_label, self.default_item = ("釣りエサ", "エサを外す", "エサなし")
-        else: # rod, hoe, watering_can
-            self.db_category = "装備"
+        else:
+            self.db_category = GEAR_CATEGORIES[0]
             if self.gear_type == 'rod': self.category_name, self.unequip_label = "釣竿", "釣竿を外す"
             elif self.gear_type == 'hoe': self.category_name, self.unequip_label = "クワ", "クワを外す"
             else: self.category_name, self.unequip_label = "じょうろ", "じょうろを外す"
@@ -189,13 +184,11 @@ class GearSelectView(ui.View):
         
         for name, count in inventory.items():
             item_data = item_db.get(name)
-            if item_data and item_data.get('category') == self.db_category:
-                 # 주석: 각 장비 타입에 맞는 아이템만 필터링합니다. (예: 釣竿을 바꿀 땐 釣竿 아이템만 표시)
-                 if (self.gear_type == 'rod' and '釣竿' in name) or \
-                    (self.gear_type == 'hoe' and 'クワ' in name) or \
-                    (self.gear_type == 'watering_can' and 'じょうろ' in name) or \
-                    (self.gear_type == 'bait'):
-                     options.append(discord.SelectOption(label=f"{name} ({count}個)", value=name, emoji=item_data.get('emoji')))
+            # --- [핵심 수정] ---
+            # 주석: 아이템 이름('%釣竿%') 대신, DB에 새로 추가한 'gear_type'을 직접 비교합니다.
+            # 이 방식이 훨씬 안정적이고 정확합니다.
+            if item_data and item_data.get('category') == self.db_category and item_data.get('gear_type') == self.gear_type:
+                 options.append(discord.SelectOption(label=f"{name} ({count}個)", value=name, emoji=item_data.get('emoji')))
 
         select = ui.Select(placeholder=f"新しい{self.category_name}を選択してください...", options=options)
         select.callback = self.select_callback
