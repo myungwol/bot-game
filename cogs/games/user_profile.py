@@ -33,7 +33,8 @@ class ProfileView(ui.View):
 
     async def build_and_send(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await self.load_data()
+        # [✅ 최종 수정 1] self.load_data()에 self.user를 전달합니다.
+        await self.load_data(self.user)
         embed = await self.build_embed()
         self.build_components()
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
@@ -41,18 +42,19 @@ class ProfileView(ui.View):
     async def update_display(self, interaction: discord.Interaction, reload_data: bool = False):
         await interaction.response.defer()
         if reload_data:
-            await self.load_data()
+            # [✅ 최종 수정 2] 여기도 마찬가지로 self.user를 전달합니다.
+            await self.load_data(self.user)
         embed = await self.build_embed()
         self.build_components()
         await interaction.edit_original_response(embed=embed, view=self)
         self.status_message = None
 
+    # load_data 함수 자체는 이전과 동일하게 유지합니다.
     async def load_data(self, user: discord.Member):
         wallet_data, inventory, aquarium, gear = await asyncio.gather(
             get_wallet(user.id),
             get_inventory(user),
             get_aquarium(str(user.id)),
-            # [✅ 최종 수정] str(user.id) 대신 user 객체를 전달합니다.
             get_user_gear(user)
         )
         self.cached_data = {"wallet": wallet_data, "inventory": inventory, "aquarium": aquarium, "gear": gear}
