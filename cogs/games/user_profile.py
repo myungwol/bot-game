@@ -254,6 +254,17 @@ class UserProfile(commands.Cog):
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ プロフィール 패널을 성공적으로 새로 생성했습니다. (채널: #{channel.name})")
+    @commands.command(name="debugitem")
+    @commands.is_owner() # 봇 소유자만 실행 가능
+    async def debug_item_command(self, ctx, *, item_name: str):
+        item_db = get_item_database()
+        item_data = item_db.get(item_name)
+        
+        if not item_data:
+            await ctx.send(f"'{item_name}' 아이템을 캐시에서 찾을 수 없습니다.")
+            return
 
+        # 파이썬 딕셔너리 그대로 출력
+        await ctx.send(f"```python\n{item_data}\n```")
 async def setup(bot: commands.Cog):
     await bot.add_cog(UserProfile(bot))
