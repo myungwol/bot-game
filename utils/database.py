@@ -153,7 +153,7 @@ def get_string(key_path: str, default: Any = None, **kwargs) -> Any:
 @supabase_retry_handler()
 async def load_channel_ids_from_db():
     global _channel_id_cache
-    response = await supabase.table('channel_configs').select('channel_key', 'channel_id').execute()
+    response = await supabase.table('channel_configs').select('channel_key', 'channel_id').limit(300).execute()
     if response and response.data:
         _channel_id_cache = {item['channel_key']: int(item['channel_id']) for item in response.data}
         logger.info(f"✅ {len(_channel_id_cache)}개의 채널/역할 ID를 DB에서 로드했습니다.")
