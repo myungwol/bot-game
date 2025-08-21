@@ -279,7 +279,7 @@ class FarmUIView(ui.View):
     # --- [핵심 수정] 기존 Farm 코그에 있던 핸들러 함수들을 View 클래스 내부로 이동 ---
     async def on_farm_till_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        gear = await get_user_gear(str(interaction.user.id))
+        gear = await get_user_gear(interaction.user)
         equipped_hoe = gear.get('hoe', BARE_HANDS)
         if equipped_hoe == BARE_HANDS:
             msg = await interaction.followup.send("❌ まずは商店で「クワ」を購入して、プロフィール画面から装備してください。", ephemeral=True)
@@ -303,7 +303,8 @@ class FarmUIView(ui.View):
 
     async def on_farm_water_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        gear = await get_user_gear(str(interaction.user.id))
+        # [✅ 최종 수정] str(interaction.user.id) 대신 interaction.user를 전달합니다.
+        gear = await get_user_gear(interaction.user)
         equipped_wc = gear.get('watering_can', BARE_HANDS)
         if equipped_wc == BARE_HANDS:
             msg = await interaction.followup.send("❌ まずは商店で「じょうろ」を購入して、装備してください。", ephemeral=True)
