@@ -1,10 +1,9 @@
-# cogs/games/farm.py
+# cogs/games/farm.py (정보 표시 기능이 추가된 최종 완성본)
 
 import discord
 from discord.ext import commands, tasks
 from discord import ui
 import logging
-# [✅ 1단계] time을 import 목록에 추가합니다.
 from typing import Optional, Dict, List, Any
 import asyncio
 from datetime import datetime, timezone, timedelta, time
@@ -32,8 +31,8 @@ WEATHER_TYPES = {
     "stormy": {"emoji": "⛈️", "name": "嵐", "water_effect": True},
 }
 
-# [✅ 2단계] 한국 시간대를 나타내는 KST 변수를 정의합니다.
 KST = timezone(timedelta(hours=9))
+KST_MIDNIGHT_UPDATE = time(hour=0, minute=1, tzinfo=KST)
 
 async def preload_farmable_info(farm_data: Dict) -> Dict[str, Dict]:
     item_names = {p['planted_item_name'] for p in farm_data.get('farm_plots', []) if p.get('planted_item_name')}
@@ -453,25 +452,28 @@ class Farm(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.thread_locks: Dict[int, asyncio.Lock] = {}
-        self.crop_growth_check.start()
+        self.daily_crop_update.start()
         
     def cog_unload(self):
-        self.crop_growth_check.cancel()
+        self.daily_crop_update.cancel()
 
     async def register_persistent_views(self):
         self.bot.add_view(FarmCreationPanelView(self))
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 농장 관련 영구 View가 성공적으로 등록되었습니다.")
         
-    @tasks.loop(hours=1)
-    async def crop_growth_check(self):
-        logger.info("작물 성장 및 상태 업데이트 시작...")
+    @tasks.loop(time=KST_MIDNIGHT_UPDATE)
+    async def daily_crop_update(self):
+        logger.info("일일 작물 상태 업데이트 시작 (성장 및 시듦 판정)...")
         try:
             weather_key = get_config("current_weather", "sunny").strip('"')
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
-            response = await supabase.table('farm_plots').select('*').eq('state', 'planted').execute()
-            if not response.data: return
             
+            response = await supabase.table('farm_plots').select('*').eq('state', 'planted').execute()
+            if not response or not response.data:
+                logger.info("업데이트할 작물이 없습니다.")
+                return
+
             plots_to_update = []
             now_utc = datetime.now(timezone.utc)
             today_kst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -480,89 +482,150 @@ class Farm(commands.Cog):
             for plot in response.data:
                 farmable_info = farmable_info_map.get(plot['planted_item_name'])
                 if not farmable_info: continue
-                
-                last_watered_at = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromisoformat(plot['planted_at'])
-                lifespan = timedelta(hours=farmable_info.get('lifespan_hours', 24))
-                if now_utc - last_watered_at > lifespan:
-                    updates = {'state': 'withered', 'quality': -1}; plots_to_update.append((plot['id'], updates)); continue
 
-                current_updates = {}; quality_change = 0
+                updates = {}
+                planted_at = datetime.fromisoformat(plot['planted_at'])
+                growth_days = farmable_info.get('growth_days', 999)
+
+                # --- 1. 성장 판정 ---
+                if plot['growth_stage'] < 3:
+                    time_since_planting = now_utc - planted_at
+                    if time_since_planting.days >= growth_days:
+                        updates['growth_stage'] = 3
+                        logger.info(f"작물 성장: {plot['planted_item_name']} (ID: {plot['id']})가 다 자랐습니다.")
+
+                # --- 2. 시듦 판정 (다 자라지 않은 작물만) ---
+                if updates.get('growth_stage') != 3 and plot['growth_stage'] < 3:
+                    last_wet_time = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else planted_at
+                    time_since_last_water = now_utc - last_wet_time
+                    wither_threshold_days = growth_days / 2.0
+                    
+                    if time_since_last_water.days > wither_threshold_days:
+                        updates['state'] = 'withered'
+                        logger.warning(f"작물 시듦: {plot['planted_item_name']} (ID: {plot['id']})가 물을 제때 받지 못해 시들었습니다.")
+
+                # --- 3. 비 오는 날 자동 물주기 판정 (시들지 않은 작물만) ---
+                if is_raining and updates.get('state') != 'withered':
+                    can_water_today = plot.get('last_watered_at') is None or datetime.fromisoformat(plot['last_watered_at']) < today_kst_midnight
+                    if can_water_today:
+                        updates['last_watered_at'] = now_utc.isoformat()
+                        updates['water_count'] = plot['water_count'] + 1
+                        updates['quality'] = plot['quality'] + 5
+                        logger.info(f"자동 물주기: {plot['planted_item_name']} (ID: {plot['id']})에 비가 내려 물을 줍니다.")
                 
-                # [✅ 최종 수정 3] 비가 올 때의 자동 물주기 로직도 "하루에 한 번"으로 변경
-                can_water_today = plot.get('last_watered_at') is None or datetime.fromisoformat(plot['last_watered_at']) < today_kst_midnight
-                if is_raining and can_water_today:
-                    current_updates['last_watered_at'] = now_utc.isoformat()
-                    current_updates['water_count'] = plot['water_count'] + 1
-                    quality_change += 5
-                
-                current_stage = plot['growth_stage']
-                if current_stage < 3:
-                    total_stages = farmable_info.get('water_cycle_required', 3)
-                    new_stage = min(3, (plot['water_count'] * 3) // total_stages) if total_stages > 0 else 3
-                    if new_stage > current_stage:
-                         current_updates['growth_stage'] = new_stage; quality_change += 10
-                
-                # 물을 너무 오랫동안 안 줬을 때 품질 하락 로직 (예: 24시간 이상)
-                if plot.get('last_watered_at') is not None:
-                    time_since_last_water = now_utc - datetime.fromisoformat(plot['last_watered_at'])
-                    if time_since_last_water > timedelta(hours=24): quality_change -= 5
-                
-                if quality_change != 0: current_updates['quality'] = plot['quality'] + quality_change
-                if current_updates: plots_to_update.append((plot['id'], current_updates))
+                if updates:
+                    plots_to_update.append((plot['id'], updates))
 
             if plots_to_update:
                 update_tasks = [update_plot(pid, data) for pid, data in plots_to_update]
                 await asyncio.gather(*update_tasks)
-                logger.info(f"{len(plots_to_update)}개의 밭의 상태를 업데이트했습니다.")
+                logger.info(f"총 {len(plots_to_update)}개의 밭의 상태를 업데이트했습니다.")
         except Exception as e:
-            logger.error(f"작물 성장/상태 체크 중 오류: {e}", exc_info=True)
+            logger.error(f"일일 작물 업데이트 중 오류: {e}", exc_info=True)
             
-    @crop_growth_check.before_loop
-    async def before_crop_growth_check(self):
+    @daily_crop_update.before_loop
+    async def before_daily_crop_update(self):
         await self.bot.wait_until_ready()
         
     async def get_farm_owner(self, interaction: discord.Interaction) -> Optional[discord.User]:
         owner_id = await get_farm_owner_by_thread(interaction.channel.id)
         return self.bot.get_user(owner_id) if owner_id else None
         
+    # [✅ 최종 수정] 임베드에 추가 정보를 표시하도록 build_farm_embed 함수를 수정합니다.
     async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         farmable_info_map = await preload_farmable_info(farm_data)
         size_x, size_y = farm_data.get('size_x', 1), farm_data.get('size_y', 1)
         plots_map = {(p['pos_x'], p['pos_y']): p for p in farm_data.get('farm_plots', [])}
+        
         grid = [['' for _ in range(size_x)] for _ in range(size_y)]
+        info_lines = []
         processed_plots = set()
+        
+        now_utc = datetime.now(timezone.utc)
+        today_kst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+
         for y in range(size_y):
             for x in range(size_x):
                 if (x, y) in processed_plots: continue
                 plot = plots_map.get((x, y))
-                if not plot: grid[y][x] = '🟤'; continue
                 
-                if plot['state'] == 'default': grid[y][x] = '🟤'
-                elif plot['state'] == 'tilled': grid[y][x] = '🟫'
-                elif plot['state'] == 'withered': grid[y][x] = '🥀'
-                elif plot['state'] == 'planted':
-                    stage = plot['growth_stage']
-                    item_name = plot['planted_item_name']
-                    farmable_info = farmable_info_map.get(item_name)
-                    if not farmable_info:
-                        grid[y][x] = '❓'; processed_plots.add((x,y)); continue
-                    emoji_to_use = farmable_info.get('item_emoji')
-                    if not emoji_to_use or stage < 3:
-                        item_type = farmable_info.get('item_type', 'seed')
-                        emoji_to_use = CROP_EMOJI_MAP.get(item_type, {}).get(stage, '🌱')
-                    sx, sy = farmable_info['space_required_x'], farmable_info['space_required_y']
-                    for dy in range(sy):
-                        for dx in range(sx):
-                            if y + dy < size_y and x + dx < size_x:
-                                grid[y+dy][x+dx] = emoji_to_use; processed_plots.add((x + dx, y + dy))
-                processed_plots.add((x, y))
+                # --- 1. 밭 이모지 그리기 ---
+                plot_emoji = '🟤' # 기본값 (갈지 않은 밭)
+                if plot:
+                    if plot['state'] == 'tilled': plot_emoji = '🟫'
+                    elif plot['state'] == 'withered': plot_emoji = '🥀'
+                    elif plot['state'] == 'planted':
+                        stage = plot['growth_stage']
+                        item_name = plot['planted_item_name']
+                        farmable_info = farmable_info_map.get(item_name)
+                        if farmable_info:
+                            emoji_to_use = farmable_info.get('item_emoji')
+                            if not emoji_to_use or stage < 3:
+                                item_type = farmable_info.get('item_type', 'seed')
+                                emoji_to_use = CROP_EMOJI_MAP.get(item_type, {}).get(stage, '🌱')
+                            
+                            sx, sy = farmable_info['space_required_x'], farmable_info['space_required_y']
+                            for dy in range(sy):
+                                for dx in range(sx):
+                                    if y + dy < size_y and x + dx < size_x:
+                                        grid[y+dy][x+dx] = emoji_to_use
+                                        processed_plots.add((x + dx, y + dy))
+                            plot_emoji = emoji_to_use
+                        else:
+                            plot_emoji = '❓'
+                
+                if not (x,y) in processed_plots:
+                    grid[y][x] = plot_emoji
+
+                # --- 2. 정보 텍스트 생성 ---
+                if plot and plot['state'] == 'planted':
+                    farmable_info = farmable_info_map.get(plot['planted_item_name'])
+                    if not farmable_info: continue
+
+                    # 오늘 물 줬는지 확인
+                    watered_today_emoji = '➖'
+                    if plot.get('last_watered_at'):
+                        if datetime.fromisoformat(plot['last_watered_at']) >= today_kst_midnight:
+                            watered_today_emoji = '💧'
+
+                    info_text = f"{plot_emoji} **{plot['planted_item_name']}** (물: {watered_today_emoji}): "
+                    
+                    # 수확까지 남은 시간 계산
+                    if plot['growth_stage'] < 3: # 아직 다 자라지 않음
+                        planted_at = datetime.fromisoformat(plot['planted_at'])
+                        growth_days = farmable_info.get('growth_days', 3)
+                        days_passed = (now_utc - planted_at).days
+                        days_left = max(0, growth_days - days_passed)
+                        info_text += f"수확까지 약 {days_left}일"
+                    
+                    elif farmable_info.get('is_tree'): # 다 자란 나무
+                        regrowth_hours = farmable_info.get('regrowth_hours', 24)
+                        last_harvest_time = datetime.fromisoformat(plot['planted_at']) # 수확 후 planted_at이 갱신됨
+                        next_harvest_time = last_harvest_time + timedelta(hours=regrowth_hours)
+                        time_left = next_harvest_time - now_utc
+                        if time_left.total_seconds() > 0:
+                            hours_left = int(time_left.total_seconds() // 3600)
+                            info_text += f"다음 열매까지 약 {hours_left}시간"
+                        else:
+                            info_text += "열매 수확 가능! 🧺"
+                    else: # 다 자란 일반 작물
+                        info_text += "수확 가능! 🧺"
+                    
+                    info_lines.append(info_text)
+
         farm_str = "\n".join("".join(row) for row in grid)
         farm_name = farm_data.get('name') or user.display_name
         embed = discord.Embed(title=f"**{farm_name}の農場**", color=0x8BC34A)
-        embed.description = f"> 畑を耕し、作物を育てましょう！\n```{farm_str}```"
+        
+        description = f"```{farm_str}```"
+        if info_lines:
+            description += "\n" + "\n".join(info_lines)
+
         weather_key = get_config("current_weather", "sunny").strip('"')
         weather = WEATHER_TYPES.get(weather_key, {"emoji": "❔", "name": "不明"})
-        embed.description += f"\n**今日の天気:** {weather['emoji']} {weather['name']}"
+        description += f"\n\n**今日の天気:** {weather['emoji']} {weather['name']}"
+        
+        embed.description = description
         return embed
         
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User):
