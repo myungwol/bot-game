@@ -47,12 +47,13 @@ class ProfileView(ui.View):
         await interaction.edit_original_response(embed=embed, view=self)
         self.status_message = None
 
-    async def load_data(self):
+    async def load_data(self, user: discord.Member):
         wallet_data, inventory, aquarium, gear = await asyncio.gather(
-            get_wallet(self.user.id),
-            get_inventory(str(self.user.id)),
-            get_aquarium(str(self.user.id)),
-            get_user_gear(str(self.user.id))
+            get_wallet(user.id),
+            get_inventory(user),
+            get_aquarium(str(user.id)),
+            # [✅ 최종 수정] str(user.id) 대신 user 객체를 전달합니다.
+            get_user_gear(user)
         )
         self.cached_data = {"wallet": wallet_data, "inventory": inventory, "aquarium": aquarium, "gear": gear}
 
