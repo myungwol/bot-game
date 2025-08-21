@@ -9,7 +9,6 @@ from typing import Any, Dict
 logger = logging.getLogger(__name__)
 
 def format_embed_from_db(embed_data: Dict[str, Any], **kwargs: Any) -> discord.Embed:
-    # ... (이전과 동일, 변경 없음) ...
     if not isinstance(embed_data, dict):
         logger.error(f"임베드 데이터가 dict 형식이 아닙니다. 실제 타입: {type(embed_data)}")
         return discord.Embed(title="오류 발생", description="임베드 데이터를 불러오는 데 실패했습니다.", color=discord.Color.red())
