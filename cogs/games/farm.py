@@ -15,9 +15,9 @@ from utils.database import (
     get_farmable_item_info, update_inventory, BARE_HANDS,
     check_farm_permission, grant_farm_permission, clear_plots_db,
     get_farm_owner_by_thread,
-    get_item_database # [오류 수정] 누락되었던 import 추가
+    get_item_database # [오류 수정] 누락된 import를 추가합니다.
 )
-from utils.helpers import format_embed_from_db, delete_after_helper # [오류 수정] 새로운 헬퍼 import 추가
+from utils.helpers import format_embed_from_db, delete_after_helper # [오류 수정] 새로운 헬퍼를 import합니다.
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +36,9 @@ async def preload_farmable_info(farm_data: Dict) -> Dict[str, Dict]:
     item_names = {p['planted_item_name'] for p in farm_data.get('farm_plots', []) if p.get('planted_item_name')}
     if not item_names:
         return {}
-    
     tasks = [get_farmable_item_info(name) for name in item_names]
     results = await asyncio.gather(*tasks)
     return {info['item_name']: info for info in results if info}
-
 
 # --- UI 클래스 ---
 class ConfirmationView(ui.View):
@@ -433,7 +431,8 @@ class Farm(commands.Cog):
         gear = await get_user_gear(str(interaction.user.id))
         equipped_hoe = gear.get('hoe', BARE_HANDS)
         if equipped_hoe == BARE_HANDS:
-            return await interaction.followup.send("❌ まずは商店で「クワ」を購入して、プロフィール画面から装備してください。", ephemeral=True)
+            msg = await interaction.followup.send("❌ まずは商店で「クワ」を購入して、プロフィール画面から装備してください。", ephemeral=True)
+            asyncio.create_task(delete_after_helper(msg, 10)); return
         farm_data = await get_farm_data(farm_owner.id)
         hoe_power = get_item_database().get(equipped_hoe, {}).get('power', 1)
         tilled_count, plots_to_update = 0, []
@@ -441,9 +440,11 @@ class Farm(commands.Cog):
             if plot['state'] == 'default' and tilled_count < hoe_power:
                 plots_to_update.append(update_plot(plot['id'], {'state': 'tilled'})); tilled_count += 1
         if not plots_to_update:
-            return await interaction.followup.send("ℹ️ これ以上耕せる畑がありません。", ephemeral=True, delete_after=10)
+            msg = await interaction.followup.send("ℹ️ これ以上耕せる畑がありません。", ephemeral=True)
+            asyncio.create_task(delete_after_helper(msg, 10)); return
         await asyncio.gather(*plots_to_update)
-        await interaction.followup.send(f"✅ **{equipped_hoe}** を使って、畑を**{tilled_count}マス**耕しました。", ephemeral=True, delete_after=10)
+        msg = await interaction.followup.send(f"✅ **{equipped_hoe}** を使って、畑を**{tilled_count}マス**耕しました。", ephemeral=True)
+        asyncio.create_task(delete_after_helper(msg, 10))
         await self.update_farm_ui(interaction.channel, farm_owner, interaction)
     async def handle_farm_plant(self, interaction: discord.Interaction):
         farm_owner = await self.get_farm_owner(interaction)
@@ -456,7 +457,8 @@ class Farm(commands.Cog):
         gear = await get_user_gear(str(interaction.user.id))
         equipped_wc = gear.get('watering_can', BARE_HANDS)
         if equipped_wc == BARE_HANDS:
-            return await interaction.followup.send("❌ まずは商店で「じょうろ」を購入して、装備してください。", ephemeral=True)
+            msg = await interaction.followup.send("❌ まずは商店で「じょうろ」を購入して、装備してください。", ephemeral=True)
+            asyncio.create_task(delete_after_helper(msg, 10)); return
         farm_data = await get_farm_data(farm_owner.id)
         item_info = get_item_database().get(equipped_wc, {})
         wc_power = item_info.get('power', 1)
@@ -472,9 +474,11 @@ class Farm(commands.Cog):
                 if now - last_watered_at > interval:
                     plots_to_update.append(update_plot(plot['id'], {'last_watered_at': now.isoformat(), 'water_count': plot['water_count'] + 1, 'quality': plot['quality'] + quality_bonus})); watered_count += 1
         if not plots_to_update:
-            return await interaction.followup.send("ℹ️ 今は水をやる必要のある作物がありません。", ephemeral=True, delete_after=10)
+            msg = await interaction.followup.send("ℹ️ 今は水をやる必要のある作物がありません。", ephemeral=True)
+            asyncio.create_task(delete_after_helper(msg, 10)); return
         await asyncio.gather(*plots_to_update)
-        await interaction.followup.send(f"✅ **{equipped_wc}** を使って、作物**{watered_count}個**に水をやりました。", ephemeral=True, delete_after=10)
+        msg = await interaction.followup.send(f"✅ **{equipped_wc}** を使って、作物**{watered_count}個**に水をやりました。", ephemeral=True)
+        asyncio.create_task(delete_after_helper(msg, 10))
         await self.update_farm_ui(interaction.channel, farm_owner, interaction)
     async def handle_farm_harvest(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
