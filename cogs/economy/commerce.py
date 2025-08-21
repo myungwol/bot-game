@@ -1,11 +1,11 @@
-# cogs/commerce.py
+# cogs/economy/commerce.py
 
 import discord
 from discord.ext import commands
 from discord import ui
 import logging
 import asyncio
-import math # 주석: 페이지 계산을 위해 math 라이브러리를 import 합니다.
+import math
 from typing import Optional, Dict, List, Any
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,6 @@ class ShopViewBase(ui.View):
         else:
             await interaction.response.send_message(message_content, ephemeral=True, delete_after=5)
 
-# --- [핵심 수정] BuyItemView 클래스에 페이지네이션 기능 추가 ---
 class BuyItemView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str):
         super().__init__(user)
@@ -82,9 +81,8 @@ class BuyItemView(ShopViewBase):
             [(n, d) for n, d in get_item_database().items() if d.get('buyable') and d.get('category') == self.category],
             key=lambda item: item[1].get('price', 0)
         )
-        # 주석: 페이지네이션을 위한 변수들을 추가합니다.
         self.page_index = 0
-        self.items_per_page = 20 # 주석: 임베드 필드(25), 선택 메뉴 옵션(25) 제한보다 낮은 안전한 수로 설정
+        self.items_per_page = 20
 
     async def build_embed(self) -> discord.Embed:
         wallet = await get_wallet(self.user.id)
@@ -102,7 +100,6 @@ class BuyItemView(ShopViewBase):
         if not self.items_in_category:
             embed.add_field(name="準備中", value=get_string("commerce.wip_category", default="このカテゴリーの商品は現在準備中です。"))
         else:
-            # 주석: 현재 페이지에 해당하는 아이템만 표시하도록 데이터를 자릅니다.
             start_index = self.page_index * self.items_per_page
             end_index = start_index + self.items_per_page
             items_on_page = self.items_in_category[start_index:end_index]
@@ -115,7 +112,6 @@ class BuyItemView(ShopViewBase):
                 )
                 embed.add_field(name=field_name, value=field_value, inline=False)
             
-            # 주석: 총 페이지 수를 계산하고, 현재 페이지를 footer에 표시합니다.
             total_pages = math.ceil(len(self.items_in_category) / self.items_per_page)
             if total_pages > 1:
                 embed.set_footer(text=f"ページ {self.page_index + 1} / {total_pages}")
@@ -136,7 +132,6 @@ class BuyItemView(ShopViewBase):
             select.callback = self.select_callback
             self.add_item(select)
         
-        # 주석: 페이지네이션 버튼을 추가합니다.
         total_pages = math.ceil(len(self.items_in_category) / self.items_per_page)
         if total_pages > 1:
             prev_button = ui.Button(label="◀ 前へ", style=discord.ButtonStyle.grey, custom_id="prev_page", disabled=(self.page_index == 0), row=2)
@@ -251,7 +246,12 @@ class BuyItemView(ShopViewBase):
             msg = await interaction.followup.send(success_message, ephemeral=True)
             asyncio.create_task(delete_after(msg, 10)); return
         else:
-            inventory = await get_inventory(str(user.id))
+            # [✅ 최종 수정] str(user.id) 대신 user 객체를 전달합니다.
+            inventory = await get_inventory(user)
+            if inventory is None:
+                msg = await interaction.followup.send("❌ インベントリ情報の読み込みに失敗しました。", ephemeral=True)
+                asyncio.create_task(delete_after(msg, 5)); return
+
             if inventory.get(item_name, 0) > 0:
                 msg = await interaction.followup.send(f"❌ 「{item_name}」は既に所持しています。1つしか持てません。", ephemeral=True)
                 asyncio.create_task(delete_after(msg, 5)); return
@@ -378,7 +378,17 @@ class SellCropView(ShopViewBase):
         return embed
     async def build_components(self):
         self.clear_items()
-        inventory = await get_inventory(str(self.user.id))
+        
+        # [✅ 최종 수정] str(self.user.id) 대신 self.user 객체를 전달합니다.
+        inventory = await get_inventory(self.user)
+        if inventory is None:
+            logger.error(f"'{self.user.name}'님의 인벤토리를 불러올 수 없어, 작물 판매 목록을 생성할 수 없습니다.")
+            self.add_item(ui.Button(label="インベントリの読み込みに失敗しました。", disabled=True, row=0))
+            back_button = ui.Button(label="カテゴリー選択に戻る", style=discord.ButtonStyle.grey, row=1)
+            back_button.callback = self.go_back
+            self.add_item(back_button)
+            return
+
         item_db = get_item_database()
         self.crop_data_map.clear()
         options = []
@@ -469,24 +479,25 @@ class CommercePanelView(ui.View):
         view.message = message
 
 class Commerce(commands.Cog):
-    def __init__(self, bot: commands.Cog):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
+        
     async def register_persistent_views(self):
         self.bot.add_view(CommercePanelView(self))
-    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "commerce"):
-        embed_key = "panel_commerce"
+        
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_commerce"):
         if (panel_info := get_panel_id(panel_key)):
             if (old_channel_id := panel_info.get("channel_id")) and (old_channel := self.bot.get_channel(old_channel_id)):
                 try:
                     old_message = await old_channel.fetch_message(panel_info["message_id"])
                     await old_message.delete()
                 except (discord.NotFound, discord.Forbidden): pass
-        if not (embed_data := await get_embed_from_db(embed_key)): return
+        if not (embed_data := await get_embed_from_db("panel_commerce")): return
         embed = discord.Embed.from_dict(embed_data)
         view = CommercePanelView(self)
         new_message = await channel.send(embed=embed, view=view)
-        await save_panel_id(panel_key, new_message.id, channel.id)
+        await save_panel_id("commerce", new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
 
-async def setup(bot: commands.Cog):
+async def setup(bot: commands.Bot):
     await bot.add_cog(Commerce(bot))
