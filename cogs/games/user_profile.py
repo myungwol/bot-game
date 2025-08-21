@@ -1,3 +1,5 @@
+# cogs/user_profile.py
+
 import discord
 from discord.ext import commands
 from discord import ui
@@ -14,8 +16,9 @@ from utils.database import (
 
 logger = logging.getLogger(__name__)
 
-FISHING_GEAR_CATEGORIES = ["釣り"]
-FARM_GEAR_CATEGORIES = ["農場_道具"]
+# 주석: 상점 카테고리와 일치하도록 '装備'로 변경합니다.
+# 이제 프로필의 '장비' 탭은 category가 '装備'인 아이템들만 보여줍니다.
+GEAR_CATEGORIES = ["装備"]
 
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
@@ -81,7 +84,7 @@ class ProfileView(ui.View):
             description += get_string("profile_view.info_tab.description")
             embed.description = description
         elif self.current_page == "item":
-            excluded_categories = FISHING_GEAR_CATEGORIES + FARM_GEAR_CATEGORIES + ["農場_種", "農場_作物"]
+            excluded_categories = GEAR_CATEGORIES + ["農場_種", "農場_作物", "エサ"]
             general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
             item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`個" for n, c in general_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items"))
@@ -90,8 +93,8 @@ class ProfileView(ui.View):
             for category_name, items in gear_categories.items():
                 field_lines = [f"**{label}:** {gear.get(key, BARE_HANDS)}" for key, label in items.items()]
                 embed.add_field(name=f"**[ 現在の装備: {category_name} ]**", value="\n".join(field_lines), inline=True)
-            all_gear_categories = FISHING_GEAR_CATEGORIES + FARM_GEAR_CATEGORIES
-            owned_gear_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') in all_gear_categories}
+            
+            owned_gear_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') in GEAR_CATEGORIES}
             if owned_gear_items:
                 gear_list = [f"{item_db.get(n,{}).get('emoji','🔧')} **{n}**: `{c}`個" for n, c in owned_gear_items.items()]
                 embed.add_field(name="\n**[ 所持している装備 ]**", value="\n".join(gear_list), inline=False)
@@ -168,22 +171,32 @@ class GearSelectView(ui.View):
         self.parent_view = parent_view
         self.user = parent_view.user
         self.gear_type = gear_type
-        if self.gear_type in ["rod", "bait"]:
-            self.db_categories = FISHING_GEAR_CATEGORIES
-            self.category_name, self.unequip_label, self.default_item = ("釣竿", "釣竿を外す", BARE_HANDS) if self.gear_type == "rod" else ("釣りエサ", "エサを外す", "エサなし")
-        else:
-            self.db_categories = FARM_GEAR_CATEGORIES
-            self.category_name, self.unequip_label, self.default_item = ("クワ", "クワを外す", BARE_HANDS) if self.gear_type == "hoe" else ("じょうろ", "じょうろを外す", BARE_HANDS)
+        
+        # 주석: gear_type에 따라 카테고리, 이름 등을 동적으로 설정합니다.
+        if self.gear_type == 'bait':
+            self.db_category = "エサ"
+            self.category_name, self.unequip_label, self.default_item = ("釣りエサ", "エサを外す", "エサなし")
+        else: # rod, hoe, watering_can
+            self.db_category = "装備"
+            if self.gear_type == 'rod': self.category_name, self.unequip_label = "釣竿", "釣竿を外す"
+            elif self.gear_type == 'hoe': self.category_name, self.unequip_label = "クワ", "クワを外す"
+            else: self.category_name, self.unequip_label = "じょうろ", "じょうろを外す"
+            self.default_item = BARE_HANDS
 
     async def setup_and_update(self, interaction: discord.Interaction):
         inventory, item_db = self.parent_view.cached_data.get("inventory", {}), get_item_database()
         options = [discord.SelectOption(label=f'✋ {self.unequip_label}', value="unequip")]
+        
         for name, count in inventory.items():
             item_data = item_db.get(name)
-            if item_data and item_data.get('category') in self.db_categories:
-                is_rod, is_bait, is_hoe, is_wc = '釣竿' in name, 'エサ' in name, 'クワ' in name, 'じょうろ' in name
-                if (self.gear_type == 'rod' and is_rod) or (self.gear_type == 'bait' and is_bait) or (self.gear_type == 'hoe' and is_hoe) or (self.gear_type == 'watering_can' and is_wc):
+            if item_data and item_data.get('category') == self.db_category:
+                 # 주석: 각 장비 타입에 맞는 아이템만 필터링합니다. (예: 釣竿을 바꿀 땐 釣竿 아이템만 표시)
+                 if (self.gear_type == 'rod' and '釣竿' in name) or \
+                    (self.gear_type == 'hoe' and 'クワ' in name) or \
+                    (self.gear_type == 'watering_can' and 'じょうろ' in name) or \
+                    (self.gear_type == 'bait'):
                      options.append(discord.SelectOption(label=f"{name} ({count}個)", value=name, emoji=item_data.get('emoji')))
+
         select = ui.Select(placeholder=f"新しい{self.category_name}を選択してください...", options=options)
         select.callback = self.select_callback
         self.add_item(select)
