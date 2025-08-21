@@ -76,7 +76,8 @@ async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
 @supabase_retry_handler()
 async def clear_plots_db(plot_ids: List[int]):
     await supabase.table('farm_plots').update({
-        'state': 'tilled', 'planted_item_name': None, 'planted_at': None, 'last_watered_at': None,
+        'state': 'default', # <--- '갈지 않은 상태'로 수정
+        'planted_item_name': None, 'planted_at': None, 'last_watered_at': None,
         'water_count': 0, 'growth_stage': 0, 'quality': 0
     }).in_('id', plot_ids).execute()
 @supabase_retry_handler()
