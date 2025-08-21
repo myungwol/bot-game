@@ -206,9 +206,28 @@ async def update_wallet(user: discord.User, amount: int) -> Optional[dict]:
     response = await supabase.rpc('increment_wallet_balance', params).execute()
     return response.data[0] if response and response.data else None
 @supabase_retry_handler()
-async def get_inventory(user_id_str: str) -> dict:
+async def get_inventory(user: Union[discord.Member, discord.User]) -> Dict[str, int]:
+    user_id_str = str(user.id)
+    
+    # 1. DB의 'inventories' 테이블에서 기본 인벤토리를 가져옵니다.
     response = await supabase.table('inventories').select('item_name, quantity').eq('user_id', user_id_str).gt('quantity', 0).execute()
-    return {item['item_name']: item['quantity'] for item in response.data} if response and response.data else {}
+    inventory = {item['item_name']: item['quantity'] for item in response.data} if response and response.data else {}
+
+    # 2. 역할 기반 아이템을 인벤토리에 추가합니다.
+    item_db = get_item_database()
+    
+    # discord.User 객체는 roles 속성이 없으므로, Member일 때만 역할을 확인합니다.
+    if isinstance(user, discord.Member):
+        user_role_ids = {role.id for role in user.roles}
+        
+        for item_name, item_data in item_db.items():
+            if role_key := item_data.get('role_key'):
+                role_id = get_id(role_key)
+                if role_id and role_id in user_role_ids:
+                    if item_name not in inventory:
+                        inventory[item_name] = 1 # 역할 아이템은 수량을 1로 간주
+
+    return inventory
 @supabase_retry_handler()
 async def update_inventory(user_id_str: str, item_name: str, quantity: int):
     params = {'user_id_param': user_id_str, 'item_name_param': item_name, 'amount_param': quantity}
