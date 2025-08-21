@@ -1,4 +1,4 @@
-# cogs/games/user_profile.py (정밀 로깅 기능 추가 버전)
+# cogs/games/user_profile.py
 
 import discord
 from discord.ext import commands
@@ -14,7 +14,6 @@ from utils.database import (
     get_item_database, get_config, get_string, BARE_HANDS
 )
 
-# [DEBUG] 로거를 가져옵니다. 로그를 출력하기 위해 필수적입니다.
 logger = logging.getLogger(__name__)
 
 GEAR_CATEGORY = "装備"
@@ -163,21 +162,9 @@ class ProfileView(ui.View):
             if self.current_page == 'fish': self.fish_page_index = 0
             await self.update_display(interaction, reload_data=False) 
         elif custom_id.startswith("profile_change_"):
-            # [DEBUG] 1단계: 버튼 클릭 로그
-            logger.warning("="*50)
-            logger.warning(f"[DEBUG-TRACE] 1. 'Change Gear' button pressed. custom_id: {repr(custom_id)}")
-            
-            gear_type = custom_id.split("_")[-1]
-            
-            # [DEBUG] 2단계: 파싱된 gear_type 로그
-            logger.warning(f"[DEBUG-TRACE] 2. Parsed gear_type from custom_id: {repr(gear_type)}")
-            logger.warning(f"[DEBUG-TRACE] 3. Creating GearSelectView with this gear_type.")
-            
+            # [✅ 최종 수정] custom_id를 파싱하는 로직을 수정합니다.
+            gear_type = custom_id.replace("profile_change_", "", 1)
             await GearSelectView(self, gear_type).setup_and_update(interaction)
-            
-            logger.warning(f"[DEBUG-TRACE] 11. GearSelectView process finished.")
-            logger.warning("="*50)
-
         elif custom_id.startswith("profile_fish_"):
             if custom_id.endswith("prev"): self.fish_page_index -= 1
             else: self.fish_page_index += 1
@@ -190,9 +177,6 @@ class GearSelectView(ui.View):
         self.user = parent_view.user
         self.gear_type = gear_type
         
-        # [DEBUG] 4단계: GearSelectView 초기화 로그
-        logger.warning(f"[DEBUG-TRACE] 4. GearSelectView initialized. Received gear_type: {repr(self.gear_type)}")
-        
         GEAR_SETTINGS = {
             "rod":          (GEAR_CATEGORY, "釣竿", "釣竿を外す", BARE_HANDS),
             "hoe":          (GEAR_CATEGORY, "クワ", "クワを外す", BARE_HANDS),
@@ -202,65 +186,19 @@ class GearSelectView(ui.View):
         
         settings = GEAR_SETTINGS.get(self.gear_type)
         if settings:
-            # [DEBUG] 5단계: 설정값 찾기 성공 로그
-            logger.warning(f"[DEBUG-TRACE] 5. Successfully found settings for gear_type. Settings: {settings}")
             self.db_category, self.category_name, self.unequip_label, self.default_item = settings
         else:
-            # [DEBUG] 5단계: 설정값 찾기 실패 로그 (이게 보이면 원인 확정)
-            logger.warning(f"[DEBUG-TRACE] 5. CRITICAL FAILURE: Could not find settings for gear_type: {repr(self.gear_type)}. This is the root cause!")
             self.db_category, self.category_name, self.unequip_label, self.default_item = ("不明", "不明", "外す", "なし")
-
-        # [DEBUG] 6단계: 내부 변수 설정 로그
-        logger.warning(f"[DEBUG-TRACE] 6. Internal variables set: self.db_category={repr(self.db_category)}, self.category_name={repr(self.category_name)}")
 
     async def setup_and_update(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        
-        # [DEBUG] 7단계: 인벤토리 필터링 시작 로그
-        logger.warning(f"[DEBUG-TRACE] 7. Starting setup_and_update. Preparing to filter inventory.")
-        
         inventory, item_db = self.parent_view.cached_data.get("inventory", {}), get_item_database()
-        logger.warning(f"[DEBUG-TRACE] >> User's full inventory to check: {inventory}")
-        logger.warning(f"[DEBUG-TRACE] >> Filter conditions: category must be {repr(self.db_category)} AND gear_type must be {repr(self.gear_type)}")
-        
         options = [discord.SelectOption(label=f'{get_string("gear_select_view.unequip_prefix", "✋")} {self.unequip_label}', value="unequip")]
         
         for name, count in inventory.items():
-            # [DEBUG] 8단계: 인벤토리의 각 아이템 검사 로그
-            logger.warning(f"[DEBUG-TRACE] 8. --- Checking inventory item: {repr(name)} ---")
-            
             item_data = item_db.get(name)
-            
-            if not item_data:
-                # [DEBUG] 8a단계: 아이템 DB에서 아이템 못 찾음 (이름 불일치)
-                logger.warning(f"[DEBUG-TRACE] 8a. ❌ FAILURE: Could not find this item in the item_db cache. KEY MISMATCH IS THE CAUSE!")
-                continue
-            
-            logger.warning(f"[DEBUG-TRACE] 8a. ✅ SUCCESS: Found item in cache. Data: {item_data}")
-            
-            actual_category = item_data.get('category')
-            actual_gear_type = item_data.get('gear_type')
-            
-            # [DEBUG] 8b단계: 카테고리 비교 로그
-            if actual_category == self.db_category:
-                logger.warning(f"[DEBUG-TRACE] 8b. ✅ SUCCESS: Category matches. (Item: {repr(actual_category)}, Required: {repr(self.db_category)})")
-            else:
-                logger.warning(f"[DEBUG-TRACE] 8b. ❌ FAILURE: Category mismatch. (Item: {repr(actual_category)}, Required: {repr(self.db_category)})")
-                continue # 다음 아이템으로
-                
-            # [DEBUG] 8c단계: gear_type 비교 로그
-            if actual_gear_type == self.gear_type:
-                logger.warning(f"[DEBUG-TRACE] 8c. ✅ SUCCESS: gear_type matches. (Item: {repr(actual_gear_type)}, Required: {repr(self.gear_type)})")
-                # 모든 조건을 통과했으므로 드롭다운에 추가
-                options.append(discord.SelectOption(label=f"{name} ({count}個)", value=name, emoji=item_data.get('emoji')))
-                logger.warning(f"[DEBUG-TRACE] 8d. 🎉 ADDED TO DROPDOWN: {repr(name)}")
-            else:
-                logger.warning(f"[DEBUG-TRACE] 8c. ❌ FAILURE: gear_type mismatch. (Item: {repr(actual_gear_type)}, Required: {repr(self.gear_type)})")
-                continue # 다음 아이템으로
-
-        # [DEBUG] 9단계: 최종 생성된 드롭다운 옵션 로그
-        final_option_values = [opt.value for opt in options]
-        logger.warning(f"[DEBUG-TRACE] 9. Final dropdown options generated: {final_option_values}")
+            if item_data and item_data.get('category') == self.db_category and item_data.get('gear_type') == self.gear_type:
+                 options.append(discord.SelectOption(label=f"{name} ({count}個)", value=name, emoji=item_data.get('emoji')))
 
         select = ui.Select(placeholder=get_string("gear_select_view.placeholder", category_name=self.category_name), options=options)
         select.callback = self.select_callback
@@ -269,9 +207,6 @@ class GearSelectView(ui.View):
         back_button = ui.Button(label=get_string("gear_select_view.back_button", "戻る"), style=discord.ButtonStyle.grey, row=1)
         back_button.callback = self.back_callback
         self.add_item(back_button)
-        
-        # [DEBUG] 10단계: UI 업데이트 전 마지막 로그
-        logger.warning(f"[DEBUG-TRACE] 10. Updating interaction response with the generated components.")
 
         embed = discord.Embed(
             title=get_string("gear_select_view.embed_title", category_name=self.category_name), 
@@ -318,7 +253,7 @@ class UserProfile(commands.Cog):
         self.bot.add_view(UserProfilePanelView(self))
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_profile"):
-        if (panel_info := get_panel_id(panel_key)):
+        if (panel_info := get_panel_id("profile")): # 'profile' 키로 패널 정보 조회
             if (old_channel_id := panel_info.get("channel_id")) and (old_channel := self.bot.get_channel(old_channel_id)):
                 try:
                     old_message = await old_channel.fetch_message(panel_info["message_id"])
