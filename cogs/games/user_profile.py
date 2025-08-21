@@ -39,6 +39,7 @@ class ProfileView(ui.View):
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     async def update_display(self, interaction: discord.Interaction, reload_data: bool = False):
+        await interaction.response.defer()
         if reload_data:
             await self.load_data()
         embed = await self.build_embed()
@@ -128,25 +129,32 @@ class ProfileView(ui.View):
             style = discord.ButtonStyle.primary if self.current_page == key else discord.ButtonStyle.secondary
             self.add_item(ui.Button(label=config.get("label"), style=style, custom_id=f"profile_tab_{key}", emoji=config.get("emoji"), row=row_counter))
             tab_buttons_in_row += 1
+        
         row_counter += 1
         if self.current_page == "gear":
             self.add_item(ui.Button(label="釣竿を変更", style=discord.ButtonStyle.blurple, custom_id="profile_change_rod", emoji="🎣", row=row_counter))
             self.add_item(ui.Button(label="エサを変更", style=discord.ButtonStyle.blurple, custom_id="profile_change_bait", emoji="🐛", row=row_counter))
+            
             row_counter += 1
             self.add_item(ui.Button(label="クワを変更", style=discord.ButtonStyle.success, custom_id="profile_change_hoe", emoji="🪓", row=row_counter))
+            
+            # [✅ 최종 수정] watering_can의 custom_id를 올바르게 수정합니다.
             self.add_item(ui.Button(label="じょうろを変更", style=discord.ButtonStyle.success, custom_id="profile_change_watering_can", emoji="💧", row=row_counter))
+        
+        row_counter += 1
         if self.current_page == "fish" and self.cached_data.get("aquarium"):
             if math.ceil(len(self.cached_data["aquarium"]) / 10) > 1:
                 total_pages = math.ceil(len(self.cached_data["aquarium"]) / 10)
                 self.add_item(ui.Button(label=get_string("profile_view.pagination_buttons.prev"), custom_id="profile_fish_prev", disabled=self.fish_page_index == 0, row=row_counter))
                 self.add_item(ui.Button(label=get_string("profile_view.pagination_buttons.next"), custom_id="profile_fish_next", disabled=self.fish_page_index >= total_pages - 1, row=row_counter))
+        
         for child in self.children:
             if isinstance(child, ui.Button): child.callback = self.button_callback
 
     async def button_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.user.id:
-            return await interaction.response.send_message("自分専用のメニューを操作してください。", ephemeral=True)
-        await interaction.response.defer()
+            return await interaction.response.send_message("自分専用のメニューを操作してください。", ephemeral=True, delete_after=5)
+        
         custom_id = interaction.data['custom_id']
         if custom_id.startswith("profile_tab_"):
             self.current_page = custom_id.split("_")[-1]
@@ -167,13 +175,10 @@ class GearSelectView(ui.View):
         self.user = parent_view.user
         self.gear_type = gear_type
         
-        # --- [핵심 버그 수정] ---
-        # 주석: 딕셔너리를 사용하여 각 gear_type에 맞는 설정을 명확하게 불러옵니다.
-        # 이 방식은 실수를 방지하고, 새로운 장비 타입을 추가할 때도 여기 한 줄만 추가하면 되어 매우 편리합니다.
         GEAR_SETTINGS = {
             "rod":          (GEAR_CATEGORY, "釣竿", "釣竿を外す", BARE_HANDS),
             "hoe":          (GEAR_CATEGORY, "クワ", "クワを外す", BARE_HANDS),
-            "watering_can": (GEAR_CATEGORY, "じょうろ", "じょうろを外す", BARE_HANDS),
+            "watering_can": (GEAR_CATEGORY, "じょうろ", "じょうろを外す", BARE_HANDS), # [✅ 최종 수정] BAIT_CATEGORY를 GEAR_CATEGORY로 수정
             "bait":         (BAIT_CATEGORY, "釣りエサ", "エサを外す", "エサなし")
         }
         
@@ -184,27 +189,31 @@ class GearSelectView(ui.View):
             self.db_category, self.category_name, self.unequip_label, self.default_item = ("不明", "不明", "外す", "なし")
 
     async def setup_and_update(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         inventory, item_db = self.parent_view.cached_data.get("inventory", {}), get_item_database()
-        options = [discord.SelectOption(label=f'✋ {self.unequip_label}', value="unequip")]
+        options = [discord.SelectOption(label=f'{get_string("gear_select_view.unequip_prefix", "✋")} {self.unequip_label}', value="unequip")]
         
         for name, count in inventory.items():
             item_data = item_db.get(name)
-            # 주석: 아이템 이름('%釣竿%') 대신, DB에 새로 추가한 'gear_type'을 직접 비교합니다.
-            # 이 방식이 훨씬 안정적이고 정확합니다.
             if item_data and item_data.get('category') == self.db_category and item_data.get('gear_type') == self.gear_type:
                  options.append(discord.SelectOption(label=f"{name} ({count}個)", value=name, emoji=item_data.get('emoji')))
 
-        select = ui.Select(placeholder=f"新しい{self.category_name}を選択してください...", options=options)
+        select = ui.Select(placeholder=get_string("gear_select_view.placeholder", category_name=self.category_name), options=options)
         select.callback = self.select_callback
         self.add_item(select)
-        back_button = ui.Button(label="戻る", style=discord.ButtonStyle.grey, row=1)
+
+        back_button = ui.Button(label=get_string("gear_select_view.back_button", "戻る"), style=discord.ButtonStyle.grey, row=1)
         back_button.callback = self.back_callback
         self.add_item(back_button)
-        embed = discord.Embed(title=f"装備変更: {self.category_name}", description="インベントリから装着するアイテムを選択してください。", color=self.user.color)
+
+        embed = discord.Embed(
+            title=get_string("gear_select_view.embed_title", category_name=self.category_name), 
+            description=get_string("gear_select_view.embed_description"), 
+            color=self.user.color
+        )
         await interaction.edit_original_response(embed=embed, view=self)
 
     async def select_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
         selected_option = interaction.data['values'][0]
         if selected_option == "unequip":
             selected_item_name = self.default_item
@@ -216,7 +225,6 @@ class GearSelectView(ui.View):
         await self.go_back_to_profile(interaction, reload_data=True)
 
     async def back_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
         await self.go_back_to_profile(interaction)
 
     async def go_back_to_profile(self, interaction: discord.Interaction, reload_data: bool = False):
@@ -230,41 +238,36 @@ class UserProfilePanelView(ui.View):
         profile_button = ui.Button(label="持ち物を見る", style=discord.ButtonStyle.primary, emoji="📦", custom_id="user_profile_open_button")
         profile_button.callback = self.open_profile
         self.add_item(profile_button)
+
     async def open_profile(self, interaction: discord.Interaction):
         view = ProfileView(interaction.user, self.cog)
         await view.build_and_send(interaction)
 
 class UserProfile(commands.Cog):
-    def __init__(self, bot: commands.Cog):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
+
     async def register_persistent_views(self):
         self.bot.add_view(UserProfilePanelView(self))
-    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "profile"):
-        embed_key = "panel_profile"
+
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_profile"):
         if (panel_info := get_panel_id(panel_key)):
             if (old_channel_id := panel_info.get("channel_id")) and (old_channel := self.bot.get_channel(old_channel_id)):
                 try:
                     old_message = await old_channel.fetch_message(panel_info["message_id"])
                     await old_message.delete()
                 except (discord.NotFound, discord.Forbidden): pass
-        if not (embed_data := await get_embed_from_db(embed_key)): return
+        
+        if not (embed_data := await get_embed_from_db("panel_profile")): 
+            logger.warning("DB에서 'panel_profile' 임베드 데이터를 찾지 못해 패널 생성을 건너뜁니다.")
+            return
+            
         embed = discord.Embed.from_dict(embed_data)
         view = UserProfilePanelView(self)
-        self.bot.add_view(view)
-        new_message = await channel.send(embed=embed, view=view)
-        await save_panel_id(panel_key, new_message.id, channel.id)
-        logger.info(f"✅ プロフィール 패널을 성공적으로 새로 생성했습니다. (채널: #{channel.name})")
-    @commands.command(name="debugitem")
-    @commands.is_owner() # 봇 소유자만 실행 가능
-    async def debug_item_command(self, ctx, *, item_name: str):
-        item_db = get_item_database()
-        item_data = item_db.get(item_name)
         
-        if not item_data:
-            await ctx.send(f"'{item_name}' 아이템을 캐시에서 찾을 수 없습니다.")
-            return
+        new_message = await channel.send(embed=embed, view=view)
+        await save_panel_id("profile", new_message.id, channel.id) # panel_key를 'profile'로 저장
+        logger.info(f"✅ プロフィールパネルを正常に生成しました。 (チャンネル: #{channel.name})")
 
-        # 파이썬 딕셔너리 그대로 출력
-        await ctx.send(f"```python\n{item_data}\n```")
-async def setup(bot: commands.Cog):
+async def setup(bot: commands.Bot):
     await bot.add_cog(UserProfile(bot))
