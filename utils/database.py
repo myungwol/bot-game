@@ -45,13 +45,12 @@ def supabase_retry_handler(retries: int = 3, delay: int = 5):
     return decorator
 
 BARE_HANDS = "素手"
-DEFAULT_ROD = "古い釣竿"
+DEFAULT_ROD = "木の釣竿" # 주석: "古い釣竿" 에서 수정
 
 # --- [농장 시스템 함수] ---
 
 @supabase_retry_handler()
 async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
-    # 주석: farm_plots(*)는 Supabase의 기능으로, farm_plots 테이블에서 farm_id가 일치하는 모든 데이터를 배열로 함께 가져옵니다.
     response = await supabase.table('farms').select('*, farm_plots(*)').eq('user_id', user_id).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
 
@@ -62,16 +61,13 @@ async def get_farm_owner_by_thread(thread_id: int) -> Optional[int]:
 
 @supabase_retry_handler()
 async def create_farm(user_id: int) -> Optional[Dict[str, Any]]:
-    # 주석: SQL로 만든 RPC 함수를 호출합니다. 이 함수는 farms 테이블과 farm_plots 테이블에 필요한 데이터를 한 번에 생성해줍니다.
     rpc_response = await supabase.rpc('create_farm_for_user', {'p_user_id': user_id}).execute()
     if rpc_response and rpc_response.data:
-        # RPC 호출 성공 후, 최신 데이터를 다시 조회하여 반환합니다.
         return await get_farm_data(user_id)
     return None
 
 @supabase_retry_handler()
 async def expand_farm_db(farm_id: int, new_size_x: int, new_size_y: int):
-    # 주석: 농장 확장을 위한 RPC 함수를 호출합니다.
     await supabase.rpc('expand_farm', {'p_farm_id': farm_id, 'new_size_x': new_size_x, 'new_size_y': new_size_y}).execute()
 
 @supabase_retry_handler()
@@ -80,14 +76,11 @@ async def update_plot(plot_id: int, updates: Dict[str, Any]):
 
 @supabase_retry_handler()
 async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
-    # 주석: farm_item_details 테이블에서 특정 작물의 재배 정보를 가져옵니다.
     response = await supabase.table('farm_item_details').select('*').eq('item_name', item_name).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
 
 @supabase_retry_handler()
 async def clear_plots_db(plot_ids: List[int]):
-    # 주석: 수확하거나 작물을 제거한 후, 밭을 초기 상태(경작된 상태)로 되돌립니다.
-    # 새로 추가된 quality, water_count 등의 컬럼도 모두 초기화합니다.
     await supabase.table('farm_plots').update({
         'state': 'tilled',
         'planted_item_name': None,
@@ -115,9 +108,8 @@ async def grant_farm_permission(farm_id: int, user_id: int):
         'can_harvest': True
     }, on_conflict='farm_id, granted_to_user_id').execute()
 
-# --- [이하 다른 함수들은 생략 없이 모두 포함] ---
-
 # --- [퀘스트 및 출석체크 함수] ---
+
 @supabase_retry_handler()
 async def has_checked_in_today(user_id: int) -> bool:
     response = await supabase.table('attendance_logs').select('id', count='exact').eq('user_id', user_id).gte('checked_in_at', 'today').limit(1).execute()
