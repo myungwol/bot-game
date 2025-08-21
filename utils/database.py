@@ -10,6 +10,7 @@ from typing import Dict, Callable, Any, List, Optional, Union
 from functools import wraps
 from utils.ui_defaults import UI_STRINGS
 from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,9 @@ async def grant_farm_permission(farm_id: int, user_id: int):
 # --- [퀘스트 및 출석체크 함수] ---
 @supabase_retry_handler()
 async def has_checked_in_today(user_id: int) -> bool:
-    response = await supabase.table('attendance_logs').select('id', count='exact').eq('user_id', user_id).gte('checked_in_at', 'today').limit(1).execute()
+    KST = timezone(timedelta(hours=9))
+    today_kst_start = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+    response = await supabase.table('attendance_logs').select('id', count='exact').eq('user_id', user_id).gte('checked_in_at', today_kst_start.isoformat()).limit(1).execute()
     return response.count > 0
 @supabase_retry_handler()
 async def record_attendance(user_id: int):
