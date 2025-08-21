@@ -531,7 +531,6 @@ class Farm(commands.Cog):
         owner_id = await get_farm_owner_by_thread(interaction.channel.id)
         return self.bot.get_user(owner_id) if owner_id else None
         
-    # [✅ 최종 수정] 임베드에 추가 정보를 표시하도록 build_farm_embed 함수를 수정합니다.
     async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         farmable_info_map = await preload_farmable_info(farm_data)
         size_x, size_y = farm_data.get('size_x', 1), farm_data.get('size_y', 1)
@@ -583,12 +582,12 @@ class Farm(commands.Cog):
                     if not farmable_info: continue
 
                     # 오늘 물 줬는지 확인
-                    watered_today_emoji = '➖'
+                    watered_today_emoji = '❌'
                     if plot.get('last_watered_at'):
                         if datetime.fromisoformat(plot['last_watered_at']) >= today_kst_midnight:
                             watered_today_emoji = '💧'
 
-                    info_text = f"{plot_emoji} **{plot['planted_item_name']}** (물: {watered_today_emoji}): "
+                    info_text = f"{plot_emoji} **{plot['planted_item_name']}** (水: {watered_today_emoji}): "
                     
                     # 수확까지 남은 시간 계산
                     if plot['growth_stage'] < 3: # 아직 다 자라지 않음
@@ -596,7 +595,7 @@ class Farm(commands.Cog):
                         growth_days = farmable_info.get('growth_days', 3)
                         days_passed = (now_utc - planted_at).days
                         days_left = max(0, growth_days - days_passed)
-                        info_text += f"수확까지 약 {days_left}일"
+                        info_text += f"収穫まであと約 {days_left}日"
                     
                     elif farmable_info.get('is_tree'): # 다 자란 나무
                         regrowth_hours = farmable_info.get('regrowth_hours', 24)
@@ -605,11 +604,11 @@ class Farm(commands.Cog):
                         time_left = next_harvest_time - now_utc
                         if time_left.total_seconds() > 0:
                             hours_left = int(time_left.total_seconds() // 3600)
-                            info_text += f"다음 열매까지 약 {hours_left}시간"
+                            info_text += f"次の実まであと約 {hours_left}時間"
                         else:
-                            info_text += "열매 수확 가능! 🧺"
+                            info_text += "実の収穫可能！ 🧺"
                     else: # 다 자란 일반 작물
-                        info_text += "수확 가능! 🧺"
+                        info_text += "収穫可能！ 🧺"
                     
                     info_lines.append(info_text)
 
