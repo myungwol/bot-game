@@ -168,7 +168,7 @@ class GearSelectView(ui.View):
         self.gear_type = gear_type
         
         # --- [핵심 버그 수정] ---
-        # 주석: if/elif 구조 대신 딕셔너리를 사용하여 각 gear_type에 맞는 설정을 명확하게 불러옵니다.
+        # 주석: 딕셔너리를 사용하여 각 gear_type에 맞는 설정을 명확하게 불러옵니다.
         # 이 방식은 실수를 방지하고, 새로운 장비 타입을 추가할 때도 여기 한 줄만 추가하면 되어 매우 편리합니다.
         GEAR_SETTINGS = {
             "rod":          (GEAR_CATEGORY, "釣竿", "釣竿を外す", BARE_HANDS),
@@ -176,15 +176,11 @@ class GearSelectView(ui.View):
             "watering_can": (GEAR_CATEGORY, "じょうろ", "じょうろを外す", BARE_HANDS),
             "bait":         (BAIT_CATEGORY, "釣りエサ", "エサを外す", "エサなし")
         }
-
-        # 주석: 현재 gear_type에 맞는 설정을 가져옵니다.
+        
         settings = GEAR_SETTINGS.get(self.gear_type)
         if settings:
-            # 주석: 가져온 설정을 self 변수에 한 번에 할당합니다. 
-            # 이로써 watering_can을 눌렀을 때 unequip_label이 누락되는 문제가 해결됩니다.
             self.db_category, self.category_name, self.unequip_label, self.default_item = settings
         else:
-            # 주석: 혹시 모를 예외 상황을 대비한 기본값 설정
             self.db_category, self.category_name, self.unequip_label, self.default_item = ("不明", "不明", "外す", "なし")
 
     async def setup_and_update(self, interaction: discord.Interaction):
@@ -193,7 +189,8 @@ class GearSelectView(ui.View):
         
         for name, count in inventory.items():
             item_data = item_db.get(name)
-            # 주석: 아이템 이름 대신, DB의 gear_type을 직접 비교하여 훨씬 안정적입니다.
+            # 주석: 아이템 이름('%釣竿%') 대신, DB에 새로 추가한 'gear_type'을 직접 비교합니다.
+            # 이 방식이 훨씬 안정적이고 정확합니다.
             if item_data and item_data.get('category') == self.db_category and item_data.get('gear_type') == self.gear_type:
                  options.append(discord.SelectOption(label=f"{name} ({count}個)", value=name, emoji=item_data.get('emoji')))
 
