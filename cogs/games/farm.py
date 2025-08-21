@@ -18,10 +18,31 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
+# 주석: 작물 성장 단계별 이모지를 정의합니다.
 CROP_EMOJI_MAP = {
-    'seed': {0: '🫘', 1: '🌱', 2: '🌾'},
-    'sapling': {0: '🫘', 1: '🌱', 2: '🌳'}
+    'seed': {0: '🌱', 1: '🌿', 2: '🌾'},
+    'sapling': {0: '🌱', 1: '🌳', 2: '🌳'} # 묘목은 1, 2단계가 동일하게 보일 수 있습니다.
 }
+
+# 주석: 날씨 정보를 저장할 간단한 딕셔너리. world.py와 동일한 구조를 유지합니다.
+WEATHER_TYPES = {
+    "sunny": {"emoji": "☀️", "name": "晴れ", "water_effect": False},
+    "cloudy": {"emoji": "☁️", "name": "曇り", "water_effect": False},
+    "rainy": {"emoji": "🌧️", "name": "雨", "water_effect": True},
+    "stormy": {"emoji": "⛈️", "name": "嵐", "water_effect": True},
+}
+
+# 주석: 농장 그리기에 필요한 모든 작물 정보를 DB에서 미리 한번에 불러오는 헬퍼 함수입니다.
+# 이 함수는 성능 최적화에 매우 중요합니다.
+async def preload_farmable_info(farm_data: Dict) -> Dict[str, Dict]:
+    item_names = {p['planted_item_name'] for p in farm_data.get('farm_plots', []) if p.get('planted_item_name')}
+    if not item_names:
+        return {}
+    
+    tasks = [get_farmable_item_info(name) for name in item_names]
+    results = await asyncio.gather(*tasks)
+    return {info['item_name']: info for info in results if info}
+
 
 # --- UI 클래스 ---
 class ConfirmationView(ui.View):
@@ -93,7 +114,7 @@ class FarmActionView(ui.View):
 
     async def _build_seed_select(self):
         inventory = await get_inventory(str(self.user.id))
-        farmable_items_in_inv = {name: qty for name, qty in inventory.items() if "種" in name or "苗木" in name or "胞子" in name}
+        farmable_items_in_inv = {name: qty for name, qty in inventory.items() if get_item_database().get(name, {}).get('category') == '農場_種'}
         if not farmable_items_in_inv:
             self.add_item(ui.Button(label="植えられる種がありません。", disabled=True)); return
 
@@ -147,11 +168,13 @@ class FarmActionView(ui.View):
             if pos_x <= p['pos_x'] < pos_x + size_x and pos_y <= p['pos_y'] < pos_y + size_y
         ]
         
+        now_iso = datetime.now(timezone.utc).isoformat()
         update_tasks = [
             update_plot(p['id'], {
                 'state': 'planted', 'planted_item_name': self.selected_item,
-                'planted_at': datetime.now(timezone.utc).isoformat(),
-                'growth_stage': 0, 'water_count': 0, 'last_watered_at': None
+                'planted_at': now_iso,
+                'last_watered_at': now_iso, # 주석: 처음 심을 때 물을 준 것으로 간주
+                'growth_stage': 0, 'water_count': 1, 'quality': 5 # 주석: 기본 품질 5점, 물 1회로 시작
             }) for p in plots_to_update
         ]
         
@@ -164,26 +187,32 @@ class FarmActionView(ui.View):
         await interaction.delete_original_response()
 
     async def _build_uproot_select(self):
-        planted_plots = [p for p in self.farm_data['farm_plots'] if p['state'] == 'planted']
-        if not planted_plots:
-            self.add_item(ui.Button(label="植えられた作物がありません。", disabled=True)); return
+        # 주석: 'planted' 상태뿐만 아니라 'withered'(시든) 상태의 작물도 정리 대상으로 포함합니다.
+        plots_to_clear = [p for p in self.farm_data['farm_plots'] if p['state'] in ['planted', 'withered']]
+        if not plots_to_clear:
+            self.add_item(ui.Button(label="整理できる作物がありません。", disabled=True)); return
             
         processed_plots, options = set(), []
-        for plot in sorted(planted_plots, key=lambda p: (p['pos_y'], p['pos_x'])):
+        for plot in sorted(plots_to_clear, key=lambda p: (p['pos_y'], p['pos_x'])):
             if plot['id'] in processed_plots: continue
 
-            item_name = plot['planted_item_name']
-            farmable_info = await get_farmable_item_info(item_name)
-            size_x, size_y = farmable_info['space_required_x'], farmable_info['space_required_y']
-            
-            plot_ids_to_clear = [
-                p_inner['id'] for p_inner in planted_plots
-                if plot['pos_x'] <= p_inner['pos_x'] < plot['pos_x'] + size_x and
-                   plot['pos_y'] <= p_inner['pos_y'] < plot['pos_y'] + size_y
-            ]
-            processed_plots.update(plot_ids_to_clear)
-            
-            label = f"{item_name} ({plot['pos_y']+1}行 {plot['pos_x']+1}列)"
+            if plot['state'] == 'withered':
+                label = f"🥀 枯れた作物 ({plot['pos_y']+1}行 {plot['pos_x']+1}列)"
+                plot_ids_to_clear = [p_inner['id'] for p_inner in plots_to_clear if p_inner['planted_at'] == plot['planted_at']]
+                processed_plots.update(plot_ids_to_clear)
+            else:
+                item_name = plot['planted_item_name']
+                farmable_info = await get_farmable_item_info(item_name)
+                size_x, size_y = farmable_info['space_required_x'], farmable_info['space_required_y']
+                
+                plot_ids_to_clear = [
+                    p_inner['id'] for p_inner in plots_to_clear
+                    if plot['pos_x'] <= p_inner['pos_x'] < plot['pos_x'] + size_x and
+                       plot['pos_y'] <= p_inner['pos_y'] < plot['pos_y'] + size_y
+                ]
+                processed_plots.update(plot_ids_to_clear)
+                label = f"{item_name} ({plot['pos_y']+1}行 {plot['pos_x']+1}列)"
+
             value = ",".join(map(str, plot_ids_to_clear))
             options.append(discord.SelectOption(label=label, value=value))
 
@@ -323,44 +352,68 @@ class Farm(commands.Cog):
 
     @tasks.loop(hours=1)
     async def crop_growth_check(self):
-        logger.info("작물 성장 상태 자동 업데이트 시작...")
+        logger.info("작물 성장 및 상태 업데이트 시작...")
         try:
-            response = await supabase.table('farm_plots').select('*').eq('state', 'planted').neq('growth_stage', 3).execute()
+            weather_key = get_config("current_weather", "sunny").strip('"')
+            is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
+
+            response = await supabase.table('farm_plots').select('*').eq('state', 'planted').execute()
             if not response.data: return
-            
+
             plots_to_update = []
+            now = datetime.now(timezone.utc)
+            farmable_info_map = await preload_farmable_info({'farm_plots': response.data})
+
             for plot in response.data:
-                farmable_info = await get_farmable_item_info(plot['planted_item_name'])
+                farmable_info = farmable_info_map.get(plot['planted_item_name'])
                 if not farmable_info: continue
 
-                planted_time = datetime.fromisoformat(plot['planted_at'])
-                time_since_planted = datetime.now(timezone.utc) - planted_time
+                planted_at = datetime.fromisoformat(plot['planted_at'])
+                last_watered_at = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else planted_at
                 
-                growth_hours = farmable_info['growth_time_hours']
-                current_stage = plot['growth_stage']
-                new_stage = current_stage
+                lifespan = timedelta(hours=farmable_info.get('lifespan_hours', 24))
+                if now - last_watered_at > lifespan:
+                    updates = {'state': 'withered', 'quality': -1}
+                    plots_to_update.append((plot['id'], updates))
+                    continue
 
-                if not farmable_info['is_tree']:
-                    if time_since_planted >= timedelta(hours=growth_hours): new_stage = 3
-                    elif time_since_planted >= timedelta(hours=growth_hours * 0.66): new_stage = 2
-                    elif time_since_planted >= timedelta(hours=growth_hours * 0.33): new_stage = 1
-                else: # Tree logic
-                    regrowth_hours = farmable_info.get('regrowth_hours', 0)
-                    if current_stage < 2: # Tree growing
-                        if time_since_planted >= timedelta(hours=growth_hours): new_stage = 2
-                        elif time_since_planted >= timedelta(hours=growth_hours * 0.5): new_stage = 1
-                    elif current_stage == 2: # Fruit growing
-                        if time_since_planted >= timedelta(hours=regrowth_hours): new_stage = 3
+                water_interval = timedelta(hours=farmable_info.get('water_interval_hours', 6))
+                time_since_last_water = now - last_watered_at
+                needs_water = time_since_last_water > water_interval
                 
-                if new_stage != current_stage:
-                    plots_to_update.append(update_plot(plot['id'], {'growth_stage': new_stage}))
+                current_updates = {}
+                quality_change = 0
+
+                if is_raining and needs_water:
+                    current_updates['last_watered_at'] = now.isoformat()
+                    current_updates['water_count'] = plot['water_count'] + 1
+                    quality_change += 5
+                
+                current_stage = plot['growth_stage']
+                if current_stage < 3:
+                    total_stages = farmable_info.get('water_cycle_required', 3)
+                    new_stage = min(3, (plot['water_count'] * 3) // total_stages)
+
+                    if new_stage > current_stage:
+                         current_updates['growth_stage'] = new_stage
+                         quality_change += 10
+
+                if time_since_last_water > water_interval * 2:
+                    quality_change -= 5
+                
+                if quality_change != 0:
+                    current_updates['quality'] = plot['quality'] + quality_change
+
+                if current_updates:
+                    plots_to_update.append((plot['id'], current_updates))
 
             if plots_to_update:
-                await asyncio.gather(*plots_to_update)
-                logger.info(f"{len(plots_to_update)}개의 밭의 성장 단계를 업데이트했습니다.")
+                update_tasks = [update_plot(pid, data) for pid, data in plots_to_update]
+                await asyncio.gather(*update_tasks)
+                logger.info(f"{len(plots_to_update)}개의 밭의 상태를 업데이트했습니다.")
 
         except Exception as e:
-            logger.error(f"작물 성장 체크 중 오류: {e}", exc_info=True)
+            logger.error(f"작물 성장/상태 체크 중 오류: {e}", exc_info=True)
 
     @crop_growth_check.before_loop
     async def before_crop_growth_check(self):
@@ -370,7 +423,8 @@ class Farm(commands.Cog):
         owner_id = await get_farm_owner_by_thread(interaction.channel.id)
         return self.bot.get_user(owner_id) if owner_id else interaction.user
 
-    def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
+    async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
+        farmable_info_map = await preload_farmable_info(farm_data)
         size_x, size_y = farm_data.get('size_x', 1), farm_data.get('size_y', 1)
         plots_map = {(p['pos_x'], p['pos_y']): p for p in farm_data.get('farm_plots', [])}
         grid = [['' for _ in range(size_x)] for _ in range(size_y)]
@@ -385,18 +439,19 @@ class Farm(commands.Cog):
                 
                 if plot['state'] == 'default': grid[y][x] = '🟤'
                 elif plot['state'] == 'tilled': grid[y][x] = '🟫'
+                elif plot['state'] == 'withered': grid[y][x] = '🥀'
                 elif plot['state'] == 'planted':
                     stage = plot['growth_stage']
-                    # 비동기 호출을 피하기 위해, farmable_info는 미리 가져와서 전달하는 것이 이상적
-                    # 지금은 임시로 동기적으로 처리 (성능 저하 가능)
                     item_name = plot['planted_item_name']
-                    farmable_info = asyncio.run_coroutine_threadsafe(get_farmable_item_info(item_name), self.bot.loop).result()
+                    farmable_info = farmable_info_map.get(item_name)
+                    if not farmable_info:
+                        grid[y][x] = '❓'; processed_plots.add((x,y)); continue
 
                     if stage == 3:
                         emoji_to_use = farmable_info.get('item_emoji', '🌟')
                     else:
                         item_type = farmable_info.get('item_type', 'seed')
-                        emoji_to_use = CROP_EMOJI_MAP.get(item_type, {}).get(stage, '❓')
+                        emoji_to_use = CROP_EMOJI_MAP.get(item_type, {}).get(stage, '🌱')
 
                     sx, sy = farmable_info['space_required_x'], farmable_info['space_required_y']
                     for dy in range(sy):
@@ -410,6 +465,11 @@ class Farm(commands.Cog):
         farm_name = farm_data.get('name') or user.display_name
         embed = discord.Embed(title=f"**{farm_name}の農場**", color=0x8BC34A)
         embed.description = f"> 畑を耕し、作物を育てましょう！\n```{farm_str}```"
+        
+        weather_key = get_config("current_weather", "sunny").strip('"')
+        weather = WEATHER_TYPES.get(weather_key, {"emoji": "❔", "name": "不明"})
+        embed.description += f"\n**今日の天気:** {weather['emoji']} {weather['name']}"
+
         return embed
 
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User, interaction: Optional[discord.Interaction] = None):
@@ -421,7 +481,7 @@ class Farm(commands.Cog):
                 return
             try:
                 farm_message = await thread.fetch_message(farm_data["farm_message_id"])
-                embed = self.build_farm_embed(farm_data, user)
+                embed = await self.build_farm_embed(farm_data, user)
                 view = FarmUIView(self, farm_data, user)
                 await farm_message.edit(embed=embed, view=view)
             except (discord.NotFound, discord.Forbidden):
@@ -440,13 +500,13 @@ class Farm(commands.Cog):
             farm_thread = await panel_channel.create_thread(name=f"🌱｜{farm_name}", type=discord.ChannelType.private_thread)
             await farm_thread.send(f"ようこそ、{user.mention}さん！このスレッドの管理権限を設定しています…", delete_after=10)
             farm_data = await get_farm_data(user.id) or await create_farm(user.id)
-            await supabase.table('farms').update({'thread_id': farm_thread.id}).eq('user_id', user.id).execute()
+            await supabase.table('farms').update({'thread_id': farm_thread.id, 'name': farm_name}).eq('user_id', user.id).execute()
             farm_data = await get_farm_data(user.id)
             if welcome_embed_data := await get_embed_from_db("farm_thread_welcome"):
                 welcome_embed = format_embed_from_db(welcome_embed_data, user_name=farm_data.get('name') or user.display_name)
                 await farm_thread.send(embed=welcome_embed)
             
-            farm_embed = self.build_farm_embed(farm_data, user)
+            farm_embed = await self.build_farm_embed(farm_data, user)
             farm_view = FarmUIView(self, farm_data, user)
             farm_message = await farm_thread.send(embed=farm_embed, view=farm_view)
             
@@ -506,13 +566,12 @@ class Farm(commands.Cog):
                 farmable_info = await get_farmable_item_info(plot['planted_item_name'])
                 if not farmable_info: continue
                 
-                interval = farmable_info['growth_time_hours'] / farmable_info['water_cycle_required']
-                needs_water = not plot.get('last_watered_at') or \
-                              now - datetime.fromisoformat(plot['last_watered_at']) >= timedelta(hours=interval)
+                last_watered_at = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromisoformat(plot['planted_at'])
+                interval = timedelta(hours=farmable_info.get('water_interval_hours', 6))
                 
-                if needs_water:
+                if now - last_watered_at > interval:
                     plots_to_update.append(
-                        update_plot(plot['id'], {'last_watered_at': now.isoformat(), 'water_count': plot['water_count'] + 1})
+                        update_plot(plot['id'], {'last_watered_at': now.isoformat(), 'water_count': plot['water_count'] + 1, 'quality': plot['quality'] + 5})
                     )
                     watered_count += 1
 
@@ -528,34 +587,46 @@ class Farm(commands.Cog):
         farm_owner = await self.get_farm_owner(interaction)
         farm_data = await get_farm_data(farm_owner.id)
         
-        harvested_items, plots_to_reset, trees_to_update = {}, [], {}
+        harvested_items, plots_to_reset, trees_to_update, processed_plots_ids = {}, [], {}, set()
+        farmable_info_map = await preload_farmable_info(farm_data)
         
         for plot in farm_data.get('farm_plots', []):
-            if plot['growth_stage'] != 3: continue
-            farmable_info = await get_farmable_item_info(plot['planted_item_name'])
+            if plot['id'] in processed_plots_ids or plot['growth_stage'] != 3: continue
+
+            farmable_info = farmable_info_map.get(plot['planted_item_name'])
             if not farmable_info: continue
 
-            max_water = farmable_info['water_cycle_required']; water_count = plot['water_count']
-            base_yield = 3
-            bonus = max(0, water_count - max_water)
-            penalty = max(0, max_water - water_count)
-            final_yield = max(1, base_yield + bonus - penalty)
+            sx, sy = farmable_info['space_required_x'], farmable_info['space_required_y']
+            related_plots = [p for p in farm_data['farm_plots'] if plot['pos_x'] <= p['pos_x'] < plot['pos_x'] + sx and plot['pos_y'] <= p['pos_y'] < plot['pos_y'] + sy]
+            plot_ids = [p['id'] for p in related_plots]
+            processed_plots_ids.update(plot_ids)
 
-            harvested_name = farmable_info['harvest_item_name']
+            quality_score = plot['quality']
+            grade = "最高級の" if quality_score > 20 else "上質な" if quality_score > 10 else ""
+            yield_multiplier = 1.5 if grade == "最高級の" else 1.2 if grade == "上質な" else 1.0
+            
+            harvest_item_name_base = farmable_info['harvest_item_name']
+            final_yield = int(farmable_info.get('base_yield', 1) * yield_multiplier)
+
+            harvested_name = f"{grade}{harvest_item_name_base}" if grade else harvest_item_name_base
+            
             harvested_items[harvested_name] = harvested_items.get(harvested_name, 0) + final_yield
 
-            if not farmable_info['is_tree']: plots_to_reset.append(plot['id'])
-            else: trees_to_update[plot['id']] = farmable_info['regrowth_hours']
+            if not farmable_info['is_tree']:
+                plots_to_reset.extend(plot_ids)
+            else:
+                for pid in plot_ids: trees_to_update[pid] = farmable_info.get('regrowth_hours', 24)
 
         if not harvested_items:
             return await interaction.followup.send("ℹ️ 収穫できる作物がありません。", ephemeral=True)
         
-        update_tasks = [update_inventory(str(farm_owner.id), name, qty) for name, qty in harvested_items.items()]
-        if plots_to_reset: await clear_plots_db(plots_to_reset)
+        update_tasks = [update_inventory(str(interaction.user.id), name, qty) for name, qty in harvested_items.items()]
+        if plots_to_reset:
+            update_tasks.append(clear_plots_db(plots_to_reset))
         if trees_to_update:
             now = datetime.now(timezone.utc)
             update_tasks.extend([
-                update_plot(pid, {'growth_stage': 2, 'planted_at': now.isoformat(), 'water_count': 0, 'last_watered_at': now.isoformat()})
+                update_plot(pid, {'growth_stage': 2, 'planted_at': now.isoformat(), 'water_count': 0, 'last_watered_at': now.isoformat(), 'quality': 5})
                 for pid, hours in trees_to_update.items()
             ])
             
