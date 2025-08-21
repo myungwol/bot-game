@@ -14,7 +14,7 @@ from utils.database import (
     get_config, get_string,
     get_aquarium, get_fishing_loot, sell_fish_from_db,
     save_panel_id, get_panel_id, get_embed_from_db,
-    update_inventory, update_wallet, get_farm_data, expand_farm_db # 주석: expand_farm_db 추가
+    update_inventory, update_wallet, get_farm_data, expand_farm_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -84,9 +84,17 @@ class BuyItemView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
+        
+        category_display_names = {
+            "アイテム": "雑貨屋",
+            "装備": "武具屋",
+            "エサ": "エサ屋",
+            "農場_種": "種屋",
+        }
+        display_name = category_display_names.get(self.category, self.category)
 
         embed = discord.Embed(
-            title=get_string("commerce.item_view_title", category=self.category),
+            title=f"🏪 Dico森商店 - {display_name}",
             description=get_string("commerce.item_view_desc", balance=f"{balance:,}", currency_icon=self.currency_icon),
             color=discord.Color.blue()
         )
@@ -116,11 +124,11 @@ class BuyItemView(ShopViewBase):
                     emoji=data.get('emoji')
                 ) for name, data in self.items_in_category
             ]
-            select = ui.Select(placeholder=f"購入したい「{self.category}」の商品を選択...", options=options)
+            select = ui.Select(placeholder=f"購入したい商品を選択...", options=options)
             select.callback = self.select_callback
             self.add_item(select)
 
-        back_button = ui.Button(label=get_string("commerce.back_button"), style=discord.ButtonStyle.grey, row=1)
+        back_button = ui.Button(label="カテゴリー選択に戻る", style=discord.ButtonStyle.grey, row=1)
         back_button.callback = self.back_callback
         self.add_item(back_button)
 
@@ -130,23 +138,22 @@ class BuyItemView(ShopViewBase):
         if not item_data: return
 
         try:
+            # 주석: is_stackable은 max_ownable로 대체하여 관리 일원화
+            is_stackable = item_data.get('max_ownable', 1) > 1
+            
             if item_data.get('instant_use'):
                 await self.handle_instant_use_item(interaction, item_name, item_data)
-                return
-
-            is_modal_needed = item_data.get('max_ownable', 1) > 1
-            if is_modal_needed:
+            elif is_stackable:
                 await self.handle_quantity_purchase(interaction, item_name, item_data)
             else:
                 await self.handle_single_purchase(interaction, item_name, item_data)
-
+            
             await self.update_view(interaction)
 
         except Exception as e:
             await self.handle_error(interaction, e, str(e))
 
     async def handle_instant_use_item(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
-        # 주석: '즉시 사용' 아이템을 처리하는 로직입니다. '농지 확장 허가증'이 여기에 해당합니다.
         await interaction.response.defer(ephemeral=True)
         wallet = await get_wallet(self.user.id)
         if wallet.get('balance', 0) < item_data['price']:
@@ -180,12 +187,10 @@ class BuyItemView(ShopViewBase):
             msg = await interaction.followup.send("❓ 未知の即時使用アイテムです。", ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
 
-        await self.update_view(interaction)
-
     async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
-        max_buyable = balance // item_data['price'] if item_data['price'] > 0 else item_data.get('max_ownable', 999)
+        max_buyable = balance // item_data['price'] if item_data['price'] > 0 else 999
 
         if max_buyable == 0:
             await interaction.response.send_message("❌ 残高が不足しています。", ephemeral=True, delete_after=5)
@@ -196,8 +201,8 @@ class BuyItemView(ShopViewBase):
         await modal.wait()
 
         if modal.value is None:
-            msg = await interaction.followup.send("購入がキャンセルされました。", ephemeral=True)
-            asyncio.create_task(delete_after(msg, 5))
+            if not interaction.response.is_done():
+                await interaction.response.defer()
             return
 
         quantity, total_price = modal.value, item_data['price'] * modal.value
@@ -210,18 +215,15 @@ class BuyItemView(ShopViewBase):
         await update_inventory(str(self.user.id), item_name, quantity)
         await update_wallet(self.user, -total_price)
 
-        new_wallet = await get_wallet(self.user.id)
-        new_balance = new_wallet.get('balance', 0)
-        success_message = f"✅ **{item_name}** {quantity}個を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-        
+        success_message = f"✅ **{item_name}** {quantity}個を購入しました。"
         msg = await interaction.followup.send(success_message, ephemeral=True)
-        asyncio.create_task(delete_after(msg, 10))
+        asyncio.create_task(delete_after(msg, 5))
 
     async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         await interaction.response.defer(ephemeral=True)
         wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(str(self.user.id)))
 
-        if inventory.get(item_name, 0) > 0 and item_data.get('max_ownable', 1) == 1:
+        if inventory.get(item_name, 0) > 0:
             error_message = f"❌ 「{item_name}」は既に所持しています。1つしか持てません。"
             msg = await interaction.followup.send(error_message, ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
@@ -236,16 +238,9 @@ class BuyItemView(ShopViewBase):
         await update_inventory(str(self.user.id), item_name, 1)
         await update_wallet(self.user, -total_price)
 
-        if id_key := item_data.get('id_key'):
-            if role_id := get_id(id_key):
-                if role := interaction.guild.get_role(role_id): await self.user.add_roles(role)
-
-        new_wallet = await get_wallet(self.user.id)
-        new_balance = new_wallet.get('balance', 0)
-        success_message = f"✅ **{item_name}**を`{total_price:,}`{self.currency_icon}で購入しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-        
+        success_message = f"✅ **{item_name}**を購入しました。"
         msg = await interaction.followup.send(success_message, ephemeral=True)
-        asyncio.create_task(delete_after(msg, 10))
+        asyncio.create_task(delete_after(msg, 5))
 
     async def back_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -256,7 +251,7 @@ class BuyItemView(ShopViewBase):
 
 class BuyCategoryView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
-        return discord.Embed(title=get_string("commerce.category_view_title"), description=get_string("commerce.category_view_desc"), color=discord.Color.green())
+        return discord.Embed(title="🏪 Dico森商店", description="購入したいアイテムのカテゴリーを選択してください。", color=discord.Color.green())
     
     async def build_components(self):
         self.clear_items()
@@ -265,30 +260,34 @@ class BuyCategoryView(ShopViewBase):
         available_categories = set(
             d['category'] for d in item_db.values() if d.get('buyable') and d.get('category')
         )
-        preferred_order = ["アイテム", "釣り", "農場_道具", "農場_種"]
         
-        sorted_categories = []
-        for category in preferred_order:
-            if category in available_categories:
-                sorted_categories.append(category)
-                available_categories.remove(category)
-        sorted_categories.extend(sorted(list(available_categories)))
+        # --- [핵심 수정] ---
+        # 주석: 요청하신 순서와 이름으로 버튼을 생성하는 리스트입니다.
+        category_map = [
+            ("アイテム 📜", "アイテム"),
+            ("装備 ⚒️", "装備"),
+            ("エサ 🐛", "エサ"),
+            ("種 🌱", "農場_種"),
+        ]
+        
+        buttons_created = 0
+        for display_name, db_category in category_map:
+            if db_category in available_categories:
+                button = ui.Button(label=display_name, custom_id=f"buy_category_{db_category}")
+                button.callback = self.category_callback
+                self.add_item(button)
+                buttons_created += 1
 
-        if not sorted_categories:
+        if buttons_created == 0:
             self.add_item(ui.Button(label="販売中の商品がありません。", disabled=True))
-            return
-
-        for category_name in sorted_categories:
-            button = ui.Button(label=category_name, custom_id=f"buy_category_{category_name}")
-            button.callback = self.category_callback
-            self.add_item(button)
     
     async def category_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        category = interaction.data['custom_id'].split('buy_category_')[-1]
-        item_view = BuyItemView(self.user, category)
+        category_db_name = interaction.data['custom_id'].split('buy_category_')[-1]
+        item_view = BuyItemView(self.user, category_db_name)
         item_view.message = self.message
         await item_view.update_view(interaction)
+
         
 class SellFishView(ShopViewBase):
     def __init__(self, user: discord.Member):
@@ -408,7 +407,7 @@ class SellCropView(ShopViewBase):
         if crop_items:
             for name, qty in crop_items.items():
                 item_data = item_db.get(name, {})
-                price = int(item_data.get('sell_price', item_data.get('price', 10) * 0.8)) 
+                price = int(item_data.get('sell_price', 0))
                 self.crop_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
                 
                 options.append(discord.SelectOption(
@@ -437,8 +436,8 @@ class SellCropView(ShopViewBase):
         await modal.wait()
 
         if modal.value is None:
-            msg = await interaction.followup.send("売却がキャンセルされました。", ephemeral=True)
-            asyncio.create_task(delete_after(msg, 5))
+            if not interaction.response.is_done():
+                await interaction.response.defer()
             return
 
         quantity_to_sell = modal.value
@@ -467,13 +466,15 @@ class SellCropView(ShopViewBase):
 
 class SellCategoryView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
-        return discord.Embed(title="📦 買取ボックス - カテゴリー選択", description="売却したいアイテムのカテゴリーを選択してください。", color=discord.Color.green())
+        return discord.Embed(title="📦 買取ボックス", description="売却したいアイテムのカテゴリーを選択してください。", color=discord.Color.green())
 
     async def build_components(self):
         self.clear_items()
-        self.add_item(ui.Button(label="装備", custom_id="sell_category_gear", disabled=True))
-        self.add_item(ui.Button(label="魚", custom_id="sell_category_fish"))
-        self.add_item(ui.Button(label="作物", custom_id="sell_category_crop"))
+        # --- [핵심 수정] ---
+        # 주석: 요청하신 순서와 이름으로 판매 카테고리 버튼을 생성합니다.
+        self.add_item(ui.Button(label="魚 🐟", custom_id="sell_category_fish"))
+        self.add_item(ui.Button(label="作物 🌾", custom_id="sell_category_crop"))
+        
         for child in self.children:
             if isinstance(child, ui.Button):
                 child.callback = self.on_button_click
