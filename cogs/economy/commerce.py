@@ -1,3 +1,5 @@
+# cogs/commerce.py
+
 import discord
 from discord.ext import commands
 from discord import ui
@@ -12,7 +14,7 @@ from utils.database import (
     get_config, get_string,
     get_aquarium, get_fishing_loot, sell_fish_from_db,
     save_panel_id, get_panel_id, get_embed_from_db,
-    update_inventory, update_wallet, get_farm_data, expand_farm_db
+    update_inventory, update_wallet, get_farm_data, expand_farm_db # 주석: expand_farm_db 추가
 )
 from utils.helpers import format_embed_from_db
 
@@ -141,10 +143,10 @@ class BuyItemView(ShopViewBase):
             await self.update_view(interaction)
 
         except Exception as e:
-            # ValueError를 여기서 잡지 않고 handle_error에서 처리하도록 남겨둠
             await self.handle_error(interaction, e, str(e))
 
     async def handle_instant_use_item(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
+        # 주석: '즉시 사용' 아이템을 처리하는 로직입니다. '농지 확장 허가증'이 여기에 해당합니다.
         await interaction.response.defer(ephemeral=True)
         wallet = await get_wallet(self.user.id)
         if wallet.get('balance', 0) < item_data['price']:
@@ -219,7 +221,6 @@ class BuyItemView(ShopViewBase):
         await interaction.response.defer(ephemeral=True)
         wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(str(self.user.id)))
 
-        # [✅ FIX] 에러를 발생시키는 대신, 사용자에게 직접 안내 메시지를 보내고 함수를 종료합니다.
         if inventory.get(item_name, 0) > 0 and item_data.get('max_ownable', 1) == 1:
             error_message = f"❌ 「{item_name}」は既に所持しています。1つしか持てません。"
             msg = await interaction.followup.send(error_message, ephemeral=True)
@@ -252,7 +253,6 @@ class BuyItemView(ShopViewBase):
         category_view.message = self.message
         await category_view.update_view(interaction)
 
-# --- (이후의 다른 클래스들은 변경사항이 없습니다) ---
 
 class BuyCategoryView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
