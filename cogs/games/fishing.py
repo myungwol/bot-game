@@ -224,7 +224,7 @@ class FishingPanelView(ui.View):
                         await update_inventory(str(user.id), bait, -1)
                         inventory[bait] -= 1
                     else:
-                        bait = "에サなし"
+                        bait = "エサなし"
                         # [✅ 최종 수정] set_user_gear는 여전히 user_id 문자열을 사용합니다.
                         await set_user_gear(str(user.id), bait="エサなし")
 
