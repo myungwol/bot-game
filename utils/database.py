@@ -214,6 +214,7 @@ async def update_inventory(user_id_str: str, item_name: str, quantity: int):
     params = {'user_id_param': user_id_str, 'item_name_param': item_name, 'amount_param': quantity}
     await supabase.rpc('increment_inventory_quantity', params).execute()
 
+# --- [핵심 버그 수정] ---
 async def get_user_gear(user_id_str: str) -> dict:
     default_bait = "エサなし"
     default_gear = {"rod": BARE_HANDS, "bait": default_bait, "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
@@ -227,9 +228,11 @@ async def get_user_gear(user_id_str: str) -> dict:
             gear[gear_type] = default_item
             updated = True
     if updated:
-        # --- [오류 수정] ---
-        # 주석: set_user_gear 함수는 첫 번째 인자로 user_id_str을 직접 받으므로, 불필요한 키워드를 제거합니다.
-        await set_user_gear(user_id_str, **gear)
+        # 주석: gear 딕셔너리에서 'user_id' 키를 제거한 후 set_user_gear를 호출합니다.
+        # 이렇게 하면 'user_id'가 두 번 전달되는 TypeError를 방지할 수 있습니다.
+        gear_updates = gear.copy()
+        gear_updates.pop('user_id', None) 
+        await set_user_gear(user_id_str, **gear_updates)
     return gear
 
 @supabase_retry_handler()
@@ -241,6 +244,7 @@ async def set_user_gear(user_id_str: str, rod: str = None, bait: str = None, hoe
     if watering_can is not None: data_to_update['watering_can'] = watering_can
     if data_to_update:
         await supabase.table('gear_setups').update(data_to_update).eq('user_id', user_id_str).execute()
+
 @supabase_retry_handler()
 async def get_aquarium(user_id_str: str) -> list:
     response = await supabase.table('aquariums').select('id, name, size, emoji').eq('user_id', user_id_str).execute()
