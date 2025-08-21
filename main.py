@@ -1,3 +1,5 @@
+# main.py
+
 import discord
 from discord.ext import commands
 import os
@@ -59,11 +61,15 @@ class MyBot(commands.Bot):
         logger.info("------ [ Cog 로드 시작 ] ------")
         # cogs 폴더와 그 하위 폴더들을 모두 탐색
         for root, dirs, files in os.walk('./cogs'):
+            # 주석: .pycache 폴더는 건너뛰도록 예외 처리 추가
+            if '__pycache__' in root:
+                continue
             for filename in files:
                 if filename.endswith('.py') and not filename.startswith('__'):
                     # 경로를 Python 모듈 경로 형식으로 변환 (e.g., cogs.games.fishing)
                     path = os.path.join(root, filename)
-                    extension_path = path.replace(os.path.sep, '.')[:-3].lstrip('.')
+                    # 주석: Windows와 Linux 호환성을 위해 os.path.sep 사용
+                    extension_path = path.replace(os.path.sep, '.')[:-3].lstrip('./')
                     try:
                         await self.load_extension(extension_path)
                         logger.info(f'✅ Cog 로드 성공: {extension_path}')
