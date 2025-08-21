@@ -143,22 +143,7 @@ class FishingGameView(ui.View):
         super().stop()
 
 class FishingPanelView(ui.View):
-    def __init__(self, bot: commands.Bot, cog_instance: 'Fishing', panel_key: str):
-        super().__init__(timeout=None)
-        self.bot = bot
-        self.fishing_cog = cog_instance
-        self.panel_key = panel_key
-        self.user_locks: Dict[int, asyncio.Lock] = {}
-
-        if panel_key == "panel_fishing_river":
-            river_button = ui.Button(label="川で釣りをする", style=discord.ButtonStyle.primary, emoji="🏞️", custom_id="start_fishing_river")
-            river_button.callback = self._start_fishing_callback
-            self.add_item(river_button)
-        elif panel_key == "panel_fishing_sea":
-            sea_button = ui.Button(label="海で釣りをする", style=discord.ButtonStyle.primary, emoji="🌊", custom_id="start_fishing_sea")
-            sea_button.callback = self._start_fishing_callback
-            self.add_item(sea_button)
-    
+    # ... (다른 함수는 변경 없음) ...
     async def _start_fishing_callback(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         lock = self.user_locks.setdefault(user_id, asyncio.Lock())
@@ -180,11 +165,15 @@ class FishingPanelView(ui.View):
                 gear, inventory = await asyncio.gather(get_user_gear(uid_str), get_inventory(uid_str))
                 rod, item_db = gear.get('rod', BARE_HANDS), get_item_database()
                 if rod == BARE_HANDS:
-                    if any('竿' in item_name for item_name in inventory if item_db.get(item_name, {}).get('category') == '釣り'):
+                    # --- [핵심 수정] ---
+                    # 주석: '装備' 카테고리에서 '竿'이 포함된 아이템을 찾도록 변경합니다.
+                    if any('竿' in item_name for item_name in inventory if item_db.get(item_name, {}).get('category') == '装備'):
                         return await interaction.followup.send("❌ プロフィール画面から釣竿を装備してください。", ephemeral=True)
                     return await interaction.followup.send(f"❌ 釣りをするには、まず商店で「{DEFAULT_ROD}」を購入してください。", ephemeral=True)
+                
+                # 주석: 이 부분은 나중에 '中級者の釣竿' 같은 아이템을 추가할 때를 대비해 남겨둡니다.
                 if location_type == 'sea' and item_db.get(rod, {}).get('tier', 0) < REQUIRED_TIER_FOR_SEA:
-                    return await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD_NAME}」(等級{REQUIRED_TIER_FOR_SEA})以上の性能を持つ釣竿を**装備**する必要があります。", ephemeral=True)
+                    return await interaction.followup.send(f"❌ 海の釣りには「中級者の釣竿」(等級{REQUIRED_TIER_FOR_SEA})以上の性能を持つ釣竿を**装備**する必要があります。", ephemeral=True)
 
                 self.fishing_cog.active_fishing_sessions_by_user.add(user_id)
                 bait = gear.get('bait', 'エサなし')
@@ -207,7 +196,7 @@ class FishingPanelView(ui.View):
                 self.fishing_cog.active_fishing_sessions_by_user.discard(user_id)
                 logger.error(f"낚시 게임 시작 중 예측 못한 오류: {e}", exc_info=True)
                 await interaction.followup.send(f"❌ 釣りの開始中に予期せぬエラーが発生しました。", ephemeral=True)
-
+                
 class Fishing(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
