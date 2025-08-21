@@ -238,16 +238,13 @@ async def get_user_gear(user: Union[discord.Member, discord.User]) -> dict:
     default_bait = "エサなし"
     default_gear = {"rod": BARE_HANDS, "bait": default_bait, "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
     
-    user_id_str = str(user.id)
+    user_id_str = str(user.id) # <--- user 객체에서 id를 추출
     gear = await get_or_create_user('gear_setups', user_id_str, default_gear)
     
-    # [✅ 최종 수정] 이제 user 객체를 그대로 전달합니다.
-    inv = await get_inventory(user)
+    inv = await get_inventory(user) # <--- user 객체를 전달
     
-    # get_inventory가 실패했을 경우를 대비한 방어 코드
     if inv is None:
         logger.error(f"'{user.name}'님의 인벤토리를 불러오는 데 실패하여, 장비 검사를 건너뜁니다.")
-        # 빈 인벤토리로 간주하고 현재 장비 상태만 반환
         return gear
 
     gear_to_check = {"rod": BARE_HANDS, "bait": default_bait, "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
