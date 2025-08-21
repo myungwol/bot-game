@@ -96,6 +96,7 @@ class FarmActionView(ui.View):
 
     async def _build_seed_select(self):
         inventory = await get_inventory(self.user)
+        
         farmable_items_in_inv = {name: qty for name, qty in inventory.items() if get_item_database().get(name, {}).get('category') == '農場_種'}
         if not farmable_items_in_inv:
             self.add_item(ui.Button(label="植えられる種がありません。", disabled=True)); return
