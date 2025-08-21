@@ -20,10 +20,8 @@ from utils.database import (
 
 logger = logging.getLogger(__name__)
 
-# 주석: 바다 낚시에 필요한 최소 등급을 상수로 정의합니다.
-# 이 값을 3으로 설정하면, tier가 3 이상인 낚싯대만 바다 낚시를 할 수 있습니다.
+# 주석: 바다 낚시에 필요한 최소 등급을 '3'으로 설정합니다. (철 낚싯대)
 REQUIRED_TIER_FOR_SEA = 3
-# 주석: 나중에 추가될 중급 낚싯대의 이름을 상수로 정의해두면, 메시지 출력 시 편리합니다.
 INTERMEDIATE_ROD_NAME = "鉄の釣竿"
 
 class FishingGameView(ui.View):
@@ -34,11 +32,12 @@ class FishingGameView(ui.View):
         self.used_rod = used_rod; self.used_bait = used_bait; self.remaining_baits = remaining_baits
         self.fishing_cog = cog_instance
         self.location_type = location_type
+        
         item_db = get_item_database()
-        rod_data = item_db.get(self.used_rod, {})
+        self.rod_data = item_db.get(self.used_rod, {}) # 주석: 낚싯대 정보를 클래스 변수로 저장
         bait_data = item_db.get(self.used_bait, {})
-        self.rod_bonus = rod_data.get("good_fish_bonus", 0.0)
-        self.bite_range = bait_data.get("bite_time_range") if bait_data and bait_data.get("bite_time_range") else [10.0, 15.0]
+
+        self.bite_range = [8.0, 12.0] # 낚시 시간 범위 고정 (미끼로 조절 가능)
         self.bite_reaction_time = get_config("FISHING_BITE_REACTION_TIME", 3.0)
         self.big_catch_threshold = get_config("FISHING_BIG_CATCH_THRESHOLD", 70.0)
 
@@ -54,8 +53,6 @@ class FishingGameView(ui.View):
             if self.children and isinstance(catch_button := self.children[0], ui.Button):
                 catch_button.style = discord.ButtonStyle.success; catch_button.label = "釣り上げる！"
             embed = discord.Embed(title="❗ アタリが来た！", description="今だ！ボタンを押して釣り上げよう！", color=discord.Color.red())
-            if waiting_image_url := get_config("FISHING_WAITING_IMAGE_URL"):
-                embed.set_image(url=waiting_image_url.strip('"'))
             if self.message: await self.message.edit(embed=embed, view=self)
             await asyncio.sleep(self.bite_reaction_time)
             if not self.is_finished() and self.game_state == "biting":
@@ -63,7 +60,7 @@ class FishingGameView(ui.View):
                 await self._send_result(embed); self.stop()
         except asyncio.CancelledError: pass
         except Exception as e:
-            logger.error(f"{self.player.display_name}の낚시 게임 흐름 중 오류: {e}", exc_info=True)
+            logger.error(f"{self.player.display_name}의 낚시 게임 흐름 중 오류: {e}", exc_info=True)
             if not self.is_finished():
                 await self._send_result(discord.Embed(title="❌ エラー発生", description="釣りの処理中に予期せぬエラーが発生しました。", color=discord.Color.red())); self.stop()
 
@@ -72,13 +69,33 @@ class FishingGameView(ui.View):
         location_map = {"river": "川", "sea": "海"}
         current_location_name = location_map.get(self.location_type, "川")
         base_loot = [item for item in all_loot if item.get('location_type') == current_location_name or item.get('location_type') is None]
-        is_legendary_available = self.used_rod == "伝説の釣竿" and await is_legendary_fish_available()
-        loot_pool = [item for item in base_loot if item['name'] != 'クジラ']
+
+        rod_tier = self.rod_data.get('tier', 0)
+        rod_bonus = self.rod_data.get('loot_bonus', 0.0)
+        
+        # --- [핵심] 고래 낚시 가능 여부 확인 ---
+        # 주석: 낚싯대 등급이 5 미만이면, loot_pool에서 'クジラ'를 제거합니다.
+        if rod_tier < 5:
+            loot_pool = [item for item in base_loot if item.get('name') != 'クジラ']
+        else:
+            loot_pool = base_loot
+
         if not loot_pool:
             return (discord.Embed(title="エラー", description="この場所では何も釣れないようです。", color=discord.Color.red()), False, False, False)
-        weights = [item['weight'] * (1 + self.rod_bonus if item.get('base_value') is not None or (item.get('value') or 0) > 0 else 1) for item in loot_pool]
+        
+        # --- [핵심] 낚싯대 등급별 확률 보너스 적용 ---
+        # 주석: 각 아이템의 가중치를 계산할 때, 낚싯대의 loot_bonus를 적용합니다.
+        weights = []
+        for item in loot_pool:
+            weight = item['weight']
+            # 주석: 'base_value'가 있는 아이템(쓰레기가 아닌 물고기)에만 보너스를 적용합니다.
+            if item.get('base_value') is not None:
+                weight *= (1.0 + rod_bonus)
+            weights.append(weight)
+
         catch_proto = random.choices(loot_pool, weights=weights, k=1)[0]
-        is_legendary_catch, is_big_catch, log_publicly = catch_proto['name'] == 'クジラ', False, False
+        is_legendary_catch, is_big_catch, log_publicly = catch_proto.get('name') == '伝説の魚', False, False # 'クジラ'와 별개로 전설의 물고기 처리
+        
         embed = discord.Embed()
         if catch_proto.get("min_size") is not None:
             log_publicly = True
@@ -189,7 +206,6 @@ class FishingPanelView(ui.View):
                         return await interaction.followup.send("❌ プロフィール画面から釣竿を装備してください。", ephemeral=True)
                     return await interaction.followup.send(f"❌ 釣りをするには、まず商店で「{DEFAULT_ROD}」を購入してください。", ephemeral=True)
                 
-                # --- [핵심] 바다 낚시 등급 확인 로직 ---
                 if location_type == 'sea':
                     rod_tier = item_db.get(rod, {}).get('tier', 0)
                     if rod_tier < REQUIRED_TIER_FOR_SEA:
@@ -208,8 +224,6 @@ class FishingPanelView(ui.View):
                 location_name = "川" if location_type == "river" else "海"
                 desc = f"### {location_name}にウキを投げました。\n**🎣 使用中の釣竿:** `{rod}`\n**🐛 使用中のエサ:** `{bait}`"
                 embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
-                if waiting_image_url := get_config("FISHING_WAITING_IMAGE_URL"):
-                    embed.set_thumbnail(url=waiting_image_url.strip('"'))
                 view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type)
                 await view.start_game(interaction, embed)
             except Exception as e:
