@@ -234,11 +234,22 @@ async def update_inventory(user_id_str: str, item_name: str, quantity: int):
     await supabase.rpc('increment_inventory_quantity', params).execute()
 
 # --- [핵심 버그 수정] ---
-async def get_user_gear(user_id_str: str) -> dict:
+async def get_user_gear(user: Union[discord.Member, discord.User]) -> dict:
     default_bait = "エサなし"
     default_gear = {"rod": BARE_HANDS, "bait": default_bait, "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
+    
+    user_id_str = str(user.id)
     gear = await get_or_create_user('gear_setups', user_id_str, default_gear)
-    inv = await get_inventory(user_id_str)
+    
+    # [✅ 최종 수정] 이제 user 객체를 그대로 전달합니다.
+    inv = await get_inventory(user)
+    
+    # get_inventory가 실패했을 경우를 대비한 방어 코드
+    if inv is None:
+        logger.error(f"'{user.name}'님의 인벤토리를 불러오는 데 실패하여, 장비 검사를 건너뜁니다.")
+        # 빈 인벤토리로 간주하고 현재 장비 상태만 반환
+        return gear
+
     gear_to_check = {"rod": BARE_HANDS, "bait": default_bait, "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
     updated = False
     for gear_type, default_item in gear_to_check.items():
@@ -247,8 +258,6 @@ async def get_user_gear(user_id_str: str) -> dict:
             gear[gear_type] = default_item
             updated = True
     if updated:
-        # 주석: gear 딕셔너리에서 'user_id' 키를 제거한 후 set_user_gear를 호출합니다.
-        # 이렇게 하면 'user_id'가 두 번 전달되는 TypeError를 방지할 수 있습니다.
         gear_updates = gear.copy()
         gear_updates.pop('user_id', None) 
         await set_user_gear(user_id_str, **gear_updates)
