@@ -174,7 +174,7 @@ class GearSelectView(ui.View):
             "rod":          (GEAR_CATEGORY, "釣竿", "釣竿を外す", BARE_HANDS),
             "hoe":          (GEAR_CATEGORY, "クワ", "クワを外す", BARE_HANDS),
             "watering_can": (GEAR_CATEGORY, "じょうろ", "じょうろを外す", BARE_HANDS),
-            "bait":         (BAIT_CATEGORY, "釣りエサ", "エサを外す", "エサなし")
+            "bait":         (BAIT_CATEGORY, "釣りエサ", "エサを外す", BARE_HANDS)
         }
         
         settings = GEAR_SETTINGS.get(self.gear_type)
