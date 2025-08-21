@@ -4,9 +4,10 @@ import discord
 from discord.ext import commands, tasks
 from discord import ui
 import logging
+# [✅ 1단계] time을 import 목록에 추가합니다.
 from typing import Optional, Dict, List, Any
 import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time
 
 from utils.database import (
     get_farm_data, create_farm, get_config,
@@ -30,6 +31,9 @@ WEATHER_TYPES = {
     "rainy": {"emoji": "🌧️", "name": "雨", "water_effect": True},
     "stormy": {"emoji": "⛈️", "name": "嵐", "water_effect": True},
 }
+
+# [✅ 2단계] 한국 시간대를 나타내는 KST 변수를 정의합니다.
+KST = timezone(timedelta(hours=9))
 
 async def preload_farmable_info(farm_data: Dict) -> Dict[str, Dict]:
     item_names = {p['planted_item_name'] for p in farm_data.get('farm_plots', []) if p.get('planted_item_name')}
@@ -139,7 +143,17 @@ class FarmActionView(ui.View):
         size_x, size_y = farmable_info['space_required_x'], farmable_info['space_required_y']
         plots_to_update = [p for p in self.farm_data['farm_plots'] if pos_x <= p['pos_x'] < pos_x + size_x and pos_y <= p['pos_y'] < pos_y + size_y]
         now_iso = datetime.now(timezone.utc).isoformat()
-        update_tasks = [update_plot(p['id'], {'state': 'planted', 'planted_item_name': self.selected_item, 'planted_at': now_iso, 'last_watered_at': now_iso, 'growth_stage': 0, 'water_count': 1, 'quality': 5}) for p in plots_to_update]
+        
+        update_tasks = [update_plot(p['id'], {
+            'state': 'planted', 
+            'planted_item_name': self.selected_item, 
+            'planted_at': now_iso, 
+            'last_watered_at': None, 
+            'growth_stage': 0, 
+            'water_count': 0, 
+            'quality': 5
+        }) for p in plots_to_update]
+
         await asyncio.gather(*update_tasks)
         await update_inventory(str(self.user.id), self.selected_item, -1)
         farm_owner = await self.cog.get_farm_owner(interaction)
@@ -298,6 +312,7 @@ class FarmUIView(ui.View):
         action_view = FarmActionView(self.cog, self.farm_data, interaction.user, "plant_seed")
         await action_view.send_initial_message(interaction)
 
+    # [✅ 최종 수정 2] 물주기 로직을 "하루에 한 번"으로 변경합니다.
     async def on_farm_water_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         gear = await get_user_gear(interaction.user)
@@ -305,22 +320,34 @@ class FarmUIView(ui.View):
         if equipped_wc == BARE_HANDS:
             msg = await interaction.followup.send("❌ まずは商店で「じょうろ」を購入して、装備してください。", ephemeral=True)
             asyncio.create_task(delete_after_helper(msg, 10)); return
+            
         item_info = get_item_database().get(equipped_wc, {})
         wc_power = item_info.get('power', 1)
         quality_bonus = item_info.get('quality_bonus', 5)
+        
         watered_count, plots_to_update = 0, []
-        now = datetime.now(timezone.utc)
+        now_utc = datetime.now(timezone.utc)
+        today_kst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+
         for plot in self.farm_data.get('farm_plots', []):
             if plot['state'] == 'planted' and watered_count < wc_power:
-                farmable_info = await get_farmable_item_info(plot['planted_item_name'])
-                if not farmable_info: continue
-                last_watered_at = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromisoformat(plot['planted_at'])
-                interval = timedelta(hours=farmable_info.get('water_interval_hours', 6))
-                if now - last_watered_at > interval:
-                    plots_to_update.append(update_plot(plot['id'], {'last_watered_at': now.isoformat(), 'water_count': plot['water_count'] + 1, 'quality': plot['quality'] + quality_bonus})); watered_count += 1
+                # 마지막으로 물 준 시간이 오늘 자정 이전이거나, 한 번도 준 적 없다면 물을 줄 수 있음
+                can_water = False
+                if plot.get('last_watered_at') is None:
+                    can_water = True
+                else:
+                    last_watered_at_dt = datetime.fromisoformat(plot['last_watered_at'])
+                    if last_watered_at_dt < today_kst_midnight:
+                        can_water = True
+                
+                if can_water:
+                    plots_to_update.append(update_plot(plot['id'], {'last_watered_at': now_utc.isoformat(), 'water_count': plot['water_count'] + 1, 'quality': plot['quality'] + quality_bonus}))
+                    watered_count += 1
+
         if not plots_to_update:
-            msg = await interaction.followup.send("ℹ️ 今は水をやる必要のある作物がありません。", ephemeral=True)
+            msg = await interaction.followup.send("ℹ️ 今日はこれ以上水をやる必要のある作物がありません。", ephemeral=True)
             asyncio.create_task(delete_after_helper(msg, 10)); return
+            
         await asyncio.gather(*plots_to_update)
         msg = await interaction.followup.send(f"✅ **{equipped_wc}** を使って、作物**{watered_count}個**に水をやりました。", ephemeral=True)
         asyncio.create_task(delete_after_helper(msg, 10))
@@ -444,34 +471,45 @@ class Farm(commands.Cog):
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
             response = await supabase.table('farm_plots').select('*').eq('state', 'planted').execute()
             if not response.data: return
+            
             plots_to_update = []
-            now = datetime.now(timezone.utc)
+            now_utc = datetime.now(timezone.utc)
+            today_kst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
             farmable_info_map = await preload_farmable_info({'farm_plots': response.data})
+
             for plot in response.data:
                 farmable_info = farmable_info_map.get(plot['planted_item_name'])
                 if not farmable_info: continue
-                planted_at = datetime.fromisoformat(plot['planted_at'])
-                last_watered_at = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else planted_at
+                
+                last_watered_at = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromisoformat(plot['planted_at'])
                 lifespan = timedelta(hours=farmable_info.get('lifespan_hours', 24))
-                if now - last_watered_at > lifespan:
+                if now_utc - last_watered_at > lifespan:
                     updates = {'state': 'withered', 'quality': -1}; plots_to_update.append((plot['id'], updates)); continue
-                water_interval = timedelta(hours=farmable_info.get('water_interval_hours', 6))
-                time_since_last_water = now - last_watered_at
-                needs_water = time_since_last_water > water_interval
+
                 current_updates = {}; quality_change = 0
-                if is_raining and needs_water:
-                    current_updates['last_watered_at'] = now.isoformat()
+                
+                # [✅ 최종 수정 3] 비가 올 때의 자동 물주기 로직도 "하루에 한 번"으로 변경
+                can_water_today = plot.get('last_watered_at') is None or datetime.fromisoformat(plot['last_watered_at']) < today_kst_midnight
+                if is_raining and can_water_today:
+                    current_updates['last_watered_at'] = now_utc.isoformat()
                     current_updates['water_count'] = plot['water_count'] + 1
                     quality_change += 5
+                
                 current_stage = plot['growth_stage']
                 if current_stage < 3:
                     total_stages = farmable_info.get('water_cycle_required', 3)
                     new_stage = min(3, (plot['water_count'] * 3) // total_stages) if total_stages > 0 else 3
                     if new_stage > current_stage:
                          current_updates['growth_stage'] = new_stage; quality_change += 10
-                if time_since_last_water > water_interval * 2: quality_change -= 5
+                
+                # 물을 너무 오랫동안 안 줬을 때 품질 하락 로직 (예: 24시간 이상)
+                if plot.get('last_watered_at') is not None:
+                    time_since_last_water = now_utc - datetime.fromisoformat(plot['last_watered_at'])
+                    if time_since_last_water > timedelta(hours=24): quality_change -= 5
+                
                 if quality_change != 0: current_updates['quality'] = plot['quality'] + quality_change
                 if current_updates: plots_to_update.append((plot['id'], current_updates))
+
             if plots_to_update:
                 update_tasks = [update_plot(pid, data) for pid, data in plots_to_update]
                 await asyncio.gather(*update_tasks)
@@ -497,9 +535,8 @@ class Farm(commands.Cog):
             for x in range(size_x):
                 if (x, y) in processed_plots: continue
                 plot = plots_map.get((x, y))
-                if not plot: grid[y][x] = '🟤'; continue # 없는 밭은 갈지 않은 흙으로 표시
+                if not plot: grid[y][x] = '🟤'; continue
                 
-                # [✅ 최종 수정] 'default' 상태일 때 흙더미 이모지(🟤)를 사용하도록 수정
                 if plot['state'] == 'default': grid[y][x] = '🟤'
                 elif plot['state'] == 'tilled': grid[y][x] = '🟫'
                 elif plot['state'] == 'withered': grid[y][x] = '🥀'
