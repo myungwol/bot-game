@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
-
+from utils.database import get_item_database
 from utils.database import save_id_to_db
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,30 @@ class Settings(commands.Cog):
             await interaction.followup.send(
                 f"❌ チャンネル設定中にエラーが発生しました。ログを確認してください。"
             )
+    @app_commands.command(name="debugitem", description="[관리자] 봇의 아이템 캐시 정보를 확인합니다.")
+    @app_commands.describe(item_name="캐시에서 확인할 아이템의 정확한 이름")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def debug_item_command(self, interaction: discord.Interaction, item_name: str):
+        # 이 명령어는 DB를 다시 조회하는게 아니라, 봇이 현재 메모리에 저장하고 있는 데이터를 보여줍니다.
+        from utils.database import get_item_database
 
+        item_db_cache = get_item_database()
+        item_data = item_db_cache.get(item_name)
+        
+        if not item_data:
+            await interaction.response.send_message(f"❌ **'현재 봇의 캐시'**에서 `{item_name}` 아이템을 찾을 수 없습니다.\n이름이 정확한지 확인해주세요.", ephemeral=True)
+            return
+
+        # 보기 쉽게 문자열로 변환하여 전송
+        response_str = f"## 봇 캐시 데이터: `{item_name}`\n"
+        response_str += "```python\n"
+        response_str += "{\n"
+        for key, value in item_data.items():
+            # 문자열 값은 따옴표로 감싸서 명확하게 표시
+            value_repr = f"'{value}'" if isinstance(value, str) else value
+            response_str += f"    '{key}': {value_repr},\n"
+        response_str += "}\n```"
+        
+        await interaction.response.send_message(response_str, ephemeral=True)
 async def setup(bot: commands.Bot):
     await bot.add_cog(Settings(bot))
