@@ -198,8 +198,13 @@ class FishingPanelView(ui.View):
             
             try:
                 custom_id, location_type = interaction.data['custom_id'], interaction.data['custom_id'].split('_')[-1]
-                uid_str = str(user_id)
-                gear, inventory = await asyncio.gather(get_user_gear(uid_str), get_inventory(uid_str))
+                
+                # [✅ 최종 수정] uid_str 대신 interaction.user 객체를 직접 사용합니다.
+                user = interaction.user
+                
+                # [✅ 최종 수정] get_user_gear와 get_inventory에 user 객체를 전달합니다.
+                gear, inventory = await asyncio.gather(get_user_gear(user), get_inventory(user))
+                
                 rod, item_db = gear.get('rod', BARE_HANDS), get_item_database()
                 if rod == BARE_HANDS:
                     if any('竿' in item_name for item_name in inventory if item_db.get(item_name, {}).get('category') == '装備'):
@@ -211,15 +216,17 @@ class FishingPanelView(ui.View):
                     if rod_tier < REQUIRED_TIER_FOR_SEA:
                         return await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD_NAME}」(等級{REQUIRED_TIER_FOR_SEA})以上の性能を持つ釣竿を**装備**する必要があります。", ephemeral=True)
 
-                self.fishing_cog.active_fishing_sessions_by_user.add(user_id)
+                self.fishing_cog.active_fishing_sessions_by_user.add(user.id)
                 bait = gear.get('bait', 'エサなし')
                 if bait != "エサなし":
                     if inventory.get(bait, 0) > 0:
-                        await update_inventory(uid_str, bait, -1)
+                        # [✅ 최종 수정] update_inventory는 여전히 user_id 문자열을 사용합니다.
+                        await update_inventory(str(user.id), bait, -1)
                         inventory[bait] -= 1
                     else:
-                        bait = "エサなし"
-                        await set_user_gear(uid_str, bait="エサなし")
+                        bait = "에サなし"
+                        # [✅ 최종 수정] set_user_gear는 여전히 user_id 문자열을 사용합니다.
+                        await set_user_gear(str(user.id), bait="エサなし")
 
                 location_name = "川" if location_type == "river" else "海"
                 desc = f"### {location_name}にウキを投げました。\n**🎣 使用中の釣竿:** `{rod}`\n**🐛 使用中のエサ:** `{bait}`"
