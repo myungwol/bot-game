@@ -109,7 +109,12 @@ async def get_user_progress(user_id: int) -> Dict[str, Any]:
         'weekly_fish_count': 0, 'last_daily_reset': None, 'last_weekly_reset': None
     }
     response = await supabase.table('user_progress').select('*').eq('user_id', user_id).maybe_single().execute()
-    return response.data if response.data else default_progress
+    
+    # [✅ 최종 수정] response가 None이거나, response에 data 속성이 없는 경우를 모두 처리합니다.
+    if response and hasattr(response, 'data') and response.data:
+        return response.data
+    else:
+        return default_progress
 async def increment_progress(user_id: int, fish_count: int = 0, voice_minutes: int = 0):
     await supabase.rpc('increment_user_progress', {'p_user_id': user_id, 'p_fish_count': fish_count, 'p_voice_minutes': voice_minutes}).execute()
 
