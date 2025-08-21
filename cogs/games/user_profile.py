@@ -125,7 +125,9 @@ class ProfileView(ui.View):
         tabs_config = get_string("profile_view.tabs", {})
         row_counter, tab_buttons_in_row = 0, 0
         for key, config in tabs_config.items():
-            if tab_buttons_in_row >= 5: row_counter += 1; tab_buttons_in_row = 0
+            if tab_buttons_in_row >= 5:
+                row_counter += 1
+                tab_buttons_in_row = 0
             style = discord.ButtonStyle.primary if self.current_page == key else discord.ButtonStyle.secondary
             self.add_item(ui.Button(label=config.get("label"), style=style, custom_id=f"profile_tab_{key}", emoji=config.get("emoji"), row=row_counter))
             tab_buttons_in_row += 1
@@ -149,8 +151,9 @@ class ProfileView(ui.View):
                 self.add_item(ui.Button(label=get_string("profile_view.pagination_buttons.next"), custom_id="profile_fish_next", disabled=self.fish_page_index >= total_pages - 1, row=row_counter))
         
         for child in self.children:
-            if isinstance(child, ui.Button): child.callback = self.button_callback
-
+            if isinstance(child, ui.Button):
+                child.callback = self.button_callback
+                
     async def button_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.user.id:
             return await interaction.response.send_message("自分専用のメニューを操作してください。", ephemeral=True, delete_after=5)
@@ -167,7 +170,7 @@ class ProfileView(ui.View):
             if custom_id.endswith("prev"): self.fish_page_index -= 1
             else: self.fish_page_index += 1
             await self.update_display(interaction)
-     self.add_item(ui.Button(label="물뿌리개 변경 테스트", style=discord.ButtonStyle.success, custom_id="profile_change_watering_can", emoji="💧", row=row_counter))
+            
 class GearSelectView(ui.View):
     def __init__(self, parent_view: ProfileView, gear_type: str):
         super().__init__(timeout=180)
