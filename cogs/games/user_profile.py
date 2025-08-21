@@ -167,7 +167,7 @@ class ProfileView(ui.View):
             if custom_id.endswith("prev"): self.fish_page_index -= 1
             else: self.fish_page_index += 1
             await self.update_display(interaction)
-
+     self.add_item(ui.Button(label="물뿌리개 변경 테스트", style=discord.ButtonStyle.success, custom_id="profile_change_watering_can", emoji="💧", row=row_counter))
 class GearSelectView(ui.View):
     def __init__(self, parent_view: ProfileView, gear_type: str):
         super().__init__(timeout=180)
