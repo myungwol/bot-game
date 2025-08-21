@@ -411,7 +411,11 @@ class FarmUIView(ui.View):
             for user in user_select.values:
                 try: await interaction.channel.add_user(user)
                 except: pass
-                await select_interaction.followup.send(f"✅ {user.mention}さんを農場に招待しました。", ephemeral=True, delete_after=10)
+                
+                # [✅ 최종 수정 1] delete_after 대신 delete_after_helper를 사용합니다.
+                message = await select_interaction.followup.send(f"✅ {user.mention}さんを農場に招待しました。", ephemeral=True)
+                asyncio.create_task(delete_after_helper(message, 10))
+
             await interaction.edit_original_response(content="招待が完了しました。", view=None)
         user_select.callback = callback
         view.add_item(user_select)
@@ -441,6 +445,7 @@ class FarmCreationPanelView(ui.View):
         create_button = ui.Button(label="農場を作る", style=discord.ButtonStyle.success, emoji="🌱", custom_id="farm_create_button")
         create_button.callback = self.create_farm_callback
         self.add_item(create_button)
+        
     async def create_farm_callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user = interaction.user
@@ -449,14 +454,14 @@ class FarmCreationPanelView(ui.View):
         if not isinstance(panel_channel, discord.TextChannel):
             await interaction.followup.send("❌ このコマンドはテキストチャンネルでのみ使用できます。", ephemeral=True); return
         if farm_data and farm_data.get('thread_id'):
-            if thread := self.bot.get_channel(farm_data['thread_id']):
+            # [✅ 최종 수정 2] self.bot.get_channel을 self.cog.bot.get_channel로 수정합니다.
+            if thread := self.cog.bot.get_channel(farm_data['thread_id']):
                 await interaction.followup.send(f"✅ あなたの農場はこちらです: {thread.mention}", ephemeral=True)
                 try: await thread.add_user(user)
                 except: pass
                 await thread.send(f"ようこそ、{user.mention}さん！", delete_after=10)
             else: await self.cog.create_new_farm_thread(interaction, user)
         else: await self.cog.create_new_farm_thread(interaction, user)
-
 
 class Farm(commands.Cog):
     def __init__(self, bot: commands.Bot):
