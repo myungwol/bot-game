@@ -6,10 +6,9 @@ from discord import app_commands, ui
 import random
 import asyncio
 import logging
-# [✅ 버그 수정] time 모듈을 별도로 import 합니다.
 import time
-# [✅ 버그 수정] time 클래스와의 충돌을 피하기 위해 dt_time으로 import 합니다.
 from datetime import datetime, timezone, timedelta, time as dt_time
+from typing import Dict, Optional # [✅ 수정] NameError 해결을 위해 Dict를 import 합니다.
 
 from utils.database import (
     get_wallet, update_wallet,
@@ -56,6 +55,7 @@ class EconomyCore(commands.Cog):
         self.update_chat_progress_loop.cancel()
         self.daily_reset_loop.cancel()
     
+    # [✅ 수정] Dict 타입 힌트가 정상적으로 작동합니다.
     async def handle_level_up_event(self, user: discord.User, result_data: Dict):
         if not result_data or not result_data.get('leveled_up'):
             return
@@ -64,7 +64,6 @@ class EconomyCore(commands.Cog):
         logger.info(f"유저 {user.display_name}(ID: {user.id})가 레벨 {new_level}(으)로 레벨업했습니다.")
         
         job_advancement_levels = get_config("GAME_CONFIG", {}).get("JOB_ADVANCEMENT_LEVELS", [50, 100])
-        # [✅ 버그 수정] time.time()을 올바르게 호출합니다.
         if new_level in job_advancement_levels:
             await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": time.time()})
             logger.info(f"유저가 전직 가능 레벨({new_level})에 도달하여 DB에 요청을 기록했습니다.")
@@ -144,7 +143,7 @@ class EconomyCore(commands.Cog):
         except Exception as e:
             logger.error(f"활동 보상 지급 루프 중 오류: {e}", exc_info=True)
 
-    async def process_rewards(self, reward_type: str, requirement: int, reward_range: List[int], xp_reward: int, reason: str):
+    async def process_rewards(self, reward_type: str, requirement: int, reward_range: list[int], xp_reward: int, reason: str):
         table, column = (PROGRESS_TABLE, 'daily_voice_minutes') if reward_type == 'voice' else (ACTIVITY_PROGRESS_TABLE, 'chat_progress')
         
         response = await supabase.table(table).select('user_id').gte(column, requirement).execute()
