@@ -6,11 +6,13 @@ from discord import app_commands, ui
 import random
 import asyncio
 import logging
+import time
 from typing import Optional, Dict, List
 
 from utils.database import (
     get_wallet, update_wallet,
     get_id, supabase, get_embed_from_db, get_config,
+    save_config_to_db # [✅ 수정] save_config_to_db import 추가
 )
 from utils.helpers import format_embed_from_db
 
@@ -38,6 +40,22 @@ class EconomyCore(commands.Cog):
     def cog_unload(self):
         self.voice_reward_loop.cancel()
     
+    async def handle_level_up_event(self, user: discord.User, result_data: Dict):
+        """레벨업 시 발생하는 이벤트를 처리하는 중앙 함수"""
+        if not result_data or not result_data.get('leveled_up'):
+            return
+
+        level_up_data = result_data
+        new_level = level_up_data.get('new_level')
+        
+        # 전직 가능 레벨(50, 100)에 도달했는지 확인
+        if new_level in [50, 100]:
+            await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": time.time()})
+            logger.info(f"유저 {user.display_name}(ID: {user.id})가 전직 가능 레벨({new_level})에 도달하여 DB에 요청을 기록했습니다.")
+
+        # 모든 레벨업 시 등급 역할 업데이트 요청
+        await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or message.guild is None or message.content.startswith('/'):
@@ -59,7 +77,7 @@ class EconomyCore(commands.Cog):
             params = {'p_user_id': str(user.id), 'p_chat_increment': 1}
             response = await supabase.rpc('increment_user_progress', params).execute()
 
-            if response.data and response.data[0]:
+            if response and response.data and response.data[0]:
                 current_progress = response.data[0].get('new_chat_progress', 0)
                 
                 if current_progress >= chat_req:
@@ -67,9 +85,11 @@ class EconomyCore(commands.Cog):
                     await update_wallet(user, reward)
                     await self.log_coin_activity(user, reward, "チャット活動報酬")
                     
-                    # [✅ 레벨 시스템] 채팅 활동으로 경험치 획득 (예: 5 XP)
                     xp_to_add = int(get_config("XP_FROM_CHAT", "5").strip('"'))
-                    await supabase.rpc('add_xp', {'p_user_id': user.id, 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
+                    res = await supabase.rpc('add_xp', {'p_user_id': user.id, 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
+                    
+                    if res and res.data:
+                        await self.handle_level_up_event(user, res.data[0])
 
                     reset_params = {'p_user_id': str(user.id), 'p_reset_chat': True}
                     await supabase.rpc('reset_user_progress', reset_params).execute()
@@ -102,7 +122,7 @@ class EconomyCore(commands.Cog):
                             params = {'p_user_id': str(member.id), 'p_voice_increment': 1}
                             response = await supabase.rpc('increment_user_progress', params).execute()
                             
-                            if response.data and response.data[0]:
+                            if response and response.data and response.data[0]:
                                 current_progress = response.data[0].get('new_voice_progress', 0)
                                 
                                 if current_progress >= voice_req_min:
@@ -110,9 +130,11 @@ class EconomyCore(commands.Cog):
                                     await update_wallet(member, reward)
                                     await self.log_coin_activity(member, reward, "ボイスチャット活動報酬")
                                     
-                                    # [✅ 레벨 시스템] 음성 활동으로 경험치 획득 (예: 10 XP)
                                     xp_to_add = int(get_config("XP_FROM_VOICE", "10").strip('"'))
-                                    await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
+                                    res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
+                                    
+                                    if res and res.data:
+                                        await self.handle_level_up_event(member, res.data[0])
 
                                     reset_params = {'p_user_id': str(member.id), 'p_reset_voice': True}
                                     await supabase.rpc('reset_user_progress', reset_params).execute()
@@ -135,7 +157,6 @@ class EconomyCore(commands.Cog):
     async def before_voice_reward_loop(self):
         await self.bot.wait_until_ready()
     
-    # (이하 나머지 코드는 동일)
     async def log_coin_activity(self, user: discord.Member, amount: int, reason: str):
         if not self.coin_log_channel_id or not (log_channel := self.bot.get_channel(self.coin_log_channel_id)): return
         
