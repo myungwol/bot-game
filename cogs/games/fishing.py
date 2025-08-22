@@ -7,6 +7,7 @@ import random
 import asyncio
 import logging
 import time
+import json # [✅ 추가] JSON 파싱을 위해 import
 from typing import Optional, Set, Dict
 
 from utils.database import (
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 INTERMEDIATE_ROD_NAME = "鉄の釣竿"
 
 class FishingGameView(ui.View):
-    def __init__(self, bot: commands.Bot, user: discord.Member, used_rod: str, used_bait: str, remaining_baits: Dict[str, int], cog_instance: 'Fishing', location_type: str):
+    def __init__(self, bot: commands.Bot, user: discord.Member, used_rod: str, used_bait: str, remaining_baits: Dict[str, int], cog_instance: 'Fishing', location_type: str, bite_range: List[float]):
         super().__init__(timeout=35)
         self.bot = bot; self.player = user; self.message: Optional[discord.WebhookMessage] = None
         self.game_state = "waiting"; self.game_task: Optional[asyncio.Task] = None
@@ -36,14 +37,14 @@ class FishingGameView(ui.View):
         item_db = get_item_database()
         self.rod_data = item_db.get(self.used_rod, {})
         
-        bite_range_config = get_config("FISHING_BITE_RANGE", "[8.0, 12.0]")
-        self.bite_range = eval(bite_range_config) if isinstance(bite_range_config, str) else [8.0, 12.0]
+        # [✅ 수정] bite_range를 직접 받도록 변경
+        self.bite_range = bite_range
 
         bite_reaction_time_config = get_config("FISHING_BITE_REACTION_TIME", "3.0")
-        self.bite_reaction_time = float(str(bite_reaction_time_config).strip('"'))
+        self.bite_reaction_time = float(str(bite_reaction_time_config))
 
         big_catch_threshold_config = get_config("FISHING_BIG_CATCH_THRESHOLD", "70.0")
-        self.big_catch_threshold = float(str(big_catch_threshold_config).strip('"'))
+        self.big_catch_threshold = float(str(big_catch_threshold_config))
 
     async def start_game(self, interaction: discord.Interaction, embed: discord.Embed):
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
@@ -235,10 +236,23 @@ class FishingPanelView(ui.View):
                 rod_data = item_db.get(rod, {})
                 loot_bonus = rod_data.get('loot_bonus', 0.0)
                 
-                bite_range_config = get_config("FISHING_BITE_RANGE", "[8.0, 12.0]")
-                bite_range = eval(bite_range_config) if isinstance(bite_range_config, str) else [8.0, 12.0]
+                # [✅ 수정] 미끼에 따라 입질 시간을 동적으로 설정
+                default_times = {
+                    "エサなし": [10.0, 15.0],
+                    "普通の釣りエサ": [7.0, 12.0],
+                    "高級釣りエサ": [5.0, 10.0]
+                }
+                bite_times_config_raw = get_config("FISHING_BITE_TIMES_BY_BAIT", default_times)
+                
+                bite_times_config = default_times
+                if isinstance(bite_times_config_raw, str):
+                    try: bite_times_config = json.loads(bite_times_config_raw)
+                    except json.JSONDecodeError: pass
+                elif isinstance(bite_times_config_raw, dict):
+                    bite_times_config = bite_times_config_raw
 
-                # [✅ 수정] 요청하신 대로 정보 표시 형식을 한 줄로 합칩니다.
+                bite_range = bite_times_config.get(bait, bite_times_config.get("エサなし", [10.0, 15.0]))
+
                 desc_lines = [
                     f"### {location_name}にウキを投げました。",
                     f"**🎣 使用中の釣竿:** `{rod}` (+{loot_bonus:.0%})",
@@ -251,7 +265,7 @@ class FishingPanelView(ui.View):
                 if image_url := get_config("FISHING_WAITING_IMAGE_URL"):
                     embed.set_thumbnail(url=str(image_url))
                 
-                view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type)
+                view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type, bite_range)
                 await view.start_game(interaction, embed)
             except Exception as e:
                 self.fishing_cog.active_fishing_sessions_by_user.discard(user_id)
