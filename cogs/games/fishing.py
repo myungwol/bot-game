@@ -6,13 +6,14 @@ from discord import ui
 import random
 import asyncio
 import logging
+import time
 from typing import Optional, Set, Dict
 
 from utils.database import (
     update_wallet, get_inventory, update_inventory, add_to_aquarium,
     get_user_gear, set_user_gear, save_panel_id, get_panel_id, get_id,
-    get_embed_from_db, supabase, # [✅ 레벨 시스템] supabase import
-    get_item_database, get_fishing_loot, get_config, get_string,
+    get_embed_from_db, supabase, get_item_database, get_fishing_loot, 
+    get_config, get_string, save_config_to_db, # [✅ 수정] save_config_to_db import
     is_legendary_fish_available, set_legendary_fish_cooldown,
     BARE_HANDS, DEFAULT_ROD,
     increment_progress
@@ -99,9 +100,11 @@ class FishingGameView(ui.View):
             is_big_catch = size >= self.big_catch_threshold
             await increment_progress(self.player.id, fish_count=1)
 
-            # [✅ 레벨 시스템] 낚시 성공 시 경험치 획득
             xp_to_add = int(get_config("XP_FROM_FISHING", "20").strip('"'))
-            await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add, 'p_source': 'fishing'}).execute()
+            res = await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add, 'p_source': 'fishing'}).execute()
+            
+            if res and res.data:
+                await self.fishing_cog.handle_level_up_event(self.player, res.data[0])
 
             title = "🏆 大物を釣り上げた！ 🏆" if is_big_catch else "🎉 釣り成功！ 🎉"
             if is_legendary_catch: title = "👑 伝説の魚を釣り上げた！！ 👑"
@@ -252,6 +255,20 @@ class Fishing(commands.Cog):
         self.fishing_log_channel_id: Optional[int] = None
         self.last_result_messages: Dict[int, discord.Message] = {}
         logger.info("Fishing Cog가 성공적으로 초기화되었습니다.")
+
+    async def handle_level_up_event(self, user: discord.User, result_data: Dict):
+        """레벨업 시 발생하는 이벤트를 처리하는 중앙 함수"""
+        if not result_data or not result_data.get('leveled_up'):
+            return
+
+        level_up_data = result_data
+        new_level = level_up_data.get('new_level')
+        
+        if new_level in [50, 100]:
+            await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": time.time()})
+            logger.info(f"유저 {user.display_name}(ID: {user.id})가 전직 가능 레벨({new_level})에 도달하여 DB에 요청을 기록했습니다.")
+
+        await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
 
     async def register_persistent_views(self):
         self.bot.add_view(FishingPanelView(self.bot, self, "panel_fishing_river"))
