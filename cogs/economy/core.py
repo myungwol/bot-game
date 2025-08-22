@@ -1,15 +1,16 @@
+# bot-game/cogs/core.py
+
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands, ui
 import random
 import asyncio
 import logging
-from typing import Optional, Dict, List # List import 추가
+from typing import Optional, Dict, List
 
 from utils.database import (
     get_wallet, update_wallet,
     get_id, supabase, get_embed_from_db, get_config,
-    # [✅ 변경] increment_progress는 이제 사용하지 않으므로 제거합니다.
 )
 from utils.helpers import format_embed_from_db
 
@@ -48,11 +49,11 @@ class EconomyCore(commands.Cog):
             return
         
         user = message.author
-        chat_req_config = get_config("CHAT_MESSAGE_REQUIREMENT")
-        chat_req = int(chat_req_config) if chat_req_config else 10
+        chat_req_config = get_config("CHAT_MESSAGE_REQUIREMENT", "10").strip('"')
+        chat_req = int(chat_req_config)
         
-        chat_reward_range_config = get_config("CHAT_REWARD_RANGE")
-        chat_reward_range = chat_reward_range_config if chat_reward_range_config and len(chat_reward_range_config) == 2 else [5, 10]
+        chat_reward_range_config = get_config("CHAT_REWARD_RANGE", "[5, 10]")
+        chat_reward_range = eval(chat_reward_range_config)
 
         try:
             params = {'p_user_id': str(user.id), 'p_chat_increment': 1}
@@ -74,13 +75,13 @@ class EconomyCore(commands.Cog):
     @tasks.loop(minutes=1)
     async def voice_reward_loop(self):
         try:
-            voice_req_min_config = get_config("VOICE_TIME_REQUIREMENT_MINUTES")
-            voice_req_min = int(voice_req_min_config) if voice_req_min_config else 10
+            voice_req_min_config = get_config("VOICE_TIME_REQUIREMENT_MINUTES", "10").strip('"')
+            voice_req_min = int(voice_req_min_config)
 
-            voice_reward_range_config = get_config("VOICE_REWARD_RANGE")
-            voice_reward_range = voice_reward_range_config if voice_reward_range_config and len(voice_reward_range_config) == 2 else [10, 15]
+            voice_reward_range_config = get_config("VOICE_REWARD_RANGE", "[10, 15]")
+            voice_reward_range = eval(voice_reward_range_config)
             
-            # [✅ 1단계: 최적화] 활동 중인 모든 유저의 ID를 저장할 리스트를 생성합니다.
+            # [✅ 최적화 1/3] 활동 중인 모든 유저의 ID를 저장할 리스트를 생성합니다.
             active_user_ids: List[int] = []
 
             for guild in self.bot.guilds:
@@ -91,7 +92,7 @@ class EconomyCore(commands.Cog):
                     eligible_members = [m for m in vc.members if not m.bot and not m.voice.self_deaf and not m.voice.self_mute]
                     
                     for member in eligible_members:
-                        # [✅ 2단계: 최적화] 유저 ID를 리스트에 추가합니다.
+                        # [✅ 최적화 2/3] 유저 ID를 리스트에 추가합니다.
                         active_user_ids.append(member.id)
                         
                         # 기존의 코인 보상 로직은 그대로 유지합니다. (이 부분은 유저별로 처리해야 합니다)
@@ -113,10 +114,10 @@ class EconomyCore(commands.Cog):
                         except Exception as e:
                             logger.error(f"음성 보상 처리 중 DB 오류 발생 (유저: {member.id}): {e}", exc_info=True)
 
-            # [✅ 3단계: 최적화] 루프가 끝난 후, 활동한 모든 유저의 퀘스트 데이터를 단 한 번의 DB 호출로 업데이트합니다.
+            # [✅ 최적화 3/3] 루프가 끝난 후, 활동한 모든 유저의 퀘스트 데이터를 단 한 번의 DB 호출로 업데이트합니다.
+            # 이를 위해 Supabase에 'increment_voice_minutes_batch' RPC 함수가 필요합니다.
             if active_user_ids:
                 try:
-                    # 중복된 ID를 제거하고, 새로 만든 RPC 함수를 호출합니다.
                     unique_user_ids = list(set(active_user_ids))
                     await supabase.rpc('increment_voice_minutes_batch', {'user_ids_array': unique_user_ids}).execute()
                     logger.info(f"{len(unique_user_ids)}명의 유저에게 음성 활동 퀘스트 시간을 일괄 부여했습니다.")
