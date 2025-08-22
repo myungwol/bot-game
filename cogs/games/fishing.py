@@ -101,7 +101,7 @@ class FishingGameView(ui.View):
 
             # [✅ 레벨 시스템] 낚시 성공 시 경험치 획득
             xp_to_add = int(get_config("XP_FROM_FISHING", "20").strip('"'))
-            await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add}).execute()
+            await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add, 'p_source': 'fishing'}).execute()
 
             title = "🏆 大物を釣り上げた！ 🏆" if is_big_catch else "🎉 釣り成功！ 🎉"
             if is_legendary_catch: title = "👑 伝説の魚を釣り上げた！！ 👑"
