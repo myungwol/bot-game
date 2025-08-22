@@ -19,17 +19,16 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# [✅ DB 구조 확인] 실제 DB 테이블 이름을 상수로 정의합니다.
 PROGRESS_TABLE = "user_progress"
-ACTIVITY_PROGRESS_TABLE = "user_activity_progress" # 채팅 보상용 테이블
+ACTIVITY_PROGRESS_TABLE = "user_activity_progress"
 
-JST_MIDNIGHT = time(hour=0, minute=1, tzinfo=timezone(timedelta(hours=9))) # DB 쓰기 작업을 피하기 위해 1분 늦게 실행
+JST = timezone(timedelta(hours=9))
+JST_MIDNIGHT_RESET = time(hour=0, minute=1, tzinfo=JST)
 
 class EconomyCore(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.coin_log_channel_id: Optional[int] = None
-        self.admin_role_id: Optional[int] = None
         self.currency_icon = "🪙"
         self._chat_cooldown = commands.CooldownMapping.from_cooldown(1, 3.0, commands.BucketType.user)
         self.voice_sessions: Dict[int, datetime] = {}
@@ -48,8 +47,7 @@ class EconomyCore(commands.Cog):
         
     async def load_configs(self):
         self.coin_log_channel_id = get_id("coin_log_channel_id")
-        self.admin_role_id = get_id("role_admin_total")
-        self.currency_icon = get_config("CURRENCY_ICON", "🪙")
+        self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙")
         logger.info("[EconomyCore Cog] 데이터베이스로부터 설정을 성공적으로 로드했습니다.")
         
     def cog_unload(self):
@@ -57,28 +55,28 @@ class EconomyCore(commands.Cog):
         self.update_chat_progress_loop.cancel()
         self.daily_reset_loop.cancel()
     
+    # [✅ 구조 개선] 레벨업 이벤트 핸들러 중앙화
     async def handle_level_up_event(self, user: discord.User, result_data: Dict):
         if not result_data or not result_data.get('leveled_up'):
             return
 
-        level_up_data = result_data
-        new_level = level_up_data.get('new_level')
+        new_level = result_data.get('new_level')
+        logger.info(f"유저 {user.display_name}(ID: {user.id})가 레벨 {new_level}(으)로 레벨업했습니다.")
         
-        if new_level in [50, 100]:
+        # 특정 레벨 도달 시 전직 요청
+        job_advancement_levels = get_config("GAME_CONFIG", {}).get("JOB_ADVANCEMENT_LEVELS", [50, 100])
+        if new_level in job_advancement_levels:
             await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": time.time()})
-            logger.info(f"유저 {user.display_name}(ID: {user.id})가 전직 가능 레벨({new_level})에 도달하여 DB에 요청을 기록했습니다.")
+            logger.info(f"유저가 전직 가능 레벨({new_level})에 도달하여 DB에 요청을 기록했습니다.")
 
+        # 레벨 등급 역할 업데이트 요청
         await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
 
-    @tasks.loop(time=JST_MIDNIGHT)
+    @tasks.loop(time=JST_MIDNIGHT_RESET)
     async def daily_reset_loop(self):
         logger.info("[일일 초기화] 모든 유저의 일일 퀘스트 진행도 초기화를 시작합니다.")
         try:
-            await supabase.table(PROGRESS_TABLE).update({
-                "daily_voice_minutes": 0,
-                "daily_fish_count": 0
-            }).gt("user_id", 0).execute()
-            
+            await supabase.rpc('reset_daily_progress_all_users').execute()
             logger.info("[일일 초기화] 성공적으로 완료되었습니다.")
         except Exception as e:
             logger.error(f"[일일 초기화] 진행도 초기화 중 오류 발생: {e}", exc_info=True)
@@ -89,9 +87,7 @@ class EconomyCore(commands.Cog):
             return
 
         bucket = self._chat_cooldown.get_bucket(message)
-        retry_after = bucket.update_rate_limit()
-        if retry_after:
-            return
+        if bucket.update_rate_limit(): return
         
         user_id = message.author.id
         async with self._cache_lock:
@@ -100,187 +96,120 @@ class EconomyCore(commands.Cog):
     @tasks.loop(minutes=1)
     async def update_chat_progress_loop(self):
         await self.bot.wait_until_ready()
-        
         async with self._cache_lock:
-            if not self.chat_progress_cache:
-                return
-            
+            if not self.chat_progress_cache: return
             data_to_update = self.chat_progress_cache.copy()
             self.chat_progress_cache.clear()
-
         try:
-            user_updates_json = [
-                {"user_id": str(uid), "chat_count": count}
-                for uid, count in data_to_update.items()
-            ]
+            user_updates_json = [{"user_id": str(uid), "chat_count": count} for uid, count in data_to_update.items()]
             await supabase.rpc('batch_increment_chat_progress', {'p_user_updates': user_updates_json}).execute()
         except Exception as e:
             logger.error(f"채팅 활동 일괄 업데이트 중 DB 오류: {e}", exc_info=True)
             async with self._cache_lock:
                 for user_update in user_updates_json:
-                    uid = int(user_update['user_id'])
-                    count = int(user_update['chat_count'])
+                    uid, count = int(user_update['user_id']), int(user_update['chat_count'])
                     self.chat_progress_cache[uid] = self.chat_progress_cache.get(uid, 0) + count
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         if member.bot: return
-
-        def is_valid_channel(state: discord.VoiceState):
-            afk_id = member.guild.afk_channel.id if member.guild.afk_channel else None
-            return state.channel and state.channel.id != afk_id
-
-        def is_active_state(state: discord.VoiceState):
-            return not state.self_deaf and not state.self_mute
-
-        is_before_valid = is_valid_channel(before) and is_active_state(before)
-        is_after_valid = is_valid_channel(after) and is_active_state(after)
-
-        if not is_before_valid and is_after_valid:
+        is_valid = lambda state: state.channel and state.channel.id != member.guild.afk_channel.id if member.guild.afk_channel else True
+        is_active = lambda state: not state.self_deaf and not state.self_mute
+        
+        if not (is_valid(before) and is_active(before)) and (is_valid(after) and is_active(after)):
             self.voice_sessions[member.id] = datetime.now(timezone.utc)
-
-        elif is_before_valid and not is_after_valid:
-            if member.id in self.voice_sessions:
-                join_time = self.voice_sessions.pop(member.id)
-                duration = datetime.now(timezone.utc) - join_time
-                duration_minutes = duration.total_seconds() / 60.0
-
-                if duration_minutes > 0:
+        elif (is_valid(before) and is_active(before)) and not (is_valid(after) and is_active(after)):
+            if join_time := self.voice_sessions.pop(member.id, None):
+                duration_minutes = (datetime.now(timezone.utc) - join_time).total_seconds() / 60.0
+                if duration_minutes > 0.1:
                     try:
-                        params = {'p_user_id': str(member.id), 'p_voice_minutes': duration_minutes}
-                        await supabase.rpc('increment_user_progress', params).execute()
+                        await supabase.rpc('increment_user_progress', {'p_user_id': str(member.id), 'p_voice_minutes': duration_minutes}).execute()
                     except Exception as e:
                         logger.error(f"음성 시간 DB 업데이트 중 오류: {e}", exc_info=True)
                         self.voice_sessions[member.id] = join_time
 
-    @tasks.loop(minutes=1)
+    @tasks.loop(minutes=5)
     async def reward_payout_loop(self):
+        game_config = get_config("GAME_CONFIG", {})
         try:
-            # --- 음성 보상 로직 ---
-            voice_req_min_config = str(get_config("VOICE_TIME_REQUIREMENT_MINUTES", "10")).strip('"')
-            voice_req_min = int(voice_req_min_config)
-            voice_reward_range_config = str(get_config("VOICE_REWARD_RANGE", "[10, 15]"))
-            voice_reward_range = eval(voice_reward_range_config)
-            
-            voice_response = await supabase.table(PROGRESS_TABLE).select('user_id, daily_voice_minutes').gte('daily_voice_minutes', voice_req_min).execute()
+            # 음성 보상
+            voice_req = game_config.get("VOICE_TIME_REQUIREMENT_MINUTES", 10)
+            voice_reward = game_config.get("VOICE_REWARD_RANGE", [10, 15])
+            voice_xp = game_config.get("XP_FROM_VOICE", 10)
+            await self.process_rewards('voice', voice_req, voice_reward, voice_xp, "ボイスチャット活動報酬")
 
-            if voice_response and voice_response.data:
-                for record in voice_response.data:
-                    user_id = int(record['user_id'])
-                    member = self.bot.get_user(user_id)
-                    if not member: continue
-                    try:
-                        reward = random.randint(voice_reward_range[0], voice_reward_range[1])
-                        await update_wallet(member, reward)
-                        await self.log_coin_activity(member, reward, "ボイスチャット活動報酬")
-                        xp_to_add = int(str(get_config("XP_FROM_VOICE", "10")).strip('"'))
-                        res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
-                        if res and res.data:
-                            await self.handle_level_up_event(member, res.data[0])
-                    finally:
-                        reset_params = {'p_user_id': str(member.id), 'p_reset_voice': True}
-                        await supabase.rpc('reset_user_progress', reset_params).execute()
-
-            # --- 채팅 보상 로직 ---
-            chat_req_config = str(get_config("CHAT_MESSAGE_REQUIREMENT", "10")).strip('"')
-            chat_req = int(chat_req_config)
-            chat_reward_range_config = str(get_config("CHAT_REWARD_RANGE", "[5, 10]"))
-            chat_reward_range = eval(chat_reward_range_config)
-            
-            chat_response = await supabase.table(ACTIVITY_PROGRESS_TABLE).select('user_id, chat_progress').gte('chat_progress', chat_req).execute()
-
-            if chat_response and chat_response.data:
-                for record in chat_response.data:
-                    user_id = int(record['user_id'])
-                    member = self.bot.get_user(user_id)
-                    if not member: continue
-                    try:
-                        reward = random.randint(chat_reward_range[0], chat_reward_range[1])
-                        await update_wallet(member, reward)
-                        await self.log_coin_activity(member, reward, "チャット活動報酬")
-                        xp_to_add = int(str(get_config("XP_FROM_CHAT", "5")).strip('"'))
-                        res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
-                        if res and res.data:
-                            await self.handle_level_up_event(member, res.data[0])
-                    finally:
-                        reset_params = {'p_user_id': str(member.id), 'p_reset_chat': True}
-                        await supabase.rpc('reset_user_progress', reset_params).execute()
+            # 채팅 보상
+            chat_req = game_config.get("CHAT_MESSAGE_REQUIREMENT", 20)
+            chat_reward = game_config.get("CHAT_REWARD_RANGE", [5, 10])
+            chat_xp = game_config.get("XP_FROM_CHAT", 5)
+            await self.process_rewards('chat', chat_req, chat_reward, chat_xp, "チャット活動報酬")
 
         except Exception as e:
-            logger.error(f"음성/채팅 보상 지급 루프 중 오류: {e}", exc_info=True)
+            logger.error(f"활동 보상 지급 루프 중 오류: {e}", exc_info=True)
+
+    async def process_rewards(self, reward_type: str, requirement: int, reward_range: List[int], xp_reward: int, reason: str):
+        table, column = (PROGRESS_TABLE, 'daily_voice_minutes') if reward_type == 'voice' else (ACTIVITY_PROGRESS_TABLE, 'chat_progress')
         
+        response = await supabase.table(table).select('user_id').gte(column, requirement).execute()
+        if not (response and response.data): return
+
+        for record in response.data:
+            user_id = int(record['user_id'])
+            if not (member := self.bot.get_user(user_id)): continue
+            
+            try:
+                reward = random.randint(reward_range[0], reward_range[1])
+                await update_wallet(member, reward)
+                await self.log_coin_activity(member, reward, reason)
+                
+                res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_reward, 'p_source': reward_type}).execute()
+                if res and res.data: await self.handle_level_up_event(member, res.data[0])
+
+            except Exception as e:
+                logger.error(f"{reason} 처리 중 오류 (유저: {user_id}): {e}", exc_info=True)
+            finally:
+                reset_params = {'p_user_id': str(user_id), f'p_reset_{reward_type}': True}
+                await supabase.rpc('reset_user_progress', reset_params).execute()
+
     @reward_payout_loop.before_loop
     async def before_reward_payout_loop(self):
         await self.bot.wait_until_ready()
     
     async def log_coin_activity(self, user: discord.Member, amount: int, reason: str):
         if not self.coin_log_channel_id or not (log_channel := self.bot.get_channel(self.coin_log_channel_id)): return
-        
-        if embed_data := await get_embed_from_db("log_coin_gain"):
-            formatted_embed_data = embed_data.copy()
-            
-            if reason == "チャット活動報酬":
-                formatted_embed_data['title'] = "💬 チャット活動報酬"
-                formatted_embed_data['description'] = f"{user.mention}さんがチャット活動でコインを獲得しました。"
-            else: 
-                formatted_embed_data['title'] = "🎙️ ボイスチャット活動報酬"
-                formatted_embed_data['description'] = f"{user.mention}さんがVC活動でコインを獲得しました。"
+        if not (embed_data := await get_embed_from_db("log_coin_gain")): return
+        embed = format_embed_from_db(embed_data, user_mention=user.mention, amount=f"{amount:,}", currency_icon=self.currency_icon, reason=reason)
+        if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
+        try: await log_channel.send(embed=embed)
+        except Exception as e: logger.error(f"코인 활동 로그 전송 실패: {e}", exc_info=True)
 
-            embed = format_embed_from_db(
-                formatted_embed_data, 
-                user_mention=user.mention, 
-                amount=f"{amount:,}", 
-                currency_icon=self.currency_icon
-            )
-
-            if user.display_avatar:
-                embed.set_thumbnail(url=user.display_avatar.url)
-            
-            try: 
-                await log_channel.send(embed=embed)
-            except Exception as e: 
-                logger.error(f"코인 활동 로그 전송 실패: {e}", exc_info=True)
-
-    async def log_coin_transfer(self, sender: discord.Member, recipient: discord.Member, amount: int):
-        if not self.coin_log_channel_id or not (log_channel := self.bot.get_channel(self.coin_log_channel_id)): return
-        
-        if embed_data := await get_embed_from_db("log_coin_transfer"):
-            embed = format_embed_from_db(embed_data, sender_mention=sender.mention, recipient_mention=recipient.mention, amount=f"{amount:,}", currency_icon=self.currency_icon)
-            try: await log_channel.send(embed=embed)
-            except Exception as e: logger.error(f"코인 송금 로그 전송 실패: {e}", exc_info=True)
-        
     async def log_admin_action(self, admin: discord.Member, target: discord.Member, amount: int, action: str):
         if not self.coin_log_channel_id or not (log_channel := self.bot.get_channel(self.coin_log_channel_id)): return
-        
-        if embed_data := await get_embed_from_db("log_coin_admin"):
-            action_color = 0x3498DB if amount > 0 else 0xE74C3C
-            amount_str = f"+{amount:,}" if amount > 0 else f"{amount:,}"
-            embed = format_embed_from_db(embed_data, action=action, target_mention=target.mention, amount=amount_str, currency_icon=self.currency_icon, admin_mention=admin.mention)
-            embed.color = discord.Color(action_color)
-            try: await log_channel.send(embed=embed)
-            except Exception as e: logger.error(f"관리자 코인 조작 로그 전송 실패: {e}", exc_info=True)
+        if not (embed_data := await get_embed_from_db("log_coin_admin")): return
+        action_color = 0x3498DB if amount > 0 else 0xE74C3C
+        amount_str = f"+{amount:,}" if amount > 0 else f"{amount:,}"
+        embed = format_embed_from_db(embed_data, action=action, target_mention=target.mention, amount=amount_str, currency_icon=self.currency_icon, admin_mention=admin.mention)
+        embed.color = discord.Color(action_color)
+        try: await log_channel.send(embed=embed)
+        except Exception as e: logger.error(f"관리자 코인 조작 로그 전송 실패: {e}", exc_info=True)
         
     @app_commands.command(name="コイン付与", description="[管理者専用] 特定のユーザーにコインを付与します。")
     @app_commands.checks.has_permissions(administrator=True)
     async def give_coin_command(self, interaction: discord.Interaction, user: discord.Member, amount: app_commands.Range[int, 1, None]):
         await interaction.response.defer(ephemeral=True)
-        result = await update_wallet(user, amount)
-        if result:
+        if await update_wallet(user, amount):
             await self.log_admin_action(interaction.user, user, amount, "付与")
             await interaction.followup.send(f"✅ {user.mention}さんへ `{amount:,}`{self.currency_icon}を付与しました。")
-        else:
-            await interaction.followup.send("❌ コイン付与中にエラーが発生しました。")
+        else: await interaction.followup.send("❌ コイン付与中にエラーが発生しました。")
         
     @app_commands.command(name="コイン削減", description="[管理者専用] 特定のユーザーのコインを削減します。")
     @app_commands.checks.has_permissions(administrator=True)
     async def take_coin_command(self, interaction: discord.Interaction, user: discord.Member, amount: app_commands.Range[int, 1, None]):
         await interaction.response.defer(ephemeral=True)
-        result = await update_wallet(user, -amount)
-        if result:
+        if await update_wallet(user, -amount):
             await self.log_admin_action(interaction.user, user, -amount, "削減")
             await interaction.followup.send(f"✅ {user.mention}さんの残高から `{amount:,}`{self.currency_icon}を削減しました。")
-        else:
-            await interaction.followup.send("❌ コイン削減中にエラーが発生しました。")
+        else: await interaction.followup.send("❌ コイン削減中にエラーが発生しました。")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(EconomyCore(bot))
