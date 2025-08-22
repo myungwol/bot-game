@@ -69,7 +69,7 @@ class EconomyCore(commands.Cog):
                     
                     # [✅ 레벨 시스템] 채팅 활동으로 경험치 획득 (예: 5 XP)
                     xp_to_add = int(get_config("XP_FROM_CHAT", "5").strip('"'))
-                    await supabase.rpc('add_xp', {'p_user_id': user.id, 'p_xp_to_add': xp_to_add}).execute()
+                    await supabase.rpc('add_xp', {'p_user_id': user.id, 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
 
                     reset_params = {'p_user_id': str(user.id), 'p_reset_chat': True}
                     await supabase.rpc('reset_user_progress', reset_params).execute()
@@ -112,7 +112,7 @@ class EconomyCore(commands.Cog):
                                     
                                     # [✅ 레벨 시스템] 음성 활동으로 경험치 획득 (예: 10 XP)
                                     xp_to_add = int(get_config("XP_FROM_VOICE", "10").strip('"'))
-                                    await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add}).execute()
+                                    await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
 
                                     reset_params = {'p_user_id': str(member.id), 'p_reset_voice': True}
                                     await supabase.rpc('reset_user_progress', reset_params).execute()
