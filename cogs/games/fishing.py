@@ -8,7 +8,6 @@ import asyncio
 import logging
 import time
 import json
-# [✅ 버그 수정] List를 import 합니다.
 from typing import Optional, Set, Dict, List
 
 from utils.database import (
@@ -197,9 +196,18 @@ class FishingPanelView(ui.View):
                 return
 
             await interaction.response.defer(ephemeral=True)
+            
+            # [✅ 수정] 만료된 토큰 문제를 해결하기 위해 메시지를 다시 fetch하여 삭제합니다.
             if last_message := self.fishing_cog.last_result_messages.pop(user_id, None):
-                try: await last_message.delete()
-                except (discord.NotFound, discord.Forbidden): pass
+                try:
+                    # last_message 객체에 있는 채널 정보를 통해 메시지를 다시 가져와서 삭제합니다.
+                    # 이렇게 하면 상호작용 토큰이 만료되어도 봇의 권한으로 메시지를 삭제할 수 있습니다.
+                    if last_message.channel:
+                        msg_to_delete = await last_message.channel.fetch_message(last_message.id)
+                        await msg_to_delete.delete()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    # 메시지가 이미 삭제되었거나, 권한이 없는 경우 등은 조용히 넘어갑니다.
+                    pass
             
             try:
                 location_type = interaction.data['custom_id'].split('_')[-1]
