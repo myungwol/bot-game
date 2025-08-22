@@ -1,4 +1,4 @@
-# cogs/economy/commerce.py
+# bot-game/cogs/commerce.py
 
 import discord
 from discord.ext import commands
@@ -17,7 +17,6 @@ from utils.database import (
     save_panel_id, get_panel_id, get_embed_from_db,
     update_inventory, update_wallet, get_farm_data, expand_farm_db
 )
-# [✅ 개선] helpers에서 CloseButtonView를 import 합니다.
 from utils.helpers import format_embed_from_db, CloseButtonView
 
 class QuantityModal(ui.Modal):
@@ -68,6 +67,14 @@ class ShopViewBase(ui.View):
         else:
             msg = await interaction.response.send_message(message_content, ephemeral=True)
         await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+    
+    # [✅ 레벨 시스템] 아이템 판매 시 경험치를 부여하는 헬퍼 함수
+    async def _grant_selling_xp(self, total_price: int):
+        rate = float(get_config("XP_RATE_FROM_SELLING", "0.02").strip('"')) # 판매 경험치 비율 (기본 2%)
+        min_xp = int(get_config("XP_MIN_FROM_SELLING", "10").strip('"'))   # 최소 경험치
+        xp_to_add = max(min_xp, int(total_price * rate))
+        if xp_to_add > 0:
+            await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': xp_to_add})
 
 class BuyItemView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str):
@@ -79,6 +86,14 @@ class BuyItemView(ShopViewBase):
         )
         self.page_index = 0
         self.items_per_page = 20
+
+    # [✅ 레벨 시스템] 아이템 구매 시 경험치를 부여하는 헬퍼 함수
+    async def _grant_purchase_xp(self, total_price: int):
+        rate = float(get_config("XP_RATE_FROM_BUYING", "0.01").strip('"')) # 구매 경험치 비율 (기본 1%)
+        min_xp = int(get_config("XP_MIN_FROM_BUYING", "5").strip('"'))    # 최소 경험치
+        xp_to_add = max(min_xp, int(total_price * rate))
+        if xp_to_add > 0:
+            await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': xp_to_add})
 
     async def build_embed(self) -> discord.Embed:
         wallet = await get_wallet(self.user.id)
@@ -190,6 +205,7 @@ class BuyItemView(ShopViewBase):
             else: new_x += 1
             await expand_farm_db(farm_data['id'], new_x, new_y)
             await update_wallet(self.user, -item_data['price'])
+            await self._grant_purchase_xp(item_data['price']) # [✅ 레벨 시스템]
             msg = await interaction.followup.send(f"✅ 農場が **{new_x}x{new_y}**サイズに拡張されました！", ephemeral=True)
             await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
         else:
@@ -216,6 +232,7 @@ class BuyItemView(ShopViewBase):
             return
         await update_inventory(str(self.user.id), item_name, quantity)
         await update_wallet(self.user, -total_price)
+        await self._grant_purchase_xp(total_price) # [✅ 레벨 시스템]
         success_message = f"✅ **{item_name}** {quantity}個を購入しました。"
         msg = await interaction.followup.send(success_message, ephemeral=True)
         await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
@@ -224,6 +241,11 @@ class BuyItemView(ShopViewBase):
         await interaction.response.defer(ephemeral=True)
         user = interaction.user
         wallet = await get_wallet(user.id)
+        if wallet.get('balance', 0) < item_data['price']:
+            msg = await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
+            await msg.edit(view=CloseButtonView(user, target_message=msg))
+            return
+        
         if role_key := item_data.get('role_key'):
             role_id = get_id(role_key)
             if not role_id:
@@ -235,17 +257,16 @@ class BuyItemView(ShopViewBase):
                 msg = await interaction.followup.send(f"❌ 「{item_name}」は既に所持しています。", ephemeral=True)
                 await msg.edit(view=CloseButtonView(user, target_message=msg))
                 return
-            if wallet.get('balance', 0) < item_data['price']:
-                msg = await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
-                await msg.edit(view=CloseButtonView(user, target_message=msg))
-                return
+            
             role_to_grant = interaction.guild.get_role(role_id)
             if not role_to_grant:
                 logger.error(f"서버에서 역할(ID: {role_id})을 찾을 수 없습니다.")
                 msg = await interaction.followup.send("❌ アイテム役割設定にエラーが発生しました。管理者に問い合わせてください。", ephemeral=True)
                 await msg.edit(view=CloseButtonView(user, target_message=msg))
                 return
+            
             await update_wallet(user, -item_data['price'])
+            await self._grant_purchase_xp(item_data['price']) # [✅ 레벨 시스템]
             await user.add_roles(role_to_grant)
             success_message = f"✅ **{item_name}**を購入し、`{role_to_grant.name}`の役割を付与されました。"
             msg = await interaction.followup.send(success_message, ephemeral=True)
@@ -262,11 +283,9 @@ class BuyItemView(ShopViewBase):
                 msg = await interaction.followup.send(f"❌ 「{item_name}」は既に所持しています。1つしか持てません。", ephemeral=True)
                 await msg.edit(view=CloseButtonView(user, target_message=msg))
                 return
-            if wallet.get('balance', 0) < item_data['price']:
-                msg = await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
-                await msg.edit(view=CloseButtonView(user, target_message=msg))
-                return
+
             await update_wallet(user, -item_data['price'])
+            await self._grant_purchase_xp(item_data['price']) # [✅ 레벨 시스템]
             await update_inventory(str(user.id), item_name, 1)
             success_message = f"✅ **{item_name}**を購入しました。"
             msg = await interaction.followup.send(success_message, ephemeral=True)
@@ -357,6 +376,7 @@ class SellFishView(ShopViewBase):
         total_price = sum(self.fish_data_map[val]['price'] for val in select_menu.values)
         try:
             await sell_fish_from_db(str(self.user.id), fish_ids_to_sell, total_price)
+            await self._grant_selling_xp(total_price) # [✅ 레벨 시스템]
             new_wallet = await get_wallet(self.user.id)
             new_balance = new_wallet.get('balance', 0)
             sold_fish_count = len(fish_ids_to_sell)
@@ -429,6 +449,7 @@ class SellCropView(ShopViewBase):
         try:
             await update_inventory(str(self.user.id), selected_crop, -quantity_to_sell)
             await update_wallet(self.user, total_price)
+            await self._grant_selling_xp(total_price) # [✅ 레벨 시스템]
             new_wallet = await get_wallet(self.user.id)
             new_balance = new_wallet.get('balance', 0)
             success_message = f"✅ **{selected_crop}** {quantity_to_sell}個を`{total_price:,}`{self.currency_icon}で売却しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
