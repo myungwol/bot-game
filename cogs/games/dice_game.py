@@ -11,7 +11,7 @@ from utils.database import (
     get_wallet, update_wallet, get_config, get_panel_components_from_db,
     save_panel_id, get_panel_id, get_embed_from_db
 )
-from utils.helpers import format_embed_from_db, CloseButtonView
+from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,6 @@ class BetAmountModal(ui.Modal, title="ベット額の入力"):
                 await interaction.response.send_message(
                     "❌ 10コイン単位の正の整数のみ入力できます。", 
                     ephemeral=True, 
-                    view=CloseButtonView(interaction.user)
                 )
                 return
 
@@ -40,7 +39,6 @@ class BetAmountModal(ui.Modal, title="ベット額の入力"):
                 await interaction.response.send_message(
                     f"❌ 残高が不足しています。(現在の残高: {wallet.get('balance', 0):,}{self.currency_icon})", 
                     ephemeral=True, 
-                    view=CloseButtonView(interaction.user)
                 )
                 return
             
