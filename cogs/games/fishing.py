@@ -12,7 +12,7 @@ from typing import Optional, Set, Dict
 from utils.database import (
     update_wallet, get_inventory, update_inventory, add_to_aquarium,
     get_user_gear, set_user_gear, save_panel_id, get_panel_id, get_id,
-    get_embed_from_db, supabase, get_item_database, get_fishing_loot, 
+    get_embed_from_db, supabase, get_item_database, get_fishing_loot,
     get_config, get_string, save_config_to_db,
     is_legendary_fish_available, set_legendary_fish_cooldown,
     BARE_HANDS, DEFAULT_ROD,
@@ -24,7 +24,10 @@ logger = logging.getLogger(__name__)
 
 INTERMEDIATE_ROD_NAME = "鉄の釣竿"
 
+# [✅ 수정] 하드코딩된 이미지 URL 맵을 삭제합니다. DB에서 직접 불러올 것입니다.
+
 class FishingGameView(ui.View):
+    # ... (이 클래스는 변경할 내용이 없습니다. 이전과 동일) ...
     def __init__(self, bot: commands.Bot, user: discord.Member, used_rod: str, used_bait: str, remaining_baits: Dict[str, int], cog_instance: 'Fishing', location_type: str):
         super().__init__(timeout=35)
         self.bot = bot; self.player = user; self.message: Optional[discord.WebhookMessage] = None
@@ -32,7 +35,7 @@ class FishingGameView(ui.View):
         self.used_rod = used_rod; self.used_bait = used_bait; self.remaining_baits = remaining_baits
         self.fishing_cog = cog_instance
         self.location_type = location_type
-        
+
         item_db = get_item_database()
         self.rod_data = item_db.get(self.used_rod, {})
         bait_data = item_db.get(self.used_bait, {})
@@ -77,7 +80,7 @@ class FishingGameView(ui.View):
 
         rod_tier = self.rod_data.get('tier', 0)
         rod_bonus = self.rod_data.get('loot_bonus', 0.0)
-        
+
         if rod_tier < 5:
             loot_pool = [item for item in base_loot if item.get('name') != 'クジラ']
         else:
@@ -85,7 +88,7 @@ class FishingGameView(ui.View):
 
         if not loot_pool:
             return (discord.Embed(title="エラー", description="この場所では何も釣れないようです。", color=discord.Color.red()), False, False, False)
-        
+
         weights = []
         for item in loot_pool:
             weight = item['weight']
@@ -95,7 +98,7 @@ class FishingGameView(ui.View):
 
         catch_proto = random.choices(loot_pool, weights=weights, k=1)[0]
         is_legendary_catch, is_big_catch, log_publicly = catch_proto.get('name') == '伝説の魚', False, False
-        
+
         embed = discord.Embed()
         if catch_proto.get("min_size") is not None:
             log_publicly = True
@@ -107,7 +110,7 @@ class FishingGameView(ui.View):
 
             xp_to_add = int(get_config("XP_FROM_FISHING", "20").strip('"'))
             res = await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add, 'p_source': 'fishing'}).execute()
-            
+
             if res and res.data:
                 await self.fishing_cog.handle_level_up_event(self.player, res.data[0])
 
@@ -120,7 +123,7 @@ class FishingGameView(ui.View):
             value = catch_proto.get('value') or 0
             if value != 0: await update_wallet(self.player, value)
             embed.title, embed.description, embed.color = catch_proto['title'], catch_proto['description'].format(user_mention=self.player.mention, value=abs(value)), int(catch_proto['color'], 16) if isinstance(catch_proto['color'], str) else catch_proto['color']
-        
+
         if image_url := catch_proto.get('image_url'):
             embed.set_thumbnail(url=image_url)
         return embed, log_publicly, is_big_catch, is_legendary_catch
@@ -136,7 +139,7 @@ class FishingGameView(ui.View):
             await interaction.response.defer(); self.game_state = "finished"
             result_embed, log_publicly, is_big_catch, is_legendary = await self._handle_catch_logic()
         if result_embed:
-            if self.player.display_avatar and not result_embed.thumbnail: 
+            if self.player.display_avatar and not result_embed.thumbnail:
                 result_embed.set_thumbnail(url=self.player.display_avatar.url)
             await self._send_result(result_embed, log_publicly, is_big_catch, is_legendary)
         self.stop()
@@ -173,6 +176,7 @@ class FishingGameView(ui.View):
         super().stop()
 
 class FishingPanelView(ui.View):
+    # ... (이 클래스는 변경할 내용이 거의 없습니다) ...
     def __init__(self, bot: commands.Bot, cog_instance: 'Fishing', panel_key: str):
         super().__init__(timeout=None)
         self.bot = bot
@@ -188,7 +192,7 @@ class FishingPanelView(ui.View):
             sea_button = ui.Button(label="海で釣りをする", style=discord.ButtonStyle.primary, emoji="🌊", custom_id="start_fishing_sea")
             sea_button.callback = self._start_fishing_callback
             self.add_item(sea_button)
-    
+
     async def _start_fishing_callback(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         lock = self.user_locks.setdefault(user_id, asyncio.Lock())
@@ -205,29 +209,26 @@ class FishingPanelView(ui.View):
             if last_message := self.fishing_cog.last_result_messages.pop(user_id, None):
                 try: await last_message.delete()
                 except (discord.NotFound, discord.Forbidden): pass
-            
+
             try:
                 custom_id, location_type = interaction.data['custom_id'], interaction.data['custom_id'].split('_')[-1]
                 user = interaction.user
                 gear, inventory = await asyncio.gather(get_user_gear(user), get_inventory(user))
-                
+
                 rod, item_db = gear.get('rod', BARE_HANDS), get_item_database()
                 if rod == BARE_HANDS:
                     if any('竿' in item_name for item_name in inventory if item_db.get(item_name, {}).get('category') == '装備'):
-                        # [✅ 오류 수정] CloseButtonView 호출 방식 변경
                         await interaction.followup.send("❌ プロフィール画面から釣竿を装備してください。", ephemeral=True, view=CloseButtonView(user))
                     else:
-                        # [✅ 오류 수정] CloseButtonView 호출 방식 변경
                         await interaction.followup.send(f"❌ 釣りをするには、まず商店で「{DEFAULT_ROD}」を購入してください。", ephemeral=True, view=CloseButtonView(user))
                     return
-                
+
                 if location_type == 'sea':
                     rod_tier = item_db.get(rod, {}).get('tier', 0)
                     req_tier_str = get_config("FISHING_SEA_REQ_TIER", "3").strip('"')
                     required_tier_for_sea = int(req_tier_str)
 
                     if rod_tier < required_tier_for_sea:
-                        # [✅ 오류 수정] CloseButtonView 호출 방식 변경
                         await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD_NAME}」(等級{required_tier_for_sea})以上の性能を持つ釣竿を**装備**する必要があります。", ephemeral=True, view=CloseButtonView(user))
                         return
 
@@ -244,15 +245,21 @@ class FishingPanelView(ui.View):
                 location_name = "川" if location_type == "river" else "海"
                 desc = f"### {location_name}にウキを投げました。\n**🎣 使用中の釣竿:** `{rod}`\n**🐛 使用中のエサ:** `{bait}`"
                 embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
+
+                # [✅ 핵심 수정] DB에서 'FISHING_WAITING_IMAGE_URL' 값을 가져와 썸네일로 설정합니다.
+                # .strip('"')을 추가하여 DB에 따옴표가 포함된 문자열로 저장되어 있어도 안전하게 처리합니다.
+                if image_url := get_config("FISHING_WAITING_IMAGE_URL"):
+                    embed.set_thumbnail(url=str(image_url).strip('"'))
+
                 view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type)
                 await view.start_game(interaction, embed)
             except Exception as e:
                 self.fishing_cog.active_fishing_sessions_by_user.discard(user_id)
                 logger.error(f"낚시 게임 시작 중 예측 못한 오류: {e}", exc_info=True)
-                # [✅ 오류 수정] CloseButtonView 호출 방식 변경
                 await interaction.followup.send(f"❌ 釣りの開始中に予期せぬエラーが発生しました。", ephemeral=True, view=CloseButtonView(interaction.user))
 
 class Fishing(commands.Cog):
+    # ... (이 클래스는 변경할 내용이 없습니다. 이전과 동일) ...
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_fishing_sessions_by_user: Set[int] = set()
