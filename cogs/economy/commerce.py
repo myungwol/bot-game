@@ -74,7 +74,7 @@ class ShopViewBase(ui.View):
         min_xp = int(get_config("XP_MIN_FROM_SELLING", "10").strip('"'))   # 최소 경험치
         xp_to_add = max(min_xp, int(total_price * rate))
         if xp_to_add > 0:
-            await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': xp_to_add})
+            await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': xp_to_add, 'p_source': 'commerce_buy'})
 
 class BuyItemView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str):
@@ -93,7 +93,7 @@ class BuyItemView(ShopViewBase):
         min_xp = int(get_config("XP_MIN_FROM_BUYING", "5").strip('"'))    # 최소 경험치
         xp_to_add = max(min_xp, int(total_price * rate))
         if xp_to_add > 0:
-            await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': xp_to_add})
+            await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': xp_to_add, 'p_source': 'commerce_sell'})
 
     async def build_embed(self) -> discord.Embed:
         wallet = await get_wallet(self.user.id)
