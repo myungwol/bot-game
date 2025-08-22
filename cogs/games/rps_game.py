@@ -1,3 +1,5 @@
+# bot-game/cogs/rps_game.py
+
 import discord
 from discord.ext import commands, tasks
 from discord import ui
@@ -10,35 +12,17 @@ from utils.database import (
     get_wallet, update_wallet, get_config,
     save_panel_id, get_panel_id, get_embed_from_db
 )
-from utils.helpers import format_embed_from_db
+# [✅ 수정] helpers에서 표준 CloseButtonView를 import 합니다.
+from utils.helpers import format_embed_from_db, CloseButtonView
 
 logger = logging.getLogger(__name__)
 
-# [✅ 개선] farm.py에서 가져온 안정적인 CloseButtonView를 여기에도 추가합니다.
-class CloseButtonView(ui.View):
-    def __init__(self, user: discord.User, target_message: discord.Message = None):
-        super().__init__(timeout=180)
-        self.user = user
-        self.target_message = target_message
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.user.id
-        
-    @ui.button(label="閉じる", style=discord.ButtonStyle.secondary)
-    async def close_button(self, interaction: discord.Interaction, button: ui.Button):
-        try:
-            await interaction.response.defer()
-            message_to_delete = self.target_message or interaction.message
-            if message_to_delete:
-                await message_to_delete.delete()
-        except discord.NotFound:
-            pass
-        except Exception as e:
-            logger.error(f"닫기 버튼 처리 중 예외 발생: {e}", exc_info=True)
+# [✅ 수정] 중복되는 CloseButtonView 클래스 정의를 삭제했습니다.
 
 HAND_EMOJIS = {"rock": "✊", "scissors": "✌️", "paper": "✋"}
 HAND_NAMES = {"rock": "グー", "scissors": "チョキ", "paper": "パー"}
-MAX_PLAYERS = 5
+# [✅ 유지보수] 하드코딩된 값을 DB에서 불러오도록 수정합니다.
+# MAX_PLAYERS = 5
 
 class BetAmountModal(ui.Modal, title="ベット額の入力 (じゃんけん)"):
     amount = ui.TextInput(label="金額 (10円単位)", placeholder="例: 100", required=True)
@@ -80,10 +64,9 @@ class BetAmountModal(ui.Modal, title="ベット額の入力 (じゃんけん)"):
 
 class RPSLobbyView(ui.View):
     def __init__(self, cog, channel_id: int):
-        # [✅ 유지보수] DB에서 타임아웃 값을 불러옵니다.
         lobby_timeout_str = get_config("RPS_LOBBY_TIMEOUT", "60").strip('"')
         lobby_timeout = int(lobby_timeout_str)
-        super().__init__(timeout=lobby_timeout + 5) # 뷰 타임아웃은 실제 카운트다운보다 길게 설정
+        super().__init__(timeout=lobby_timeout + 5)
         self.cog = cog
         self.channel_id = channel_id
 
@@ -101,10 +84,9 @@ class RPSLobbyView(ui.View):
 
 class RPSGameView(ui.View):
     def __init__(self, cog, channel_id: int):
-        # [✅ 유지보수] DB에서 타임아웃 값을 불러옵니다.
         choice_timeout_str = get_config("RPS_CHOICE_TIMEOUT", "45").strip('"')
         choice_timeout = int(choice_timeout_str)
-        super().__init__(timeout=choice_timeout + 5) # 뷰 타임아웃은 실제 카운트다운보다 길게 설정
+        super().__init__(timeout=choice_timeout + 5)
         self.cog = cog
         self.channel_id = channel_id
 
@@ -126,6 +108,7 @@ class RPSGame(commands.Cog):
         self.active_games: Dict[int, Dict] = {}
         self.currency_icon = "🪙"
         self.user_locks: Dict[int, asyncio.Lock] = {}
+        self.max_players = 5
         self.cleanup_stale_games.start()
 
     def cog_unload(self):
@@ -152,6 +135,7 @@ class RPSGame(commands.Cog):
 
     async def cog_load(self):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
+        self.max_players = int(get_config("RPS_MAX_PLAYERS", "5").strip('"'))
 
     async def create_game_lobby(self, interaction: discord.Interaction, bet_amount: int):
         user_lock = self.user_locks.setdefault(interaction.user.id, asyncio.Lock())
@@ -321,7 +305,7 @@ class RPSGame(commands.Cog):
                 msg = await interaction.response.send_message("❌ すで参加しています。", ephemeral=True)
                 await msg.edit(view=CloseButtonView(user, target_message=msg))
                 return
-            if len(game["players"]) >= MAX_PLAYERS:
+            if len(game["players"]) >= self.max_players:
                 msg = await interaction.response.send_message("❌ 満員です。", ephemeral=True)
                 await msg.edit(view=CloseButtonView(user, target_message=msg))
                 return
@@ -417,7 +401,7 @@ class RPSGame(commands.Cog):
         embed = discord.Embed(title="✊✌️✋ じゃんけん参加者募集中！", color=0x9B59B6)
         embed.description = f"**主催者:** {host.mention}\n**ベット額:** `{bet}`{self.currency_icon}"
         player_list = "\n".join([p.display_name for p in players]) or "まだいません"
-        embed.add_field(name=f"参加者 ({len(players)}/{MAX_PLAYERS})", value=player_list)
+        embed.add_field(name=f"参加者 ({len(players)}/{self.max_players})", value=player_list)
         embed.set_footer(text=f"{timeout}秒後に自動で開始します。")
         return embed
 
