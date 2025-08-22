@@ -12,26 +12,25 @@ from utils.database import (
     get_wallet, update_wallet, get_config,
     save_panel_id, get_panel_id, get_embed_from_db
 )
-# [✅ 수정] helpers에서 표준 CloseButtonView를 import 합니다.
 from utils.helpers import format_embed_from_db, CloseButtonView
 
 logger = logging.getLogger(__name__)
 
-# [✅ 수정] 중복되는 CloseButtonView 클래스 정의를 삭제했습니다.
-
 HAND_EMOJIS = {"rock": "✊", "scissors": "✌️", "paper": "✋"}
 HAND_NAMES = {"rock": "グー", "scissors": "チョキ", "paper": "パー"}
-# [✅ 유지보수] 하드코딩된 값을 DB에서 불러오도록 수정합니다.
-# MAX_PLAYERS = 5
 
 class BetAmountModal(ui.Modal, title="ベット額の入力 (じゃんけん)"):
     amount = ui.TextInput(label="金額 (10円単位)", placeholder="例: 100", required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
         cog = interaction.client.get_cog("RPSGame")
-        if not cog: 
-            msg = await interaction.response.send_message("エラー: ゲームCogが見つかりません。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+        if not cog:
+            # [✅ 오류 수정] View를 send_message에 직접 전달합니다.
+            await interaction.response.send_message(
+                "エラー: ゲームCogが見つかりません。", 
+                ephemeral=True, 
+                view=CloseButtonView(interaction.user)
+            )
             return
         
         try:
@@ -47,19 +46,22 @@ class BetAmountModal(ui.Modal, title="ベット額の入力 (じゃんけん)"):
             await cog.create_game_lobby(interaction, bet_amount)
 
         except ValueError as e:
+            # [✅ 오류 수정] View를 send_message/followup.send에 직접 전달합니다.
+            message_content = f"❌ {e}"
+            view = CloseButtonView(interaction.user)
             if not interaction.response.is_done():
-                msg = await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+                await interaction.response.send_message(message_content, ephemeral=True, view=view)
             else:
-                msg = await interaction.followup.send(f"❌ {e}", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+                await interaction.followup.send(message_content, ephemeral=True, view=view)
 
         except Exception as e:
             logger.error(f"じゃんけんのベット処理中にエラー: {e}", exc_info=True)
+            message_content = "❌ 処理中にエラーが発生しました。"
+            view = CloseButtonView(interaction.user)
             if not interaction.response.is_done():
-                msg = await interaction.response.send_message("❌ 処理中にエラーが発生しました。", ephemeral=True)
+                await interaction.response.send_message(message_content, ephemeral=True, view=view)
             else:
-                msg = await interaction.followup.send("❌ 処理中にエラーが発生しました。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+                await interaction.followup.send(message_content, ephemeral=True, view=view)
 
 
 class RPSLobbyView(ui.View):
@@ -140,8 +142,7 @@ class RPSGame(commands.Cog):
     async def create_game_lobby(self, interaction: discord.Interaction, bet_amount: int):
         user_lock = self.user_locks.setdefault(interaction.user.id, asyncio.Lock())
         if user_lock.locked():
-            msg = await interaction.followup.send("❌ 現在、他の操作を処理中です。しばらくお待ちください。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.followup.send("❌ 現在、他の操作を処理中です。しばらくお待ちください。", ephemeral=True, view=CloseButtonView(interaction.user))
             return
 
         async with user_lock:
@@ -149,8 +150,7 @@ class RPSGame(commands.Cog):
             host = interaction.user
 
             if channel_id in self.active_games:
-                msg = await interaction.followup.send("❌ このチャンネルでは既にゲームが進行中です。", ephemeral=True)
-                await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+                await interaction.followup.send("❌ このチャンネルでは既にゲームが進行中です。", ephemeral=True, view=CloseButtonView(interaction.user))
                 return
 
             await update_wallet(host, -bet_amount)
@@ -175,8 +175,7 @@ class RPSGame(commands.Cog):
                 "task": self.bot.loop.create_task(self.lobby_countdown(channel_id, lobby_timeout)),
                 "created_at": datetime.now(timezone.utc)
             }
-            msg = await interaction.followup.send(f"✅ じゃんけん部屋を作成しました！ ベット額: `{bet_amount}`{self.currency_icon}", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.followup.send(f"✅ じゃんけん部屋を作成しました！ ベット額: `{bet_amount}`{self.currency_icon}", ephemeral=True, view=CloseButtonView(interaction.user))
 
     async def start_new_round(self, channel_id: int):
         game = self.active_games.get(channel_id)
@@ -290,30 +289,25 @@ class RPSGame(commands.Cog):
     async def handle_join(self, interaction: discord.Interaction, channel_id: int):
         user_lock = self.user_locks.setdefault(interaction.user.id, asyncio.Lock())
         if user_lock.locked():
-            msg = await interaction.response.send_message("❌ 現在、他の操作を処理中です。しばらくお待ちください。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.response.send_message("❌ 現在、他の操作を処理中です。しばらくお待ちください。", ephemeral=True, view=CloseButtonView(interaction.user))
             return
 
         async with user_lock:
             game = self.active_games.get(channel_id)
             user = interaction.user
-            if not game: 
-                msg = await interaction.response.send_message("❌ 募集が終了したゲームです。", ephemeral=True)
-                await msg.edit(view=CloseButtonView(user, target_message=msg))
+            if not game:
+                await interaction.response.send_message("❌ 募集が終了したゲームです。", ephemeral=True, view=CloseButtonView(user))
                 return
             if user.id in game["players"]:
-                msg = await interaction.response.send_message("❌ すで参加しています。", ephemeral=True)
-                await msg.edit(view=CloseButtonView(user, target_message=msg))
+                await interaction.response.send_message("❌ すで参加しています。", ephemeral=True, view=CloseButtonView(user))
                 return
             if len(game["players"]) >= self.max_players:
-                msg = await interaction.response.send_message("❌ 満員です。", ephemeral=True)
-                await msg.edit(view=CloseButtonView(user, target_message=msg))
+                await interaction.response.send_message("❌ 満員です。", ephemeral=True, view=CloseButtonView(user))
                 return
 
             wallet = await get_wallet(user.id)
             if wallet.get('balance', 0) < game["bet_amount"]:
-                msg = await interaction.response.send_message(f"❌ コインが不足しています。(必要: {game['bet_amount']}{self.currency_icon})", ephemeral=True)
-                await msg.edit(view=CloseButtonView(user, target_message=msg))
+                await interaction.response.send_message(f"❌ コインが不足しています。(必要: {game['bet_amount']}{self.currency_icon})", ephemeral=True, view=CloseButtonView(user))
                 return
 
             await update_wallet(user, -game["bet_amount"])
@@ -325,18 +319,15 @@ class RPSGame(commands.Cog):
             embed = self.build_lobby_embed(self.bot.get_user(game["host_id"]), game["bet_amount"], list(game["players"].values()), lobby_timeout)
             await game["lobby_message"].edit(embed=embed)
             
-            msg = await interaction.response.send_message("✅ ゲームに参加しました！", ephemeral=True)
-            await msg.edit(view=CloseButtonView(user, target_message=msg))
+            await interaction.response.send_message("✅ ゲームに参加しました！", ephemeral=True, view=CloseButtonView(user))
 
     async def handle_start_manually(self, interaction: discord.Interaction, channel_id: int):
         game = self.active_games.get(channel_id)
         if not game or interaction.user.id != game["host_id"]:
-            msg = await interaction.response.send_message("❌ 部屋主のみがゲームを開始できます。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.response.send_message("❌ 部屋主のみがゲームを開始できます。", ephemeral=True, view=CloseButtonView(interaction.user))
             return
         if len(game["players"]) < 2:
-            msg = await interaction.response.send_message("❌ 参加者が2人以上必要です。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.response.send_message("❌ 参加者が2人以上必要です。", ephemeral=True, view=CloseButtonView(interaction.user))
             return
 
         await interaction.response.defer()
@@ -349,15 +340,13 @@ class RPSGame(commands.Cog):
     async def handle_cancel(self, interaction: discord.Interaction, channel_id: int):
         game = self.active_games.get(channel_id)
         if not game or interaction.user.id != game["host_id"]:
-            msg = await interaction.response.send_message("❌ 部屋主のみがゲームを中止できます。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.response.send_message("❌ 部屋主のみがゲームを中止できます。", ephemeral=True, view=CloseButtonView(interaction.user))
             return
 
         await interaction.response.defer()
         if game["task"]: game["task"].cancel()
         await self.end_game(channel_id, None)
-        msg = await interaction.followup.send("ゲームを中止しました。", ephemeral=True)
-        await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+        await interaction.followup.send("ゲームを中止しました。", ephemeral=True, view=CloseButtonView(interaction.user))
 
 
     async def handle_choice(self, interaction: discord.Interaction, channel_id: int, choice: str):
@@ -365,13 +354,21 @@ class RPSGame(commands.Cog):
         user_id = interaction.user.id
         if not game or user_id not in game["players"]: return await interaction.response.defer()
         if user_id in game["choices"]:
-            msg = await interaction.response.send_message("❌ すでに選択済みです。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            # [✅ 오류 수정] View를 send_message에 직접 전달합니다.
+            await interaction.response.send_message(
+                "❌ すでに選択済みです。", 
+                ephemeral=True, 
+                view=CloseButtonView(interaction.user)
+            )
             return
 
         game["choices"][user_id] = choice
-        msg = await interaction.response.send_message(f"✅ {HAND_NAMES[choice]}を出しました。", ephemeral=True)
-        await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+        # [✅ 오류 수정] View를 send_message에 직접 전달합니다.
+        await interaction.response.send_message(
+            f"✅ {HAND_NAMES[choice]}を出しました。", 
+            ephemeral=True, 
+            view=CloseButtonView(interaction.user)
+        )
 
         if len(game["choices"]) == len(game["players"]):
             if game["task"]: game["task"].cancel()
@@ -468,14 +465,12 @@ class RPSGamePanelView(ui.View):
     async def create_room_callback(self, interaction: discord.Interaction):
         user_lock = self.cog.user_locks.setdefault(interaction.user.id, asyncio.Lock())
         if user_lock.locked():
-            msg = await interaction.response.send_message("❌ 現在、他の操作を処理中です。しばらくお待ちください。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.response.send_message("❌ 現在、他の操作を処理中です。しばらくお待ちください。", ephemeral=True, view=CloseButtonView(interaction.user))
             return
 
         async with user_lock:
             if interaction.channel.id in self.cog.active_games:
-                msg = await interaction.response.send_message("❌ このチャンネルでは既にゲームが進行中です。", ephemeral=True)
-                await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+                await interaction.response.send_message("❌ このチャンネルでは既にゲームが進行中です。", ephemeral=True, view=CloseButtonView(interaction.user))
                 return
             await interaction.response.send_modal(BetAmountModal())
 
