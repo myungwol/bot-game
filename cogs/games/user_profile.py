@@ -13,6 +13,8 @@ from utils.database import (
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
     get_item_database, get_config, get_string, BARE_HANDS
 )
+# [✅ 개선] helpers에서 CloseButtonView를 import 합니다.
+from utils.helpers import CloseButtonView
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,6 @@ class ProfileView(ui.View):
 
     async def build_and_send(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
-        # [✅ 최종 수정 1] self.load_data()에 self.user를 전달합니다.
         await self.load_data(self.user)
         embed = await self.build_embed()
         self.build_components()
@@ -42,14 +43,12 @@ class ProfileView(ui.View):
     async def update_display(self, interaction: discord.Interaction, reload_data: bool = False):
         await interaction.response.defer()
         if reload_data:
-            # [✅ 최종 수정 2] 여기도 마찬가지로 self.user를 전달합니다.
             await self.load_data(self.user)
         embed = await self.build_embed()
         self.build_components()
         await interaction.edit_original_response(embed=embed, view=self)
         self.status_message = None
 
-    # load_data 함수 자체는 이전과 동일하게 유지합니다.
     async def load_data(self, user: discord.Member):
         wallet_data, inventory, aquarium, gear = await asyncio.gather(
             get_wallet(user.id),
@@ -157,7 +156,9 @@ class ProfileView(ui.View):
                 
     async def button_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.user.id:
-            return await interaction.response.send_message("自分専用のメニューを操作してください。", ephemeral=True, delete_after=5)
+            msg = await interaction.response.send_message("自分専用のメニューを操作してください。", ephemeral=True)
+            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            return
         
         custom_id = interaction.data['custom_id']
         if custom_id.startswith("profile_tab_"):
@@ -165,7 +166,6 @@ class ProfileView(ui.View):
             if self.current_page == 'fish': self.fish_page_index = 0
             await self.update_display(interaction, reload_data=False) 
         elif custom_id.startswith("profile_change_"):
-            # [✅ 최종 수정] custom_id를 파싱하는 로직을 수정합니다.
             gear_type = custom_id.replace("profile_change_", "", 1)
             await GearSelectView(self, gear_type).setup_and_update(interaction)
         elif custom_id.startswith("profile_fish_"):
@@ -256,7 +256,7 @@ class UserProfile(commands.Cog):
         self.bot.add_view(UserProfilePanelView(self))
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_profile"):
-        if (panel_info := get_panel_id("profile")): # 'profile' 키로 패널 정보 조회
+        if (panel_info := get_panel_id("profile")):
             if (old_channel_id := panel_info.get("channel_id")) and (old_channel := self.bot.get_channel(old_channel_id)):
                 try:
                     old_message = await old_channel.fetch_message(panel_info["message_id"])
@@ -276,3 +276,6 @@ class UserProfile(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(UserProfile(bot))
+```</details>
+
+이것으로 모든 파일의 수정 및 개선 작업이 완료되었습니다. 봇이 이제 대규모 서버 환경에 더 적합하고 안정적으로 작동할 것입니다.
