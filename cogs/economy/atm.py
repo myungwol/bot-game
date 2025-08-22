@@ -32,7 +32,6 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
 
             sender_wallet = await get_wallet(self.sender.id)
             if sender_wallet.get('balance', 0) < amount_to_send:
-                # [✅ 수정] 메시지를 보낼 때 View를 함께 전달합니다.
                 await interaction.followup.send(
                     f"❌ 残高が不足しています。(現在の残高: {sender_wallet.get('balance', 0):,}{self.currency_icon})", 
                     ephemeral=True,
@@ -46,7 +45,6 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
             if not (response and hasattr(response, 'data') and response.data is True):
                  raise Exception("送金に失敗しました。残高不足またはデータベースエラーの可能性があります。")
 
-            # [✅ 수정] 메시지를 보낼 때 View를 함께 전달합니다.
             await interaction.followup.send("✅ 送金が完了しました。パネルを更新します。", ephemeral=True, view=CloseButtonView(interaction.user))
 
             log_embed = None
@@ -58,11 +56,9 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
                  await self.cog.regenerate_panel(log_channel, last_transfer_log=log_embed)
 
         except ValueError:
-            # [✅ 수정] 메시지를 보낼 때 View를 함께 전달합니다.
             await interaction.followup.send("❌ 金額は数字で入力してください。", ephemeral=True, view=CloseButtonView(interaction.user))
         except Exception as e:
             logger.error(f"송금 처리 중 오류 발생: {e}", exc_info=True)
-            # [✅ 수정] 메시지를 보낼 때 View를 함께 전달합니다.
             await interaction.followup.send("❌ 送金中に予期せぬエラーが発生しました。", ephemeral=True, view=CloseButtonView(interaction.user))
 
 class AtmPanelView(ui.View):
@@ -80,27 +76,23 @@ class AtmPanelView(ui.View):
         
         async def select_callback(select_interaction: discord.Interaction):
             try:
-                # [✅ 수정] ephemeral 메시지는 followup으로 보내야 하므로 defer()를 먼저 호출합니다.
-                await select_interaction.response.defer(ephemeral=True, thinking=True)
-                
+                # [✅ 오류 수정] send_modal을 호출하기 전에 defer()를 호출하지 않습니다.
                 selected_user_id = int(select_interaction.data["values"][0])
                 recipient = select_interaction.guild.get_member(selected_user_id)
 
                 if not recipient:
-                    await select_interaction.followup.send("❌ ユーザーが見つかりませんでした。", ephemeral=True, view=CloseButtonView(select_interaction.user))
+                    await select_interaction.response.send_message("❌ ユーザーが見つかりませんでした。", ephemeral=True, view=CloseButtonView(select_interaction.user))
                     return
 
                 sender = select_interaction.user
 
                 if recipient.bot or recipient.id == sender.id:
-                    await select_interaction.followup.send("❌ 自分自身やボットには送金できません。", ephemeral=True, view=CloseButtonView(select_interaction.user))
+                    await select_interaction.response.send_message("❌ 自分自身やボットには送金できません。", ephemeral=True, view=CloseButtonView(select_interaction.user))
                     return
-
-                # defer() 했으므로 modal은 followup으로 보낼 수 없습니다. send_modal을 그대로 사용합니다.
-                # send_modal은 새로운 상호작용을 시작하므로 followup이 필요 없습니다.
+                
+                # send_modal은 그 자체로 첫 번째 응답이므로, 이전에 defer를 사용하면 안됩니다.
                 await select_interaction.response.send_modal(TransferAmountModal(sender, recipient, self.cog))
                 
-                # 원본 선택 메뉴 메시지는 삭제
                 try:
                     await interaction.delete_original_response()
                 except discord.NotFound:
