@@ -9,7 +9,6 @@ import time
 from typing import Dict, Callable, Any, List, Optional, Union
 from functools import wraps
 from utils.ui_defaults import UI_STRINGS
-from datetime import datetime, timezone
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
@@ -56,7 +55,7 @@ async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
 @supabase_retry_handler()
 async def get_farm_owner_by_thread(thread_id: int) -> Optional[int]:
     response = await supabase.table('farms').select('user_id').eq('thread_id', thread_id).maybe_single().execute()
-    return response.data['user_id'] if response.data else None
+    return response.data['user_id'] if response and hasattr(response, 'data') and response.data else None
 @supabase_retry_handler()
 async def create_farm(user_id: int) -> Optional[Dict[str, Any]]:
     rpc_response = await supabase.rpc('create_farm_for_user', {'p_user_id': user_id}).execute()
@@ -76,7 +75,7 @@ async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
 @supabase_retry_handler()
 async def clear_plots_db(plot_ids: List[int]):
     await supabase.table('farm_plots').update({
-        'state': 'default', # <--- '갈지 않은 상태'로 수정
+        'state': 'tilled',
         'planted_item_name': None, 'planted_at': None, 'last_watered_at': None,
         'water_count': 0, 'growth_stage': 0, 'quality': 0
     }).in_('id', plot_ids).execute()
@@ -95,7 +94,6 @@ async def grant_farm_permission(farm_id: int, user_id: int):
 # --- [퀘스트 및 출석체크 함수] ---
 @supabase_retry_handler()
 async def has_checked_in_today(user_id: int) -> bool:
-    # [✅ 수정] KST -> JST로 변수명을 변경하여 코드의 명확성을 높입니다. (시간은 동일하게 UTC+9)
     JST = timezone(timedelta(hours=9))
     today_jst_start = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
     response = await supabase.table('attendance_logs').select('id', count='exact').eq('user_id', user_id).gte('checked_in_at', today_jst_start.isoformat()).limit(1).execute()
@@ -111,34 +109,25 @@ async def get_user_progress(user_id: int) -> Dict[str, Any]:
         'weekly_fish_count': 0, 'last_daily_reset': None, 'last_weekly_reset': None
     }
     response = await supabase.table('user_progress').select('*').eq('user_id', user_id).maybe_single().execute()
-    
-    # [✅ 최종 수정] response가 None이거나, response에 data 속성이 없는 경우를 모두 처리합니다.
     if response and hasattr(response, 'data') and response.data:
         return response.data
-    else:
-        return default_progress
+    return default_progress
 async def increment_progress(user_id: int, fish_count: int = 0, voice_minutes: int = 0):
     await supabase.rpc('increment_user_progress', {'p_user_id': user_id, 'p_fish_count': fish_count, 'p_voice_minutes': voice_minutes}).execute()
 
 # --- [공용 및 기타 게임 함수] ---
-ONE_MONTH_IN_SECONDS = 30 * 24 * 60 * 60
-async def is_legendary_fish_available() -> bool:
-    last_caught_str = get_config("legendary_fish_last_caught_timestamp", '"0"')
-    last_caught_timestamp = float(last_caught_str.strip('"'))
-    return (time.time() - last_caught_timestamp) > ONE_MONTH_IN_SECONDS
 async def save_config(key: str, value: Any):
     global _configs_cache
-    str_value = f'"{str(value)}"'
-    await supabase.table('bot_configs').upsert({"config_key": key, "config_value": str_value}).execute()
-    _configs_cache[key] = str_value
-    logger.info(f"설정이 업데이트되었습니다: {key} -> {str_value}")
+    await supabase.table('bot_configs').upsert({"config_key": key, "config_value": value}).execute()
+    _configs_cache[key] = value
+    logger.info(f"설정이 업데이트되었습니다: {key} -> {value}")
 save_config_to_db = save_config
-async def set_legendary_fish_cooldown():
-    await save_config("legendary_fish_last_caught_timestamp", time.time())
+
 async def load_all_data_from_db():
     logger.info("------ [ 모든 DB 데이터 로드 시작 ] ------")
     await asyncio.gather(load_bot_configs_from_db(), load_channel_ids_from_db(), load_game_data_from_db())
     logger.info("------ [ 모든 DB 데이터 로드 완료 ] ------")
+
 @supabase_retry_handler()
 async def load_bot_configs_from_db():
     global _configs_cache
@@ -147,8 +136,10 @@ async def load_bot_configs_from_db():
         for item in response.data: _configs_cache[item['config_key']] = item['config_value']
         logger.info(f"✅ {len(response.data)}개의 봇 설정을 DB에서 로드하고 캐시에 병합했습니다.")
     else: logger.warning("DB 'bot_configs' 테이블에서 설정 정보를 찾을 수 없습니다.")
+
 def get_config(key: str, default: Any = None) -> Any:
     return _configs_cache.get(key, default)
+
 def get_string(key_path: str, default: Any = None, **kwargs) -> Any:
     try:
         keys = key_path.split('.'); value = _configs_cache.get("strings", {})
@@ -160,15 +151,18 @@ def get_string(key_path: str, default: Any = None, **kwargs) -> Any:
         return value
     except (KeyError, TypeError):
         return default if default is not None else f"[{key_path}]"
+
 @supabase_retry_handler()
 async def load_channel_ids_from_db():
     global _channel_id_cache
     response = await supabase.table('channel_configs').select('channel_key', 'channel_id').limit(1000).execute()
     if response and response.data:
-        _channel_id_cache = {item['channel_key']: int(item['channel_id']) for item in response.data}
+        _channel_id_cache = {item['channel_key']: int(item['channel_id']) for item in response.data if item.get('channel_id') and item['channel_id'] != '0'}
         logger.info(f"✅ {len(_channel_id_cache)}개의 채널/역할 ID를 DB에서 로드했습니다.")
     else: logger.warning("DB 'channel_configs' 테이블에서 ID 정보를 찾을 수 없습니다.")
+
 def get_id(key: str) -> Optional[int]: return _channel_id_cache.get(key)
+
 @supabase_retry_handler()
 async def load_game_data_from_db():
     global _item_database_cache, _fishing_loot_cache
@@ -180,27 +174,36 @@ async def load_game_data_from_db():
     if loot_response and loot_response.data:
         _fishing_loot_cache = loot_response.data
         logger.info(f"✅ {len(_fishing_loot_cache)}개의 낚시 결과물 정보를 DB에서 로드했습니다.")
+
 def get_item_database() -> Dict[str, Dict[str, Any]]: return _item_database_cache
 def get_fishing_loot() -> List[Dict[str, Any]]: return _fishing_loot_cache
+
 @supabase_retry_handler()
 async def save_id_to_db(key: str, object_id: int):
     global _channel_id_cache
     await supabase.table('channel_configs').upsert({"channel_key": key, "channel_id": str(object_id)}, on_conflict="channel_key").execute()
     _channel_id_cache[key] = object_id
 async def save_panel_id(panel_name: str, message_id: int, channel_id: int):
-    await save_id_to_db(f"panel_{panel_name}_message_id", message_id)
-    await save_id_to_db(f"panel_{panel_name}_channel_id", channel_id)
+    # panel_key에서 'panel_' 접두사를 제거합니다.
+    db_panel_name = panel_name.replace("panel_", "")
+    await save_id_to_db(f"panel_{db_panel_name}_message_id", message_id)
+    await save_id_to_db(f"panel_{db_panel_name}_channel_id", channel_id)
+
 def get_panel_id(panel_name: str) -> Optional[dict]:
-    message_id, channel_id = get_id(f"panel_{panel_name}_message_id"), get_id(f"panel_{panel_name}_channel_id")
+    db_panel_name = panel_name.replace("panel_", "")
+    message_id, channel_id = get_id(f"panel_{db_panel_name}_message_id"), get_id(f"panel_{db_panel_name}_channel_id")
     return {"message_id": message_id, "channel_id": channel_id} if message_id and channel_id else None
+
 @supabase_retry_handler()
 async def get_embed_from_db(embed_key: str) -> Optional[dict]:
     response = await supabase.table('embeds').select('embed_data').eq('embed_key', embed_key).limit(1).execute()
     return response.data[0]['embed_data'] if response and response.data else None
+
 @supabase_retry_handler()
 async def get_panel_components_from_db(panel_key: str) -> list:
     response = await supabase.table('panel_components').select('*').eq('panel_key', panel_key).order('row', desc=False).order('order_in_row', desc=False).execute()
     return response.data if response and response.data else []
+
 @supabase_retry_handler()
 async def get_or_create_user(table_name: str, user_id_str: str, default_data: dict) -> dict:
     response = await supabase.table(table_name).select("*").eq("user_id", user_id_str).limit(1).execute()
@@ -208,42 +211,36 @@ async def get_or_create_user(table_name: str, user_id_str: str, default_data: di
     insert_data = {"user_id": user_id_str, **default_data}
     response = await supabase.table(table_name).insert(insert_data, returning="representation").execute()
     return response.data[0] if response and response.data else default_data
+
 async def get_wallet(user_id: int) -> dict:
     return await get_or_create_user('wallets', str(user_id), {"balance": 0})
+
 @supabase_retry_handler()
 async def update_wallet(user: discord.User, amount: int) -> Optional[dict]:
-    params = {'user_id_param': str(user.id), 'amount_param': amount}
-    response = await supabase.rpc('increment_wallet_balance', params).execute()
+    params = {'p_user_id': str(user.id), 'p_amount': amount}
+    response = await supabase.rpc('update_wallet_balance', params).execute()
     return response.data[0] if response and response.data else None
+
 @supabase_retry_handler()
 async def get_inventory(user: Union[discord.Member, discord.User]) -> Dict[str, int]:
     user_id_str = str(user.id)
-    
-    # 1. DB의 'inventories' 테이블에서 기본 인벤토리를 가져옵니다.
     response = await supabase.table('inventories').select('item_name, quantity').eq('user_id', user_id_str).gt('quantity', 0).execute()
     inventory = {item['item_name']: item['quantity'] for item in response.data} if response and response.data else {}
-
-    # 2. 역할 기반 아이템을 인벤토리에 추가합니다.
     item_db = get_item_database()
-    
-    # discord.User 객체는 roles 속성이 없으므로, Member일 때만 역할을 확인합니다.
     if isinstance(user, discord.Member):
         user_role_ids = {role.id for role in user.roles}
-        
         for item_name, item_data in item_db.items():
-            if role_key := item_data.get('role_key'):
-                role_id = get_id(role_key)
-                if role_id and role_id in user_role_ids:
-                    if item_name not in inventory:
-                        inventory[item_name] = 1 # 역할 아이템은 수량을 1로 간주
-
+            if (role_key := item_data.get('role_key')) and (role_id := get_id(role_key)) and role_id in user_role_ids:
+                inventory[item_name] = inventory.get(item_name, 0) + 1
     return inventory
+
 @supabase_retry_handler()
 async def update_inventory(user_id_str: str, item_name: str, quantity: int):
-    params = {'user_id_param': user_id_str, 'item_name_param': item_name, 'amount_param': quantity}
-    await supabase.rpc('increment_inventory_quantity', params).execute()
+    params = {'p_user_id': user_id_str, 'p_item_name': item_name, 'p_quantity_delta': quantity}
+    await supabase.rpc('update_inventory_quantity', params).execute()
 
-# --- [핵심 버그 수정] ---
+
+# [✅ 핵심 버그 수정] str(user) 대신 str(user.id)를 사용하도록 수정합니다.
 async def get_user_gear(user: Union[discord.Member, discord.User]) -> dict:
     default_bait = "エサなし"
     default_gear = {"rod": BARE_HANDS, "bait": default_bait, "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
@@ -251,7 +248,7 @@ async def get_user_gear(user: Union[discord.Member, discord.User]) -> dict:
     user_id_str = str(user.id) # <--- user 객체에서 id를 추출
     gear = await get_or_create_user('gear_setups', user_id_str, default_gear)
     
-    inv = await get_inventory(user) # <--- user 객체를 전달
+    inv = await get_inventory(user) # <--- user 객체를 그대로 전달
     
     if inv is None:
         logger.error(f"'{user.name}'님의 인벤토리를 불러오는 데 실패하여, 장비 검사를 건너뜁니다.")
@@ -264,10 +261,11 @@ async def get_user_gear(user: Union[discord.Member, discord.User]) -> dict:
         if equipped_item != default_item and inv.get(equipped_item, 0) <= 0:
             gear[gear_type] = default_item
             updated = True
+    
     if updated:
-        gear_updates = gear.copy()
-        gear_updates.pop('user_id', None) 
+        gear_updates = {k: v for k, v in gear.items() if k in gear_to_check}
         await set_user_gear(user_id_str, **gear_updates)
+        
     return gear
 
 @supabase_retry_handler()
@@ -284,20 +282,25 @@ async def set_user_gear(user_id_str: str, rod: str = None, bait: str = None, hoe
 async def get_aquarium(user_id_str: str) -> list:
     response = await supabase.table('aquariums').select('id, name, size, emoji').eq('user_id', user_id_str).execute()
     return response.data if response and response.data else []
+
 @supabase_retry_handler()
 async def add_to_aquarium(user_id_str: str, fish_data: dict):
     await supabase.table('aquariums').insert({"user_id": user_id_str, **fish_data}).execute()
+
 @supabase_retry_handler()
 async def get_cooldown(user_id_str: str, cooldown_key: str) -> float:
     response = await supabase.table('cooldowns').select('last_cooldown_timestamp').eq('user_id', user_id_str).eq('cooldown_key', cooldown_key).limit(1).execute()
     if response and response.data and (ts_str := response.data[0].get('last_cooldown_timestamp')):
-        try: return datetime.fromisoformat(ts_str).timestamp()
+        try: return datetime.fromisoformat(ts_str.replace('Z', '+00:00')).timestamp()
         except (ValueError, TypeError): return 0.0
     return 0.0
+
 @supabase_retry_handler()
-async def set_cooldown(user_id_str: str, cooldown_key: str, timestamp: float):
-    iso_timestamp = datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
-    await supabase.table('cooldowns').upsert({"user_id": user_id_str, "cooldown_key": cooldown_key, "last_cooldown_timestamp": iso_timestamp}).execute()
+async def set_cooldown(user_id_str: str, cooldown_key: str, timestamp: float = None):
+    ts = timestamp or time.time()
+    iso_timestamp = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    await supabase.table('cooldowns').upsert({"user_id": user_id_str, "cooldown_key": cooldown_key, "last_cooldown_timestamp": iso_timestamp}, on_conflict="user_id,cooldown_key").execute()
+
 @supabase_retry_handler()
 async def sell_fish_from_db(user_id_str: str, fish_ids: List[int], total_sell_price: int):
     params = {'p_user_id': user_id_str, 'p_fish_ids': fish_ids, 'p_total_value': total_sell_price}
