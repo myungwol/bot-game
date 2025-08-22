@@ -1,4 +1,4 @@
-# bot-game/cogs/farm.py
+# cogs/games/farm.py
 
 import discord
 from discord.ext import commands, tasks
@@ -14,13 +14,12 @@ from utils.database import (
     supabase, get_inventory, get_user_gear, update_plot,
     get_farmable_item_info, update_inventory, BARE_HANDS,
     check_farm_permission, grant_farm_permission, clear_plots_db,
-    get_farm_owner_by_thread, get_item_database
+    get_farm_owner_by_thread, get_item_database, save_config_to_db
 )
 from utils.helpers import format_embed_from_db, CloseButtonView
 
 logger = logging.getLogger(__name__)
 
-# [✅ 수정] CloseButtonView는 helpers에서 import하므로, 이 파일 내의 중복 정의는 삭제했습니다.
 
 CROP_EMOJI_MAP = {
     'seed': {0: '🌱', 1: '🌿', 2: '🌾'},
@@ -416,17 +415,24 @@ class FarmUIView(ui.View):
                 }) for pid in trees_to_update.keys()
             ])
         
-        # [✅ 레벨 시스템] 농작물 수확 시 경험치 획득
+        level_up_result = None
         xp_per_crop = int(get_config("XP_FROM_FARMING", "15").strip('"'))
         total_xp = sum(harvested_items.values()) * xp_per_crop
         if total_xp > 0:
-            update_tasks.append(supabase.rpc('add_xp', {'p_user_id': self.farm_owner.id, 'p_xp_to_add': total_xp, 'p_source': 'farming'}))
+            res = await supabase.rpc('add_xp', {'p_user_id': self.farm_owner.id, 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute()
+            if res and res.data:
+                level_up_result = res.data[0]
 
         await asyncio.gather(*update_tasks)
         result_str = ", ".join([f"**{name}** {qty}個" for name, qty in harvested_items.items()])
         msg = await interaction.followup.send(f"🎉 **{result_str}**を収穫しました！", ephemeral=True)
         await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
         await self.cog.update_farm_ui(interaction.channel, self.farm_owner)
+
+        if level_up_result:
+            core_cog = self.cog.bot.get_cog("EconomyCore")
+            if core_cog and hasattr(core_cog, "handle_level_up_event"):
+                await core_cog.handle_level_up_event(self.farm_owner, level_up_result)
 
     async def on_farm_uproot_click(self, interaction: discord.Interaction):
         action_view = FarmActionView(self.cog, self.farm_data, interaction.user, "uproot")
