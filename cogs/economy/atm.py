@@ -1,3 +1,5 @@
+# bot-game/cogs/economy/atm.py
+
 import discord
 from discord.ext import commands
 from discord import ui
@@ -34,7 +36,7 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
             if sender_wallet.get('balance', 0) < amount_to_send:
                 await interaction.followup.send(
                     f"❌ 残高が不足しています。(現在の残高: {sender_wallet.get('balance', 0):,}{self.currency_icon})", 
-                    ephemeral=True,
+                    ephemeral=True
                 )
                 return
 
@@ -75,21 +77,19 @@ class AtmPanelView(ui.View):
         
         async def select_callback(select_interaction: discord.Interaction):
             try:
-                # [✅ 오류 수정] send_modal을 호출하기 전에 defer()를 호출하지 않습니다.
                 selected_user_id = int(select_interaction.data["values"][0])
                 recipient = select_interaction.guild.get_member(selected_user_id)
 
                 if not recipient:
-                    await select_interaction.response.send_message("❌ ユーザーが見つかりませんでした。", ephemeral=True, view=CloseButtonView(select_interaction.user))
+                    await select_interaction.response.send_message("❌ ユーザーが見つかりませんでした。", ephemeral=True)
                     return
 
                 sender = select_interaction.user
 
                 if recipient.bot or recipient.id == sender.id:
-                    await select_interaction.response.send_message("❌ 自分自身やボットには送金できません。", ephemeral=True, view=CloseButtonView(select_interaction.user))
+                    await select_interaction.response.send_message("❌ 自分自身やボットには送金できません。", ephemeral=True)
                     return
                 
-                # send_modal은 그 자체로 첫 번째 응답이므로, 이전에 defer를 사용하면 안됩니다.
                 await select_interaction.response.send_modal(TransferAmountModal(sender, recipient, self.cog))
                 
                 try:
