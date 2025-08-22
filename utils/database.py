@@ -123,6 +123,16 @@ async def save_config(key: str, value: Any):
     logger.info(f"설정이 업데이트되었습니다: {key} -> {value}")
 save_config_to_db = save_config
 
+# --- [✅ 버그 수정] 누락된 전설 물고기 관련 함수 추가 ---
+ONE_WEEK_IN_SECONDS = 7 * 24 * 60 * 60
+async def is_legendary_fish_available() -> bool:
+    last_caught_ts = get_config("legendary_fish_last_caught_timestamp", 0)
+    return (time.time() - float(last_caught_ts)) > ONE_WEEK_IN_SECONDS
+
+async def set_legendary_fish_cooldown():
+    await save_config("legendary_fish_last_caught_timestamp", time.time())
+# --- [수정 완료] ---
+
 async def load_all_data_from_db():
     logger.info("------ [ 모든 DB 데이터 로드 시작 ] ------")
     await asyncio.gather(load_bot_configs_from_db(), load_channel_ids_from_db(), load_game_data_from_db())
@@ -183,8 +193,8 @@ async def save_id_to_db(key: str, object_id: int):
     global _channel_id_cache
     await supabase.table('channel_configs').upsert({"channel_key": key, "channel_id": str(object_id)}, on_conflict="channel_key").execute()
     _channel_id_cache[key] = object_id
+
 async def save_panel_id(panel_name: str, message_id: int, channel_id: int):
-    # panel_key에서 'panel_' 접두사를 제거합니다.
     db_panel_name = panel_name.replace("panel_", "")
     await save_id_to_db(f"panel_{db_panel_name}_message_id", message_id)
     await save_id_to_db(f"panel_{db_panel_name}_channel_id", channel_id)
@@ -239,16 +249,14 @@ async def update_inventory(user_id_str: str, item_name: str, quantity: int):
     params = {'p_user_id': user_id_str, 'p_item_name': item_name, 'p_quantity_delta': quantity}
     await supabase.rpc('update_inventory_quantity', params).execute()
 
-
-# [✅ 핵심 버그 수정] str(user) 대신 str(user.id)를 사용하도록 수정합니다.
 async def get_user_gear(user: Union[discord.Member, discord.User]) -> dict:
     default_bait = "エサなし"
     default_gear = {"rod": BARE_HANDS, "bait": default_bait, "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
     
-    user_id_str = str(user.id) # <--- user 객체에서 id를 추출
+    user_id_str = str(user.id)
     gear = await get_or_create_user('gear_setups', user_id_str, default_gear)
     
-    inv = await get_inventory(user) # <--- user 객체를 그대로 전달
+    inv = await get_inventory(user)
     
     if inv is None:
         logger.error(f"'{user.name}'님의 인벤토리를 불러오는 데 실패하여, 장비 검사를 건너뜁니다.")
