@@ -1,3 +1,5 @@
+# bot-game/cogs/slot_machine.py
+
 import discord
 from discord.ext import commands
 from discord import ui
@@ -10,7 +12,7 @@ from utils.database import (
     get_wallet, update_wallet, get_config,
     save_panel_id, get_panel_id, get_embed_from_db
 )
-# [✅ 개선] helpers에서 CloseButtonView를 import 합니다.
+# [✅ 수정] helpers에서 표준 CloseButtonView를 import 합니다.
 from utils.helpers import format_embed_from_db, CloseButtonView
 
 logger = logging.getLogger(__name__)
@@ -19,7 +21,8 @@ REEL_SYMBOLS = ['🍒', '🍊', '🍇', '🍋', '🔔', '5️⃣', '7️⃣']
 FRUIT_SYMBOLS = ['🍒', '🍊', '🍇', '🍋', '🔔']
 SPIN_ANIMATION_FRAMES = 5
 SPIN_ANIMATION_SPEED = 0.4
-MAX_ACTIVE_SLOTS = 5
+# [✅ 유지보수] 하드코딩된 값을 제거합니다. 이 값은 cog_load에서 DB로부터 불러옵니다.
+# MAX_ACTIVE_SLOTS = 5
 
 class BetAmountModal(ui.Modal, title="ベット額の入力 (スロット)"):
     amount = ui.TextInput(label="金額 (100コイン単位)", placeholder="例: 1000", required=True)
@@ -186,8 +189,8 @@ class SlotMachinePanelView(ui.View):
         self.add_item(slot_button)
 
     async def start_game_callback(self, interaction: discord.Interaction):
-        if len(self.cog.active_sessions) >= MAX_ACTIVE_SLOTS:
-            msg = await interaction.response.send_message(f"❌ すべてのスロットマシンが使用中です。しばらく待ってからもう一度お試しください。({len(self.cog.active_sessions)}/{MAX_ACTIVE_SLOTS})", ephemeral=True)
+        if len(self.cog.active_sessions) >= self.cog.max_active_slots:
+            msg = await interaction.response.send_message(f"❌ すべてのスロットマシンが使用中です。しばらく待ってからもう一度お試しください。({len(self.cog.active_sessions)}/{self.cog.max_active_slots})", ephemeral=True)
             await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
             return
 
@@ -202,8 +205,10 @@ class SlotMachine(commands.Cog):
         self.bot = bot
         self.active_sessions = set()
         self.panel_message: Optional[discord.Message] = None
+        self.max_active_slots = 5
 
     async def cog_load(self):
+        self.max_active_slots = int(get_config("SLOT_MAX_ACTIVE", "5").strip('"'))
         self.bot.loop.create_task(self._fetch_panel_message())
 
     async def _fetch_panel_message(self):
@@ -226,7 +231,7 @@ class SlotMachine(commands.Cog):
         if not embed_data: return
 
         current_players = len(self.active_sessions)
-        status_line = f"\n\n**[現在使用中のマシン: {current_players}/{MAX_ACTIVE_SLOTS}]**"
+        status_line = f"\n\n**[現在使用中のマシン: {current_players}/{self.max_active_slots}]**"
         
         embed_data['description'] += status_line
         new_embed = discord.Embed.from_dict(embed_data)
