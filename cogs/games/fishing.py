@@ -13,7 +13,7 @@ from utils.database import (
     update_wallet, get_inventory, update_inventory, add_to_aquarium,
     get_user_gear, set_user_gear, save_panel_id, get_panel_id, get_id,
     get_embed_from_db, supabase, get_item_database, get_fishing_loot, 
-    get_config, get_string, save_config_to_db, # [✅ 수정] save_config_to_db import
+    get_config, get_string, save_config_to_db,
     is_legendary_fish_available, set_legendary_fish_cooldown,
     BARE_HANDS, DEFAULT_ROD,
     increment_progress
@@ -37,9 +37,19 @@ class FishingGameView(ui.View):
         self.rod_data = item_db.get(self.used_rod, {})
         bait_data = item_db.get(self.used_bait, {})
 
-        self.bite_range = eval(get_config("FISHING_BITE_RANGE", "[8.0, 12.0]"))
-        self.bite_reaction_time = float(get_config("FISHING_BITE_REACTION_TIME", "3.0").strip('"'))
-        self.big_catch_threshold = float(get_config("FISHING_BIG_CATCH_THRESHOLD", "70.0").strip('"'))
+        # [✅ 오류 수정] DB에서 가져온 설정값이 숫자(int, float)여도 안전하게 처리하도록 수정합니다.
+        
+        # 1. bite_range 수정: eval()은 문자열에만 사용 가능하므로 타입을 확인합니다.
+        bite_range_config = get_config("FISHING_BITE_RANGE", "[8.0, 12.0]")
+        self.bite_range = eval(bite_range_config) if isinstance(bite_range_config, str) else bite_range_config
+
+        # 2. bite_reaction_time 수정: str()로 먼저 변환하여 .strip() 오류를 방지합니다.
+        bite_reaction_time_config = get_config("FISHING_BITE_REACTION_TIME", "3.0")
+        self.bite_reaction_time = float(str(bite_reaction_time_config).strip('"'))
+
+        # 3. big_catch_threshold 수정: str()로 먼저 변환하여 .strip() 오류를 방지합니다.
+        big_catch_threshold_config = get_config("FISHING_BIG_CATCH_THRESHOLD", "70.0")
+        self.big_catch_threshold = float(str(big_catch_threshold_config).strip('"'))
 
     async def start_game(self, interaction: discord.Interaction, embed: discord.Embed):
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
