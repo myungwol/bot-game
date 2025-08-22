@@ -30,14 +30,12 @@ class QuantityModal(ui.Modal):
         try:
             q_val = int(self.quantity.value)
             if not (1 <= q_val <= self.max_value):
-                # [✅ 수정] CloseButtonView 호출 방식 변경
-                await i.response.send_message(f"1から{self.max_value}までの数字を入力してください。", ephemeral=True, view=CloseButtonView(i.user))
+                await i.response.send_message(f"1から{self.max_value}までの数字を入力してください。", ephemeral=True)
                 return
             self.value = q_val
             await i.response.defer(ephemeral=True)
         except ValueError:
-            # [✅ 수정] CloseButtonView 호출 방식 변경
-            await i.response.send_message("数字のみ入力してください。", ephemeral=True, view=CloseButtonView(i.user))
+            await i.response.send_message("数字のみ入力してください。", ephemeral=True)
         except Exception:
             self.stop()
 
@@ -62,12 +60,9 @@ class ShopViewBase(ui.View):
     async def handle_error(self, interaction: discord.Interaction, error: Exception, custom_message: str = ""):
         logger.error(f"상점 처리 중 오류 발생: {error}", exc_info=True)
         message_content = custom_message or "❌ 処理中にエラーが発生しました。"
-        view = CloseButtonView(interaction.user)
         if interaction.response.is_done():
-            # [✅ 수정] CloseButtonView 호출 방식 변경
             await interaction.followup.send(message_content, ephemeral=True)
         else:
-            # [✅ 수정] CloseButtonView 호출 방식 변경
             await interaction.response.send_message(message_content, ephemeral=True)
 
 class BuyItemView(ShopViewBase):
@@ -171,16 +166,16 @@ class BuyItemView(ShopViewBase):
         await interaction.response.defer(ephemeral=True)
         wallet = await get_wallet(self.user.id)
         if wallet.get('balance', 0) < item_data['price']:
-            await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True, view=CloseButtonView(interaction.user))
+            await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
             return
         if item_data.get('effect_type') == 'expand_farm':
             farm_data = await get_farm_data(self.user.id)
             if not farm_data:
-                await interaction.followup.send("❌ 農場をまず作成してください。", ephemeral=True, view=CloseButtonView(interaction.user))
+                await interaction.followup.send("❌ 農場をまず作成してください。", ephemeral=True)
                 return
             size_x, size_y = farm_data['size_x'], farm_data['size_y']
             if size_x >= 4 and size_y >= 4:
-                await interaction.followup.send("❌ 農場はすでに最大サイズです。", ephemeral=True, view=CloseButtonView(interaction.user))
+                await interaction.followup.send("❌ 農場はすでに最大サイズです。", ephemeral=True)
                 return
             new_x, new_y = size_x, size_y
             if size_x <= size_y and size_x < 4: new_x += 1
@@ -188,16 +183,16 @@ class BuyItemView(ShopViewBase):
             else: new_x += 1
             await expand_farm_db(farm_data['id'], new_x, new_y)
             await update_wallet(self.user, -item_data['price'])
-            await interaction.followup.send(f"✅ 農場が **{new_x}x{new_y}**サイズに拡張されました！", ephemeral=True, view=CloseButtonView(interaction.user))
+            await interaction.followup.send(f"✅ 農場が **{new_x}x{new_y}**サイズに拡張されました！", ephemeral=True)
         else:
-            await interaction.followup.send("❓ 未知の即時使用アイテムです。", ephemeral=True, view=CloseButtonView(interaction.user))
+            await interaction.followup.send("❓ 未知の即時使用アイテムです。", ephemeral=True)
 
     async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
         max_buyable = balance // item_data['price'] if item_data['price'] > 0 else 999
         if max_buyable == 0:
-            await interaction.response.send_message("❌ 残高が不足しています。", ephemeral=True, view=CloseButtonView(interaction.user))
+            await interaction.response.send_message("❌ 残高が不足しています。", ephemeral=True)
             return
         modal = QuantityModal(f"{item_name} 購入", max_buyable)
         await interaction.response.send_modal(modal)
@@ -207,56 +202,56 @@ class BuyItemView(ShopViewBase):
         quantity, total_price = modal.value, item_data['price'] * modal.value
         wallet_after_modal = await get_wallet(self.user.id)
         if wallet_after_modal.get('balance', 0) < total_price:
-            await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True, view=CloseButtonView(interaction.user))
+            await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
             return
         await update_inventory(str(self.user.id), item_name, quantity)
         await update_wallet(self.user, -total_price)
         success_message = f"✅ **{item_name}** {quantity}個を購入しました。"
-        await interaction.followup.send(success_message, ephemeral=True, view=CloseButtonView(interaction.user))
+        await interaction.followup.send(success_message, ephemeral=True)
 
     async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         await interaction.response.defer(ephemeral=True)
         user = interaction.user
         wallet = await get_wallet(user.id)
         if wallet.get('balance', 0) < item_data['price']:
-            await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True, view=CloseButtonView(user))
+            await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
             return
         
         if role_key := item_data.get('role_key'):
             role_id = get_id(role_key)
             if not role_id:
                 logger.error(f"'{role_key}'에 해당하는 역할 ID를 찾을 수 없습니다. DB 설정을 확인해주세요.")
-                await interaction.followup.send("❌ アイテム設定にエラーが発生しました。管理者に問い合わせてください。", ephemeral=True, view=CloseButtonView(user))
+                await interaction.followup.send("❌ アイテム設定にエラーが発生しました。管理者に問い合わせてください。", ephemeral=True)
                 return
             if any(r.id == role_id for r in user.roles):
-                await interaction.followup.send(f"❌ 「{item_name}」は既に所持しています。", ephemeral=True, view=CloseButtonView(user))
+                await interaction.followup.send(f"❌ 「{item_name}」は既に所持しています。", ephemeral=True)
                 return
             
             role_to_grant = interaction.guild.get_role(role_id)
             if not role_to_grant:
                 logger.error(f"서버에서 역할(ID: {role_id})을 찾을 수 없습니다.")
-                await interaction.followup.send("❌ アイテム役割設定にエラーが発生しました。管理者に問い合わせてください。", ephemeral=True, view=CloseButtonView(user))
+                await interaction.followup.send("❌ アイテム役割設定にエラーが発生しました。管理者に問い合わせてください。", ephemeral=True)
                 return
             
             await update_wallet(user, -item_data['price'])
             await user.add_roles(role_to_grant)
             success_message = f"✅ **{item_name}**を購入し、`{role_to_grant.name}`の役割を付与されました。"
-            await interaction.followup.send(success_message, ephemeral=True, view=CloseButtonView(user))
+            await interaction.followup.send(success_message, ephemeral=True)
             return
         else:
             inventory = await get_inventory(user)
             if inventory is None:
-                await interaction.followup.send("❌ インベントリ情報の読み込みに失敗しました。", ephemeral=True, view=CloseButtonView(user))
+                await interaction.followup.send("❌ インベントリ情報の読み込みに失敗しました。", ephemeral=True)
                 return
 
             if inventory.get(item_name, 0) > 0:
-                await interaction.followup.send(f"❌ 「{item_name}」は既に所持しています。1つしか持てません。", ephemeral=True, view=CloseButtonView(user))
+                await interaction.followup.send(f"❌ 「{item_name}」は既に所持しています。1つしか持てません。", ephemeral=True)
                 return
 
             await update_wallet(user, -item_data['price'])
             await update_inventory(str(user.id), item_name, 1)
             success_message = f"✅ **{item_name}**を購入しました。"
-            await interaction.followup.send(success_message, ephemeral=True, view=CloseButtonView(user))
+            await interaction.followup.send(success_message, ephemeral=True)
             return
 
     async def back_callback(self, interaction: discord.Interaction):
@@ -336,7 +331,7 @@ class SellFishView(ShopViewBase):
         await interaction.response.defer(ephemeral=True)
         select_menu = next((c for c in self.children if isinstance(c, ui.Select)), None)
         if not select_menu or not select_menu.values:
-            await interaction.followup.send("❌ 売却する魚が選択されていません。", ephemeral=True, view=CloseButtonView(interaction.user))
+            await interaction.followup.send("❌ 売却する魚が選択されていません。", ephemeral=True)
             return
         fish_ids_to_sell = [int(val) for val in select_menu.values]
         total_price = sum(self.fish_data_map[val]['price'] for val in select_menu.values)
@@ -346,7 +341,7 @@ class SellFishView(ShopViewBase):
             new_balance = new_wallet.get('balance', 0)
             sold_fish_count = len(fish_ids_to_sell)
             success_message = f"✅ 魚{sold_fish_count}匹を`{total_price:,}`{self.currency_icon}で売却しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-            await interaction.followup.send(success_message, ephemeral=True, view=CloseButtonView(interaction.user))
+            await interaction.followup.send(success_message, ephemeral=True)
             await self.refresh_view(interaction)
         except Exception as e:
             logger.error(f"물고기 판매 중 오류: {e}", exc_info=True)
@@ -416,7 +411,7 @@ class SellCropView(ShopViewBase):
             new_wallet = await get_wallet(self.user.id)
             new_balance = new_wallet.get('balance', 0)
             success_message = f"✅ **{selected_crop}** {quantity_to_sell}個を`{total_price:,}`{self.currency_icon}で売却しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-            await interaction.followup.send(success_message, ephemeral=True, view=CloseButtonView(interaction.user))
+            await interaction.followup.send(success_message, ephemeral=True)
             await self.refresh_view(interaction)
         except Exception as e:
             logger.error(f"작물 판매 중 오류: {e}", exc_info=True)
@@ -460,14 +455,14 @@ class CommercePanelView(ui.View):
         view = BuyCategoryView(interaction.user)
         embed = await view.build_embed()
         await view.build_components()
-        message = await interaction.followup.send(embed=embed, ephemeral=True)
+        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         view.message = message
     async def open_market(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         view = SellCategoryView(interaction.user)
         embed = await view.build_embed()
         await view.build_components()
-        message = await interaction.followup.send(embed=embed, ephemeral=True)
+        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         view.message = message
 
 class Commerce(commands.Cog):
@@ -490,7 +485,7 @@ class Commerce(commands.Cog):
         if not (embed_data := await get_embed_from_db(panel_key)): return
         embed = discord.Embed.from_dict(embed_data)
         view = CommercePanelView(self)
-        new_message = await channel.send(embed=embed)
+        new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_name, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
 
