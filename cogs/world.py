@@ -1,10 +1,10 @@
-# cogs/world.py (KST 자정 업데이트로 수정된 최종본)
+# cogs/world.py
 
 import discord
 from discord.ext import commands, tasks
 import logging
 import random
-# [✅ 1단계] datetime 관련 모듈을 import 합니다.
+# [✅ 현지화] timedelta, timezone을 import 합니다.
 from datetime import time, timezone, timedelta
 from utils.database import save_config_to_db, get_config, get_id
 
@@ -17,8 +17,8 @@ WEATHER_TYPES = {
     "stormy": {"emoji": "⛈️", "name": "嵐", "water_effect": True},
 }
 
-# [✅ 2단계] 한국 시간(KST) 자정을 나타내는 시간 객체를 만듭니다.
-KST_MIDNIGHT = time(hour=0, minute=0, tzinfo=timezone(timedelta(hours=9)))
+# [✅ 현지화] KST를 JST로 변경하여 코드의 명확성을 높입니다.
+JST_MIDNIGHT = time(hour=0, minute=0, tzinfo=timezone(timedelta(hours=9)))
 
 class WorldSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -29,8 +29,7 @@ class WorldSystem(commands.Cog):
     def cog_unload(self):
         self.update_weather.cancel()
 
-    # [✅ 3단계] @tasks.loop 설정을 hours=24 대신 time=KST_MIDNIGHT로 변경합니다.
-    @tasks.loop(time=KST_MIDNIGHT)
+    @tasks.loop(time=JST_MIDNIGHT)
     async def update_weather(self):
         weather_key = random.choices(
             population=list(WEATHER_TYPES.keys()),
@@ -53,14 +52,9 @@ class WorldSystem(commands.Cog):
     async def before_update_weather(self):
         await self.bot.wait_until_ready()
         
-        # 주석: 봇 시작 시 날씨가 설정되어 있지 않다면 즉시 한 번 실행합니다.
-        # 이 코드는 그대로 두어도 괜찮습니다.
         if get_config("current_weather") is None:
             logger.info("現在の天気が設定されていないため、初期設定を行います。")
-            # before_loop에서는 루프 자체를 직접 호출할 수 없으므로,
-            # 루프의 실제 로직을 별도 함수로 분리하거나, 여기서 직접 실행해야 합니다.
-            # 하지만 현재 구조상으로는 첫 실행은 그냥 24시간 뒤로 두어도 무방합니다.
-            # 더 나은 방법은 루프의 첫 실행을 기다리는 것입니다.
+            # 루프가 곧 시작될 것이므로 여기서 직접 호출할 필요는 없습니다.
             pass
 
 async def setup(bot: commands.Bot):
