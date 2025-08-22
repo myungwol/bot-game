@@ -528,9 +528,9 @@ class Farm(commands.Cog):
         except (discord.NotFound, discord.Forbidden):
             pass
             
-    # [✅ 기능 추가] 유저가 스레드에 참여했을 때 UI를 자동으로 최신화하는 리스너
+    # [✅ 4차 수정] 유저가 스레드에 참여했을 때 UI를 자동으로 최신화하는 리스너
     @commands.Cog.listener()
-    async def on_thread_member_join(self, member):
+    async def on_thread_member_join(self, member: discord.ThreadMember): # 타입을 명확히 함
         thread = member.thread
 
         if member.id == self.bot.user.id:
@@ -545,9 +545,17 @@ class Farm(commands.Cog):
             logger.warning(f"농장(스레드 ID: {thread.id})의 소유자(ID: {owner_id})를 찾을 수 없어 UI 업데이트를 건너뜁니다.")
             return
 
+        # [✅ 4차 수정] ThreadMember에서 실제 Member 객체를 가져옵니다.
+        guild_member = thread.guild.get_member(member.id)
+        if not guild_member:
+            # 만약 멤버를 찾을 수 없다면 (예: 바로 나간 경우) ID로 로그를 남깁니다.
+            logger.info(f"유저(ID: {member.id})님이 농장(스레드 ID: {thread.id})에 참여하여 UI를 최신화합니다.")
+        else:
+            # 멤버를 찾았다면 display_name을 사용합니다.
+            logger.info(f"{guild_member.display_name}님이 농장(스레드 ID: {thread.id})에 참여하여 UI를 최신화합니다.")
+
         await asyncio.sleep(1.5)
         
-        logger.info(f"{member.display_name}님이 농장(스레드 ID: {thread.id})에 참여하여 UI를 최신화합니다.")
         await self.update_farm_ui(thread, farm_owner)
 
     async def register_persistent_views(self):
