@@ -7,7 +7,6 @@ import logging
 from typing import Optional, Dict, List, Any
 import asyncio
 import time
-# [✅ 버그 수정] datetime에서 time 클래스를 직접 import 합니다.
 from datetime import datetime, timezone, timedelta, time as dt_time
 
 from utils.database import (
@@ -34,7 +33,6 @@ WEATHER_TYPES = {
 }
 
 JST = timezone(timedelta(hours=9))
-# [✅ 버그 수정] datetime.time 객체를 직접 생성하여 사용합니다.
 JST_MIDNIGHT_UPDATE = dt_time(hour=0, minute=1, tzinfo=JST)
 
 
@@ -129,11 +127,35 @@ class FarmActionView(ui.View):
         info = await get_farmable_item_info(self.selected_item)
         sx, sy = info['space_required_x'], info['space_required_y']
         plots = [p for p in self.farm_data['farm_plots'] if x <= p['pos_x'] < x + sx and y <= p['pos_y'] < y + sy]
-        now_iso = datetime.now(timezone.utc).isoformat()
-        updates = {'state': 'planted', 'planted_item_name': self.selected_item, 'planted_at': now_iso, 'last_watered_at': now_iso, 'growth_stage': 0, 'water_count': 1, 'quality': 5}
-        await asyncio.gather(*[update_plot(p['id'], updates) for p in plots], update_inventory(str(self.user.id), self.selected_item, -1))
+        
+        now = datetime.now(timezone.utc)
+        
+        # [✅ 수정] 파종 시 물주기 로직 변경
+        weather_key = get_config("current_weather", "sunny")
+        is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
+
+        updates = {
+            'state': 'planted', 
+            'planted_item_name': self.selected_item, 
+            'planted_at': now.isoformat(), 
+            'growth_stage': 0,
+            'quality': 5 # 기본 품질
+        }
+        if is_raining:
+            updates['last_watered_at'] = now.isoformat()
+            updates['water_count'] = 1
+            followup_message = f"✅ 「{self.selected_item}」を植えました。雨が降っていて、自動で水がまかれました！"
+        else:
+            updates['last_watered_at'] = None
+            updates['water_count'] = 0
+            followup_message = f"✅ 「{self.selected_item}」を植えました。忘れずに水をあげてください！"
+
+        await asyncio.gather(
+            *[update_plot(p['id'], updates) for p in plots], 
+            update_inventory(str(self.user.id), self.selected_item, -1)
+        )
         await self.cog.request_farm_ui_update(interaction.user.id)
-        await interaction.followup.send(f"✅ 「{self.selected_item}」を植え、水をやりました。", ephemeral=True)
+        await interaction.followup.send(followup_message, ephemeral=True)
         await interaction.delete_original_response()
 
     async def _build_uproot_select(self):
@@ -425,7 +447,7 @@ class Farm(commands.Cog):
                 farm_data = await get_farm_data(user_id)
                 if farm_data and farm_data.get('thread_id'):
                     if (thread := self.bot.get_channel(farm_data['thread_id'])) and (user := self.bot.get_user(user_id)):
-                        tasks.append(self.update_farm_ui(thread, user))
+                        tasks.append(self.update_farm_ui(thread, user, farm_data))
             
             await asyncio.gather(*tasks)
 
@@ -448,7 +470,7 @@ class Farm(commands.Cog):
         
     async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         info_map = await preload_farmable_info(farm_data)
-        sx, sy = farm_data.get('size_x', 1), farm_data.get('size_y', 1)
+        sx, sy = farm_data.get('size_x', 5), farm_data.get('size_y', 5)
         plots = {(p['pos_x'], p['pos_y']): p for p in farm_data['farm_plots']}
         grid, infos, processed = [['' for _ in range(sx)] for _ in range(sy)], [], set()
         today_jst_midnight = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -488,23 +510,33 @@ class Farm(commands.Cog):
         farm_name = farm_data.get('name') or user.display_name
         embed = discord.Embed(title=f"**{farm_name}さんの農場**", color=0x8BC34A, description=f"```{farm_str}```")
         if infos: embed.description += "\n" + "\n".join(sorted(infos))
-        weather = WEATHER_TYPES.get(get_config("current_weather", "sunny"), {"emoji": "❔", "name": "不明"})
+        
+        weather_key = get_config("current_weather", "sunny")
+        weather = WEATHER_TYPES.get(weather_key, {"emoji": "❔", "name": "不明"})
         embed.description += f"\n\n**今日の天気:** {weather['emoji']} {weather['name']}"
         return embed
         
-    async def update_farm_ui(self, thread: discord.Thread, user: discord.User):
+    async def update_farm_ui(self, thread: discord.Thread, user: discord.User, farm_data: Dict):
         lock = self.thread_locks.setdefault(thread.id, asyncio.Lock())
         async with lock:
-            if user is None: return
-            farm_data = await get_farm_data(user.id)
-            if not farm_data: return
+            if not (user and farm_data): return
+
             try:
-                if old_message_id := farm_data.get("farm_message_id"):
-                    try: await (await thread.fetch_message(old_message_id)).delete()
-                    except (discord.NotFound, discord.Forbidden): pass
                 embed = await self.build_farm_embed(farm_data, user)
-                new_message = await thread.send(embed=embed, view=FarmUIView(self))
+                view = FarmUIView(self)
+                
+                if message_id := farm_data.get("farm_message_id"):
+                    try:
+                        message = await thread.fetch_message(message_id)
+                        await message.edit(embed=embed, view=view)
+                        return
+                    except (discord.NotFound, discord.Forbidden):
+                        logger.warning(f"농장 메시지(ID: {message_id})를 찾지 못하여 새로 생성합니다.")
+                
+                # 메시지를 찾지 못했거나 원래 없었으면 새로 생성
+                new_message = await thread.send(embed=embed, view=view)
                 await supabase.table('farms').update({'farm_message_id': new_message.id}).eq('id', farm_data['id']).execute()
+
             except Exception as e:
                 logger.error(f"농장 UI 업데이트 중 오류: {e}", exc_info=True)
                 
@@ -515,12 +547,14 @@ class Farm(commands.Cog):
             farm_data = farm_data or await create_farm(user.id)
             if not farm_data:
                 await interaction.followup.send("❌ 農場の初期化に失敗しました。", ephemeral=True); return
+            
             await supabase.table('farms').update({'thread_id': thread.id, 'name': farm_name}).eq('user_id', user.id).execute()
             updated_data = await get_farm_data(user.id)
+            
             if embed_data := await get_embed_from_db("farm_thread_welcome"):
                 await thread.send(embed=format_embed_from_db(embed_data, user_name=updated_data.get('name') or user.display_name))
             
-            await self.update_farm_ui(thread, user)
+            await self.update_farm_ui(thread, user, updated_data)
             await thread.add_user(user)
             await interaction.followup.send(f"✅ あなただけの農場を作成しました！ {thread.mention} を確認してください。", ephemeral=True)
         except Exception as e:
