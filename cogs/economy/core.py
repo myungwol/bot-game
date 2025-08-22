@@ -12,7 +12,7 @@ from typing import Optional, Dict, List
 from utils.database import (
     get_wallet, update_wallet,
     get_id, supabase, get_embed_from_db, get_config,
-    save_config_to_db # [✅ 수정] save_config_to_db import 추가
+    save_config_to_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -48,12 +48,10 @@ class EconomyCore(commands.Cog):
         level_up_data = result_data
         new_level = level_up_data.get('new_level')
         
-        # 전직 가능 레벨(50, 100)에 도달했는지 확인
         if new_level in [50, 100]:
             await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": time.time()})
             logger.info(f"유저 {user.display_name}(ID: {user.id})가 전직 가능 레벨({new_level})에 도달하여 DB에 요청을 기록했습니다.")
 
-        # 모든 레벨업 시 등급 역할 업데이트 요청
         await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
 
     @commands.Cog.listener()
@@ -67,10 +65,12 @@ class EconomyCore(commands.Cog):
             return
         
         user = message.author
-        chat_req_config = get_config("CHAT_MESSAGE_REQUIREMENT", "10").strip('"')
+        
+        # [✅ 오류 수정] 어떤 타입이든 안전하게 처리하도록 str() 추가
+        chat_req_config = str(get_config("CHAT_MESSAGE_REQUIREMENT", "10")).strip('"')
         chat_req = int(chat_req_config)
         
-        chat_reward_range_config = get_config("CHAT_REWARD_RANGE", "[5, 10]")
+        chat_reward_range_config = str(get_config("CHAT_REWARD_RANGE", "[5, 10]"))
         chat_reward_range = eval(chat_reward_range_config)
 
         try:
@@ -85,7 +85,7 @@ class EconomyCore(commands.Cog):
                     await update_wallet(user, reward)
                     await self.log_coin_activity(user, reward, "チャット活動報酬")
                     
-                    xp_to_add = int(get_config("XP_FROM_CHAT", "5").strip('"'))
+                    xp_to_add = int(str(get_config("XP_FROM_CHAT", "5")).strip('"'))
                     res = await supabase.rpc('add_xp', {'p_user_id': user.id, 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
                     
                     if res and res.data:
@@ -100,10 +100,11 @@ class EconomyCore(commands.Cog):
     @tasks.loop(minutes=1)
     async def voice_reward_loop(self):
         try:
-            voice_req_min_config = get_config("VOICE_TIME_REQUIREMENT_MINUTES", "10").strip('"')
+            # [✅ 오류 수정] 어떤 타입이든 안전하게 처리하도록 str() 추가
+            voice_req_min_config = str(get_config("VOICE_TIME_REQUIREMENT_MINUTES", "10")).strip('"')
             voice_req_min = int(voice_req_min_config)
 
-            voice_reward_range_config = get_config("VOICE_REWARD_RANGE", "[10, 15]")
+            voice_reward_range_config = str(get_config("VOICE_REWARD_RANGE", "[10, 15]"))
             voice_reward_range = eval(voice_reward_range_config)
             
             active_user_ids: List[int] = []
@@ -130,7 +131,7 @@ class EconomyCore(commands.Cog):
                                     await update_wallet(member, reward)
                                     await self.log_coin_activity(member, reward, "ボイスチャット活動報酬")
                                     
-                                    xp_to_add = int(get_config("XP_FROM_VOICE", "10").strip('"'))
+                                    xp_to_add = int(str(get_config("XP_FROM_VOICE", "10")).strip('"'))
                                     res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
                                     
                                     if res and res.data:
@@ -146,7 +147,7 @@ class EconomyCore(commands.Cog):
                 try:
                     unique_user_ids = list(set(active_user_ids))
                     await supabase.rpc('increment_voice_minutes_batch', {'user_ids_array': unique_user_ids}).execute()
-                    logger.info(f"{len(unique_user_ids)}명의 유저에게 음성 활동 퀘스트 시간을 일괄 부여했습니다.")
+                    # logger.info(f"{len(unique_user_ids)}명의 유저에게 음성 활동 퀘스트 시간을 일괄 부여했습니다.") # 너무 자주 로깅되므로 주석 처리
                 except Exception as e:
                     logger.error(f"음성 활동 퀘스트 일괄 업데이트 중 DB 오류 발생: {e}", exc_info=True)
 
