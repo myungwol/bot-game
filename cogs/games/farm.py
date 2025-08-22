@@ -20,18 +20,34 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# [✅ 개선] 닫기 버튼 View를 추가하여 사용자 경험을 개선합니다.
+# [✅ 오류 수정] 닫기 버튼 View
 class CloseButtonView(ui.View):
     def __init__(self, user: discord.User):
         super().__init__(timeout=180)
         self.user = user
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.user.id
+        # 이 상호작용을 시작한 유저만 버튼을 누를 수 있도록 합니다.
+        if interaction.user.id != self.user.id:
+            # 다른 사람이 누르면 조용한 에러 메시지를 보냅니다.
+            await interaction.response.send_message("自分専用のメニューです。", ephemeral=True, delete_after=5)
+            return False
+        return True
         
     @ui.button(label="閉じる", style=discord.ButtonStyle.secondary)
     async def close_button(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.message.delete()
+        # [✅ 오류 수정] try...except 블록으로 감싸 NotFound 오류를 처리합니다.
+        try:
+            # defer()를 먼저 호출하여 "상호작용에 실패했습니다" 오류를 방지합니다.
+            await interaction.response.defer()
+            await interaction.message.delete()
+        except discord.NotFound:
+            # 메시지가 이미 삭제된 경우, 아무것도 하지 않고 조용히 넘어갑니다.
+            pass
+        except Exception as e:
+            # 다른 예외가 발생할 경우를 대비해 로그를 남깁니다.
+            logger.error(f"닫기 버튼 처리 중 예외 발생: {e}", exc_info=True)
+
 
 CROP_EMOJI_MAP = {
     'seed': {0: '🌱', 1: '🌿', 2: '🌾'},
@@ -44,7 +60,6 @@ WEATHER_TYPES = {
     "stormy": {"emoji": "⛈️", "name": "嵐", "water_effect": True},
 }
 
-# [✅ 현지화] KST를 JST로 변경하여 코드의 명확성을 높입니다.
 JST = timezone(timedelta(hours=9))
 JST_MIDNIGHT_UPDATE = time(hour=0, minute=1, tzinfo=JST)
 
@@ -495,17 +510,15 @@ class Farm(commands.Cog):
             weather_key = get_config("current_weather", "sunny").strip('"')
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
             
-            # [✅ 성능 최적화] 페이지네이션을 위한 변수 초기화
             page_size = 1000
             offset = 0
             total_updated_plots = 0
 
             while True:
-                # [✅ 성능 최적화] DB에서 데이터를 1000개씩 나누어 가져옵니다.
                 response = await supabase.table('farm_plots').select('*').eq('state', 'planted').range(offset, offset + page_size - 1).execute()
                 
                 if not response or not response.data:
-                    break # 더 이상 처리할 데이터가 없으면 루프 종료
+                    break
 
                 plots_to_update = []
                 now_utc = datetime.now(timezone.utc)
@@ -548,13 +561,11 @@ class Farm(commands.Cog):
                     await asyncio.gather(*update_tasks)
                     total_updated_plots += len(plots_to_update)
 
-                # [✅ 성능 최적화] 처리한 데이터가 페이지 크기보다 작으면, 마지막 페이지이므로 루프를 종료합니다.
                 if len(response.data) < page_size:
                     break
                 
-                # [✅ 성능 최적화] 다음 페이지로 이동합니다.
                 offset += page_size
-                await asyncio.sleep(1) # DB 부하를 줄이기 위해 잠시 대기
+                await asyncio.sleep(1)
             
             if total_updated_plots > 0:
                 logger.info(f"총 {total_updated_plots}개의 밭의 상태를 업데이트했습니다.")
