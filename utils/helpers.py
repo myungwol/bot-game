@@ -1,15 +1,14 @@
 # bot-game/utils/helpers.py
 
 import discord
-from discord import ui # ui import 추가
+from discord import ui
 import copy
 import logging
-import asyncio
-from typing import Any, Dict, Optional # Optional import 추가
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# [✅ 개선] 모든 파일에서 공통으로 사용할 안정적인 CloseButtonView를 helpers에 정의합니다.
+# [✅ 수정] 모든 파일에서 공통으로 사용할 안정적인 CloseButtonView를 여기에 표준으로 정의합니다.
 class CloseButtonView(ui.View):
     def __init__(self, user: discord.User, target_message: Optional[discord.Message] = None):
         """
@@ -62,7 +61,7 @@ def format_embed_from_db(embed_data: Dict[str, Any], **kwargs: Any) -> discord.E
             for field in formatted_data['fields']:
                 if isinstance(field, dict):
                     if field.get('name') and isinstance(field['name'], str): field['name'] = field['name'].format_map(safe_kwargs)
-                    if field.get('value') and isinstance(field['value'], str): field['value'] = field['value'].format_map(safe_kwargs)
+                    if field.get('value') and isinstance(field.get('value'), str): field['value'] = field['value'].format_map(safe_kwargs)
         return discord.Embed.from_dict(formatted_data)
     except (KeyError, ValueError) as e:
         logger.error(f"임베드 데이터 포맷팅 중 오류 발생: {e}", exc_info=True)
@@ -70,5 +69,3 @@ def format_embed_from_db(embed_data: Dict[str, Any], **kwargs: Any) -> discord.E
         except Exception as final_e:
             logger.critical(f"원본 임베드 데이터로도 임베드 생성 실패: {final_e}", exc_info=True)
             return discord.Embed(title="치명적 오류", description="임베드 생성에 실패했습니다. 데이터 형식을 확인해주세요.", color=discord.Color.dark_red())
-
-# --- [✅ 개선] delete_after_helper는 더 이상 사용하지 않으므로 삭제합니다. ---
