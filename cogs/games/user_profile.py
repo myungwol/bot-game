@@ -14,7 +14,7 @@ from utils.database import (
     get_item_database, get_config, get_string, BARE_HANDS,
     supabase
 )
-from utils.helpers import CloseButtonView
+from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -86,11 +86,9 @@ class ProfileView(ui.View):
 
             user_rank_mention = get_string("profile_view.info_tab.default_rank_name")
             
-            # [✅ 유지보수성 개선] 하드코딩된 리스트 대신, DB에서 설정을 동적으로 불러옵니다.
             job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
             level_tier_roles = job_system_config.get("LEVEL_TIER_ROLES", [])
             
-            # 높은 레벨의 등급부터 확인하기 위해 정렬합니다.
             sorted_tier_roles = sorted(level_tier_roles, key=lambda x: x.get('level', 0), reverse=True)
             
             user_role_ids = {role.id for role in self.user.roles}
@@ -187,7 +185,7 @@ class ProfileView(ui.View):
                 
     async def button_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.user.id:
-            await interaction.response.send_message("自分専用のメニューを操作してください。", ephemeral=True, view=CloseButtonView(interaction.user))
+            await interaction.response.send_message("自分専用のメニューを操作してください。", ephemeral=True)
             return
         
         custom_id = interaction.data['custom_id']
