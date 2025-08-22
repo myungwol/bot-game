@@ -66,11 +66,16 @@ class EconomyCore(commands.Cog):
                     reward = random.randint(chat_reward_range[0], chat_reward_range[1])
                     await update_wallet(user, reward)
                     await self.log_coin_activity(user, reward, "チャット活動報酬")
+                    
+                    # [✅ 레벨 시스템] 채팅 활동으로 경험치 획득 (예: 5 XP)
+                    xp_to_add = int(get_config("XP_FROM_CHAT", "5").strip('"'))
+                    await supabase.rpc('add_xp', {'p_user_id': user.id, 'p_xp_to_add': xp_to_add}).execute()
+
                     reset_params = {'p_user_id': str(user.id), 'p_reset_chat': True}
                     await supabase.rpc('reset_user_progress', reset_params).execute()
 
         except Exception as e:
-            logger.error(f"채팅 보상 처리 중 DB 오류 발생 (유저: {user.id}): {e}", exc_info=True)
+            logger.error(f"채팅 보상/경험치 처리 중 DB 오류 발생 (유저: {user.id}): {e}", exc_info=True)
             
     @tasks.loop(minutes=1)
     async def voice_reward_loop(self):
@@ -81,7 +86,6 @@ class EconomyCore(commands.Cog):
             voice_reward_range_config = get_config("VOICE_REWARD_RANGE", "[10, 15]")
             voice_reward_range = eval(voice_reward_range_config)
             
-            # [✅ 최적화 1/3] 활동 중인 모든 유저의 ID를 저장할 리스트를 생성합니다.
             active_user_ids: List[int] = []
 
             for guild in self.bot.guilds:
@@ -92,10 +96,8 @@ class EconomyCore(commands.Cog):
                     eligible_members = [m for m in vc.members if not m.bot and not m.voice.self_deaf and not m.voice.self_mute]
                     
                     for member in eligible_members:
-                        # [✅ 최적화 2/3] 유저 ID를 리스트에 추가합니다.
                         active_user_ids.append(member.id)
                         
-                        # 기존의 코인 보상 로직은 그대로 유지합니다. (이 부분은 유저별로 처리해야 합니다)
                         try:
                             params = {'p_user_id': str(member.id), 'p_voice_increment': 1}
                             response = await supabase.rpc('increment_user_progress', params).execute()
@@ -108,14 +110,16 @@ class EconomyCore(commands.Cog):
                                     await update_wallet(member, reward)
                                     await self.log_coin_activity(member, reward, "ボイスチャット活動報酬")
                                     
+                                    # [✅ 레벨 시스템] 음성 활동으로 경험치 획득 (예: 10 XP)
+                                    xp_to_add = int(get_config("XP_FROM_VOICE", "10").strip('"'))
+                                    await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add}).execute()
+
                                     reset_params = {'p_user_id': str(member.id), 'p_reset_voice': True}
                                     await supabase.rpc('reset_user_progress', reset_params).execute()
 
                         except Exception as e:
-                            logger.error(f"음성 보상 처리 중 DB 오류 발생 (유저: {member.id}): {e}", exc_info=True)
+                            logger.error(f"음성 보상/경험치 처리 중 DB 오류 발생 (유저: {member.id}): {e}", exc_info=True)
 
-            # [✅ 최적화 3/3] 루프가 끝난 후, 활동한 모든 유저의 퀘스트 데이터를 단 한 번의 DB 호출로 업데이트합니다.
-            # 이를 위해 Supabase에 'increment_voice_minutes_batch' RPC 함수가 필요합니다.
             if active_user_ids:
                 try:
                     unique_user_ids = list(set(active_user_ids))
@@ -131,6 +135,7 @@ class EconomyCore(commands.Cog):
     async def before_voice_reward_loop(self):
         await self.bot.wait_until_ready()
     
+    # (이하 나머지 코드는 동일)
     async def log_coin_activity(self, user: discord.Member, amount: int, reason: str):
         if not self.coin_log_channel_id or not (log_channel := self.bot.get_channel(self.coin_log_channel_id)): return
         
