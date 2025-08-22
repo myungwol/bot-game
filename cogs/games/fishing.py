@@ -11,20 +11,16 @@ from typing import Optional, Set, Dict
 from utils.database import (
     update_wallet, get_inventory, update_inventory, add_to_aquarium,
     get_user_gear, set_user_gear, save_panel_id, get_panel_id, get_id,
-    get_embed_from_db,
+    get_embed_from_db, supabase, # [✅ 레벨 시스템] supabase import
     get_item_database, get_fishing_loot, get_config, get_string,
     is_legendary_fish_available, set_legendary_fish_cooldown,
     BARE_HANDS, DEFAULT_ROD,
     increment_progress
 )
-# [✅ 수정] helpers에서 표준 CloseButtonView를 import 합니다.
 from utils.helpers import CloseButtonView
 
 logger = logging.getLogger(__name__)
 
-# [✅ 수정] 중복되는 CloseButtonView 클래스 정의를 삭제했습니다.
-
-# [✅ 유지보수] 하드코딩된 값을 제거합니다. 이 값은 이제 DB에서 불러옵니다.
 INTERMEDIATE_ROD_NAME = "鉄の釣竿"
 
 class FishingGameView(ui.View):
@@ -40,11 +36,9 @@ class FishingGameView(ui.View):
         self.rod_data = item_db.get(self.used_rod, {})
         bait_data = item_db.get(self.used_bait, {})
 
-        # [✅ 유지보수] 하드코딩된 값을 DB에서 불러오도록 수정합니다.
         self.bite_range = eval(get_config("FISHING_BITE_RANGE", "[8.0, 12.0]"))
         self.bite_reaction_time = float(get_config("FISHING_BITE_REACTION_TIME", "3.0").strip('"'))
         self.big_catch_threshold = float(get_config("FISHING_BIG_CATCH_THRESHOLD", "70.0").strip('"'))
-
 
     async def start_game(self, interaction: discord.Interaction, embed: discord.Embed):
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
@@ -104,6 +98,11 @@ class FishingGameView(ui.View):
             await add_to_aquarium(str(self.player.id), {"name": catch_proto['name'], "size": size, "emoji": catch_proto.get('emoji', '🐠')})
             is_big_catch = size >= self.big_catch_threshold
             await increment_progress(self.player.id, fish_count=1)
+
+            # [✅ 레벨 시스템] 낚시 성공 시 경험치 획득
+            xp_to_add = int(get_config("XP_FROM_FISHING", "20").strip('"'))
+            await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add}).execute()
+
             title = "🏆 大物を釣り上げた！ 🏆" if is_big_catch else "🎉 釣り成功！ 🎉"
             if is_legendary_catch: title = "👑 伝説の魚を釣り上げた！！ 👑"
             embed.title, embed.description, embed.color = title, f"{self.player.mention}さんが釣りに成功しました！", discord.Color.gold() if is_legendary_catch else discord.Color.blue()
@@ -113,6 +112,7 @@ class FishingGameView(ui.View):
             value = catch_proto.get('value') or 0
             if value != 0: await update_wallet(self.player, value)
             embed.title, embed.description, embed.color = catch_proto['title'], catch_proto['description'].format(user_mention=self.player.mention, value=abs(value)), int(catch_proto['color'], 16) if isinstance(catch_proto['color'], str) else catch_proto['color']
+        
         if image_url := catch_proto.get('image_url'):
             embed.set_thumbnail(url=image_url)
         return embed, log_publicly, is_big_catch, is_legendary_catch
