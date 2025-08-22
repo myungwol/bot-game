@@ -77,20 +77,35 @@ class ProfileView(ui.View):
             
             try:
                 job_res = await supabase.table('user_jobs').select('jobs(job_name)').eq('user_id', self.user.id).maybe_single().execute()
-                job_name = job_res.data['jobs']['job_name'] if job_res and job_res.data and job_res.data.get('jobs') else "一般住民"
+                job_data = job_res.data.get('jobs') if job_res and job_res.data else None
+                job_name = job_data.get('job_name') if job_data else "一般住民"
             except Exception as e:
                 logger.error(f"직업 정보 조회 중 오류 발생 (유저: {self.user.id}): {e}")
                 job_name = "一般住民"
             embed.add_field(name="職業", value=f"`{job_name}`", inline=True)
 
-            resident_role_keys = ["role_resident_elder", "role_resident_veteran", "role_resident_regular", "role_resident_rookie", "role_resident"]
+            user_rank_mention = get_string("profile_view.info_tab.default_rank_name")
+            
+            # [✅ 유지보수성 개선] 하드코딩된 리스트 대신, DB에서 설정을 동적으로 불러옵니다.
+            job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
+            level_tier_roles = job_system_config.get("LEVEL_TIER_ROLES", [])
+            
+            # 높은 레벨의 등급부터 확인하기 위해 정렬합니다.
+            sorted_tier_roles = sorted(level_tier_roles, key=lambda x: x.get('level', 0), reverse=True)
+            
             user_role_ids = {role.id for role in self.user.roles}
-            user_rank_name = get_string("profile_view.info_tab.default_rank_name")
-            for key in resident_role_keys:
-                if (rank_role_id := get_id(key)) and rank_role_id in user_role_ids:
+            
+            for tier in sorted_tier_roles:
+                role_key = tier.get('role_key')
+                if not role_key: continue
+                
+                if (rank_role_id := get_id(role_key)) and rank_role_id in user_role_ids:
                     if rank_role := self.user.guild.get_role(rank_role_id):
-                        user_rank_name = rank_role.name; break
-            embed.add_field(name=get_string("profile_view.info_tab.field_rank"), value=f"`{user_rank_name}`", inline=True)
+                        user_rank_mention = rank_role.mention
+                        break
+            
+            embed.add_field(name=get_string("profile_view.info_tab.field_rank"), value=user_rank_mention, inline=True)
+            
             description += get_string("profile_view.info_tab.description")
             embed.description = description
         
@@ -172,8 +187,7 @@ class ProfileView(ui.View):
                 
     async def button_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.user.id:
-            msg = await interaction.response.send_message("自分専用のメニューを操作してください。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.response.send_message("自分専用のメニューを操作してください。", ephemeral=True, view=CloseButtonView(interaction.user))
             return
         
         custom_id = interaction.data['custom_id']
@@ -272,23 +286,24 @@ class UserProfile(commands.Cog):
         self.bot.add_view(UserProfilePanelView(self))
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_profile"):
-        if (panel_info := get_panel_id("profile")):
+        panel_name = panel_key.replace("panel_", "")
+        if (panel_info := get_panel_id(panel_name)):
             if (old_channel_id := panel_info.get("channel_id")) and (old_channel := self.bot.get_channel(old_channel_id)):
                 try:
                     old_message = await old_channel.fetch_message(panel_info["message_id"])
                     await old_message.delete()
                 except (discord.NotFound, discord.Forbidden): pass
         
-        if not (embed_data := await get_embed_from_db("panel_profile")): 
-            logger.warning("DB에서 'panel_profile' 임베드 데이터를 찾지 못해 패널 생성을 건너뜁니다.")
+        if not (embed_data := await get_embed_from_db(panel_key)): 
+            logger.warning(f"DB에서 '{panel_key}' 임베드 데이터를 찾지 못해 패널 생성을 건너뜁니다.")
             return
             
         embed = discord.Embed.from_dict(embed_data)
         view = UserProfilePanelView(self)
         
         new_message = await channel.send(embed=embed, view=view)
-        await save_panel_id("profile", new_message.id, channel.id)
-        logger.info(f"✅ プロフィールパネルを正常に生成しました。 (チャンネル: #{channel.name})")
+        await save_panel_id(panel_name, new_message.id, channel.id)
+        logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(UserProfile(bot))
