@@ -1,3 +1,5 @@
+# bot-game/cogs/daily_check.py
+
 import discord
 from discord.ext import commands
 from discord import ui
@@ -9,34 +11,12 @@ from utils.database import (
     save_panel_id, get_panel_id, get_embed_from_db,
     has_checked_in_today, record_attendance
 )
-from utils.helpers import format_embed_from_db
+# [✅ 수정] helpers에서 표준 CloseButtonView를 import 합니다.
+from utils.helpers import format_embed_from_db, CloseButtonView
 
 logger = logging.getLogger(__name__)
 
-# [✅ 개선] farm.py에서 가져온 안정적인 CloseButtonView를 여기에도 추가합니다.
-class CloseButtonView(ui.View):
-    def __init__(self, user: discord.User, target_message: discord.Message = None):
-        super().__init__(timeout=180)
-        self.user = user
-        self.target_message = target_message
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.user.id
-        
-    @ui.button(label="閉じる", style=discord.ButtonStyle.secondary)
-    async def close_button(self, interaction: discord.Interaction, button: ui.Button):
-        try:
-            await interaction.response.defer()
-            message_to_delete = self.target_message or interaction.message
-            if message_to_delete:
-                await message_to_delete.delete()
-        except discord.NotFound:
-            pass
-        except Exception as e:
-            logger.error(f"닫기 버튼 처리 중 예외 발생: {e}", exc_info=True)
-
-# [✅ 유지보수] 하드코딩된 값을 제거합니다.
-# ATTENDANCE_REWARD = 100
+# [✅ 수정] 중복되는 CloseButtonView 클래스 정의를 삭제했습니다.
 
 class DailyCheckPanelView(ui.View):
     def __init__(self, cog_instance: 'DailyCheck'):
@@ -62,7 +42,6 @@ class DailyCheckPanelView(ui.View):
             await msg.edit(view=CloseButtonView(user, target_message=msg))
             return
 
-        # [✅ 유지보수] DB에서 출석 보상 값을 불러옵니다.
         reward_str = get_config("DAILY_CHECK_REWARD", "100").strip('"')
         attendance_reward = int(reward_str)
 
