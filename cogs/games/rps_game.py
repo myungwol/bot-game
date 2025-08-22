@@ -24,13 +24,8 @@ class BetAmountModal(ui.Modal, title="ベット額の入力 (じゃんけん)"):
 
     async def on_submit(self, interaction: discord.Interaction):
         cog = interaction.client.get_cog("RPSGame")
-        if not cog:
-            # [✅ 오류 수정] View를 send_message에 직접 전달합니다.
-            await interaction.response.send_message(
-                "エラー: ゲームCogが見つかりません。", 
-                ephemeral=True, 
-                view=CloseButtonView(interaction.user)
-            )
+        if not cog: 
+            await interaction.response.send_message("エラー: ゲームCogが見つかりません。", ephemeral=True, view=CloseButtonView(interaction.user))
             return
         
         try:
@@ -46,7 +41,6 @@ class BetAmountModal(ui.Modal, title="ベット額の入力 (じゃんけん)"):
             await cog.create_game_lobby(interaction, bet_amount)
 
         except ValueError as e:
-            # [✅ 오류 수정] View를 send_message/followup.send에 직접 전달합니다.
             message_content = f"❌ {e}"
             view = CloseButtonView(interaction.user)
             if not interaction.response.is_done():
@@ -295,7 +289,7 @@ class RPSGame(commands.Cog):
         async with user_lock:
             game = self.active_games.get(channel_id)
             user = interaction.user
-            if not game:
+            if not game: 
                 await interaction.response.send_message("❌ 募集が終了したゲームです。", ephemeral=True, view=CloseButtonView(user))
                 return
             if user.id in game["players"]:
@@ -354,21 +348,19 @@ class RPSGame(commands.Cog):
         user_id = interaction.user.id
         if not game or user_id not in game["players"]: return await interaction.response.defer()
         if user_id in game["choices"]:
-            # [✅ 오류 수정] View를 send_message에 직접 전달합니다.
-            await interaction.response.send_message(
-                "❌ すでに選択済みです。", 
-                ephemeral=True, 
-                view=CloseButtonView(interaction.user)
-            )
+            await interaction.response.send_message("❌ すでに選択済みです。", ephemeral=True, view=CloseButtonView(interaction.user))
             return
 
         game["choices"][user_id] = choice
-        # [✅ 오류 수정] View를 send_message에 직접 전달합니다.
-        await interaction.response.send_message(
-            f"✅ {HAND_NAMES[choice]}を出しました。", 
-            ephemeral=True, 
-            view=CloseButtonView(interaction.user)
-        )
+        await interaction.response.send_message(f"✅ {HAND_NAMES[choice]}を出しました。", ephemeral=True, view=CloseButtonView(interaction.user))
+
+        # [✅ 수정] 유저가 수를 낼 때마다, 누가 냈는지 알 수 있도록 게임 현황판을 즉시 업데이트합니다.
+        if game.get("game_message"):
+            try:
+                updated_embed = self.build_game_embed(game)
+                await game["game_message"].edit(embed=updated_embed)
+            except Exception as e:
+                logger.warning(f"RPS 게임 보드 업데이트 실패: {e}")
 
         if len(game["choices"]) == len(game["players"]):
             if game["task"]: game["task"].cancel()
@@ -397,6 +389,7 @@ class RPSGame(commands.Cog):
     def build_lobby_embed(self, host: discord.User, bet: int, players: List[discord.Member], timeout: int) -> discord.Embed:
         embed = discord.Embed(title="✊✌️✋ じゃんけん参加者募集中！", color=0x9B59B6)
         embed.description = f"**主催者:** {host.mention}\n**ベット額:** `{bet}`{self.currency_icon}"
+        # [✅ 수정] discord.Member 객체의 .display_name을 사용하여 서버 별명을 표시합니다.
         player_list = "\n".join([p.display_name for p in players]) or "まだいません"
         embed.add_field(name=f"参加者 ({len(players)}/{self.max_players})", value=player_list)
         embed.set_footer(text=f"{timeout}秒後に自動で開始します。")
@@ -404,8 +397,18 @@ class RPSGame(commands.Cog):
 
     def build_game_embed(self, game: Dict, result: str = "", choice_timeout: int = 45) -> discord.Embed:
         embed = discord.Embed(title=f"じゃんけん勝負！ - ラウンド {game['round']}", color=0x3498DB)
-        player_list = "\n".join([p.display_name for p in game["players"].values()])
-        embed.add_field(name="現在のプレイヤー", value=player_list, inline=False)
+        
+        # [✅ 수정] 플레이어 목록을 생성할 때, 수를 냈는지 여부에 따라 이모지를 붙여줍니다.
+        player_status_list = []
+        for player in game["players"].values():
+            if player.id in game["choices"]:
+                player_status_list.append(f"✅ {player.display_name}")
+            else:
+                player_status_list.append(f"❔ {player.display_name}")
+        
+        player_list_text = "\n".join(player_status_list)
+        embed.add_field(name="現在のプレイヤー", value=player_list_text, inline=False)
+
         if result:
             embed.add_field(name="ラウンド結果", value=result, inline=False)
         embed.set_footer(text=f"{choice_timeout}秒以内に手を選択してください。")
@@ -415,17 +418,31 @@ class RPSGame(commands.Cog):
         lines = []
         for pid, choice in game["choices"].items():
             user = self.bot.get_user(pid)
-            if user: lines.append(f"{user.display_name}: {HAND_EMOJIS[choice]}")
-        
+            # [✅ 수정] user 객체가 discord.Member 객체일 경우를 대비하여 서버 별명을 우선적으로 사용합니다.
+            if user:
+                # 길드(서버)에서 해당 유저 정보를 찾아 Member 객체로 가져옵니다.
+                guild = self.bot.get_channel(list(game["players"].values())[0].guild.id).guild
+                member = guild.get_member(pid)
+                display_name = member.display_name if member else user.name
+                lines.append(f"{display_name}: {HAND_EMOJIS[choice]}")
+
         participants_in_round = set(game["choices"].keys())
         if not winners and participants_in_round:
             lines.append("\n**引き分け！** (あいこでしょ！)")
         
-        winner_mentions = [self.bot.get_user(wid).display_name for wid in winners if self.bot.get_user(wid)]
+        # [✅ 수정] 여기도 마찬가지로 서버 별명을 사용하도록 수정합니다.
+        winner_mentions = []
+        guild = self.bot.get_channel(list(game["players"].values())[0].guild.id).guild
+        for wid in winners:
+            member = guild.get_member(wid)
+            winner_mentions.append(member.display_name if member else self.bot.get_user(wid).name)
         if winner_mentions:
             lines.append(f"\n**勝者:** {', '.join(winner_mentions)}")
-        
-        loser_mentions = [self.bot.get_user(lid).display_name for lid in losers if self.bot.get_user(lid)]
+
+        loser_mentions = []
+        for lid in losers:
+            member = guild.get_member(lid)
+            loser_mentions.append(member.display_name if member else self.bot.get_user(lid).name)
         if loser_mentions:
             lines.append(f"**敗者:** {', '.join(loser_mentions)}")
 
