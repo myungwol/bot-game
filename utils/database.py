@@ -70,13 +70,13 @@ async def update_plot(plot_id: int, updates: Dict[str, Any]):
 async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
     response = await supabase.table('farm_item_details').select('*').eq('item_name', item_name).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
+
+# [✅ 수정] 새로운 RPC를 호출하도록 변경
 @supabase_retry_handler()
 async def clear_plots_db(plot_ids: List[int]):
-    await supabase.table('farm_plots').update({
-        'state': 'tilled',
-        'planted_item_name': None, 'planted_at': None, 'last_watered_at': None,
-        'water_count': 0, 'growth_stage': 0, 'quality': 0
-    }).in_('id', plot_ids).execute()
+    """지정된 밭들을 갈지 않은 초기 상태('default')로 되돌립니다."""
+    await supabase.rpc('clear_plots_to_default', {'p_plot_ids': plot_ids}).execute()
+
 @supabase_retry_handler()
 async def check_farm_permission(farm_id: int, user_id: int, action: str) -> bool:
     permission_column = f"can_{action}"
