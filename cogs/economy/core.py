@@ -8,6 +8,7 @@ import asyncio
 import logging
 import time
 from typing import Optional, Dict, List
+from datetime import datetime, timezone
 
 from utils.database import (
     get_wallet, update_wallet,
@@ -25,7 +26,17 @@ class EconomyCore(commands.Cog):
         self.admin_role_id: Optional[int] = None
         self.currency_icon = "🪙"
         self._chat_cooldown = commands.CooldownMapping.from_cooldown(1, 3.0, commands.BucketType.user)
+        self.voice_sessions: Dict[int, datetime] = {}
+        
+        # [✅ 채팅 최적화] 채팅 횟수를 메모리에 임시 저장할 딕셔너리
+        self.chat_progress_cache: Dict[int, int] = {}
+        # [✅ 채팅 최적화] 캐시를 보호하기 위한 Lock
+        self._cache_lock = asyncio.Lock()
+
         self.voice_reward_loop.start()
+        # [✅ 채팅 최적화] 캐시를 DB에 업데이트하는 새로운 루프 시작
+        self.update_chat_progress_loop.start()
+
         logger.info("EconomyCore Cog가 성공적으로 초기화되었습니다.")
         
     async def cog_load(self):
@@ -39,6 +50,8 @@ class EconomyCore(commands.Cog):
         
     def cog_unload(self):
         self.voice_reward_loop.cancel()
+        # [✅ 채팅 최적화] Cog 언로드 시 루프도 취소
+        self.update_chat_progress_loop.cancel()
     
     async def handle_level_up_event(self, user: discord.User, result_data: Dict):
         """레벨업 시 발생하는 이벤트를 처리하는 중앙 함수"""
@@ -54,6 +67,7 @@ class EconomyCore(commands.Cog):
 
         await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
 
+    # [✅ 채팅 최적화] on_message는 이제 DB에 직접 접근하지 않습니다.
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or message.guild is None or message.content.startswith('/'):
@@ -64,100 +78,137 @@ class EconomyCore(commands.Cog):
         if retry_after:
             return
         
-        user = message.author
+        user_id = message.author.id
+        async with self._cache_lock:
+            self.chat_progress_cache[user_id] = self.chat_progress_cache.get(user_id, 0) + 1
+
+    # [✅ 채팅 최적화] 1분마다 캐시를 DB에 일괄 업데이트하는 새로운 루프
+    @tasks.loop(minutes=1)
+    async def update_chat_progress_loop(self):
+        # 루프가 시작되기 전에 봇이 준비될 때까지 기다림
+        await self.bot.wait_until_ready()
         
-        # [✅ 오류 수정] 어떤 타입이든 안전하게 처리하도록 str() 추가
-        chat_req_config = str(get_config("CHAT_MESSAGE_REQUIREMENT", "10")).strip('"')
-        chat_req = int(chat_req_config)
-        
-        chat_reward_range_config = str(get_config("CHAT_REWARD_RANGE", "[5, 10]"))
-        chat_reward_range = eval(chat_reward_range_config)
+        async with self._cache_lock:
+            if not self.chat_progress_cache:
+                return
+            
+            # DB로 보낼 데이터 복사 및 캐시 초기화
+            data_to_update = self.chat_progress_cache.copy()
+            self.chat_progress_cache.clear()
 
         try:
-            params = {'p_user_id': str(user.id), 'p_chat_increment': 1}
-            response = await supabase.rpc('increment_user_progress', params).execute()
-
-            if response and response.data and response.data[0]:
-                current_progress = response.data[0].get('new_chat_progress', 0)
-                
-                if current_progress >= chat_req:
-                    reward = random.randint(chat_reward_range[0], chat_reward_range[1])
-                    await update_wallet(user, reward)
-                    await self.log_coin_activity(user, reward, "チャット活動報酬")
-                    
-                    xp_to_add = int(str(get_config("XP_FROM_CHAT", "5")).strip('"'))
-                    res = await supabase.rpc('add_xp', {'p_user_id': user.id, 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
-                    
-                    if res and res.data:
-                        await self.handle_level_up_event(user, res.data[0])
-
-                    reset_params = {'p_user_id': str(user.id), 'p_reset_chat': True}
-                    await supabase.rpc('reset_user_progress', reset_params).execute()
-
-        except Exception as e:
-            logger.error(f"채팅 보상/경험치 처리 중 DB 오류 발생 (유저: {user.id}): {e}", exc_info=True)
+            # Supabase RPC 형식에 맞게 데이터 변환
+            # [{"user_id": "123", "chat_count": 5}, ...]
+            user_updates_json = [
+                {"user_id": str(uid), "chat_count": count}
+                for uid, count in data_to_update.items()
+            ]
             
+            # 새로 만든 RPC 함수를 호출
+            await supabase.rpc('batch_increment_chat_progress', {'p_user_updates': user_updates_json}).execute()
+            # logger.info(f"[채팅 최적화] {len(user_updates_json)}명의 채팅 활동을 DB에 일괄 업데이트했습니다.")
+        except Exception as e:
+            logger.error(f"채팅 활동 일괄 업데이트 중 DB 오류: {e}", exc_info=True)
+            # 실패 시, 데이터를 다시 캐시에 넣어 다음 루프에서 재시도
+            async with self._cache_lock:
+                for user_update in user_updates_json:
+                    uid = int(user_update['user_id'])
+                    count = int(user_update['chat_count'])
+                    self.chat_progress_cache[uid] = self.chat_progress_cache.get(uid, 0) + count
+
+
+    # ... (on_voice_state_update는 변경 없음) ...
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+        if member.bot:
+            return
+
+        def is_valid_channel(state: discord.VoiceState):
+            return state.channel and state.channel.id != member.guild.afk_channel.id if member.guild.afk_channel else state.channel is not None
+
+        def is_active_state(state: discord.VoiceState):
+            return not state.self_deaf and not state.self_mute
+
+        is_before_valid = is_valid_channel(before) and is_active_state(before)
+        is_after_valid = is_valid_channel(after) and is_active_state(after)
+
+        if not is_before_valid and is_after_valid:
+            self.voice_sessions[member.id] = datetime.now(timezone.utc)
+
+        elif is_before_valid and not is_after_valid:
+            if member.id in self.voice_sessions:
+                join_time = self.voice_sessions.pop(member.id)
+                duration = datetime.now(timezone.utc) - join_time
+                duration_minutes = duration.total_seconds() / 60.0
+
+                if duration_minutes > 0:
+                    try:
+                        params = {'p_user_id': str(member.id), 'p_voice_minutes': duration_minutes, 'p_voice_increment': duration_minutes}
+                        await supabase.rpc('increment_user_progress', params).execute()
+                    except Exception as e:
+                        logger.error(f"음성 시간 DB 업데이트 중 오류: {e}", exc_info=True)
+                        self.voice_sessions[member.id] = join_time
+
+    # [✅ 채팅 최적화] voice_reward_loop는 이제 채팅 보상이 아닌, 음성 보상과 '채팅 보상 지급'을 담당
     @tasks.loop(minutes=1)
     async def voice_reward_loop(self):
         try:
-            # [✅ 오류 수정] 어떤 타입이든 안전하게 처리하도록 str() 추가
+            # --- 음성 보상 로직 (기존과 동일) ---
             voice_req_min_config = str(get_config("VOICE_TIME_REQUIREMENT_MINUTES", "10")).strip('"')
             voice_req_min = int(voice_req_min_config)
-
             voice_reward_range_config = str(get_config("VOICE_REWARD_RANGE", "[10, 15]"))
             voice_reward_range = eval(voice_reward_range_config)
-            
-            active_user_ids: List[int] = []
+            voice_response = await supabase.table('user_progress').select('user_id, new_voice_progress').gte('new_voice_progress', voice_req_min).execute()
 
-            for guild in self.bot.guilds:
-                afk_ch_id = guild.afk_channel.id if guild.afk_channel else None
-                for vc in guild.voice_channels:
-                    if vc.id == afk_ch_id: continue
-                    
-                    eligible_members = [m for m in vc.members if not m.bot and not m.voice.self_deaf and not m.voice.self_mute]
-                    
-                    for member in eligible_members:
-                        active_user_ids.append(member.id)
-                        
-                        try:
-                            params = {'p_user_id': str(member.id), 'p_voice_increment': 1}
-                            response = await supabase.rpc('increment_user_progress', params).execute()
-                            
-                            if response and response.data and response.data[0]:
-                                current_progress = response.data[0].get('new_voice_progress', 0)
-                                
-                                if current_progress >= voice_req_min:
-                                    reward = random.randint(voice_reward_range[0], voice_reward_range[1])
-                                    await update_wallet(member, reward)
-                                    await self.log_coin_activity(member, reward, "ボイスチャット活動報酬")
-                                    
-                                    xp_to_add = int(str(get_config("XP_FROM_VOICE", "10")).strip('"'))
-                                    res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
-                                    
-                                    if res and res.data:
-                                        await self.handle_level_up_event(member, res.data[0])
+            if voice_response and voice_response.data:
+                for record in voice_response.data:
+                    user_id = int(record['user_id'])
+                    member = self.bot.get_user(user_id)
+                    if not member: continue
+                    try:
+                        reward = random.randint(voice_reward_range[0], voice_reward_range[1])
+                        await update_wallet(member, reward)
+                        await self.log_coin_activity(member, reward, "ボイスチャット活動報酬")
+                        xp_to_add = int(str(get_config("XP_FROM_VOICE", "10")).strip('"'))
+                        res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
+                        if res and res.data:
+                            await self.handle_level_up_event(member, res.data[0])
+                    finally:
+                        reset_params = {'p_user_id': str(member.id), 'p_reset_voice': True}
+                        await supabase.rpc('reset_user_progress', reset_params).execute()
 
-                                    reset_params = {'p_user_id': str(member.id), 'p_reset_voice': True}
-                                    await supabase.rpc('reset_user_progress', reset_params).execute()
+            # --- 채팅 보상 지급 로직 (새롭게 추가) ---
+            chat_req_config = str(get_config("CHAT_MESSAGE_REQUIREMENT", "10")).strip('"')
+            chat_req = int(chat_req_config)
+            chat_reward_range_config = str(get_config("CHAT_REWARD_RANGE", "[5, 10]"))
+            chat_reward_range = eval(chat_reward_range_config)
+            chat_response = await supabase.table('user_progress').select('user_id, chat_progress').gte('chat_progress', chat_req).execute()
 
-                        except Exception as e:
-                            logger.error(f"음성 보상/경험치 처리 중 DB 오류 발생 (유저: {member.id}): {e}", exc_info=True)
-
-            if active_user_ids:
-                try:
-                    unique_user_ids = list(set(active_user_ids))
-                    await supabase.rpc('increment_voice_minutes_batch', {'user_ids_array': unique_user_ids}).execute()
-                    # logger.info(f"{len(unique_user_ids)}명의 유저에게 음성 활동 퀘스트 시간을 일괄 부여했습니다.") # 너무 자주 로깅되므로 주석 처리
-                except Exception as e:
-                    logger.error(f"음성 활동 퀘스트 일괄 업데이트 중 DB 오류 발생: {e}", exc_info=True)
+            if chat_response and chat_response.data:
+                for record in chat_response.data:
+                    user_id = int(record['user_id'])
+                    member = self.bot.get_user(user_id)
+                    if not member: continue
+                    try:
+                        reward = random.randint(chat_reward_range[0], chat_reward_range[1])
+                        await update_wallet(member, reward)
+                        await self.log_coin_activity(member, reward, "チャット活動報酬")
+                        xp_to_add = int(str(get_config("XP_FROM_CHAT", "5")).strip('"'))
+                        res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
+                        if res and res.data:
+                            await self.handle_level_up_event(member, res.data[0])
+                    finally:
+                        reset_params = {'p_user_id': str(member.id), 'p_reset_chat': True}
+                        await supabase.rpc('reset_user_progress', reset_params).execute()
 
         except Exception as e:
-            logger.error(f"음성 보상 루프 중 오류: {e}", exc_info=True)
+            logger.error(f"음성/채팅 보상 지급 루프 중 오류: {e}", exc_info=True)
         
     @voice_reward_loop.before_loop
     async def before_voice_reward_loop(self):
         await self.bot.wait_until_ready()
     
+    # ... (나머지 log_..., 관리자 명령어 코드는 그대로 유지) ...
     async def log_coin_activity(self, user: discord.Member, amount: int, reason: str):
         if not self.coin_log_channel_id or not (log_channel := self.bot.get_channel(self.coin_log_channel_id)): return
         
