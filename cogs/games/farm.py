@@ -20,14 +20,8 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# [✅ 3차 수정] 삭제할 메시지를 직접 지정할 수 있는 범용 CloseButtonView
 class CloseButtonView(ui.View):
     def __init__(self, user: discord.User, target_message: discord.Message = None):
-        """
-        범용 닫기 버튼 View 입니다.
-        :param user: 이 버튼을 누를 수 있는 유저입니다.
-        :param target_message: None이 아니면, 이 메시지를 삭제합니다. None이면 버튼이 붙어있는 메시지를 삭제합니다.
-        """
         super().__init__(timeout=180)
         self.user = user
         self.target_message = target_message
@@ -77,11 +71,8 @@ class ConfirmationView(ui.View):
         self.value = None; self.user = user
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user.id:
-            # [✅ 3차 수정] 여기서도 수정된 CloseButtonView를 사용합니다.
             msg = await interaction.response.send_message("❌ 自分専用のメニューです。", ephemeral=True)
-            # followup으로 보낸 메시지가 아니므로, target_message를 지정할 필요가 없습니다.
-            # 이 메시지에 바로 닫기 버튼을 붙입니다.
-            await msg.edit(view=CloseButtonView(interaction.user))
+            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
             return False
         return True
     @ui.button(label="はい", style=discord.ButtonStyle.danger)
@@ -536,6 +527,28 @@ class Farm(commands.Cog):
             await message.delete()
         except (discord.NotFound, discord.Forbidden):
             pass
+            
+    # [✅ 기능 추가] 유저가 스레드에 참여했을 때 UI를 자동으로 최신화하는 리스너
+    @commands.Cog.listener()
+    async def on_thread_member_join(self, member):
+        thread = member.thread
+
+        if member.id == self.bot.user.id:
+            return
+
+        owner_id = await get_farm_owner_by_thread(thread.id)
+        if not owner_id:
+            return
+        
+        farm_owner = self.bot.get_user(owner_id)
+        if not farm_owner:
+            logger.warning(f"농장(스레드 ID: {thread.id})의 소유자(ID: {owner_id})를 찾을 수 없어 UI 업데이트를 건너뜁니다.")
+            return
+
+        await asyncio.sleep(1.5)
+        
+        logger.info(f"{member.display_name}님이 농장(스레드 ID: {thread.id})에 참여하여 UI를 최신화합니다.")
+        await self.update_farm_ui(thread, farm_owner)
 
     async def register_persistent_views(self):
         self.bot.add_view(FarmCreationPanelView(self))
