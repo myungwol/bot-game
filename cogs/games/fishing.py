@@ -37,17 +37,12 @@ class FishingGameView(ui.View):
         self.rod_data = item_db.get(self.used_rod, {})
         bait_data = item_db.get(self.used_bait, {})
 
-        # [✅ 오류 수정] DB에서 가져온 설정값이 숫자(int, float)여도 안전하게 처리하도록 수정합니다.
-        
-        # 1. bite_range 수정: eval()은 문자열에만 사용 가능하므로 타입을 확인합니다.
         bite_range_config = get_config("FISHING_BITE_RANGE", "[8.0, 12.0]")
         self.bite_range = eval(bite_range_config) if isinstance(bite_range_config, str) else bite_range_config
 
-        # 2. bite_reaction_time 수정: str()로 먼저 변환하여 .strip() 오류를 방지합니다.
         bite_reaction_time_config = get_config("FISHING_BITE_REACTION_TIME", "3.0")
         self.bite_reaction_time = float(str(bite_reaction_time_config).strip('"'))
 
-        # 3. big_catch_threshold 수정: str()로 먼저 변환하여 .strip() 오류를 방지합니다.
         big_catch_threshold_config = get_config("FISHING_BIG_CATCH_THRESHOLD", "70.0")
         self.big_catch_threshold = float(str(big_catch_threshold_config).strip('"'))
 
@@ -198,14 +193,12 @@ class FishingPanelView(ui.View):
         user_id = interaction.user.id
         lock = self.user_locks.setdefault(user_id, asyncio.Lock())
         if lock.locked():
-            msg = await interaction.response.send_message("現在、以前のリクエストを処理中です。しばらくお待ちください。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.response.send_message("現在、以前のリクエストを処理中です。しばらくお待ちください。", ephemeral=True, view=CloseButtonView(interaction.user))
             return
 
         async with lock:
             if user_id in self.fishing_cog.active_fishing_sessions_by_user:
-                msg = await interaction.response.send_message("すでに釣りを開始しています。", ephemeral=True)
-                await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+                await interaction.response.send_message("すでに釣りを開始しています。", ephemeral=True, view=CloseButtonView(interaction.user))
                 return
 
             await interaction.response.defer(ephemeral=True)
@@ -221,10 +214,11 @@ class FishingPanelView(ui.View):
                 rod, item_db = gear.get('rod', BARE_HANDS), get_item_database()
                 if rod == BARE_HANDS:
                     if any('竿' in item_name for item_name in inventory if item_db.get(item_name, {}).get('category') == '装備'):
-                        msg = await interaction.followup.send("❌ プロフィール画面から釣竿を装備してください。", ephemeral=True)
+                        # [✅ 오류 수정] CloseButtonView 호출 방식 변경
+                        await interaction.followup.send("❌ プロフィール画面から釣竿を装備してください。", ephemeral=True, view=CloseButtonView(user))
                     else:
-                        msg = await interaction.followup.send(f"❌ 釣りをするには、まず商店で「{DEFAULT_ROD}」を購入してください。", ephemeral=True)
-                    await msg.edit(view=CloseButtonView(user, target_message=msg))
+                        # [✅ 오류 수정] CloseButtonView 호출 방식 변경
+                        await interaction.followup.send(f"❌ 釣りをするには、まず商店で「{DEFAULT_ROD}」を購入してください。", ephemeral=True, view=CloseButtonView(user))
                     return
                 
                 if location_type == 'sea':
@@ -233,8 +227,8 @@ class FishingPanelView(ui.View):
                     required_tier_for_sea = int(req_tier_str)
 
                     if rod_tier < required_tier_for_sea:
-                        msg = await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD_NAME}」(等級{required_tier_for_sea})以上の性能を持つ釣竿を**装備**する必要があります。", ephemeral=True)
-                        await msg.edit(view=CloseButtonView(user, target_message=msg))
+                        # [✅ 오류 수정] CloseButtonView 호출 방식 변경
+                        await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD_NAME}」(等級{required_tier_for_sea})以上の性能を持つ釣竿を**装備**する必要があります。", ephemeral=True, view=CloseButtonView(user))
                         return
 
                 self.fishing_cog.active_fishing_sessions_by_user.add(user.id)
@@ -255,8 +249,8 @@ class FishingPanelView(ui.View):
             except Exception as e:
                 self.fishing_cog.active_fishing_sessions_by_user.discard(user_id)
                 logger.error(f"낚시 게임 시작 중 예측 못한 오류: {e}", exc_info=True)
-                msg = await interaction.followup.send(f"❌ 釣りの開始中に予期せぬエラーが発生しました。", ephemeral=True)
-                await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+                # [✅ 오류 수정] CloseButtonView 호출 방식 변경
+                await interaction.followup.send(f"❌ 釣りの開始中に予期せぬエラーが発生しました。", ephemeral=True, view=CloseButtonView(interaction.user))
 
 class Fishing(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -267,7 +261,6 @@ class Fishing(commands.Cog):
         logger.info("Fishing Cog가 성공적으로 초기화되었습니다.")
 
     async def handle_level_up_event(self, user: discord.User, result_data: Dict):
-        """레벨업 시 발생하는 이벤트를 처리하는 중앙 함수"""
         if not result_data or not result_data.get('leveled_up'):
             return
 
@@ -295,7 +288,8 @@ class Fishing(commands.Cog):
         fish_name_raw = fish_field.value.split('**')[1] if '**' in fish_field.value else fish_field.value
         fish_data = next((loot for loot in get_fishing_loot() if loot['name'] == fish_name_raw), None)
         if not fish_data: return
-        size_cm_str, size_cm = size_field.value.strip('`cm`'), float(size_cm_str)
+        size_cm_str = size_field.value.strip('`cm`')
+        size_cm = float(size_cm_str) if size_cm_str else 0.0
         value = int(fish_data.get("base_value", 0) + (size_cm * fish_data.get("size_multiplier", 0)))
         field_value = get_string("log_legendary_catch.field_value", emoji=fish_data.get('emoji','👑'), name=fish_name_raw, size=size_cm_str, value=f"{value:,}", currency_icon=get_config('CURRENCY_ICON', '🪙'))
         embed = discord.Embed(
