@@ -11,12 +11,9 @@ from utils.database import (
     get_wallet, update_wallet, get_config, get_panel_components_from_db,
     save_panel_id, get_panel_id, get_embed_from_db
 )
-# [✅ 수정] helpers에서 표준 CloseButtonView를 import 합니다.
 from utils.helpers import format_embed_from_db, CloseButtonView
 
 logger = logging.getLogger(__name__)
-
-# [✅ 수정] 중복되는 CloseButtonView 클래스 정의를 삭제했습니다.
 
 # 베팅 금액을 입력받는 모달
 class BetAmountModal(ui.Modal, title="ベット額の入力"):
@@ -31,14 +28,22 @@ class BetAmountModal(ui.Modal, title="ベット額の入力"):
         try:
             bet_amount = int(self.amount.value)
             if bet_amount <= 0 or bet_amount % 10 != 0:
-                msg = await interaction.response.send_message("❌ 10コイン単位の正の整数のみ入力できます。", ephemeral=True)
-                await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+                # [✅ 오류 수정] 메시지를 보낼 때 View를 함께 보냅니다.
+                await interaction.response.send_message(
+                    "❌ 10コイン単位の正の整数のみ入力できます。", 
+                    ephemeral=True, 
+                    view=CloseButtonView(interaction.user)
+                )
                 return
 
             wallet = await get_wallet(interaction.user.id)
             if wallet.get('balance', 0) < bet_amount:
-                msg = await interaction.response.send_message(f"❌ 残高が不足しています。(現在の残高: {wallet.get('balance', 0):,}{self.currency_icon})", ephemeral=True)
-                await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+                # [✅ 오류 수정] 메시지를 보낼 때 View를 함께 보냅니다.
+                await interaction.response.send_message(
+                    f"❌ 残高が不足しています。(現在の残高: {wallet.get('balance', 0):,}{self.currency_icon})", 
+                    ephemeral=True, 
+                    view=CloseButtonView(interaction.user)
+                )
                 return
             
             view = NumberSelectView(interaction.user, bet_amount, self.cog)
@@ -47,15 +52,21 @@ class BetAmountModal(ui.Modal, title="ベット額の入力"):
             self.cog.active_sessions.add(interaction.user.id)
         
         except ValueError:
-            msg = await interaction.response.send_message("❌ 数字のみ入力してください。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            # [✅ 오류 수정] 메시지를 보낼 때 View를 함께 보냅니다.
+            await interaction.response.send_message(
+                "❌ 数字のみ入力してください。", 
+                ephemeral=True, 
+                view=CloseButtonView(interaction.user)
+            )
         except Exception as e:
             logger.error(f"サイコロのベット処理中にエラー: {e}", exc_info=True)
+            message_content = "❌ 処理中にエラーが発生しました。"
+            view = CloseButtonView(interaction.user)
             if not interaction.response.is_done():
-                msg = await interaction.response.send_message("❌ 処理中にエラーが発生しました。", ephemeral=True)
+                await interaction.response.send_message(message_content, ephemeral=True, view=view)
             else:
-                msg = await interaction.followup.send("❌ 処理中にエラーが発生しました。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+                # followup.send는 수정 가능한 메시지 객체를 반환하므로 기존 코드도 동작하지만, 일관성을 위해 수정합니다.
+                await interaction.followup.send(message_content, ephemeral=True, view=view)
 
 # 1~6 숫자 버튼이 있는 View
 class NumberSelectView(ui.View):
@@ -141,8 +152,12 @@ class DiceGamePanelView(ui.View):
 
     async def start_game_callback(self, interaction: discord.Interaction):
         if interaction.user.id in self.cog.active_sessions:
-            msg = await interaction.response.send_message("❌ すでにゲームをプレイ中です。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            # [✅ 오류 수정] 메시지를 보낼 때 View를 함께 보냅니다.
+            await interaction.response.send_message(
+                "❌ すでにゲームをプレイ中です。", 
+                ephemeral=True, 
+                view=CloseButtonView(interaction.user)
+            )
             return
         await interaction.response.send_modal(BetAmountModal(self.cog))
 
