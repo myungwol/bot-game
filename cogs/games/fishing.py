@@ -7,8 +7,9 @@ import random
 import asyncio
 import logging
 import time
-import json # [✅ 추가] JSON 파싱을 위해 import
-from typing import Optional, Set, Dict
+import json
+# [✅ 버그 수정] List를 import 합니다.
+from typing import Optional, Set, Dict, List
 
 from utils.database import (
     update_wallet, get_inventory, update_inventory, add_to_aquarium,
@@ -37,7 +38,6 @@ class FishingGameView(ui.View):
         item_db = get_item_database()
         self.rod_data = item_db.get(self.used_rod, {})
         
-        # [✅ 수정] bite_range를 직접 받도록 변경
         self.bite_range = bite_range
 
         bite_reaction_time_config = get_config("FISHING_BITE_REACTION_TIME", "3.0")
@@ -236,7 +236,6 @@ class FishingPanelView(ui.View):
                 rod_data = item_db.get(rod, {})
                 loot_bonus = rod_data.get('loot_bonus', 0.0)
                 
-                # [✅ 수정] 미끼에 따라 입질 시간을 동적으로 설정
                 default_times = {
                     "エサなし": [10.0, 15.0],
                     "普通の釣りエサ": [7.0, 12.0],
