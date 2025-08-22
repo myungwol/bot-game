@@ -9,7 +9,6 @@ from utils.database import (
     get_wallet, update_wallet, get_config, get_panel_components_from_db,
     save_panel_id, get_panel_id, get_embed_from_db
 )
-# [✅ 개선] helpers에서 CloseButtonView를 import 합니다.
 from utils.helpers import format_embed_from_db, CloseButtonView
 
 logger = logging.getLogger(__name__)
@@ -36,16 +35,16 @@ class BetAmountModal(ui.Modal, title="ベット額の入力"):
                 msg = await interaction.response.send_message(f"❌ 残高が不足しています。(現在の残高: {wallet.get('balance', 0):,}{self.currency_icon})", ephemeral=True)
                 await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
                 return
-            
+            
             view = NumberSelectView(interaction.user, bet_amount, self.cog)
             await interaction.response.send_message(f"ベット額 `{bet_amount:,}`{self.currency_icon}を設定しました。次にサイコロの出る目を選択してください。", view=view, ephemeral=True)
             view.message = await interaction.original_response() # 메시지 객체 저장
             self.cog.active_sessions.add(interaction.user.id)
 
+        # [✅ 오류 수정] IndentationError를 해결하기 위해 들여쓰기를 수정합니다.
         except ValueError:
             msg = await interaction.response.send_message("❌ 数字のみ入力してください。", ephemeral=True)
             await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
-
         except Exception as e:
             logger.error(f"サイコロのベット処理中にエラー: {e}", exc_info=True)
             if not interaction.response.is_done():
@@ -106,16 +105,16 @@ class NumberSelectView(ui.View):
                     chosen_number=chosen_number, dice_result=dice_result,
                     currency_icon=self.currency_icon
                 )
-        
+        
         self.cog.active_sessions.discard(self.user.id)
         await self.cog.regenerate_panel(interaction.channel, last_game_log=result_embed)
-        
+        
         try:
             await interaction.delete_original_response()
         except discord.NotFound:
             pass
         self.stop()
-    
+    
     async def on_timeout(self):
         self.cog.active_sessions.discard(self.user.id)
         if self.message:
@@ -135,7 +134,7 @@ class DiceGamePanelView(ui.View):
         components = await get_panel_components_from_db("panel_dice_game")
         for button_info in components:
             button = ui.Button(
-                label=button_info.get('label'), style=discord.ButtonStyle.primary, 
+                label=button_info.get('label'), style=discord.ButtonStyle.primary, 
                 emoji=button_info.get('emoji'), custom_id=button_info.get('component_key')
             )
             button.callback = self.start_game_callback
@@ -161,13 +160,13 @@ class DiceGame(commands.Cog):
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_dice_game", last_game_log: Optional[discord.Embed] = None):
         embed_key = "panel_dice_game"
-        
+        
         if panel_info := get_panel_id(panel_key):
             if (old_channel := self.bot.get_channel(panel_info['channel_id'])) and (old_message_id := panel_info.get('message_id')):
                 try:
                     await (await old_channel.fetch_message(old_message_id)).delete()
                 except (discord.NotFound, discord.Forbidden): pass
-        
+        
         if last_game_log:
             try: await channel.send(embed=last_game_log)
             except Exception as e: logger.error(f"サイコロゲームのログメッセージ送信に失敗: {e}")
@@ -180,7 +179,7 @@ class DiceGame(commands.Cog):
         view = DiceGamePanelView(self)
         await view.setup_buttons()
         self.bot.add_view(view)
-        
+        
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。(チャンネル: #{channel.name})")
