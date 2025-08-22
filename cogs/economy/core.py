@@ -1,4 +1,4 @@
-# bot-game/cogs/core.py
+# bot-game/cogs/economy/core.py
 
 import discord
 from discord.ext import commands, tasks
@@ -6,9 +6,10 @@ from discord import app_commands, ui
 import random
 import asyncio
 import logging
+# [✅ 버그 수정] time 모듈을 별도로 import 합니다.
 import time
-from typing import Optional, Dict, List
-from datetime import datetime, timezone, timedelta, time
+# [✅ 버그 수정] time 클래스와의 충돌을 피하기 위해 dt_time으로 import 합니다.
+from datetime import datetime, timezone, timedelta, time as dt_time
 
 from utils.database import (
     get_wallet, update_wallet,
@@ -23,7 +24,7 @@ PROGRESS_TABLE = "user_progress"
 ACTIVITY_PROGRESS_TABLE = "user_activity_progress"
 
 JST = timezone(timedelta(hours=9))
-JST_MIDNIGHT_RESET = time(hour=0, minute=1, tzinfo=JST)
+JST_MIDNIGHT_RESET = dt_time(hour=0, minute=1, tzinfo=JST)
 
 class EconomyCore(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -63,6 +64,7 @@ class EconomyCore(commands.Cog):
         logger.info(f"유저 {user.display_name}(ID: {user.id})가 레벨 {new_level}(으)로 레벨업했습니다.")
         
         job_advancement_levels = get_config("GAME_CONFIG", {}).get("JOB_ADVANCEMENT_LEVELS", [50, 100])
+        # [✅ 버그 수정] time.time()을 올바르게 호출합니다.
         if new_level in job_advancement_levels:
             await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": time.time()})
             logger.info(f"유저가 전직 가능 레벨({new_level})에 도달하여 DB에 요청을 기록했습니다.")
