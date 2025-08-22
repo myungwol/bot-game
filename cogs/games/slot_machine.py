@@ -10,7 +10,8 @@ from utils.database import (
     get_wallet, update_wallet, get_config,
     save_panel_id, get_panel_id, get_embed_from_db
 )
-from utils.helpers import format_embed_from_db
+# [✅ 개선] helpers에서 CloseButtonView를 import 합니다.
+from utils.helpers import format_embed_from_db, CloseButtonView
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +33,14 @@ class BetAmountModal(ui.Modal, title="ベット額の入力 (スロット)"):
         try:
             bet_amount = int(self.amount.value)
             if bet_amount <= 0 or bet_amount % 100 != 0:
-                await interaction.response.send_message("❌ 100コイン単位の正の整数のみ入力できます。", ephemeral=True, delete_after=10)
+                msg = await interaction.response.send_message("❌ 100コイン単位の正の整数のみ入力できます。", ephemeral=True)
+                await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
                 return
 
             wallet = await get_wallet(interaction.user.id)
             if wallet.get('balance', 0) < bet_amount:
-                await interaction.response.send_message(f"❌ 残高が不足しています。(現在の残高: {wallet.get('balance', 0):,}{self.currency_icon})", ephemeral=True, delete_after=10)
+                msg = await interaction.response.send_message(f"❌ 残高が不足しています。(現在の残高: {wallet.get('balance', 0):,}{self.currency_icon})", ephemeral=True)
+                await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
                 return
             
             self.cog.active_sessions.add(interaction.user.id)
@@ -47,11 +50,17 @@ class BetAmountModal(ui.Modal, title="ベット額の入力 (スロット)"):
             await game_view.start_game(interaction)
 
         except ValueError:
-            await interaction.response.send_message("❌ 数字のみ入力してください。", ephemeral=True, delete_after=10)
+            msg = await interaction.response.send_message("❌ 数字のみ入力してください。", ephemeral=True)
+            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            
         except Exception as e:
             logger.error(f"スロットのベット処理中にエラー: {e}", exc_info=True)
             if not interaction.response.is_done():
-                await interaction.response.send_message("❌ 処理中にエラーが発生しました。", ephemeral=True, delete_after=10)
+                msg = await interaction.response.send_message("❌ 処理中にエラーが発生しました。", ephemeral=True)
+            else:
+                msg = await interaction.followup.send("❌ 処理中にエラーが発生しました。", ephemeral=True)
+            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+
 
 class SlotMachineGameView(ui.View):
     def __init__(self, user: discord.Member, bet_amount: int, cog_instance: 'SlotMachine'):
@@ -178,11 +187,13 @@ class SlotMachinePanelView(ui.View):
 
     async def start_game_callback(self, interaction: discord.Interaction):
         if len(self.cog.active_sessions) >= MAX_ACTIVE_SLOTS:
-            await interaction.response.send_message(f"❌ すべてのスロットマシンが使用中です。しばらく待ってからもう一度お試しください。({len(self.cog.active_sessions)}/{MAX_ACTIVE_SLOTS})", ephemeral=True, delete_after=10)
+            msg = await interaction.response.send_message(f"❌ すべてのスロットマシンが使用中です。しばらく待ってからもう一度お試しください。({len(self.cog.active_sessions)}/{MAX_ACTIVE_SLOTS})", ephemeral=True)
+            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
             return
 
         if interaction.user.id in self.cog.active_sessions:
-            await interaction.response.send_message("❌ すでにゲームをプレイ中です。", ephemeral=True, delete_after=5)
+            msg = await interaction.response.send_message("❌ すでにゲームをプレイ中です。", ephemeral=True)
+            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
             return
         await interaction.response.send_modal(BetAmountModal(self.cog))
 
