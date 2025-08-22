@@ -1,4 +1,4 @@
-# bot-game/cogs/dice_game.py
+# bot-game/cogs/games/dice_game.py
 
 import discord
 from discord.ext import commands
@@ -15,7 +15,6 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# 베팅 금액을 입력받는 모달
 class BetAmountModal(ui.Modal, title="ベット額の入力"):
     amount = ui.TextInput(label="金額 (10コイン単位)", placeholder="例: 100", required=True)
 
@@ -30,7 +29,7 @@ class BetAmountModal(ui.Modal, title="ベット額の入力"):
             if bet_amount <= 0 or bet_amount % 10 != 0:
                 await interaction.response.send_message(
                     "❌ 10コイン単位の正の整数のみ入力できます。", 
-                    ephemeral=True, 
+                    ephemeral=True
                 )
                 return
 
@@ -38,7 +37,7 @@ class BetAmountModal(ui.Modal, title="ベット額の入力"):
             if wallet.get('balance', 0) < bet_amount:
                 await interaction.response.send_message(
                     f"❌ 残高が不足しています。(現在の残高: {wallet.get('balance', 0):,}{self.currency_icon})", 
-                    ephemeral=True, 
+                    ephemeral=True
                 )
                 return
             
@@ -50,19 +49,16 @@ class BetAmountModal(ui.Modal, title="ベット額の入力"):
         except ValueError:
             await interaction.response.send_message(
                 "❌ 数字のみ入力してください。", 
-                ephemeral=True, 
-                view=CloseButtonView(interaction.user)
+                ephemeral=True
             )
         except Exception as e:
             logger.error(f"サイコロのベット処理中にエラー: {e}", exc_info=True)
             message_content = "❌ 処理中にエラーが発生しました。"
-            view = CloseButtonView(interaction.user)
             if not interaction.response.is_done():
-                await interaction.response.send_message(message_content, ephemeral=True, view=view)
+                await interaction.response.send_message(message_content, ephemeral=True)
             else:
-                await interaction.followup.send(message_content, ephemeral=True, view=view)
+                await interaction.followup.send(message_content, ephemeral=True)
 
-# 1~6 숫자 버튼이 있는 View
 class NumberSelectView(ui.View):
     def __init__(self, user: discord.Member, bet_amount: int, cog_instance: 'DiceGame'):
         super().__init__(timeout=60)
@@ -72,8 +68,6 @@ class NumberSelectView(ui.View):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.message: Optional[discord.InteractionMessage] = None
 
-        # [✅ 버그 수정] 1부터 6까지의 숫자를 선택하는 버튼을 동적으로 생성합니다.
-        # 이 부분이 누락되어 버튼이 표시되지 않았습니다.
         for i in range(1, 7):
             button = ui.Button(
                 label=str(i),
@@ -139,7 +133,6 @@ class NumberSelectView(ui.View):
             except discord.NotFound:
                 pass
 
-# 메인 패널 View
 class DiceGamePanelView(ui.View):
     def __init__(self, cog_instance: 'DiceGame'):
         super().__init__(timeout=None)
@@ -160,13 +153,11 @@ class DiceGamePanelView(ui.View):
         if interaction.user.id in self.cog.active_sessions:
             await interaction.response.send_message(
                 "❌ すでにゲームをプレイ中です。", 
-                ephemeral=True, 
-                view=CloseButtonView(interaction.user)
+                ephemeral=True
             )
             return
         await interaction.response.send_modal(BetAmountModal(self.cog))
 
-# 메인 Cog
 class DiceGame(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
