@@ -9,7 +9,7 @@ from utils.database import (
     get_wallet, supabase, get_config,
     save_panel_id, get_panel_id, get_embed_from_db, update_wallet
 )
-from utils.helpers import format_embed_from_db, CloseButtonView
+from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,6 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
                 await interaction.followup.send(
                     f"❌ 残高が不足しています。(現在の残高: {sender_wallet.get('balance', 0):,}{self.currency_icon})", 
                     ephemeral=True,
-                    view=CloseButtonView(interaction.user)
                 )
                 return
 
@@ -45,7 +44,7 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
             if not (response and hasattr(response, 'data') and response.data is True):
                  raise Exception("送金に失敗しました。残高不足またはデータベースエラーの可能性があります。")
 
-            await interaction.followup.send("✅ 送金が完了しました。パネルを更新します。", ephemeral=True, view=CloseButtonView(interaction.user))
+            await interaction.followup.send("✅ 送金が完了しました。パネルを更新します。", ephemeral=True)
 
             log_embed = None
             if embed_data := await get_embed_from_db("log_coin_transfer"):
@@ -56,10 +55,10 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
                  await self.cog.regenerate_panel(log_channel, last_transfer_log=log_embed)
 
         except ValueError:
-            await interaction.followup.send("❌ 金額は数字で入力してください。", ephemeral=True, view=CloseButtonView(interaction.user))
+            await interaction.followup.send("❌ 金額は数字で入力してください。", ephemeral=True)
         except Exception as e:
             logger.error(f"송금 처리 중 오류 발생: {e}", exc_info=True)
-            await interaction.followup.send("❌ 送金中に予期せぬエラーが発生しました。", ephemeral=True, view=CloseButtonView(interaction.user))
+            await interaction.followup.send("❌ 送金中に予期せぬエラーが発生しました。", ephemeral=True)
 
 class AtmPanelView(ui.View):
     def __init__(self, cog_instance: 'Atm'):
