@@ -1,4 +1,5 @@
-# cogs/fishing.py
+
+# cogs/games/fishing.py
 
 import discord
 from discord.ext import commands
@@ -18,10 +19,35 @@ from utils.database import (
     increment_progress
 )
 
+# [✅ 개선] farm.py에서 가져온 안정적인 CloseButtonView를 여기에도 추가합니다.
+# 이 클래스는 여러 파일에서 사용될 수 있지만, 유지보수 편의를 위해 각 파일에 포함시키는 것도 좋은 방법입니다.
+# 또는 별도의 ui_components.py 같은 파일로 분리할 수도 있습니다.
 logger = logging.getLogger(__name__)
 
-# 주석: 바다 낚시에 필요한 최소 등급을 '3'으로 설정합니다. (철 낚싯대)
-REQUIRED_TIER_FOR_SEA = 3
+class CloseButtonView(ui.View):
+    def __init__(self, user: discord.User, target_message: discord.Message = None):
+        super().__init__(timeout=180)
+        self.user = user
+        self.target_message = target_message
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.user.id
+        
+    @ui.button(label="閉じる", style=discord.ButtonStyle.secondary)
+    async def close_button(self, interaction: discord.Interaction, button: ui.Button):
+        try:
+            await interaction.response.defer()
+            message_to_delete = self.target_message or interaction.message
+            if message_to_delete:
+                await message_to_delete.delete()
+        except discord.NotFound:
+            pass
+        except Exception as e:
+            logger.error(f"닫기 버튼 처리 중 예외 발생: {e}", exc_info=True)
+
+
+# [✅ 유지보수] 하드코딩된 값을 제거합니다. 이 값은 이제 DB에서 불러옵니다.
+# REQUIRED_TIER_FOR_SEA = 3 
 INTERMEDIATE_ROD_NAME = "鉄の釣竿"
 
 class FishingGameView(ui.View):
@@ -34,10 +60,10 @@ class FishingGameView(ui.View):
         self.location_type = location_type
         
         item_db = get_item_database()
-        self.rod_data = item_db.get(self.used_rod, {}) # 주석: 낚싯대 정보를 클래스 변수로 저장
+        self.rod_data = item_db.get(self.used_rod, {})
         bait_data = item_db.get(self.used_bait, {})
 
-        self.bite_range = [8.0, 12.0] # 낚시 시간 범위 고정 (미끼로 조절 가능)
+        self.bite_range = [8.0, 12.0]
         self.bite_reaction_time = get_config("FISHING_BITE_REACTION_TIME", 3.0)
         self.big_catch_threshold = get_config("FISHING_BIG_CATCH_THRESHOLD", 70.0)
 
@@ -73,8 +99,6 @@ class FishingGameView(ui.View):
         rod_tier = self.rod_data.get('tier', 0)
         rod_bonus = self.rod_data.get('loot_bonus', 0.0)
         
-        # --- [핵심] 고래 낚시 가능 여부 확인 ---
-        # 주석: 낚싯대 등급이 5 미만이면, loot_pool에서 'クジラ'를 제거합니다.
         if rod_tier < 5:
             loot_pool = [item for item in base_loot if item.get('name') != 'クジラ']
         else:
@@ -83,18 +107,15 @@ class FishingGameView(ui.View):
         if not loot_pool:
             return (discord.Embed(title="エラー", description="この場所では何も釣れないようです。", color=discord.Color.red()), False, False, False)
         
-        # --- [핵심] 낚싯대 등급별 확률 보너스 적용 ---
-        # 주석: 각 아이템의 가중치를 계산할 때, 낚싯대의 loot_bonus를 적용합니다.
         weights = []
         for item in loot_pool:
             weight = item['weight']
-            # 주석: 'base_value'가 있는 아이템(쓰레기가 아닌 물고기)에만 보너스를 적용합니다.
             if item.get('base_value') is not None:
                 weight *= (1.0 + rod_bonus)
             weights.append(weight)
 
         catch_proto = random.choices(loot_pool, weights=weights, k=1)[0]
-        is_legendary_catch, is_big_catch, log_publicly = catch_proto.get('name') == '伝説の魚', False, False # 'クジラ'와 별개로 전설의 물고기 처리
+        is_legendary_catch, is_big_catch, log_publicly = catch_proto.get('name') == '伝説の魚', False, False
         
         embed = discord.Embed()
         if catch_proto.get("min_size") is not None:
@@ -185,11 +206,15 @@ class FishingPanelView(ui.View):
         user_id = interaction.user.id
         lock = self.user_locks.setdefault(user_id, asyncio.Lock())
         if lock.locked():
-            return await interaction.response.send_message("現在、以前のリクエストを処理中です。しばらくお待ちください。", ephemeral=True, delete_after=5)
+            msg = await interaction.response.send_message("現在、以前のリクエストを処理中です。しばらくお待ちください。", ephemeral=True)
+            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            return
 
         async with lock:
             if user_id in self.fishing_cog.active_fishing_sessions_by_user:
-                return await interaction.response.send_message("すでに釣りを開始しています。", ephemeral=True, delete_after=5)
+                msg = await interaction.response.send_message("すでに釣りを開始しています。", ephemeral=True)
+                await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+                return
 
             await interaction.response.defer(ephemeral=True)
             if last_message := self.fishing_cog.last_result_messages.pop(user_id, None):
@@ -198,34 +223,37 @@ class FishingPanelView(ui.View):
             
             try:
                 custom_id, location_type = interaction.data['custom_id'], interaction.data['custom_id'].split('_')[-1]
-                
-                # [✅ 최종 수정] uid_str 대신 interaction.user 객체를 직접 사용합니다.
                 user = interaction.user
-                
-                # [✅ 최종 수정] get_user_gear와 get_inventory에 user 객체를 전달합니다.
                 gear, inventory = await asyncio.gather(get_user_gear(user), get_inventory(user))
                 
                 rod, item_db = gear.get('rod', BARE_HANDS), get_item_database()
                 if rod == BARE_HANDS:
                     if any('竿' in item_name for item_name in inventory if item_db.get(item_name, {}).get('category') == '装備'):
-                        return await interaction.followup.send("❌ プロフィール画面から釣竿を装備してください。", ephemeral=True)
-                    return await interaction.followup.send(f"❌ 釣りをするには、まず商店で「{DEFAULT_ROD}」を購入してください。", ephemeral=True)
+                        msg = await interaction.followup.send("❌ プロフィール画面から釣竿を装備してください。", ephemeral=True)
+                    else:
+                        msg = await interaction.followup.send(f"❌ 釣りをするには、まず商店で「{DEFAULT_ROD}」を購入してください。", ephemeral=True)
+                    await msg.edit(view=CloseButtonView(user, target_message=msg))
+                    return
                 
                 if location_type == 'sea':
                     rod_tier = item_db.get(rod, {}).get('tier', 0)
-                    if rod_tier < REQUIRED_TIER_FOR_SEA:
-                        return await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD_NAME}」(等級{REQUIRED_TIER_FOR_SEA})以上の性能を持つ釣竿を**装備**する必要があります。", ephemeral=True)
+                    # [✅ 유지보수] DB에서 설정값을 불러옵니다.
+                    req_tier_str = get_config("FISHING_SEA_REQ_TIER", "3").strip('"')
+                    required_tier_for_sea = int(req_tier_str)
+
+                    if rod_tier < required_tier_for_sea:
+                        msg = await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD_NAME}」(等級{required_tier_for_sea})以上の性能を持つ釣竿を**装備**する必要があります。", ephemeral=True)
+                        await msg.edit(view=CloseButtonView(user, target_message=msg))
+                        return
 
                 self.fishing_cog.active_fishing_sessions_by_user.add(user.id)
                 bait = gear.get('bait', 'エサなし')
                 if bait != "エサなし":
                     if inventory.get(bait, 0) > 0:
-                        # [✅ 최종 수정] update_inventory는 여전히 user_id 문자열을 사용합니다.
                         await update_inventory(str(user.id), bait, -1)
                         inventory[bait] -= 1
                     else:
                         bait = "エサなし"
-                        # [✅ 최종 수정] set_user_gear는 여전히 user_id 문자열을 사용합니다.
                         await set_user_gear(str(user.id), bait="エサなし")
 
                 location_name = "川" if location_type == "river" else "海"
@@ -236,7 +264,8 @@ class FishingPanelView(ui.View):
             except Exception as e:
                 self.fishing_cog.active_fishing_sessions_by_user.discard(user_id)
                 logger.error(f"낚시 게임 시작 중 예측 못한 오류: {e}", exc_info=True)
-                await interaction.followup.send(f"❌ 釣りの開始中に予期せぬエラーが発生しました。", ephemeral=True)
+                msg = await interaction.followup.send(f"❌ 釣りの開始中に予期せぬエラーが発生しました。", ephemeral=True)
+                await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
 
 class Fishing(commands.Cog):
     def __init__(self, bot: commands.Bot):
