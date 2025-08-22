@@ -19,6 +19,9 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
+# [✅ 수정] 실제 DB 테이블 이름을 반영합니다.
+ACTIVITY_PROGRESS_TABLE = "user_activity_progress"
+
 class EconomyCore(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -103,11 +106,11 @@ class EconomyCore(commands.Cog):
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
-        if member.bot:
-            return
+        if member.bot: return
 
         def is_valid_channel(state: discord.VoiceState):
-            return state.channel and state.channel.id != member.guild.afk_channel.id if member.guild.afk_channel else state.channel is not None
+            afk_id = member.guild.afk_channel.id if member.guild.afk_channel else None
+            return state.channel and state.channel.id != afk_id
 
         def is_active_state(state: discord.VoiceState):
             return not state.self_deaf and not state.self_mute
@@ -126,6 +129,7 @@ class EconomyCore(commands.Cog):
 
                 if duration_minutes > 0:
                     try:
+                        # [✅ 수정] RPC 함수가 user_activity_progress 테이블을 업데이트하도록 확인 필요
                         params = {'p_user_id': str(member.id), 'p_voice_minutes': duration_minutes}
                         await supabase.rpc('increment_user_progress', params).execute()
                     except Exception as e:
@@ -140,8 +144,8 @@ class EconomyCore(commands.Cog):
             voice_reward_range_config = str(get_config("VOICE_REWARD_RANGE", "[10, 15]"))
             voice_reward_range = eval(voice_reward_range_config)
             
-            # [✅ 오류 수정] 'new_voice_progress'를 실제 테이블 컬럼명인 'daily_voice_minutes'로 변경
-            voice_response = await supabase.table('user_progress').select('user_id, daily_voice_minutes').gte('daily_voice_minutes', voice_req_min).execute()
+            # [✅ 오류 수정] 실제 테이블명과 컬럼명으로 수정
+            voice_response = await supabase.table(ACTIVITY_PROGRESS_TABLE).select('user_id, voice_progress').gte('voice_progress', voice_req_min).execute()
 
             if voice_response and voice_response.data:
                 for record in voice_response.data:
@@ -157,6 +161,7 @@ class EconomyCore(commands.Cog):
                         if res and res.data:
                             await self.handle_level_up_event(member, res.data[0])
                     finally:
+                        # [✅ 수정] RPC 함수가 user_activity_progress 테이블을 업데이트하도록 확인 필요
                         reset_params = {'p_user_id': str(member.id), 'p_reset_voice': True}
                         await supabase.rpc('reset_user_progress', reset_params).execute()
 
@@ -164,7 +169,8 @@ class EconomyCore(commands.Cog):
             chat_req = int(chat_req_config)
             chat_reward_range_config = str(get_config("CHAT_REWARD_RANGE", "[5, 10]"))
             chat_reward_range = eval(chat_reward_range_config)
-            chat_response = await supabase.table('user_progress').select('user_id, chat_progress').gte('chat_progress', chat_req).execute()
+            # [✅ 오류 수정] 실제 테이블명으로 수정
+            chat_response = await supabase.table(ACTIVITY_PROGRESS_TABLE).select('user_id, chat_progress').gte('chat_progress', chat_req).execute()
 
             if chat_response and chat_response.data:
                 for record in chat_response.data:
@@ -180,6 +186,7 @@ class EconomyCore(commands.Cog):
                         if res and res.data:
                             await self.handle_level_up_event(member, res.data[0])
                     finally:
+                        # [✅ 수정] RPC 함수가 user_activity_progress 테이블을 업데이트하도록 확인 필요
                         reset_params = {'p_user_id': str(member.id), 'p_reset_chat': True}
                         await supabase.rpc('reset_user_progress', reset_params).execute()
 
