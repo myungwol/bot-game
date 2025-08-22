@@ -1,9 +1,12 @@
+# cogs/games/quests.py
+
 import discord
 from discord.ext import commands
 from discord import ui
 import logging
 import time
 from typing import Optional, Dict, Any
+from datetime import datetime, timezone, timedelta
 
 from utils.database import (
     get_user_progress, has_checked_in_today,
@@ -14,6 +17,8 @@ from utils.database import (
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
+
+JST = timezone(timedelta(hours=9))
 
 QUEST_REWARDS = {
     "daily": {"attendance": 10, "voice": 55, "fishing": 35, "all_complete": 100},
@@ -44,16 +49,28 @@ class QuestView(ui.View):
         await interaction.edit_original_response(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
+        # get_user_progress는 user_progress 테이블을 조회합니다. (정상)
         progress = await get_user_progress(self.user.id)
         has_attended_today = await has_checked_in_today(self.user.id)
         embed = discord.Embed(color=0x2ECC71)
         embed.set_author(name=f"{self.user.display_name}さんのクエスト", icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
         quests_to_show = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
         rewards = QUEST_REWARDS[self.current_tab]
+        
+        # [✅ DB 구조 확인] 스크린샷에 나온 컬럼 이름과 일치하는지 확인합니다.
         progress_values = {
-            "daily": {"attendance": 1 if has_attended_today else 0, "voice": progress.get('daily_voice_minutes', 0), "fishing": progress.get('daily_fish_count', 0)},
-            "weekly": {"attendance": progress.get('weekly_attendance_count', 0), "voice": progress.get('weekly_voice_minutes', 0), "fishing": progress.get('weekly_fish_count', 0)}
+            "daily": {
+                "attendance": 1 if has_attended_today else 0, 
+                "voice": progress.get('daily_voice_minutes', 0), 
+                "fishing": progress.get('daily_fish_count', 0)
+            },
+            "weekly": {
+                "attendance": progress.get('weekly_attendance_count', 0), 
+                "voice": progress.get('weekly_voice_minutes', 0), 
+                "fishing": progress.get('weekly_fish_count', 0)
+            }
         }[self.current_tab]
+
         embed.title = "📅 デイリークエスト" if self.current_tab == "daily" else "🗓️ ウィークリークエスト"
         all_complete = True
         for key, quest in quests_to_show.items():
@@ -97,42 +114,60 @@ class QuestView(ui.View):
         reward_details = []
         quests_to_check = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
         rewards = QUEST_REWARDS[self.current_tab]
+        
         progress_values = {
-            "daily": {"attendance": 1 if has_attended_today else 0, "voice": progress.get('daily_voice_minutes', 0), "fishing": progress.get('daily_fish_count', 0)},
-            "weekly": {"attendance": progress.get('weekly_attendance_count', 0), "voice": progress.get('weekly_voice_minutes', 0), "fishing": progress.get('weekly_fish_count', 0)}
+            "daily": {
+                "attendance": 1 if has_attended_today else 0, 
+                "voice": progress.get('daily_voice_minutes', 0), 
+                "fishing": progress.get('daily_fish_count', 0)
+            },
+            "weekly": {
+                "attendance": progress.get('weekly_attendance_count', 0), 
+                "voice": progress.get('weekly_voice_minutes', 0), 
+                "fishing": progress.get('weekly_fish_count', 0)
+            }
         }[self.current_tab]
+        
         all_quests_complete = True
+        today_str = datetime.now(JST).strftime('%Y-%m-%d')
+
         for key, quest in quests_to_check.items():
             is_complete = progress_values.get(key, 0) >= quest["goal"]
             if not is_complete:
                 all_quests_complete = False
                 continue
-            cooldown_key = f"quest_claimed_{self.current_tab}_{key}"
+            
+            cooldown_key = f"quest_claimed_{self.current_tab}_{key}_{today_str}"
             last_claimed_timestamp = await get_cooldown(str(self.user.id), cooldown_key)
             if last_claimed_timestamp > 0: continue
+            
             reward = rewards.get(key, 0)
             total_reward += reward
             reward_details.append(f"・{quest['name']}: `{reward:,}`")
             await set_cooldown(str(self.user.id), cooldown_key, time.time())
+        
         if all_quests_complete:
-            cooldown_key = f"quest_claimed_{self.current_tab}_all"
+            cooldown_key = f"quest_claimed_{self.current_tab}_all_{today_str}"
             last_claimed_timestamp = await get_cooldown(str(self.user.id), cooldown_key)
             if last_claimed_timestamp == 0:
                 reward = rewards.get("all_complete", 0)
                 total_reward += reward
                 reward_details.append(f"・全クエスト完了ボーナス: `{reward:,}`")
                 await set_cooldown(str(self.user.id), cooldown_key, time.time())
+        
         if total_reward > 0:
             await update_wallet(self.user, total_reward)
             details_text = "\n".join(reward_details)
             await interaction.followup.send(f"🎉 **以下の報酬を受け取りました！**\n{details_text}\n\n**合計:** `{total_reward:,}` {self.cog.currency_icon}", ephemeral=True)
         else:
             await interaction.followup.send("❌ 受け取れる報酬がありません。", ephemeral=True)
+        
         embed = await self.build_embed()
         self.update_components()
         await interaction.edit_original_response(embed=embed, view=self)
 
 class QuestPanelView(ui.View):
+    # ... (변경 없음)
     def __init__(self, cog_instance: 'Quests'):
         super().__init__(timeout=None)
         self.cog = cog_instance
@@ -147,6 +182,7 @@ class QuestPanelView(ui.View):
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 class Quests(commands.Cog):
+    # ... (변경 없음)
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.currency_icon = "🪙"
