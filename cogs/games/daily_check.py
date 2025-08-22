@@ -12,7 +12,7 @@ from utils.database import (
     has_checked_in_today, record_attendance,
     get_id  # [✅ 수정] get_id 함수를 import합니다.
 )
-from utils.helpers import format_embed_from_db, CloseButtonView
+from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class DailyCheckPanelView(ui.View):
         
         already_checked_in = await has_checked_in_today(user.id)
         if already_checked_in:
-            await interaction.followup.send("❌ 本日は既に出席チェックが完了しています。", ephemeral=True, view=CloseButtonView(user))
+            await interaction.followup.send("❌ 本日は既に出席チェックが完了しています。", ephemeral=True)
             return
 
         reward_str = get_config("DAILY_CHECK_REWARD", "100").strip('"')
@@ -46,7 +46,7 @@ class DailyCheckPanelView(ui.View):
         await update_wallet(user, attendance_reward)
         
         # 유저에게 보내는 확인 메시지 (ephemeral)
-        await interaction.followup.send(f"✅ 出席チェックが完了しました！ **`{attendance_reward}`**{self.cog.currency_icon}を獲得しました。", ephemeral=True, view=CloseButtonView(user))
+        await interaction.followup.send(f"✅ 出席チェックが完了しました！ **`{attendance_reward}`**{self.cog.currency_icon}を獲得しました。", ephemeral=True)
 
         # [✅ 핵심 수정] 로그 메시지를 생성하고, 설정된 로그 채널에 직접 보냅니다.
         if embed_data := await get_embed_from_db("log_daily_check"):
