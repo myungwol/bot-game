@@ -70,13 +70,9 @@ async def update_plot(plot_id: int, updates: Dict[str, Any]):
 async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
     response = await supabase.table('farm_item_details').select('*').eq('item_name', item_name).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
-
-# [✅ 수정] 새로운 RPC를 호출하도록 변경
 @supabase_retry_handler()
 async def clear_plots_db(plot_ids: List[int]):
-    """지정된 밭들을 갈지 않은 초기 상태('default')로 되돌립니다."""
     await supabase.rpc('clear_plots_to_default', {'p_plot_ids': plot_ids}).execute()
-
 @supabase_retry_handler()
 async def check_farm_permission(farm_id: int, user_id: int, action: str) -> bool:
     permission_column = f"can_{action}"
@@ -143,8 +139,12 @@ async def load_bot_configs_from_db():
         logger.info(f"✅ {len(response.data)}개의 봇 설정을 DB에서 로드하고 캐시에 병합했습니다.")
     else: logger.warning("DB 'bot_configs' 테이블에서 설정 정보를 찾을 수 없습니다.")
 
+# [✅ 날씨 버그 수정] DB에서 불러온 값에 따옴표가 있을 경우 제거합니다.
 def get_config(key: str, default: Any = None) -> Any:
-    return _configs_cache.get(key, default)
+    value = _configs_cache.get(key, default)
+    if isinstance(value, str) and value.startswith('"') and value.endswith('"'):
+        return value.strip('"')
+    return value
 
 def get_string(key_path: str, default: Any = None, **kwargs) -> Any:
     try:
