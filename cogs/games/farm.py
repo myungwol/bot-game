@@ -6,9 +6,9 @@ from discord import ui
 import logging
 from typing import Optional, Dict, List, Any
 import asyncio
-# [✅ 버그 수정] time 모듈을 별도로 import 합니다.
 import time
-from datetime import datetime, timezone, timedelta
+# [✅ 버그 수정] datetime에서 time 클래스를 직접 import 합니다.
+from datetime import datetime, timezone, timedelta, time as dt_time
 
 from utils.database import (
     get_farm_data, create_farm, get_config,
@@ -34,8 +34,8 @@ WEATHER_TYPES = {
 }
 
 JST = timezone(timedelta(hours=9))
-# [✅ 버그 수정] datetime.time 객체와 time 모듈의 충돌을 피하기 위해, 변수명으로 time을 사용하지 않습니다.
-JST_MIDNIGHT_UPDATE = discord.utils.parse_time("00:01+09:00")
+# [✅ 버그 수정] datetime.time 객체를 직접 생성하여 사용합니다.
+JST_MIDNIGHT_UPDATE = dt_time(hour=0, minute=1, tzinfo=JST)
 
 
 async def preload_farmable_info(farm_data: Dict) -> Dict[str, Dict]:
@@ -394,7 +394,6 @@ class Farm(commands.Cog):
         try:
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
-            # [✅ 수정] 새로운 DB 함수 호출
             response = await supabase.rpc('process_daily_farm_update', {'is_raining': is_raining}).execute()
             
             if response.data and response.data > 0:
