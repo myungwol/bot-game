@@ -4,8 +4,8 @@ import discord
 from discord.ext import commands, tasks
 import logging
 import random
-# [✅ 현지화] timedelta, timezone을 import 합니다.
-from datetime import time, timezone, timedelta
+from datetime import time as dt_time, timezone, timedelta
+# [✅ 수정] DB 함수를 import 합니다.
 from utils.database import save_config_to_db, get_config, get_id
 
 logger = logging.getLogger(__name__)
@@ -17,8 +17,8 @@ WEATHER_TYPES = {
     "stormy": {"emoji": "⛈️", "name": "嵐", "water_effect": True},
 }
 
-# [✅ 현지화] KST를 JST로 변경하여 코드의 명확성을 높입니다.
-JST_MIDNIGHT = time(hour=0, minute=0, tzinfo=timezone(timedelta(hours=9)))
+JST = timezone(timedelta(hours=9))
+JST_MIDNIGHT = dt_time(hour=0, minute=0, tzinfo=JST)
 
 class WorldSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -37,6 +37,7 @@ class WorldSystem(commands.Cog):
             k=1
         )[0]
         
+        # [✅ 수정] bot_configs 테이블에 'current_weather' 키로 저장
         await save_config_to_db("current_weather", weather_key)
         logger.info(f"今日の天気が '{WEATHER_TYPES[weather_key]['name']}' に変わりました。")
         
@@ -52,9 +53,10 @@ class WorldSystem(commands.Cog):
     async def before_update_weather(self):
         await self.bot.wait_until_ready()
         
-        if get_config("current_weather") is None:
+        # [✅ 수정] 로컬 캐시가 아닌 DB에서 직접 확인
+        if await get_config("current_weather") is None:
             logger.info("現在の天気が設定されていないため、初期設定を行います。")
-            # 루프가 곧 시작될 것이므로 여기서 직접 호출할 필요는 없습니다.
+            # 루프가 즉시 실행되므로 여기서 직접 호출할 필요 없이 다음 루프를 기다립니다.
             pass
 
 async def setup(bot: commands.Bot):
