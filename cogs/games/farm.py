@@ -16,7 +16,7 @@ from utils.database import (
     check_farm_permission, grant_farm_permission, clear_plots_db,
     get_farm_owner_by_thread, get_item_database, save_config_to_db
 )
-from utils.helpers import format_embed_from_db, CloseButtonView
+from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +50,7 @@ class ConfirmationView(ui.View):
         self.value = None; self.user = user
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user.id:
-            msg = await interaction.response.send_message("❌ 自分専用のメニューです。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.response.send_message("❌ 自分専用のメニューです。", ephemeral=True)
             return False
         return True
     @ui.button(label="はい", style=discord.ButtonStyle.danger)
@@ -161,9 +160,7 @@ class FarmActionView(ui.View):
         farm_owner = await self.cog.get_farm_owner(interaction)
         await self.cog.update_farm_ui(interaction.channel, farm_owner)
         
-        msg = await interaction.followup.send(f"✅ 「{self.selected_item}」を植えました。", ephemeral=True)
-        await msg.edit(view=CloseButtonView(self.user, target_message=msg))
-
+        await interaction.followup.send(f"✅ 「{self.selected_item}」を植えました。", ephemeral=True)
         await interaction.delete_original_response()
 
     async def _build_uproot_select(self):
@@ -233,8 +230,7 @@ class FarmNameModal(ui.Modal, title="農場の新しい名前"):
         farm_owner = await self.cog.get_farm_owner(interaction)
         await self.cog.update_farm_ui(interaction.channel, farm_owner)
         
-        msg = await interaction.followup.send(f"✅ 農場の名前を「{name_to_set}」に変更しました。", ephemeral=True)
-        await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+        await interaction.followup.send(f"✅ 農場の名前を「{name_to_set}」に変更しました。", ephemeral=True)
 
 class FarmUIView(ui.View):
     def __init__(self, cog_instance: 'Farm'):
@@ -260,14 +256,12 @@ class FarmUIView(ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         farm_owner_id = await get_farm_owner_by_thread(interaction.channel.id)
         if not farm_owner_id:
-            msg = await interaction.response.send_message("❌ この農場の情報を見つけられませんでした。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.response.send_message("❌ この農場の情報を見つけられませんでした。", ephemeral=True)
             return False
         
         self.farm_owner = self.cog.bot.get_user(farm_owner_id)
         if not self.farm_owner:
-            msg = await interaction.response.send_message("❌ 農場の所有者情報を見つけられませんでした。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.response.send_message("❌ 農場の所有者情報を見つけられませんでした。", ephemeral=True)
             return False
             
         self.farm_data = await get_farm_data(farm_owner_id)
@@ -276,8 +270,7 @@ class FarmUIView(ui.View):
         
         custom_id = interaction.data['custom_id']
         if custom_id in ["farm_share", "farm_rename", "farm_invite"]:
-            msg = await interaction.response.send_message("❌ 農場の所有者のみ操作できます。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.response.send_message("❌ 農場の所有者のみ操作できます。", ephemeral=True)
             return False
 
         action_map = {"farm_till": "till", "farm_plant": "plant", "farm_water": "water", "farm_harvest": "harvest", "farm_uproot": "plant"}
@@ -286,27 +279,23 @@ class FarmUIView(ui.View):
 
         has_permission = await check_farm_permission(self.farm_data['id'], interaction.user.id, action)
         if not has_permission:
-            msg = await interaction.response.send_message("❌ この操作を行う権限がありません。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.response.send_message("❌ この操作を行う権限がありません。", ephemeral=True)
         return has_permission
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: ui.Item) -> None:
         logger.error(f"FarmUIView에서 오류 발생 (item: {item.custom_id}): {error}", exc_info=True)
         msg_content = "❌ 処理中に予期せぬエラーが発生しました。"
         if interaction.response.is_done():
-            msg = await interaction.followup.send(msg_content, ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.followup.send(msg_content, ephemeral=True)
         else:
-            msg = await interaction.response.send_message(msg_content, ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.response.send_message(msg_content, ephemeral=True)
 
     async def on_farm_till_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         gear = await get_user_gear(interaction.user)
         equipped_hoe = gear.get('hoe', BARE_HANDS)
         if equipped_hoe == BARE_HANDS:
-            msg = await interaction.followup.send("❌ まずは商店で「クワ」を購入して、プロフィール画面から装備してください。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.followup.send("❌ まずは商店で「クワ」を購入して、プロフィール画面から装備してください。", ephemeral=True)
             return
             
         hoe_power = get_item_database().get(equipped_hoe, {}).get('power', 1)
@@ -315,13 +304,11 @@ class FarmUIView(ui.View):
             if plot['state'] == 'default' and tilled_count < hoe_power:
                 plots_to_update.append(update_plot(plot['id'], {'state': 'tilled'})); tilled_count += 1
         if not plots_to_update:
-            msg = await interaction.followup.send("ℹ️ これ以上耕せる畑がありません。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.followup.send("ℹ️ これ以上耕せる畑がありません。", ephemeral=True)
             return
 
         await asyncio.gather(*plots_to_update)
-        msg = await interaction.followup.send(f"✅ **{equipped_hoe}** を使って、畑を**{tilled_count}マス**耕しました。", ephemeral=True)
-        await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+        await interaction.followup.send(f"✅ **{equipped_hoe}** を使って、畑を**{tilled_count}マス**耕しました。", ephemeral=True)
         await self.cog.update_farm_ui(interaction.channel, self.farm_owner)
 
     async def on_farm_plant_click(self, interaction: discord.Interaction):
@@ -333,8 +320,7 @@ class FarmUIView(ui.View):
         gear = await get_user_gear(interaction.user)
         equipped_wc = gear.get('watering_can', BARE_HANDS)
         if equipped_wc == BARE_HANDS:
-            msg = await interaction.followup.send("❌ まずは商店で「じょうろ」を購入して、装備してください。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.followup.send("❌ まずは商店で「じょうろ」を購入して、装備してください。", ephemeral=True)
             return
             
         item_info = get_item_database().get(equipped_wc, {})
@@ -360,13 +346,11 @@ class FarmUIView(ui.View):
                     watered_count += 1
 
         if not plots_to_update:
-            msg = await interaction.followup.send("ℹ️ 今日はこれ以上水をやる必要のある作物がありません。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.followup.send("ℹ️ 今日はこれ以上水をやる必要のある作物がありません。", ephemeral=True)
             return
             
         await asyncio.gather(*plots_to_update)
-        msg = await interaction.followup.send(f"✅ **{equipped_wc}** を使って、作物**{watered_count}個**に水をやりました。", ephemeral=True)
-        await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+        await interaction.followup.send(f"✅ **{equipped_wc}** を使って、作物**{watered_count}個**に水をやりました。", ephemeral=True)
         await self.cog.update_farm_ui(interaction.channel, self.farm_owner)
 
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
@@ -397,8 +381,7 @@ class FarmUIView(ui.View):
                     trees_to_update[pid] = regrowth_hours
 
         if not harvested_items:
-            msg = await interaction.followup.send("ℹ️ 収穫できる作物がありません。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.followup.send("ℹ️ 収穫できる作物がありません。", ephemeral=True)
             return
             
         update_tasks = [update_inventory(str(self.farm_owner.id), name, qty) for name, qty in harvested_items.items()]
@@ -425,8 +408,7 @@ class FarmUIView(ui.View):
 
         await asyncio.gather(*update_tasks)
         result_str = ", ".join([f"**{name}** {qty}個" for name, qty in harvested_items.items()])
-        msg = await interaction.followup.send(f"🎉 **{result_str}**を収穫しました！", ephemeral=True)
-        await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+        await interaction.followup.send(f"🎉 **{result_str}**を収穫しました！", ephemeral=True)
         await self.cog.update_farm_ui(interaction.channel, self.farm_owner)
 
         if level_up_result:
@@ -447,8 +429,7 @@ class FarmUIView(ui.View):
                 try: await interaction.channel.add_user(user)
                 except: pass
                 
-                msg = await select_interaction.followup.send(f"✅ {user.mention}さんを農場に招待しました。", ephemeral=True)
-                await msg.edit(view=CloseButtonView(select_interaction.user, target_message=msg))
+                await select_interaction.followup.send(f"✅ {user.mention}さんを農場に招待しました。", ephemeral=True)
 
             await interaction.edit_original_response(content="招待が完了しました。", view=None)
         user_select.callback = callback
@@ -462,8 +443,7 @@ class FarmUIView(ui.View):
             await select_interaction.response.defer(ephemeral=True)
             for user in user_select.values:
                 await grant_farm_permission(self.farm_data['id'], user.id)
-                msg = await select_interaction.followup.send(f"✅ {user.mention}さんに農場の編集権限を付与しました。", ephemeral=True)
-                await msg.edit(view=CloseButtonView(select_interaction.user, target_message=msg))
+                await select_interaction.followup.send(f"✅ {user.mention}さんに農場の編集権限を付与しました。", ephemeral=True)
 
             await interaction.edit_original_response(content="権限設定が完了しました。", view=None)
         user_select.callback = callback
@@ -772,8 +752,7 @@ class Farm(commands.Cog):
             await interaction.followup.send(f"✅ あなただけの農場を作成しました！ {farm_thread.mention} を確認してください。", ephemeral=True)
         except Exception as e:
             logger.error(f"농장 생성 중 오류 발생: {e}", exc_info=True)
-            msg = await interaction.followup.send("❌ 農場の作成中にエラーが発生しました。", ephemeral=True)
-            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+            await interaction.followup.send("❌ 農場の作成中にエラーが発生しました。", ephemeral=True)
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_farm_creation", **kwargs):
         if panel_info := get_panel_id(panel_key):
