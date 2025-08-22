@@ -62,9 +62,7 @@ async def create_farm(user_id: int) -> Optional[Dict[str, Any]]:
     if rpc_response and rpc_response.data:
         return await get_farm_data(user_id)
     return None
-@supabase_retry_handler()
-async def expand_farm_db(farm_id: int, new_size_x: int, new_size_y: int):
-    await supabase.rpc('expand_farm', {'p_farm_id': farm_id, 'new_size_x': new_size_x, 'new_size_y': new_size_y}).execute()
+
 @supabase_retry_handler()
 async def update_plot(plot_id: int, updates: Dict[str, Any]):
     await supabase.table('farm_plots').update(updates).eq('id', plot_id).execute()
@@ -123,7 +121,6 @@ async def save_config(key: str, value: Any):
     logger.info(f"설정이 업데이트되었습니다: {key} -> {value}")
 save_config_to_db = save_config
 
-# --- [✅ 버그 수정] 누락된 전설 물고기 관련 함수 추가 ---
 ONE_WEEK_IN_SECONDS = 7 * 24 * 60 * 60
 async def is_legendary_fish_available() -> bool:
     last_caught_ts = get_config("legendary_fish_last_caught_timestamp", 0)
@@ -131,7 +128,6 @@ async def is_legendary_fish_available() -> bool:
 
 async def set_legendary_fish_cooldown():
     await save_config("legendary_fish_last_caught_timestamp", time.time())
-# --- [수정 완료] ---
 
 async def load_all_data_from_db():
     logger.info("------ [ 모든 DB 데이터 로드 시작 ] ------")
