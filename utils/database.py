@@ -106,10 +106,15 @@ async def get_user_progress(user_id: int) -> Dict[str, Any]:
     if response and hasattr(response, 'data') and response.data:
         return response.data
     return default_progress
+
+# [✅ 개선] 안정성을 위해 재시도 핸들러를 추가합니다.
+@supabase_retry_handler()
 async def increment_progress(user_id: int, fish_count: int = 0, voice_minutes: int = 0):
     await supabase.rpc('increment_user_progress', {'p_user_id': user_id, 'p_fish_count': fish_count, 'p_voice_minutes': voice_minutes}).execute()
 
 # --- [공용 및 기타 게임 함수] ---
+# [✅ 개선] 안정성을 위해 재시도 핸들러를 추가합니다.
+@supabase_retry_handler()
 async def save_config(key: str, value: Any):
     global _configs_cache
     await supabase.table('bot_configs').upsert({"config_key": key, "config_value": value}).execute()
@@ -139,7 +144,6 @@ async def load_bot_configs_from_db():
         logger.info(f"✅ {len(response.data)}개의 봇 설정을 DB에서 로드하고 캐시에 병합했습니다.")
     else: logger.warning("DB 'bot_configs' 테이블에서 설정 정보를 찾을 수 없습니다.")
 
-# [✅ 날씨 버그 수정] DB에서 불러온 값에 따옴표가 있을 경우 제거합니다.
 def get_config(key: str, default: Any = None) -> Any:
     value = _configs_cache.get(key, default)
     if isinstance(value, str) and value.startswith('"') and value.endswith('"'):
@@ -184,6 +188,7 @@ async def load_game_data_from_db():
 def get_item_database() -> Dict[str, Dict[str, Any]]: return _item_database_cache
 def get_fishing_loot() -> List[Dict[str, Any]]: return _fishing_loot_cache
 
+# [✅ 개선] 안정성을 위해 재시도 핸들러를 추가합니다.
 @supabase_retry_handler()
 async def save_id_to_db(key: str, object_id: int):
     global _channel_id_cache
@@ -210,6 +215,7 @@ async def get_panel_components_from_db(panel_key: str) -> list:
     response = await supabase.table('panel_components').select('*').eq('panel_key', panel_key).order('row', desc=False).order('order_in_row', desc=False).execute()
     return response.data if response and response.data else []
 
+# [✅ 개선] 안정성을 위해 재시도 핸들러를 추가합니다.
 @supabase_retry_handler()
 async def get_or_create_user(table_name: str, user_id_str: str, default_data: dict) -> dict:
     response = await supabase.table(table_name).select("*").eq("user_id", user_id_str).limit(1).execute()
