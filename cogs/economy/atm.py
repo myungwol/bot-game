@@ -24,7 +24,6 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
 
     async def on_submit(self, interaction: discord.Interaction):
-        # [✅ 오류 수정] defer를 먼저 호출하여 followup을 사용할 준비를 합니다.
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             amount_to_send = int(self.amount.value)
@@ -33,7 +32,6 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
 
             sender_wallet = await get_wallet(self.sender.id)
             if sender_wallet.get('balance', 0) < amount_to_send:
-                # [✅ 오류 수정] interaction.followup.send를 사용합니다.
                 msg = await interaction.followup.send(f"❌ 残高が不足しています。(現在の残高: {sender_wallet.get('balance', 0):,}{self.currency_icon})", ephemeral=True)
                 await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
                 return
@@ -41,7 +39,8 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
             params = {'sender_id_param': str(self.sender.id), 'recipient_id_param': str(self.recipient.id), 'amount_param': amount_to_send}
             response = await supabase.rpc('transfer_coins', params).execute()
             
-            if not response.data or not response.data[0]:
+            # [✅ 오류 수정] response.data가 boolean이므로 직접 확인합니다.
+            if not response.data:
                  raise Exception("送金に失敗しました。残高不足またはデータベースエラーの可能性があります。")
 
             msg = await interaction.followup.send("✅ 送金が完了しました。パネルを更新します。", ephemeral=True)
@@ -51,7 +50,6 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
             if embed_data := await get_embed_from_db("log_coin_transfer"):
                 log_embed = format_embed_from_db(embed_data, sender_mention=self.sender.mention, recipient_mention=self.recipient.mention, amount=f"{amount_to_send:,}", currency_icon=self.currency_icon)
             
-            # 송금 로그는 일반 채널에 보내므로 interaction.channel을 사용합니다.
             log_channel = self.cog.bot.get_channel(interaction.channel_id)
             if log_channel:
                  await self.cog.regenerate_panel(log_channel, last_transfer_log=log_embed)
@@ -82,7 +80,6 @@ class AtmPanelView(ui.View):
                 selected_user_id = int(select_interaction.data["values"][0])
                 recipient = select_interaction.guild.get_member(selected_user_id)
 
-                # [✅ 오류 수정] 모달이 아닌 곳에서는 response.send_message를 사용해도 괜찮습니다.
                 if not recipient:
                     msg = await select_interaction.response.send_message("❌ ユーザーが見つかりませんでした。", ephemeral=True)
                     await msg.edit(view=CloseButtonView(select_interaction.user, target_message=msg))
@@ -100,7 +97,6 @@ class AtmPanelView(ui.View):
                 
                 await modal.wait()
 
-                # 원래 유저 선택 메시지를 삭제합니다.
                 try:
                     await interaction.delete_original_response()
                 except discord.NotFound:
