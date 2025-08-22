@@ -276,6 +276,3 @@ class UserProfile(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(UserProfile(bot))
-```</details>
-
-이것으로 모든 파일의 수정 및 개선 작업이 완료되었습니다. 봇이 이제 대규모 서버 환경에 더 적합하고 안정적으로 작동할 것입니다.
