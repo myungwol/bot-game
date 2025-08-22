@@ -1,4 +1,3 @@
-
 # cogs/games/fishing.py
 
 import discord
@@ -18,36 +17,14 @@ from utils.database import (
     BARE_HANDS, DEFAULT_ROD,
     increment_progress
 )
+# [✅ 수정] helpers에서 표준 CloseButtonView를 import 합니다.
+from utils.helpers import CloseButtonView
 
-# [✅ 개선] farm.py에서 가져온 안정적인 CloseButtonView를 여기에도 추가합니다.
-# 이 클래스는 여러 파일에서 사용될 수 있지만, 유지보수 편의를 위해 각 파일에 포함시키는 것도 좋은 방법입니다.
-# 또는 별도의 ui_components.py 같은 파일로 분리할 수도 있습니다.
 logger = logging.getLogger(__name__)
 
-class CloseButtonView(ui.View):
-    def __init__(self, user: discord.User, target_message: discord.Message = None):
-        super().__init__(timeout=180)
-        self.user = user
-        self.target_message = target_message
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.user.id
-        
-    @ui.button(label="閉じる", style=discord.ButtonStyle.secondary)
-    async def close_button(self, interaction: discord.Interaction, button: ui.Button):
-        try:
-            await interaction.response.defer()
-            message_to_delete = self.target_message or interaction.message
-            if message_to_delete:
-                await message_to_delete.delete()
-        except discord.NotFound:
-            pass
-        except Exception as e:
-            logger.error(f"닫기 버튼 처리 중 예외 발생: {e}", exc_info=True)
-
+# [✅ 수정] 중복되는 CloseButtonView 클래스 정의를 삭제했습니다.
 
 # [✅ 유지보수] 하드코딩된 값을 제거합니다. 이 값은 이제 DB에서 불러옵니다.
-# REQUIRED_TIER_FOR_SEA = 3 
 INTERMEDIATE_ROD_NAME = "鉄の釣竿"
 
 class FishingGameView(ui.View):
@@ -63,9 +40,11 @@ class FishingGameView(ui.View):
         self.rod_data = item_db.get(self.used_rod, {})
         bait_data = item_db.get(self.used_bait, {})
 
-        self.bite_range = [8.0, 12.0]
-        self.bite_reaction_time = get_config("FISHING_BITE_REACTION_TIME", 3.0)
-        self.big_catch_threshold = get_config("FISHING_BIG_CATCH_THRESHOLD", 70.0)
+        # [✅ 유지보수] 하드코딩된 값을 DB에서 불러오도록 수정합니다.
+        self.bite_range = eval(get_config("FISHING_BITE_RANGE", "[8.0, 12.0]"))
+        self.bite_reaction_time = float(get_config("FISHING_BITE_REACTION_TIME", "3.0").strip('"'))
+        self.big_catch_threshold = float(get_config("FISHING_BIG_CATCH_THRESHOLD", "70.0").strip('"'))
+
 
     async def start_game(self, interaction: discord.Interaction, embed: discord.Embed):
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
@@ -155,7 +134,7 @@ class FishingGameView(ui.View):
         self.stop()
 
     async def _send_result(self, embed: discord.Embed, log_publicly: bool = False, is_big_catch: bool = False, is_legendary: bool = False):
-        remaining_baits_config = get_config("FISHING_REMAINING_BAITS_DISPLAY", ["普通の釣りエサ", "高級釣りエサ"])
+        remaining_baits_config = eval(get_config("FISHING_REMAINING_BAITS_DISPLAY", "['普通の釣りエサ', '高級釣りエサ']"))
         footer_private = f"残りのエサ: {' / '.join([f'{b}({self.remaining_baits.get(b, 0)}個)' for b in remaining_baits_config])}"
         footer_public = f"使用した装備: {self.used_rod} / {self.used_bait}"
         if log_publicly:
@@ -237,7 +216,6 @@ class FishingPanelView(ui.View):
                 
                 if location_type == 'sea':
                     rod_tier = item_db.get(rod, {}).get('tier', 0)
-                    # [✅ 유지보수] DB에서 설정값을 불러옵니다.
                     req_tier_str = get_config("FISHING_SEA_REQ_TIER", "3").strip('"')
                     required_tier_for_sea = int(req_tier_str)
 
