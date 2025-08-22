@@ -12,7 +12,7 @@ from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
     get_item_database, get_config, get_string, BARE_HANDS,
-    supabase # [✅ 레벨 시스템] supabase import 추가
+    supabase
 )
 from utils.helpers import CloseButtonView
 
@@ -65,7 +65,7 @@ class ProfileView(ui.View):
         item_db = get_item_database()
         base_title = get_string("profile_view.base_title", user_name=self.user.display_name)
         title_suffix = get_string(f"profile_view.tabs.{self.current_page}.title_suffix", default="")
-        embed = discord.Embed(title=f"{base_title}{title_suffix}", color=self.user.color)
+        embed = discord.Embed(title=f"{base_title}{title_suffix}", color=self.user.color or discord.Color.blue())
         if self.user.display_avatar:
             embed.set_thumbnail(url=self.user.display_avatar.url)
         description = ""
@@ -75,13 +75,12 @@ class ProfileView(ui.View):
         if self.current_page == "info":
             embed.add_field(name=get_string("profile_view.info_tab.field_balance"), value=f"`{balance:,}`{self.currency_icon}", inline=True)
             
-            # [✅ 레벨 시스템] 직업 정보 조회 및 표시
             try:
                 job_res = await supabase.table('user_jobs').select('jobs(job_name)').eq('user_id', self.user.id).maybe_single().execute()
-                job_name = job_res.data['jobs']['job_name'] if job_res.data and job_res.data.get('jobs') else "一般住民"
+                job_name = job_res.data['jobs']['job_name'] if job_res and job_res.data and job_res.data.get('jobs') else "一般住民"
             except Exception as e:
                 logger.error(f"직업 정보 조회 중 오류 발생 (유저: {self.user.id}): {e}")
-                job_name = "一般住民" # 오류 발생 시 기본값
+                job_name = "一般住民"
             embed.add_field(name="職業", value=f"`{job_name}`", inline=True)
 
             resident_role_keys = ["role_resident_elder", "role_resident_veteran", "role_resident_regular", "role_resident_rookie", "role_resident"]
