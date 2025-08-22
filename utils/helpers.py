@@ -8,7 +8,6 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# [✅ 핵심 수정] CloseButtonView를 더 안정적이고 단순하게 개선합니다.
 class CloseButtonView(ui.View):
     def __init__(self, user: discord.User):
         """
@@ -19,9 +18,7 @@ class CloseButtonView(ui.View):
         self.user = user
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # 이 상호작용을 시작한 유저만 버튼을 누를 수 있도록 권한을 확인합니다.
         if interaction.user.id != self.user.id:
-            # [✅ 개선] 다른 사람이 누를 경우, 보이지 않는 메시지로 알려줍니다.
             await interaction.response.send_message("自分専用のメニューです。", ephemeral=True)
             return False
         return True
@@ -29,19 +26,16 @@ class CloseButtonView(ui.View):
     @ui.button(label="閉じる", style=discord.ButtonStyle.secondary, emoji="✖️")
     async def close_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
-            # 이 버튼이 속한 메시지(interaction.message)를 삭제합니다.
+            # [✅ 핵심 수정] 실제 행동을 하기 전에 defer()를 호출하여 상호작용에 먼저 응답합니다.
+            # 이 한 줄이 "상호작용 실패" 오류를 해결합니다.
+            await interaction.response.defer()
+            
+            # 그 다음, 이 버튼이 속한 메시지(interaction.message)를 삭제합니다.
             await interaction.message.delete()
         except discord.NotFound:
-            # 메시지가 이미 다른 동작으로 인해 삭제된 경우, 조용히 넘어갑니다.
             pass
         except Exception as e:
             logger.error(f"닫기 버튼으로 메시지 삭제 중 예외 발생: {e}", exc_info=True)
-            try:
-                # 삭제에 실패하면(예: 권한 부족), 사용자에게 알립니다.
-                await interaction.response.send_message("メッセージの削除に失敗しました。", ephemeral=True)
-            except discord.InteractionResponded:
-                # 이미 다른 응답이 보내진 경우 followup으로 보냅니다.
-                await interaction.followup.send("メッセージの削除に失敗しました。", ephemeral=True)
 
 
 def format_embed_from_db(embed_data: Dict[str, Any], **kwargs: Any) -> discord.Embed:
