@@ -17,7 +17,7 @@ from utils.database import (
     save_panel_id, get_panel_id, get_embed_from_db,
     update_inventory, update_wallet, get_farm_data, expand_farm_db
 )
-from utils.helpers import format_embed_from_db, CloseButtonView
+from utils.helpers import format_embed_from_db
 
 class QuantityModal(ui.Modal):
     quantity = ui.TextInput(label="数量", placeholder="例: 10", required=True, max_length=5)
@@ -65,10 +65,10 @@ class ShopViewBase(ui.View):
         view = CloseButtonView(interaction.user)
         if interaction.response.is_done():
             # [✅ 수정] CloseButtonView 호출 방식 변경
-            await interaction.followup.send(message_content, ephemeral=True, view=view)
+            await interaction.followup.send(message_content, ephemeral=True)
         else:
             # [✅ 수정] CloseButtonView 호출 방식 변경
-            await interaction.response.send_message(message_content, ephemeral=True, view=view)
+            await interaction.response.send_message(message_content, ephemeral=True)
 
 class BuyItemView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str):
@@ -460,14 +460,14 @@ class CommercePanelView(ui.View):
         view = BuyCategoryView(interaction.user)
         embed = await view.build_embed()
         await view.build_components()
-        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        message = await interaction.followup.send(embed=embed, ephemeral=True)
         view.message = message
     async def open_market(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         view = SellCategoryView(interaction.user)
         embed = await view.build_embed()
         await view.build_components()
-        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        message = await interaction.followup.send(embed=embed, ephemeral=True)
         view.message = message
 
 class Commerce(commands.Cog):
@@ -490,7 +490,7 @@ class Commerce(commands.Cog):
         if not (embed_data := await get_embed_from_db(panel_key)): return
         embed = discord.Embed.from_dict(embed_data)
         view = CommercePanelView(self)
-        new_message = await channel.send(embed=embed, view=view)
+        new_message = await channel.send(embed=embed)
         await save_panel_id(panel_name, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
 
