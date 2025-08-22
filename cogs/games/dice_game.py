@@ -1,3 +1,5 @@
+# bot-game/cogs/dice_game.py
+
 import discord
 from discord.ext import commands
 from discord import ui
@@ -9,9 +11,12 @@ from utils.database import (
     get_wallet, update_wallet, get_config, get_panel_components_from_db,
     save_panel_id, get_panel_id, get_embed_from_db
 )
+# [✅ 수정] helpers에서 표준 CloseButtonView를 import 합니다.
 from utils.helpers import format_embed_from_db, CloseButtonView
 
 logger = logging.getLogger(__name__)
+
+# [✅ 수정] 중복되는 CloseButtonView 클래스 정의를 삭제했습니다.
 
 # 베팅 금액을 입력받는 모달
 class BetAmountModal(ui.Modal, title="ベット額の入力"):
@@ -40,8 +45,7 @@ class BetAmountModal(ui.Modal, title="ベット額の入力"):
             await interaction.response.send_message(f"ベット額 `{bet_amount:,}`{self.currency_icon}を設定しました。次にサイコロの出る目を選択してください。", view=view, ephemeral=True)
             view.message = await interaction.original_response() # 메시지 객체 저장
             self.cog.active_sessions.add(interaction.user.id)
-
-        # [✅ 오류 수정] IndentationError를 해결하기 위해 들여쓰기를 수정합니다.
+        
         except ValueError:
             msg = await interaction.response.send_message("❌ 数字のみ入力してください。", ephemeral=True)
             await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
@@ -62,11 +66,6 @@ class NumberSelectView(ui.View):
         self.cog = cog_instance
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.message: Optional[discord.InteractionMessage] = None
-
-        for i in range(1, 7):
-            button = ui.Button(label=str(i), style=discord.ButtonStyle.secondary, emoji="🎲", custom_id=f"dice_choice_{i}")
-            button.callback = self.button_callback
-            self.add_item(button)
 
     async def button_callback(self, interaction: discord.Interaction):
         chosen_number = int(interaction.data['custom_id'].split('_')[-1])
