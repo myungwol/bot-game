@@ -95,9 +95,10 @@ async def grant_farm_permission(farm_id: int, user_id: int):
 # --- [퀘스트 및 출석체크 함수] ---
 @supabase_retry_handler()
 async def has_checked_in_today(user_id: int) -> bool:
-    KST = timezone(timedelta(hours=9))
-    today_kst_start = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
-    response = await supabase.table('attendance_logs').select('id', count='exact').eq('user_id', user_id).gte('checked_in_at', today_kst_start.isoformat()).limit(1).execute()
+    # [✅ 수정] KST -> JST로 변수명을 변경하여 코드의 명확성을 높입니다. (시간은 동일하게 UTC+9)
+    JST = timezone(timedelta(hours=9))
+    today_jst_start = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
+    response = await supabase.table('attendance_logs').select('id', count='exact').eq('user_id', user_id).gte('checked_in_at', today_jst_start.isoformat()).limit(1).execute()
     return response.count > 0
 @supabase_retry_handler()
 async def record_attendance(user_id: int):
