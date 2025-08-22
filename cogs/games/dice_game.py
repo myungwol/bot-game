@@ -28,7 +28,6 @@ class BetAmountModal(ui.Modal, title="ベット額の入力"):
         try:
             bet_amount = int(self.amount.value)
             if bet_amount <= 0 or bet_amount % 10 != 0:
-                # [✅ 오류 수정] 메시지를 보낼 때 View를 함께 보냅니다.
                 await interaction.response.send_message(
                     "❌ 10コイン単位の正の整数のみ入力できます。", 
                     ephemeral=True, 
@@ -38,7 +37,6 @@ class BetAmountModal(ui.Modal, title="ベット額の入力"):
 
             wallet = await get_wallet(interaction.user.id)
             if wallet.get('balance', 0) < bet_amount:
-                # [✅ 오류 수정] 메시지를 보낼 때 View를 함께 보냅니다.
                 await interaction.response.send_message(
                     f"❌ 残高が不足しています。(現在の残高: {wallet.get('balance', 0):,}{self.currency_icon})", 
                     ephemeral=True, 
@@ -48,11 +46,10 @@ class BetAmountModal(ui.Modal, title="ベット額の入力"):
             
             view = NumberSelectView(interaction.user, bet_amount, self.cog)
             await interaction.response.send_message(f"ベット額 `{bet_amount:,}`{self.currency_icon}を設定しました。次にサイコロの出る目を選択してください。", view=view, ephemeral=True)
-            view.message = await interaction.original_response() # 메시지 객체 저장
+            view.message = await interaction.original_response() 
             self.cog.active_sessions.add(interaction.user.id)
         
         except ValueError:
-            # [✅ 오류 수정] 메시지를 보낼 때 View를 함께 보냅니다.
             await interaction.response.send_message(
                 "❌ 数字のみ入力してください。", 
                 ephemeral=True, 
@@ -65,7 +62,6 @@ class BetAmountModal(ui.Modal, title="ベット額の入力"):
             if not interaction.response.is_done():
                 await interaction.response.send_message(message_content, ephemeral=True, view=view)
             else:
-                # followup.send는 수정 가능한 메시지 객체를 반환하므로 기존 코드도 동작하지만, 일관성을 위해 수정합니다.
                 await interaction.followup.send(message_content, ephemeral=True, view=view)
 
 # 1~6 숫자 버튼이 있는 View
@@ -77,6 +73,18 @@ class NumberSelectView(ui.View):
         self.cog = cog_instance
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.message: Optional[discord.InteractionMessage] = None
+
+        # [✅ 버그 수정] 1부터 6까지의 숫자를 선택하는 버튼을 동적으로 생성합니다.
+        # 이 부분이 누락되어 버튼이 표시되지 않았습니다.
+        for i in range(1, 7):
+            button = ui.Button(
+                label=str(i),
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"dice_select_{i}",
+                emoji="🎲"
+            )
+            button.callback = self.button_callback
+            self.add_item(button)
 
     async def button_callback(self, interaction: discord.Interaction):
         chosen_number = int(interaction.data['custom_id'].split('_')[-1])
@@ -152,7 +160,6 @@ class DiceGamePanelView(ui.View):
 
     async def start_game_callback(self, interaction: discord.Interaction):
         if interaction.user.id in self.cog.active_sessions:
-            # [✅ 오류 수정] 메시지를 보낼 때 View를 함께 보냅니다.
             await interaction.response.send_message(
                 "❌ すでにゲームをプレイ中です。", 
                 ephemeral=True, 
