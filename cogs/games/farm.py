@@ -26,10 +26,10 @@ CROP_EMOJI_MAP = {
     'sapling': {0: '🌱', 1: '🌳', 2: '🌳'}
 }
 WEATHER_TYPES = {
-    "sunny": {"emoji": "☀️", "name": "晴れ", "water_effect": False},
-    "cloudy": {"emoji": "☁️", "name": "曇り", "water_effect": False},
-    "rainy": {"emoji": "🌧️", "name": "雨", "water_effect": True},
-    "stormy": {"emoji": "⛈️", "name": "嵐", "water_effect": True},
+    "sunny": {"emoji": "☀️", "name": "晴れ", "water_effect": False, "growth_mod": 0.9},
+    "cloudy": {"emoji": "☁️", "name": "曇り", "water_effect": False, "growth_mod": 1.0},
+    "rainy": {"emoji": "🌧️", "name": "雨", "water_effect": True, "growth_mod": 1.0},
+    "stormy": {"emoji": "⛈️", "name": "嵐", "water_effect": True, "growth_mod": 1.0},
 }
 
 JST = timezone(timedelta(hours=9))
@@ -83,11 +83,7 @@ class FarmActionView(ui.View):
             "plant_location": f"選択した「{self.selected_item}」を植える場所を選択してください。",
             "uproot": "撤去したい作物または木を選択してください。この操作は元に戻せません。"
         }
-        embed = discord.Embed(
-            title=titles.get(self.action_type, "エラー"),
-            description=descs.get(self.action_type, "不明なアクションです。"),
-            color=0x8BC34A
-        )
+        embed = discord.Embed(title=titles.get(self.action_type, "エラー"), description=descs.get(self.action_type, "不明なアクションです。"), color=0x8BC34A)
         return embed
 
     async def build_components(self):
@@ -132,8 +128,7 @@ class FarmActionView(ui.View):
         valid_top_lefts = []
         for y in range(farm_size_y - required_y + 1):
             for x in range(farm_size_x - required_x + 1):
-                is_space_free = all(plots.get((x + dx, y + dy)) and plots[(x + dx, y + dy)]['state'] == 'tilled'
-                                    for dy in range(required_y) for dx in range(required_x))
+                is_space_free = all(plots.get((x + dx, y + dy)) and plots[(x + dx, y + dy)]['state'] == 'tilled' for dy in range(required_y) for dx in range(required_x))
                 if is_space_free: valid_top_lefts.append(plots[(x, y)])
         return valid_top_lefts
 
@@ -145,15 +140,7 @@ class FarmActionView(ui.View):
         plots_to_update = [p for p in self.farm_data['farm_plots'] if pos_x <= p['pos_x'] < pos_x + size_x and pos_y <= p['pos_y'] < pos_y + size_y]
         now_iso = datetime.now(timezone.utc).isoformat()
         
-        update_tasks = [update_plot(p['id'], {
-            'state': 'planted', 
-            'planted_item_name': self.selected_item, 
-            'planted_at': now_iso, 
-            'last_watered_at': None, 
-            'growth_stage': 0, 
-            'water_count': 0, 
-            'quality': 5
-        }) for p in plots_to_update]
+        update_tasks = [update_plot(p['id'], {'state': 'planted', 'planted_item_name': self.selected_item, 'planted_at': now_iso, 'last_watered_at': None, 'growth_stage': 0, 'water_count': 0, 'quality': 5}) for p in plots_to_update]
 
         await asyncio.gather(*update_tasks)
         await update_inventory(str(self.user.id), self.selected_item, -1)
@@ -223,135 +210,83 @@ class FarmNameModal(ui.Modal, title="農場の新しい名前"):
             await interaction.followup.send("❌ 名前は空にできません。", ephemeral=True); return
         await supabase.table('farms').update({'name': name_to_set}).eq('id', self.farm_data['id']).execute()
         try:
-            if isinstance(interaction.channel, discord.Thread):
-                await interaction.channel.edit(name=f"🌱｜{name_to_set}")
-        except Exception as e:
-            logger.error(f"농장 스레드 이름 변경 실패: {e}")
+            if isinstance(interaction.channel, discord.Thread): await interaction.channel.edit(name=f"🌱｜{name_to_set}")
+        except Exception as e: logger.error(f"농장 스레드 이름 변경 실패: {e}")
         farm_owner = await self.cog.get_farm_owner(interaction)
         await self.cog.update_farm_ui(interaction.channel, farm_owner)
-        
         await interaction.followup.send(f"✅ 農場の名前を「{name_to_set}」に変更しました。", ephemeral=True)
 
 class FarmUIView(ui.View):
     def __init__(self, cog_instance: 'Farm'):
         super().__init__(timeout=None)
         self.cog = cog_instance
-
-        buttons = [
-            ui.Button(label="畑を耕す", style=discord.ButtonStyle.secondary, emoji="🪓", row=0, custom_id="farm_till"),
-            ui.Button(label="種を植える", style=discord.ButtonStyle.success, emoji="🌱", row=0, custom_id="farm_plant"),
-            ui.Button(label="水をやる", style=discord.ButtonStyle.primary, emoji="💧", row=0, custom_id="farm_water"),
-            ui.Button(label="収穫する", style=discord.ButtonStyle.success, emoji="🧺", row=0, custom_id="farm_harvest"),
-            ui.Button(label="畑を整理する", style=discord.ButtonStyle.danger, emoji="🧹", row=0, custom_id="farm_uproot"),
-            ui.Button(label="農場に招待", style=discord.ButtonStyle.grey, emoji="📢", row=1, custom_id="farm_invite"),
-            ui.Button(label="権限を付与", style=discord.ButtonStyle.grey, emoji="🤝", row=1, custom_id="farm_share"),
-            ui.Button(label="名前を変更", style=discord.ButtonStyle.grey, emoji="✏️", row=1, custom_id="farm_rename"),
-        ]
+        buttons = [ ui.Button(label="畑を耕す", style=discord.ButtonStyle.secondary, emoji="🪓", row=0, custom_id="farm_till"), ui.Button(label="種を植える", style=discord.ButtonStyle.success, emoji="🌱", row=0, custom_id="farm_plant"), ui.Button(label="水をやる", style=discord.ButtonStyle.primary, emoji="💧", row=0, custom_id="farm_water"), ui.Button(label="収穫する", style=discord.ButtonStyle.success, emoji="🧺", row=0, custom_id="farm_harvest"), ui.Button(label="畑を整理する", style=discord.ButtonStyle.danger, emoji="🧹", row=0, custom_id="farm_uproot"), ]
         for item in buttons:
             callback_name = f"on_{item.custom_id}_click"
-            if hasattr(self, callback_name):
-                setattr(item, 'callback', getattr(self, callback_name))
+            if hasattr(self, callback_name): setattr(item, 'callback', getattr(self, callback_name))
             self.add_item(item)
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        farm_owner_id = await get_farm_owner_by_thread(interaction.channel.id)
-        if not farm_owner_id:
-            await interaction.response.send_message("❌ この農場の情報を見つけられませんでした。", ephemeral=True)
-            return False
-        
-        self.farm_owner = self.cog.bot.get_user(farm_owner_id)
-        if not self.farm_owner:
-            await interaction.response.send_message("❌ 農場の所有者情報を見つけられませんでした。", ephemeral=True)
-            return False
-            
-        self.farm_data = await get_farm_data(farm_owner_id)
-
-        if interaction.user.id == self.farm_owner.id: return True
-        
+        self.farm_owner_id = await get_farm_owner_by_thread(interaction.channel.id)
+        if not self.farm_owner_id:
+            await interaction.response.send_message("❌ この農場の情報を見つけられませんでした。", ephemeral=True); return False
+        self.farm_data = await get_farm_data(self.farm_owner_id)
+        if interaction.user.id == self.farm_owner_id: return True
         custom_id = interaction.data['custom_id']
-        if custom_id in ["farm_share", "farm_rename", "farm_invite"]:
-            await interaction.response.send_message("❌ 農場の所有者のみ操作できます。", ephemeral=True)
-            return False
-
         action_map = {"farm_till": "till", "farm_plant": "plant", "farm_water": "water", "farm_harvest": "harvest", "farm_uproot": "plant"}
         action = action_map.get(custom_id)
         if not action: return False
-
         has_permission = await check_farm_permission(self.farm_data['id'], interaction.user.id, action)
-        if not has_permission:
-            await interaction.response.send_message("❌ この操作を行う権限がありません。", ephemeral=True)
+        if not has_permission: await interaction.response.send_message("❌ この操作を行う権限がありません。", ephemeral=True)
         return has_permission
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: ui.Item) -> None:
         logger.error(f"FarmUIView에서 오류 발생 (item: {item.custom_id}): {error}", exc_info=True)
-        msg_content = "❌ 処理中に予期せぬエラーが発生しました。"
-        if interaction.response.is_done():
-            await interaction.followup.send(msg_content, ephemeral=True)
-        else:
-            await interaction.response.send_message(msg_content, ephemeral=True)
+        msg = "❌ 処理中に予期せぬエラーが発生しました。"
+        if interaction.response.is_done(): await interaction.followup.send(msg, ephemeral=True)
+        else: await interaction.response.send_message(msg, ephemeral=True)
 
     async def on_farm_till_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         gear = await get_user_gear(interaction.user)
         equipped_hoe = gear.get('hoe', BARE_HANDS)
         if equipped_hoe == BARE_HANDS:
-            await interaction.followup.send("❌ まずは商店で「クワ」を購入して、プロフィール画面から装備してください。", ephemeral=True)
-            return
-            
+            await interaction.followup.send("❌ まずは商店で「クワ」を購入して、プロフィール画面から装備してください。", ephemeral=True); return
         hoe_power = get_item_database().get(equipped_hoe, {}).get('power', 1)
         tilled_count, plots_to_update = 0, []
         for plot in self.farm_data.get('farm_plots', []):
             if plot['state'] == 'default' and tilled_count < hoe_power:
                 plots_to_update.append(update_plot(plot['id'], {'state': 'tilled'})); tilled_count += 1
         if not plots_to_update:
-            await interaction.followup.send("ℹ️ これ以上耕せる畑がありません。", ephemeral=True)
-            return
-
+            await interaction.followup.send("ℹ️ これ以上耕せる畑がありません。", ephemeral=True); return
         await asyncio.gather(*plots_to_update)
         await interaction.followup.send(f"✅ **{equipped_hoe}** を使って、畑を**{tilled_count}マス**耕しました。", ephemeral=True)
-        await self.cog.update_farm_ui(interaction.channel, self.farm_owner)
+        await self.cog.update_farm_ui(interaction.channel, self.cog.bot.get_user(self.farm_owner_id))
 
     async def on_farm_plant_click(self, interaction: discord.Interaction):
-        action_view = FarmActionView(self.cog, self.farm_data, interaction.user, "plant_seed")
-        await action_view.send_initial_message(interaction)
+        await FarmActionView(self.cog, self.farm_data, interaction.user, "plant_seed").send_initial_message(interaction)
 
     async def on_farm_water_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         gear = await get_user_gear(interaction.user)
         equipped_wc = gear.get('watering_can', BARE_HANDS)
         if equipped_wc == BARE_HANDS:
-            await interaction.followup.send("❌ まずは商店で「じょうろ」を購入して、装備してください。", ephemeral=True)
-            return
-            
+            await interaction.followup.send("❌ まずは商店で「じょうろ」を購入して、装備してください。", ephemeral=True); return
         item_info = get_item_database().get(equipped_wc, {})
-        wc_power = item_info.get('power', 1)
-        quality_bonus = item_info.get('quality_bonus', 5)
-        
+        wc_power, quality_bonus = item_info.get('power', 1), item_info.get('quality_bonus', 5)
         watered_count, plots_to_update = 0, []
-        now_utc = datetime.now(timezone.utc)
-        today_jst_midnight = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
-
+        now_utc, today_jst_midnight = datetime.now(timezone.utc), datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
         for plot in self.farm_data.get('farm_plots', []):
             if plot['state'] == 'planted' and watered_count < wc_power:
-                can_water = False
-                if plot.get('last_watered_at') is None:
-                    can_water = True
-                else:
-                    last_watered_at_dt = datetime.fromisoformat(plot['last_watered_at'])
-                    if last_watered_at_dt < today_jst_midnight:
-                        can_water = True
-                
-                if can_water:
+                last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
+                if last_watered_dt < today_jst_midnight:
                     plots_to_update.append(update_plot(plot['id'], {'last_watered_at': now_utc.isoformat(), 'water_count': plot['water_count'] + 1, 'quality': plot['quality'] + quality_bonus}))
                     watered_count += 1
-
         if not plots_to_update:
-            await interaction.followup.send("ℹ️ 今日はこれ以上水をやる必要のある作物がありません。", ephemeral=True)
-            return
-            
+            await interaction.followup.send("ℹ️ 今日はこれ以上水をやる必要のある作物がありません。", ephemeral=True); return
         await asyncio.gather(*plots_to_update)
         await interaction.followup.send(f"✅ **{equipped_wc}** を使って、作物**{watered_count}個**に水をやりました。", ephemeral=True)
-        await self.cog.update_farm_ui(interaction.channel, self.farm_owner)
+        await self.cog.update_farm_ui(interaction.channel, self.cog.bot.get_user(self.farm_owner_id))
 
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -364,95 +299,40 @@ class FarmUIView(ui.View):
             sx, sy = farmable_info['space_required_x'], farmable_info['space_required_y']
             related_plots = [p for p in self.farm_data['farm_plots'] if plot['pos_x'] <= p['pos_x'] < plot['pos_x'] + sx and plot['pos_y'] <= p['pos_y'] < plot['pos_y'] + sy]
             plot_ids = [p['id'] for p in related_plots]; processed_plots_ids.update(plot_ids)
-            quality_score = plot['quality']
-            yield_multiplier = 1.0
-            if quality_score > 20: yield_multiplier = 1.5
-            elif quality_score > 10: yield_multiplier = 1.2
-            elif quality_score < 0: yield_multiplier = 0.5
+            quality_score = sum(p['quality'] for p in related_plots) / len(related_plots)
+            yield_multiplier = 1.0 + (quality_score / 100.0)
             base_yield = farmable_info.get('base_yield', 1)
-            final_yield = max(1, int(base_yield * yield_multiplier))
+            final_yield = max(1, round(base_yield * yield_multiplier))
             harvest_name = farmable_info['harvest_item_name']
             harvested_items[harvest_name] = harvested_items.get(harvest_name, 0) + final_yield
-            if not farmable_info.get('is_tree'): 
-                plots_to_reset.extend(plot_ids)
+            if not farmable_info.get('is_tree'): plots_to_reset.extend(plot_ids)
             else:
-                regrowth_hours = farmable_info.get('regrowth_hours', 24)
-                for pid in plot_ids:
-                    trees_to_update[pid] = regrowth_hours
-
+                for pid in plot_ids: trees_to_update[pid] = farmable_info.get('regrowth_hours', 24)
         if not harvested_items:
-            await interaction.followup.send("ℹ️ 収穫できる作物がありません。", ephemeral=True)
-            return
-            
-        update_tasks = [update_inventory(str(self.farm_owner.id), name, qty) for name, qty in harvested_items.items()]
+            await interaction.followup.send("ℹ️ 収穫できる作物がありません。", ephemeral=True); return
+        update_tasks = [update_inventory(str(self.farm_owner_id), name, qty) for name, qty in harvested_items.items()]
         if plots_to_reset: update_tasks.append(clear_plots_db(plots_to_reset))
         if trees_to_update:
-            now = datetime.now(timezone.utc)
-            update_tasks.extend([
-                update_plot(pid, {
-                    'growth_stage': 2, 
-                    'planted_at': now.isoformat(), 
-                    'water_count': 0, 
-                    'last_watered_at': now.isoformat(), 
-                    'quality': 5
-                }) for pid in trees_to_update.keys()
-            ])
+            now_iso = datetime.now(timezone.utc).isoformat()
+            update_tasks.extend([update_plot(pid, {'growth_stage': 2, 'planted_at': now_iso, 'water_count': 0, 'last_watered_at': now_iso, 'quality': 5}) for pid in trees_to_update.keys()])
         
-        level_up_result = None
-        xp_per_crop = int(get_config("XP_FROM_FARMING", "15").strip('"'))
-        total_xp = sum(harvested_items.values()) * xp_per_crop
-        if total_xp > 0:
-            res = await supabase.rpc('add_xp', {'p_user_id': self.farm_owner.id, 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute()
-            if res and res.data:
-                level_up_result = res.data[0]
-
+        farm_owner = self.cog.bot.get_user(self.farm_owner_id)
+        if farm_owner:
+            game_config = get_config("GAME_CONFIG", {})
+            xp_per_crop = game_config.get("XP_FROM_FARMING", 15)
+            total_xp = sum(harvested_items.values()) * xp_per_crop
+            if total_xp > 0:
+                res = await supabase.rpc('add_xp', {'p_user_id': self.farm_owner_id, 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute()
+                if res and res.data:
+                    core_cog = self.cog.bot.get_cog("EconomyCore")
+                    if core_cog: await core_cog.handle_level_up_event(farm_owner, res.data[0])
         await asyncio.gather(*update_tasks)
         result_str = ", ".join([f"**{name}** {qty}個" for name, qty in harvested_items.items()])
         await interaction.followup.send(f"🎉 **{result_str}**を収穫しました！", ephemeral=True)
-        await self.cog.update_farm_ui(interaction.channel, self.farm_owner)
-
-        if level_up_result:
-            core_cog = self.cog.bot.get_cog("EconomyCore")
-            if core_cog and hasattr(core_cog, "handle_level_up_event"):
-                await core_cog.handle_level_up_event(self.farm_owner, level_up_result)
+        await self.cog.update_farm_ui(interaction.channel, farm_owner)
 
     async def on_farm_uproot_click(self, interaction: discord.Interaction):
-        action_view = FarmActionView(self.cog, self.farm_data, interaction.user, "uproot")
-        await action_view.send_initial_message(interaction)
-        
-    async def on_farm_invite_click(self, interaction: discord.Interaction):
-        view = ui.View()
-        user_select = ui.UserSelect(placeholder="農場に招待するユーザーを選択...")
-        async def callback(select_interaction: discord.Interaction):
-            await select_interaction.response.defer(ephemeral=True)
-            for user in user_select.values:
-                try: await interaction.channel.add_user(user)
-                except: pass
-                
-                await select_interaction.followup.send(f"✅ {user.mention}さんを農場に招待しました。", ephemeral=True)
-
-            await interaction.edit_original_response(content="招待が完了しました。", view=None)
-        user_select.callback = callback
-        view.add_item(user_select)
-        await interaction.response.send_message("誰を農場に招待しますか？", view=view, ephemeral=True)
-
-    async def on_farm_share_click(self, interaction: discord.Interaction):
-        view = ui.View()
-        user_select = ui.UserSelect(placeholder="権限を付与するユーザーを選択...")
-        async def callback(select_interaction: discord.Interaction):
-            await select_interaction.response.defer(ephemeral=True)
-            for user in user_select.values:
-                await grant_farm_permission(self.farm_data['id'], user.id)
-                await select_interaction.followup.send(f"✅ {user.mention}さんに農場の編集権限を付与しました。", ephemeral=True)
-
-            await interaction.edit_original_response(content="権限設定が完了しました。", view=None)
-        user_select.callback = callback
-        view.add_item(user_select)
-        await interaction.response.send_message("誰に農場の権限を付与しますか？", view=view, ephemeral=True)
-
-    async def on_farm_rename_click(self, interaction: discord.Interaction):
-        modal = FarmNameModal(self.cog, self.farm_data)
-        await interaction.response.send_modal(modal)
+        await FarmActionView(self.cog, self.farm_data, interaction.user, "uproot").send_initial_message(interaction)
 
 class FarmCreationPanelView(ui.View):
     def __init__(self, cog_instance: 'Farm'):
@@ -475,8 +355,8 @@ class FarmCreationPanelView(ui.View):
                 try: await thread.add_user(user)
                 except: pass
                 await thread.send(f"ようこそ、{user.mention}さん！", delete_after=10)
-            else: await self.cog.create_new_farm_thread(interaction, user)
-        else: await self.cog.create_new_farm_thread(interaction, user)
+            else: await self.cog.create_new_farm_thread(interaction, user, farm_data)
+        else: await self.cog.create_new_farm_thread(interaction, user, farm_data)
 
 class Farm(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -489,44 +369,13 @@ class Farm(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author.bot or not message.guild or not isinstance(message.channel, discord.Thread):
-            return
-
+        if message.author.bot or not message.guild or not isinstance(message.channel, discord.Thread): return
         owner_id = await get_farm_owner_by_thread(message.channel.id)
-        if not owner_id:
-            return
-
-        try:
-            await message.delete()
-        except (discord.NotFound, discord.Forbidden):
-            pass
+        if not owner_id: return
+        try: await message.delete()
+        except (discord.NotFound, discord.Forbidden): pass
+        await message.channel.send(f"{message.author.mention}さん、農場での操作は下のボタンを使用してください。", delete_after=10)
             
-    @commands.Cog.listener()
-    async def on_thread_member_join(self, member: discord.ThreadMember):
-        thread = member.thread
-
-        if member.id == self.bot.user.id:
-            return
-
-        owner_id = await get_farm_owner_by_thread(thread.id)
-        if not owner_id:
-            return
-        
-        farm_owner = self.bot.get_user(owner_id)
-        if not farm_owner:
-            logger.warning(f"농장(스레드 ID: {thread.id})의 소유자(ID: {owner_id})를 찾을 수 없어 UI 업데이트를 건너뜁니다.")
-            return
-
-        guild_member = thread.guild.get_member(member.id)
-        if not guild_member:
-            logger.info(f"유저(ID: {member.id})님이 농장(스레드 ID: {thread.id})에 참여하여 UI를 최신화합니다.")
-        else:
-            logger.info(f"{guild_member.display_name}님이 농장(스레드 ID: {thread.id})에 참여하여 UI를 최신화합니다.")
-
-        await asyncio.sleep(1.5)
-        
-        await self.update_farm_ui(thread, farm_owner)
-
     async def register_persistent_views(self):
         self.bot.add_view(FarmCreationPanelView(self))
         self.bot.add_view(FarmUIView(self))
@@ -536,71 +385,16 @@ class Farm(commands.Cog):
     async def daily_crop_update(self):
         logger.info("일일 작물 상태 업데이트 시작 (성장 및 시듦 판정)...")
         try:
-            weather_key = get_config("current_weather", "sunny").strip('"')
-            is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
+            weather_key = get_config("current_weather", "sunny")
+            weather = WEATHER_TYPES.get(weather_key, {})
+            is_raining = weather.get('water_effect', False)
+            growth_mod = weather.get('growth_mod', 1.0)
             
-            page_size = 1000
-            offset = 0
-            total_updated_plots = 0
-
-            while True:
-                response = await supabase.table('farm_plots').select('*').eq('state', 'planted').range(offset, offset + page_size - 1).execute()
-                
-                if not response or not response.data:
-                    break
-
-                plots_to_update = []
-                now_utc = datetime.now(timezone.utc)
-                today_jst_midnight = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
-                farmable_info_map = await preload_farmable_info({'farm_plots': response.data})
-
-                for plot in response.data:
-                    farmable_info = farmable_info_map.get(plot['planted_item_name'])
-                    if not farmable_info: continue
-
-                    updates = {}
-                    planted_at = datetime.fromisoformat(plot['planted_at'])
-                    growth_days = farmable_info.get('growth_days', 999)
-
-                    if plot['growth_stage'] < 3:
-                        time_since_planting = now_utc - planted_at
-                        if time_since_planting.days >= growth_days:
-                            updates['growth_stage'] = 3
-
-                    if updates.get('growth_stage') != 3 and plot['growth_stage'] < 3:
-                        last_wet_time = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else planted_at
-                        time_since_last_water = now_utc - last_wet_time
-                        wither_threshold_days = growth_days / 2.0
-                        
-                        if time_since_last_water.days > wither_threshold_days:
-                            updates['state'] = 'withered'
-
-                    if is_raining and updates.get('state') != 'withered':
-                        can_water_today = plot.get('last_watered_at') is None or datetime.fromisoformat(plot['last_watered_at']) < today_jst_midnight
-                        if can_water_today:
-                            updates['last_watered_at'] = now_utc.isoformat()
-                            updates['water_count'] = plot['water_count'] + 1
-                            updates['quality'] = plot['quality'] + 5
-                    
-                    if updates:
-                        plots_to_update.append((plot['id'], updates))
-
-                if plots_to_update:
-                    update_tasks = [update_plot(pid, data) for pid, data in plots_to_update]
-                    await asyncio.gather(*update_tasks)
-                    total_updated_plots += len(plots_to_update)
-
-                if len(response.data) < page_size:
-                    break
-                
-                offset += page_size
-                await asyncio.sleep(1)
-            
-            if total_updated_plots > 0:
-                logger.info(f"총 {total_updated_plots}개의 밭의 상태를 업데이트했습니다.")
+            response = await supabase.rpc('daily_crop_update', {'is_raining': is_raining, 'growth_modifier': growth_mod}).execute()
+            if response.data:
+                logger.info(f"일일 작물 업데이트 완료. {response.data}개의 밭이 영향을 받았습니다.")
             else:
                 logger.info("업데이트할 작물이 없습니다.")
-
         except Exception as e:
             logger.error(f"일일 작물 업데이트 중 오류: {e}", exc_info=True)
             
@@ -616,33 +410,22 @@ class Farm(commands.Cog):
         farmable_info_map = await preload_farmable_info(farm_data)
         size_x, size_y = farm_data.get('size_x', 1), farm_data.get('size_y', 1)
         plots_map = {(p['pos_x'], p['pos_y']): p for p in farm_data.get('farm_plots', [])}
-        
-        grid = [['' for _ in range(size_x)] for _ in range(size_y)]
-        info_lines = []
-        processed_plots = set()
-        
-        now_utc = datetime.now(timezone.utc)
-        today_jst_midnight = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
-
+        grid, info_lines, processed_plots = [['' for _ in range(size_x)] for _ in range(size_y)], [], set()
+        now_utc, today_jst_midnight = datetime.now(timezone.utc), datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
         for y in range(size_y):
             for x in range(size_x):
                 if (x, y) in processed_plots: continue
                 plot = plots_map.get((x, y))
-                
                 plot_emoji = '🟤'
                 if plot:
                     if plot['state'] == 'tilled': plot_emoji = '🟫'
                     elif plot['state'] == 'withered': plot_emoji = '🥀'
                     elif plot['state'] == 'planted':
-                        stage = plot['growth_stage']
                         item_name = plot['planted_item_name']
                         farmable_info = farmable_info_map.get(item_name)
                         if farmable_info:
-                            emoji_to_use = farmable_info.get('item_emoji')
-                            if not emoji_to_use or stage < 3:
-                                item_type = farmable_info.get('item_type', 'seed')
-                                emoji_to_use = CROP_EMOJI_MAP.get(item_type, {}).get(stage, '🌱')
-                            
+                            stage = plot['growth_stage']
+                            emoji_to_use = farmable_info.get('item_emoji') if stage == 3 else CROP_EMOJI_MAP.get(farmable_info.get('item_type', 'seed'), {}).get(stage, '🌱')
                             sx, sy = farmable_info['space_required_x'], farmable_info['space_required_y']
                             for dy in range(sy):
                                 for dx in range(sx):
@@ -650,104 +433,67 @@ class Farm(commands.Cog):
                                         grid[y+dy][x+dx] = emoji_to_use
                                         processed_plots.add((x + dx, y + dy))
                             plot_emoji = emoji_to_use
-                        else:
-                            plot_emoji = '❓'
-                
-                if not (x,y) in processed_plots:
-                    grid[y][x] = plot_emoji
-
+                        else: plot_emoji = '❓'
+                if not (x,y) in processed_plots: grid[y][x] = plot_emoji
                 if plot and plot['state'] == 'planted':
                     farmable_info = farmable_info_map.get(plot['planted_item_name'])
                     if not farmable_info: continue
-
-                    watered_today_emoji = '➖'
-                    if plot.get('last_watered_at'):
-                        if datetime.fromisoformat(plot['last_watered_at']) >= today_jst_midnight:
-                            watered_today_emoji = '💧'
-
+                    watered_today_emoji = '💧' if plot.get('last_watered_at') and datetime.fromisoformat(plot['last_watered_at']) >= today_jst_midnight else '➖'
                     info_text = f"{plot_emoji} **{plot['planted_item_name']}** (水: {watered_today_emoji}): "
-                    
                     if plot['growth_stage'] < 3:
                         planted_at = datetime.fromisoformat(plot['planted_at'])
                         growth_days = farmable_info.get('growth_days', 3)
                         days_passed = (now_utc - planted_at).days
                         days_left = max(0, growth_days - days_passed)
                         info_text += f"収穫まであと約 {days_left}日"
-                    
                     elif farmable_info.get('is_tree'):
                         regrowth_hours = farmable_info.get('regrowth_hours', 24)
-                        last_harvest_time = datetime.fromisoformat(plot['planted_at'])
-                        next_harvest_time = last_harvest_time + timedelta(hours=regrowth_hours)
+                        next_harvest_time = datetime.fromisoformat(plot['planted_at']) + timedelta(hours=regrowth_hours)
                         time_left = next_harvest_time - now_utc
-                        if time_left.total_seconds() > 0:
-                            hours_left = int(time_left.total_seconds() // 3600)
-                            info_text += f"次の実まであと約 {hours_left}時間"
-                        else:
-                            info_text += "実の収穫可能！ 🧺"
-                    else:
-                        info_text += "収穫可能！ 🧺"
-                    
+                        if time_left.total_seconds() > 0: info_text += f"次の実まであと約 {int(time_left.total_seconds() // 3600)}時間"
+                        else: info_text += "実の収穫可能！ 🧺"
+                    else: info_text += "収穫可能！ 🧺"
                     info_lines.append(info_text)
-
         farm_str = "\n".join("".join(row) for row in grid)
         farm_name = farm_data.get('name') or user.display_name
-        embed = discord.Embed(title=f"**{farm_name}の農場**", color=0x8BC34A)
-        
-        description = f"```{farm_str}```"
-        if info_lines:
-            description += "\n" + "\n".join(info_lines)
-
-        weather_key = get_config("current_weather", "sunny").strip('"')
-        weather = WEATHER_TYPES.get(weather_key, {"emoji": "❔", "name": "不明"})
-        description += f"\n\n**今日の天気:** {weather['emoji']} {weather['name']}"
-        
-        embed.description = description
+        embed = discord.Embed(title=f"**{farm_name}さんの農場**", color=0x8BC34A, description=f"```{farm_str}```")
+        if info_lines: embed.description += "\n" + "\n".join(info_lines)
+        weather = WEATHER_TYPES.get(get_config("current_weather", "sunny"), {"emoji": "❔", "name": "不明"})
+        embed.description += f"\n\n**今日の天気:** {weather['emoji']} {weather['name']}"
         return embed
         
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User):
         lock = self.thread_locks.setdefault(thread.id, asyncio.Lock())
         async with lock:
             if user is None:
-                logger.warning(f"농장 UI 업데이트 시도 실패: 유저 정보를 찾을 수 없습니다 (스레드 ID: {thread.id})")
-                return
+                logger.warning(f"농장 UI 업데이트 시도 실패: 유저 정보를 찾을 수 없습니다 (스레드 ID: {thread.id})"); return
             farm_data = await get_farm_data(user.id)
-            if not farm_data or not farm_data.get("farm_message_id"): return
+            if not farm_data: return
             try:
                 if old_message_id := farm_data.get("farm_message_id"):
-                    try:
-                        old_message = await thread.fetch_message(old_message_id)
-                        await old_message.delete()
-                    except (discord.NotFound, discord.Forbidden):
-                        pass
-
+                    try: await (await thread.fetch_message(old_message_id)).delete()
+                    except (discord.NotFound, discord.Forbidden): pass
                 embed = await self.build_farm_embed(farm_data, user)
                 view = FarmUIView(self)
-                
                 new_message = await thread.send(embed=embed, view=view)
                 await supabase.table('farms').update({'farm_message_id': new_message.id}).eq('id', farm_data['id']).execute()
-
-            except (discord.NotFound, discord.Forbidden): pass
             except Exception as e:
                 logger.error(f"농장 UI 업데이트 중 오류: {e}", exc_info=True)
                 
-    async def create_new_farm_thread(self, interaction: discord.Interaction, user: discord.Member):
+    async def create_new_farm_thread(self, interaction: discord.Interaction, user: discord.Member, farm_data: Optional[Dict] = None):
         try:
-            panel_channel = interaction.channel
             farm_name = f"{user.display_name}の農場"
-            farm_thread = await panel_channel.create_thread(name=f"🌱｜{farm_name}", type=discord.ChannelType.private_thread)
-            await farm_thread.send(f"ようこそ、{user.mention}さん！このスレッドの管理権限を設定しています…", delete_after=10)
-            farm_data = await get_farm_data(user.id) or await create_farm(user.id)
+            farm_thread = await interaction.channel.create_thread(name=f"🌱｜{farm_name}", type=discord.ChannelType.private_thread)
+            farm_data = farm_data or await create_farm(user.id)
+            if not farm_data:
+                await interaction.followup.send("❌ 農場の初期化に失敗しました。", ephemeral=True); return
             await supabase.table('farms').update({'thread_id': farm_thread.id, 'name': farm_name}).eq('user_id', user.id).execute()
-            farm_data = await get_farm_data(user.id)
+            updated_farm_data = await get_farm_data(user.id)
             if welcome_embed_data := await get_embed_from_db("farm_thread_welcome"):
-                welcome_embed = format_embed_from_db(welcome_embed_data, user_name=farm_data.get('name') or user.display_name)
-                await farm_thread.send(embed=welcome_embed)
-            
-            farm_embed = await self.build_farm_embed(farm_data, user)
-            farm_view = FarmUIView(self)
-            farm_message = await farm_thread.send(embed=farm_embed, view=farm_view)
-            
-            await supabase.table('farms').update({'farm_message_id': farm_message.id}).eq('id', farm_data['id']).execute()
+                await farm_thread.send(embed=format_embed_from_db(welcome_embed_data, user_name=updated_farm_data.get('name') or user.display_name))
+            farm_embed = await self.build_farm_embed(updated_farm_data, user)
+            farm_message = await farm_thread.send(embed=farm_embed, view=FarmUIView(self))
+            await supabase.table('farms').update({'farm_message_id': farm_message.id}).eq('id', updated_farm_data['id']).execute()
             await farm_thread.add_user(user)
             await interaction.followup.send(f"✅ あなただけの農場を作成しました！ {farm_thread.mention} を確認してください。", ephemeral=True)
         except Exception as e:
@@ -760,11 +506,44 @@ class Farm(commands.Cog):
                 try: await (await old_channel.fetch_message(old_message_id)).delete()
                 except (discord.NotFound, discord.Forbidden): pass
         if not (embed_data := await get_embed_from_db(panel_key)): return
-        embed = discord.Embed.from_dict(embed_data)
-        view = FarmCreationPanelView(self)
-        new_message = await channel.send(embed=embed, view=view)
+        new_message = await channel.send(embed=discord.Embed.from_dict(embed_data), view=FarmCreationPanelView(self))
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。(チャンネル: #{channel.name})")
+
+    @app_commands.command(name="farm", description="農場関連のコマンドです。")
+    @app_commands.describe(action="実行する操作を選択してください。", user="招待または権限を付与するユーザー")
+    @app_commands.choices(action=[
+        app_commands.Choice(name="農場に招待する", value="invite"),
+        app_commands.Choice(name="編集権限を付与する", value="share"),
+        app_commands.Choice(name="農場の名前を変更する", value="rename"),
+    ])
+    async def farm_command(self, interaction: discord.Interaction, action: str, user: Optional[discord.Member] = None, name: Optional[str] = None):
+        farm_data = await get_farm_data(interaction.user.id)
+        if not (farm_data and farm_data.get('thread_id')):
+            return await interaction.response.send_message("❌ あなたはまだ農場を所有していません。", ephemeral=True)
+        if not (thread := self.bot.get_channel(farm_data['thread_id'])):
+            return await interaction.response.send_message("❌ 農場スレッドが見つかりません。", ephemeral=True)
+
+        if action == "invite":
+            if not user: return await interaction.response.send_message("❌ 招待するユーザーを指定してください。", ephemeral=True)
+            try:
+                await thread.add_user(user)
+                await interaction.response.send_message(f"✅ {user.mention}さんを農場に招待しました。", ephemeral=True)
+            except Exception:
+                await interaction.response.send_message("❌ 招待に失敗しました。", ephemeral=True)
+        
+        elif action == "share":
+            if not user: return await interaction.response.send_message("❌ 権限を付与するユーザーを指定してください。", ephemeral=True)
+            await grant_farm_permission(farm_data['id'], user.id)
+            await interaction.response.send_message(f"✅ {user.mention}さんに農場の編集権限を付与しました。", ephemeral=True)
+
+        elif action == "rename":
+            if not name: return await interaction.response.send_message("❌ 新しい農場の名前を入力してください。", ephemeral=True)
+            await supabase.table('farms').update({'name': name}).eq('id', farm_data['id']).execute()
+            try: await thread.edit(name=f"🌱｜{name}")
+            except Exception: pass
+            await interaction.response.send_message(f"✅ 農場の名前を「{name}」に変更しました。", ephemeral=True)
+            await self.update_farm_ui(thread, interaction.user)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Farm(bot))
