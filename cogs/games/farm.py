@@ -6,8 +6,9 @@ from discord import ui
 import logging
 from typing import Optional, Dict, List, Any
 import asyncio
+# [✅ 버그 수정] time 모듈을 별도로 import 합니다.
 import time
-from datetime import datetime, timezone, timedelta, time
+from datetime import datetime, timezone, timedelta
 
 from utils.database import (
     get_farm_data, create_farm, get_config,
@@ -33,7 +34,9 @@ WEATHER_TYPES = {
 }
 
 JST = timezone(timedelta(hours=9))
-JST_MIDNIGHT_UPDATE = time(hour=0, minute=1, tzinfo=JST)
+# [✅ 버그 수정] datetime.time 객체와 time 모듈의 충돌을 피하기 위해, 변수명으로 time을 사용하지 않습니다.
+JST_MIDNIGHT_UPDATE = discord.utils.parse_time("00:01+09:00")
+
 
 async def preload_farmable_info(farm_data: Dict) -> Dict[str, Dict]:
     item_names = {p['planted_item_name'] for p in farm_data.get('farm_plots', []) if p.get('planted_item_name')}
@@ -274,7 +277,7 @@ class FarmUIView(ui.View):
         harvested, plots_to_reset, trees_to_update, processed = {}, [], {}, set()
         info_map = await preload_farmable_info(self.farm_data)
         for p in self.farm_data['farm_plots']:
-            if p['id'] in processed or p['growth_stage'] != 3: continue
+            if p['id'] in processed or p['growth_stage'] < info_map.get(p['planted_item_name'], {}).get('max_growth_stage', 3): continue
             info = info_map.get(p['planted_item_name'])
             if not info: continue
             sx, sy = info['space_required_x'], info['space_required_y']
@@ -391,10 +394,11 @@ class Farm(commands.Cog):
         try:
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
+            # [✅ 수정] 새로운 DB 함수 호출
             response = await supabase.rpc('process_daily_farm_update', {'is_raining': is_raining}).execute()
-            if response.data: 
+            
+            if response.data and response.data > 0:
                 logger.info(f"일일 작물 업데이트 완료. {response.data}개의 밭이 영향을 받았습니다. UI 업데이트를 요청합니다.")
-                # 모든 농장주에게 UI 업데이트 요청
                 farms_res = await supabase.table('farms').select('user_id').execute()
                 if farms_res.data:
                     for farm in farms_res.data:
@@ -414,17 +418,18 @@ class Farm(commands.Cog):
             response = await supabase.table('bot_configs').select('config_key').like('config_key', 'farm_ui_update_request_%').execute()
             if not response.data: return
             
-            requests = response.data
-            keys_to_delete = [req['config_key'] for req in requests]
-            user_ids_to_update = {int(key.split('_')[-1]) for key in keys_to_delete}
+            keys_to_delete = [req['config_key'] for req in response.data]
+            user_ids = {int(key.split('_')[-1]) for key in keys_to_delete}
 
-            for user_id in user_ids_to_update:
+            tasks = []
+            for user_id in user_ids:
                 farm_data = await get_farm_data(user_id)
                 if farm_data and farm_data.get('thread_id'):
-                    if thread := self.bot.get_channel(farm_data['thread_id']):
-                        if user := self.bot.get_user(user_id):
-                            await self.update_farm_ui(thread, user)
+                    if (thread := self.bot.get_channel(farm_data['thread_id'])) and (user := self.bot.get_user(user_id)):
+                        tasks.append(self.update_farm_ui(thread, user))
             
+            await asyncio.gather(*tasks)
+
             if keys_to_delete:
                 await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
 
@@ -463,7 +468,8 @@ class Farm(commands.Cog):
                         info = info_map.get(name)
                         if info:
                             stage = plot['growth_stage']
-                            emoji = info.get('item_emoji') if stage >= info.get('max_growth_stage', 3) else CROP_EMOJI_MAP.get(info.get('item_type', 'seed'), {}).get(stage, '🌱')
+                            max_stage = info.get('max_growth_stage', 3)
+                            emoji = info.get('item_emoji') if stage >= max_stage else CROP_EMOJI_MAP.get(info.get('item_type', 'seed'), {}).get(stage, '🌱')
                             item_sx, item_sy = info['space_required_x'], info['space_required_y']
                             for dy in range(item_sy):
                                 for dx in range(item_sx):
@@ -474,15 +480,15 @@ class Farm(commands.Cog):
                             water_emoji = '💧' if last_watered >= today_jst_midnight else '➖'
                             
                             info_text = f"{emoji} **{name}** (水: {water_emoji}): "
-                            if stage >= info.get('max_growth_stage', 3): info_text += "収穫可能！ 🧺"
-                            else: info_text += f"成長 {stage+1}/{info.get('max_growth_stage', 3)+1}段階目"
+                            if stage >= max_stage: info_text += "収穫可能！ 🧺"
+                            else: info_text += f"成長 {stage+1}/{max_stage+1}段階目"
                             infos.append(info_text)
                 if not (x,y) in processed: grid[y][x] = emoji
 
         farm_str = "\n".join("".join(row) for row in grid)
         farm_name = farm_data.get('name') or user.display_name
         embed = discord.Embed(title=f"**{farm_name}さんの農場**", color=0x8BC34A, description=f"```{farm_str}```")
-        if infos: embed.description += "\n" + "\n".join(infos)
+        if infos: embed.description += "\n" + "\n".join(sorted(infos))
         weather = WEATHER_TYPES.get(get_config("current_weather", "sunny"), {"emoji": "❔", "name": "不明"})
         embed.description += f"\n\n**今日の天気:** {weather['emoji']} {weather['name']}"
         return embed
@@ -515,7 +521,7 @@ class Farm(commands.Cog):
             if embed_data := await get_embed_from_db("farm_thread_welcome"):
                 await thread.send(embed=format_embed_from_db(embed_data, user_name=updated_data.get('name') or user.display_name))
             
-            await self.update_farm_ui(thread, user) # UI 생성 및 메시지 ID 저장을 한번에 처리
+            await self.update_farm_ui(thread, user)
             await thread.add_user(user)
             await interaction.followup.send(f"✅ あなただけの農場を作成しました！ {thread.mention} を確認してください。", ephemeral=True)
         except Exception as e:
