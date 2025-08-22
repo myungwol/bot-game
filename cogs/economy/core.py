@@ -55,7 +55,6 @@ class EconomyCore(commands.Cog):
         self.update_chat_progress_loop.cancel()
         self.daily_reset_loop.cancel()
     
-    # [✅ 구조 개선] 레벨업 이벤트 핸들러 중앙화
     async def handle_level_up_event(self, user: discord.User, result_data: Dict):
         if not result_data or not result_data.get('leveled_up'):
             return
@@ -63,13 +62,11 @@ class EconomyCore(commands.Cog):
         new_level = result_data.get('new_level')
         logger.info(f"유저 {user.display_name}(ID: {user.id})가 레벨 {new_level}(으)로 레벨업했습니다.")
         
-        # 특정 레벨 도달 시 전직 요청
         job_advancement_levels = get_config("GAME_CONFIG", {}).get("JOB_ADVANCEMENT_LEVELS", [50, 100])
         if new_level in job_advancement_levels:
             await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": time.time()})
             logger.info(f"유저가 전직 가능 레벨({new_level})에 도달하여 DB에 요청을 기록했습니다.")
 
-        # 레벨 등급 역할 업데이트 요청
         await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
 
     @tasks.loop(time=JST_MIDNIGHT_RESET)
@@ -132,13 +129,11 @@ class EconomyCore(commands.Cog):
     async def reward_payout_loop(self):
         game_config = get_config("GAME_CONFIG", {})
         try:
-            # 음성 보상
             voice_req = game_config.get("VOICE_TIME_REQUIREMENT_MINUTES", 10)
             voice_reward = game_config.get("VOICE_REWARD_RANGE", [10, 15])
             voice_xp = game_config.get("XP_FROM_VOICE", 10)
             await self.process_rewards('voice', voice_req, voice_reward, voice_xp, "ボイスチャット活動報酬")
 
-            # 채팅 보상
             chat_req = game_config.get("CHAT_MESSAGE_REQUIREMENT", 20)
             chat_reward = game_config.get("CHAT_REWARD_RANGE", [5, 10])
             chat_xp = game_config.get("XP_FROM_CHAT", 5)
@@ -182,34 +177,6 @@ class EconomyCore(commands.Cog):
         if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
         try: await log_channel.send(embed=embed)
         except Exception as e: logger.error(f"코인 활동 로그 전송 실패: {e}", exc_info=True)
-
-    async def log_admin_action(self, admin: discord.Member, target: discord.Member, amount: int, action: str):
-        if not self.coin_log_channel_id or not (log_channel := self.bot.get_channel(self.coin_log_channel_id)): return
-        if not (embed_data := await get_embed_from_db("log_coin_admin")): return
-        action_color = 0x3498DB if amount > 0 else 0xE74C3C
-        amount_str = f"+{amount:,}" if amount > 0 else f"{amount:,}"
-        embed = format_embed_from_db(embed_data, action=action, target_mention=target.mention, amount=amount_str, currency_icon=self.currency_icon, admin_mention=admin.mention)
-        embed.color = discord.Color(action_color)
-        try: await log_channel.send(embed=embed)
-        except Exception as e: logger.error(f"관리자 코인 조작 로그 전송 실패: {e}", exc_info=True)
-        
-    @app_commands.command(name="コイン付与", description="[管理者専用] 特定のユーザーにコインを付与します。")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def give_coin_command(self, interaction: discord.Interaction, user: discord.Member, amount: app_commands.Range[int, 1, None]):
-        await interaction.response.defer(ephemeral=True)
-        if await update_wallet(user, amount):
-            await self.log_admin_action(interaction.user, user, amount, "付与")
-            await interaction.followup.send(f"✅ {user.mention}さんへ `{amount:,}`{self.currency_icon}を付与しました。")
-        else: await interaction.followup.send("❌ コイン付与中にエラーが発生しました。")
-        
-    @app_commands.command(name="コイン削減", description="[管理者専用] 特定のユーザーのコインを削減します。")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def take_coin_command(self, interaction: discord.Interaction, user: discord.Member, amount: app_commands.Range[int, 1, None]):
-        await interaction.response.defer(ephemeral=True)
-        if await update_wallet(user, -amount):
-            await self.log_admin_action(interaction.user, user, -amount, "削減")
-            await interaction.followup.send(f"✅ {user.mention}さんの残高から `{amount:,}`{self.currency_icon}を削減しました。")
-        else: await interaction.followup.send("❌ コイン削減中にエラーが発生しました。")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(EconomyCore(bot))
