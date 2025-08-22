@@ -232,22 +232,18 @@ class FishingPanelView(ui.View):
 
                 location_name = "川" if location_type == "river" else "海"
                 
-                # [✅ 수정] 임베드 설명란에 장비 효과와 입질 시간 추가
                 rod_data = item_db.get(rod, {})
                 loot_bonus = rod_data.get('loot_bonus', 0.0)
                 
                 bite_range_config = get_config("FISHING_BITE_RANGE", "[8.0, 12.0]")
                 bite_range = eval(bite_range_config) if isinstance(bite_range_config, str) else [8.0, 12.0]
 
+                # [✅ 수정] 요청하신 대로 정보 표시 형식을 한 줄로 합칩니다.
                 desc_lines = [
                     f"### {location_name}にウキを投げました。",
-                    f"**🎣 使用中の釣竿:** `{rod}`",
+                    f"**🎣 使用中の釣竿:** `{rod}` (+{loot_bonus:.0%})",
+                    f"**🐛 使用中のエサ:** `{bait}` (⏱️ `{bite_range[0]}`～`{bite_range[1]}`秒)"
                 ]
-                if loot_bonus > 0:
-                    desc_lines.append(f"**✨ 釣竿の効果:** アイテム獲得率 +{loot_bonus:.0%}")
-                
-                desc_lines.append(f"**🐛 使用中のエサ:** `{bait}`")
-                desc_lines.append(f"**⏱️ アタリ予測:** `{bite_range[0]}`～`{bite_range[1]}`秒")
                 
                 desc = "\n".join(desc_lines)
                 embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
