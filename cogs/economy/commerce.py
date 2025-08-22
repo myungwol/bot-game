@@ -6,6 +6,7 @@ from discord import ui
 import logging
 import asyncio
 import math
+import time
 from typing import Optional, Dict, List, Any
 
 logger = logging.getLogger(__name__)
@@ -15,7 +16,7 @@ from utils.database import (
     get_config, get_string,
     get_aquarium, get_fishing_loot, sell_fish_from_db,
     save_panel_id, get_panel_id, get_embed_from_db,
-    update_inventory, update_wallet, get_farm_data, expand_farm_db
+    update_inventory, update_wallet, get_farm_data, save_config_to_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -43,7 +44,7 @@ class ShopViewBase(ui.View):
     def __init__(self, user: discord.Member):
         super().__init__(timeout=300)
         self.user = user
-        self.currency_icon = get_config("CURRENCY_ICON", "🪙")
+        self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙")
         self.message: Optional[discord.WebhookMessage] = None
 
     async def update_view(self, interaction: discord.Interaction):
@@ -92,16 +93,12 @@ class BuyItemView(ShopViewBase):
         if not self.items_in_category:
             embed.add_field(name="準備中", value=get_string("commerce.wip_category", default="このカテゴリーの商品は現在準備中です。"))
         else:
-            start_index = self.page_index * self.items_per_page
-            end_index = start_index + self.items_per_page
+            start_index, end_index = self.page_index * self.items_per_page, (self.page_index + 1) * self.items_per_page
             items_on_page = self.items_in_category[start_index:end_index]
 
             for name, data in items_on_page:
                 field_name = f"{data.get('emoji', '📦')} {name}"
-                field_value = (
-                    f"**価格:** `{data.get('price', 0):,}`{self.currency_icon}\n"
-                    f"> {data.get('description', '説明がありません。')}"
-                )
+                field_value = f"**価格:** `{data.get('price', 0):,}`{self.currency_icon}\n> {data.get('description', '説明がありません。')}"
                 embed.add_field(name=field_name, value=field_value, inline=False)
             
             total_pages = math.ceil(len(self.items_in_category) / self.items_per_page)
@@ -113,14 +110,12 @@ class BuyItemView(ShopViewBase):
     async def build_components(self):
         self.clear_items()
         
-        start_index = self.page_index * self.items_per_page
-        end_index = start_index + self.items_per_page
+        start_index, end_index = self.page_index * self.items_per_page, (self.page_index + 1) * self.items_per_page
         items_on_page = self.items_in_category[start_index:end_index]
 
         if items_on_page:
-            options = [discord.SelectOption(label=name, value=name, description=f"価格: {data['price']:,}{self.currency_icon}", emoji=data.get('emoji'))
-                       for name, data in items_on_page]
-            select = ui.Select(placeholder=f"購入したい商品を選択...", options=options)
+            options = [discord.SelectOption(label=name, value=name, description=f"価格: {data['price']:,}{self.currency_icon}", emoji=data.get('emoji')) for name, data in items_on_page]
+            select = ui.Select(placeholder="購入したい商品を選択...", options=options)
             select.callback = self.select_callback
             self.add_item(select)
         
@@ -128,12 +123,9 @@ class BuyItemView(ShopViewBase):
         if total_pages > 1:
             prev_button = ui.Button(label="◀ 前へ", style=discord.ButtonStyle.grey, custom_id="prev_page", disabled=(self.page_index == 0), row=2)
             prev_button.callback = self.pagination_callback
-            
             next_button = ui.Button(label="次へ ▶", style=discord.ButtonStyle.grey, custom_id="next_page", disabled=(self.page_index >= total_pages - 1), row=2)
             next_button.callback = self.pagination_callback
-
-            self.add_item(prev_button)
-            self.add_item(next_button)
+            self.add_item(prev_button); self.add_item(next_button)
 
         back_button = ui.Button(label="カテゴリー選択に戻る", style=discord.ButtonStyle.grey, row=3)
         back_button.callback = self.back_callback
@@ -141,10 +133,8 @@ class BuyItemView(ShopViewBase):
 
     async def pagination_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if interaction.data['custom_id'] == 'next_page':
-            self.page_index += 1
-        else:
-            self.page_index -= 1
+        if interaction.data['custom_id'] == 'next_page': self.page_index += 1
+        else: self.page_index -= 1
         await self.update_view(interaction)
 
     async def select_callback(self, interaction: discord.Interaction):
@@ -158,7 +148,6 @@ class BuyItemView(ShopViewBase):
                 await self.handle_quantity_purchase(interaction, item_name, item_data)
             else:
                 await self.handle_single_purchase(interaction, item_name, item_data)
-            await self.update_view(interaction)
         except Exception as e:
             await self.handle_error(interaction, e, str(e))
 
@@ -166,93 +155,75 @@ class BuyItemView(ShopViewBase):
         await interaction.response.defer(ephemeral=True)
         wallet = await get_wallet(self.user.id)
         if wallet.get('balance', 0) < item_data['price']:
-            await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
-            return
+            return await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
+            
         if item_data.get('effect_type') == 'expand_farm':
             farm_data = await get_farm_data(self.user.id)
             if not farm_data:
-                await interaction.followup.send("❌ 農場をまず作成してください。", ephemeral=True)
-                return
-            size_x, size_y = farm_data['size_x'], farm_data['size_y']
-            if size_x >= 4 and size_y >= 4:
-                await interaction.followup.send("❌ 農場はすでに最大サイズです。", ephemeral=True)
-                return
-            new_x, new_y = size_x, size_y
-            if size_x <= size_y and size_x < 4: new_x += 1
-            elif size_y < 4: new_y += 1
-            else: new_x += 1
-            await expand_farm_db(farm_data['id'], new_x, new_y)
+                return await interaction.followup.send("❌ 農場をまず作成してください。", ephemeral=True)
+            
+            plot_count = farm_data['size_x'] * farm_data['size_y']
+            if plot_count >= 25:
+                return await interaction.followup.send("❌ 農場はすでに最大サイズ(25칸)です。", ephemeral=True)
+
             await update_wallet(self.user, -item_data['price'])
-            await interaction.followup.send(f"✅ 農場が **{new_x}x{new_y}**サイズに拡張されました！", ephemeral=True)
+            # [✅ 수정] 새로운 DB 함수 호출
+            result = await supabase.rpc('expand_farm_single_plot', {'p_user_id': self.user.id}).execute()
+            
+            if result and result.data:
+                new_size = result.data[0]
+                # UI 업데이트 요청
+                await save_config_to_db(f"farm_ui_update_request_{self.user.id}", time.time())
+                await interaction.followup.send(f"✅ 農場が **{new_size['new_size_x']}x{new_size['new_size_y']}**サイズに拡張されました！", ephemeral=True)
+            else:
+                # 돈 환불
+                await update_wallet(self.user, item_data['price'])
+                await interaction.followup.send("❌ 農場の拡張中にエラーが発生しました。", ephemeral=True)
         else:
             await interaction.followup.send("❓ 未知の即時使用アイテムです。", ephemeral=True)
+
+        await self.update_view(interaction)
 
     async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
         max_buyable = balance // item_data['price'] if item_data['price'] > 0 else 999
         if max_buyable == 0:
-            await interaction.response.send_message("❌ 残高が不足しています。", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ 残高が不足しています。", ephemeral=True)
+            
         modal = QuantityModal(f"{item_name} 購入", max_buyable)
         await interaction.response.send_modal(modal)
         await modal.wait()
-        if modal.value is None:
-            if not interaction.response.is_done(): await interaction.response.defer(); return
+        
+        if modal.value is None: return
+
         quantity, total_price = modal.value, item_data['price'] * modal.value
-        wallet_after_modal = await get_wallet(self.user.id)
-        if wallet_after_modal.get('balance', 0) < total_price:
-            await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
-            return
+        
+        # 다시 한번 잔액 확인
+        current_wallet = await get_wallet(self.user.id)
+        if current_wallet.get('balance', 0) < total_price:
+            return await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
+            
         await update_inventory(str(self.user.id), item_name, quantity)
         await update_wallet(self.user, -total_price)
-        success_message = f"✅ **{item_name}** {quantity}個を購入しました。"
-        await interaction.followup.send(success_message, ephemeral=True)
+        await interaction.followup.send(f"✅ **{item_name}** {quantity}個を購入しました。", ephemeral=True)
+        await self.update_view(interaction)
 
     async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         await interaction.response.defer(ephemeral=True)
-        user = interaction.user
+        user, guild = interaction.user, interaction.guild
         wallet = await get_wallet(user.id)
         if wallet.get('balance', 0) < item_data['price']:
-            await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
-            return
+            return await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
         
-        if role_key := item_data.get('role_key'):
-            role_id = get_id(role_key)
-            if not role_id:
-                logger.error(f"'{role_key}'에 해당하는 역할 ID를 찾을 수 없습니다. DB 설정을 확인해주세요.")
-                await interaction.followup.send("❌ アイテム設定にエラーが発生しました。管理者に問い合わせてください。", ephemeral=True)
-                return
-            if any(r.id == role_id for r in user.roles):
-                await interaction.followup.send(f"❌ 「{item_name}」は既に所持しています。", ephemeral=True)
-                return
-            
-            role_to_grant = interaction.guild.get_role(role_id)
-            if not role_to_grant:
-                logger.error(f"서버에서 역할(ID: {role_id})을 찾을 수 없습니다.")
-                await interaction.followup.send("❌ アイテム役割設定にエラーが発生しました。管理者に問い合わせてください。", ephemeral=True)
-                return
-            
-            await update_wallet(user, -item_data['price'])
-            await user.add_roles(role_to_grant)
-            success_message = f"✅ **{item_name}**を購入し、`{role_to_grant.name}`の役割を付与されました。"
-            await interaction.followup.send(success_message, ephemeral=True)
-            return
-        else:
-            inventory = await get_inventory(user)
-            if inventory is None:
-                await interaction.followup.send("❌ インベントリ情報の読み込みに失敗しました。", ephemeral=True)
-                return
-
-            if inventory.get(item_name, 0) > 0:
-                await interaction.followup.send(f"❌ 「{item_name}」は既に所持しています。1つしか持てません。", ephemeral=True)
-                return
-
-            await update_wallet(user, -item_data['price'])
-            await update_inventory(str(user.id), item_name, 1)
-            success_message = f"✅ **{item_name}**を購入しました。"
-            await interaction.followup.send(success_message, ephemeral=True)
-            return
+        inventory = await get_inventory(user)
+        if inventory.get(item_name, 0) > 0:
+            return await interaction.followup.send(f"❌ 「{item_name}」は既に所持しています。1つしか持てません。", ephemeral=True)
+        
+        await update_wallet(user, -item_data['price'])
+        await update_inventory(str(user.id), item_name, 1)
+        await interaction.followup.send(f"✅ **{item_name}**を購入しました。", ephemeral=True)
+        await self.update_view(interaction)
 
     async def back_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -266,17 +237,14 @@ class BuyCategoryView(ShopViewBase):
     async def build_components(self):
         self.clear_items()
         item_db = get_item_database()
-        available_categories = set(d['category'] for d in item_db.values() if d.get('buyable') and d.get('category'))
+        available_categories = {d['category'] for d in item_db.values() if d.get('buyable') and d.get('category')}
         category_map = [("アイテム 📜", "アイテム"), ("装備 ⚒️", "装備"), ("エサ 🐛", "エサ"), ("種 🌱", "農場_種"),]
-        buttons_created = 0
+        
         for display_name, db_category in category_map:
             if db_category in available_categories:
                 button = ui.Button(label=display_name, custom_id=f"buy_category_{db_category}")
                 button.callback = self.category_callback
                 self.add_item(button)
-                buttons_created += 1
-        if buttons_created == 0:
-            self.add_item(ui.Button(label="販売中の商品がありません。", disabled=True))
     async def category_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         category_db_name = interaction.data['custom_id'].split('buy_category_')[-1]
@@ -305,46 +273,42 @@ class SellFishView(ShopViewBase):
         options = []
         if aquarium:
             for fish in aquarium:
-                fish_id = str(fish['id'])
+                fish_id_str = str(fish['id'])
                 loot_info = loot_db.get(fish['name'], {})
-                base_value = loot_info.get('base_value', 0)
-                size_multiplier = loot_info.get('size_multiplier', 0)
-                price = int(base_value + (fish['size'] * size_multiplier))
-                self.fish_data_map[fish_id] = {'price': price, 'name': fish['name']}
-                options.append(discord.SelectOption(label=f"{fish['name']} ({fish['size']}cm)", value=fish_id, description=f"{price}{self.currency_icon}"))
+                price = int(loot_info.get('base_value', 0) + (fish['size'] * loot_info.get('size_multiplier', 0)))
+                self.fish_data_map[fish_id_str] = {'price': price, 'name': fish['name']}
+                options.append(discord.SelectOption(label=f"{fish['name']} ({fish['size']}cm)", value=fish_id_str, description=f"{price}{self.currency_icon}"))
+        
         if options:
-            max_select = min(len(options), 25)
-            select = ui.Select(placeholder="売却する魚を選択...", options=options, min_values=1, max_values=max_select)
+            select = ui.Select(placeholder="売却する魚を選択...", options=options, min_values=1, max_values=min(len(options), 25))
             select.callback = self.on_select
             self.add_item(select)
+        
         sell_button = ui.Button(label="選択した魚を売却", style=discord.ButtonStyle.success, disabled=True, custom_id="sell_fish_confirm")
         sell_button.callback = self.sell_fish
         self.add_item(sell_button)
+        
         back_button = ui.Button(label="カテゴリー選択に戻る", style=discord.ButtonStyle.grey)
         back_button.callback = self.go_back
         self.add_item(back_button)
     async def on_select(self, interaction: discord.Interaction):
-        sell_button = next((c for c in self.children if isinstance(c, ui.Button) and c.custom_id == "sell_fish_confirm"), None)
-        if sell_button: sell_button.disabled = False
+        if sell_button := discord.utils.find(lambda c: c.custom_id == "sell_fish_confirm", self.children):
+            sell_button.disabled = False
         await interaction.response.edit_message(view=self)
     async def sell_fish(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        select_menu = next((c for c in self.children if isinstance(c, ui.Select)), None)
-        if not select_menu or not select_menu.values:
-            await interaction.followup.send("❌ 売却する魚が選択されていません。", ephemeral=True)
-            return
+        select_menu = discord.utils.find(lambda c: isinstance(c, ui.Select), self.children)
+        if not (select_menu and select_menu.values):
+            return await interaction.followup.send("❌ 売却する魚が選択されていません。", ephemeral=True)
+        
         fish_ids_to_sell = [int(val) for val in select_menu.values]
         total_price = sum(self.fish_data_map[val]['price'] for val in select_menu.values)
         try:
             await sell_fish_from_db(str(self.user.id), fish_ids_to_sell, total_price)
             new_wallet = await get_wallet(self.user.id)
-            new_balance = new_wallet.get('balance', 0)
-            sold_fish_count = len(fish_ids_to_sell)
-            success_message = f"✅ 魚{sold_fish_count}匹を`{total_price:,}`{self.currency_icon}で売却しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-            await interaction.followup.send(success_message, ephemeral=True)
+            await interaction.followup.send(f"✅ 魚{len(fish_ids_to_sell)}匹を`{total_price:,}`{self.currency_icon}で売却しました。\n(残高: `{new_wallet.get('balance', 0):,}`{self.currency_icon})", ephemeral=True)
             await self.refresh_view(interaction)
         except Exception as e:
-            logger.error(f"물고기 판매 중 오류: {e}", exc_info=True)
             await self.handle_error(interaction, e)
     async def go_back(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -370,52 +334,47 @@ class SellCropView(ShopViewBase):
         
         inventory = await get_inventory(self.user)
         if inventory is None:
-            logger.error(f"'{self.user.name}'님의 인벤토리를 불러올 수 없어, 작물 판매 목록을 생성할 수 없습니다.")
-            self.add_item(ui.Button(label="インベントリの読み込みに失敗しました。", disabled=True, row=0))
-            back_button = ui.Button(label="カテゴリー選択に戻る", style=discord.ButtonStyle.grey, row=1)
-            back_button.callback = self.go_back
-            self.add_item(back_button)
-            return
-
-        item_db = get_item_database()
-        self.crop_data_map.clear()
-        options = []
-        crop_items = {name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category') == '農場_作物'}
-        if crop_items:
-            for name, qty in crop_items.items():
-                item_data = item_db.get(name, {})
-                price = int(item_data.get('sell_price', 0))
-                self.crop_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
-                options.append(discord.SelectOption(label=f"{name} (所持: {qty}個)", value=name, description=f"単価: {price}{self.currency_icon}", emoji=item_data.get('emoji')))
-        if options:
-            select = ui.Select(placeholder="売却する作物を選択...", options=options)
-            select.callback = self.on_select
-            self.add_item(select)
+            self.add_item(ui.Button(label="インベントリの読み込みに失敗しました。", disabled=True))
+        else:
+            item_db = get_item_database()
+            self.crop_data_map.clear()
+            crop_items = {name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category') == '農場_作物'}
+            if crop_items:
+                options = []
+                for name, qty in crop_items.items():
+                    item_data = item_db.get(name, {})
+                    price = int(item_data.get('sell_price', 0))
+                    self.crop_data_map[name] = {'price': price, 'max_qty': qty}
+                    options.append(discord.SelectOption(label=f"{name} (所持: {qty}個)", value=name, description=f"単価: {price}{self.currency_icon}", emoji=item_data.get('emoji')))
+                select = ui.Select(placeholder="売却する作物を選択...", options=options)
+                select.callback = self.on_select
+                self.add_item(select)
+        
         back_button = ui.Button(label="カテゴリー選択に戻る", style=discord.ButtonStyle.grey, row=1)
         back_button.callback = self.go_back
         self.add_item(back_button)
+
     async def on_select(self, interaction: discord.Interaction):
         selected_crop = interaction.data['values'][0]
         crop_info = self.crop_data_map.get(selected_crop)
         if not crop_info: return
+        
         modal = QuantityModal(f"「{selected_crop}」売却", crop_info['max_qty'])
         await interaction.response.send_modal(modal)
         await modal.wait()
-        if modal.value is None:
-            if not interaction.response.is_done(): await interaction.response.defer(); return
-        quantity_to_sell = modal.value
-        total_price = crop_info['price'] * quantity_to_sell
+        
+        if modal.value is None: return
+
+        quantity, total_price = modal.value, crop_info['price'] * modal.value
         try:
-            await update_inventory(str(self.user.id), selected_crop, -quantity_to_sell)
+            await update_inventory(str(self.user.id), selected_crop, -quantity)
             await update_wallet(self.user, total_price)
             new_wallet = await get_wallet(self.user.id)
-            new_balance = new_wallet.get('balance', 0)
-            success_message = f"✅ **{selected_crop}** {quantity_to_sell}個を`{total_price:,}`{self.currency_icon}で売却しました。\n(残高: `{new_balance:,}`{self.currency_icon})"
-            await interaction.followup.send(success_message, ephemeral=True)
+            await interaction.followup.send(f"✅ **{selected_crop}** {quantity}個を`{total_price:,}`{self.currency_icon}で売却しました。\n(残高: `{new_wallet.get('balance', 0):,}`{self.currency_icon})", ephemeral=True)
             await self.refresh_view(interaction)
         except Exception as e:
-            logger.error(f"작물 판매 중 오류: {e}", exc_info=True)
             await self.handle_error(interaction, e)
+
     async def go_back(self, interaction: discord.Interaction):
         await interaction.response.defer()
         view = SellCategoryView(self.user)
@@ -434,11 +393,12 @@ class SellCategoryView(ShopViewBase):
     async def on_button_click(self, interaction: discord.Interaction):
         await interaction.response.defer()
         category = interaction.data['custom_id'].split('_')[-1]
+        view = None
         if category == "fish": view = SellFishView(self.user)
         elif category == "crop": view = SellCropView(self.user)
-        else: return
-        view.message = self.message
-        await view.refresh_view(interaction)
+        if view:
+            view.message = self.message
+            await view.refresh_view(interaction)
 
 class CommercePanelView(ui.View):
     def __init__(self, cog_instance: 'Commerce'):
@@ -450,6 +410,7 @@ class CommercePanelView(ui.View):
         market_button = ui.Button(label="買取ボックス (アイテム売却)", style=discord.ButtonStyle.danger, emoji="📦", custom_id="commerce_open_market")
         market_button.callback = self.open_market
         self.add_item(market_button)
+
     async def open_shop(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         view = BuyCategoryView(interaction.user)
@@ -457,6 +418,7 @@ class CommercePanelView(ui.View):
         await view.build_components()
         message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         view.message = message
+
     async def open_market(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         view = SellCategoryView(interaction.user)
