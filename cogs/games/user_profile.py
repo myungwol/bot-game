@@ -11,9 +11,9 @@ from typing import Optional, Dict, List, Any
 from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
-    get_item_database, get_config, get_string, BARE_HANDS
+    get_item_database, get_config, get_string, BARE_HANDS,
+    supabase # [✅ 레벨 시스템] supabase import 추가
 )
-# [✅ 개선] helpers에서 CloseButtonView를 import 합니다.
 from utils.helpers import CloseButtonView
 
 logger = logging.getLogger(__name__)
@@ -71,8 +71,19 @@ class ProfileView(ui.View):
         description = ""
         if self.status_message:
             description += f"**{self.status_message}**\n\n"
+        
         if self.current_page == "info":
             embed.add_field(name=get_string("profile_view.info_tab.field_balance"), value=f"`{balance:,}`{self.currency_icon}", inline=True)
+            
+            # [✅ 레벨 시스템] 직업 정보 조회 및 표시
+            try:
+                job_res = await supabase.table('user_jobs').select('jobs(job_name)').eq('user_id', self.user.id).maybe_single().execute()
+                job_name = job_res.data['jobs']['job_name'] if job_res.data and job_res.data.get('jobs') else "一般住民"
+            except Exception as e:
+                logger.error(f"직업 정보 조회 중 오류 발생 (유저: {self.user.id}): {e}")
+                job_name = "一般住民" # 오류 발생 시 기본값
+            embed.add_field(name="職業", value=f"`{job_name}`", inline=True)
+
             resident_role_keys = ["role_resident_elder", "role_resident_veteran", "role_resident_regular", "role_resident_rookie", "role_resident"]
             user_role_ids = {role.id for role in self.user.roles}
             user_rank_name = get_string("profile_view.info_tab.default_rank_name")
@@ -83,11 +94,13 @@ class ProfileView(ui.View):
             embed.add_field(name=get_string("profile_view.info_tab.field_rank"), value=f"`{user_rank_name}`", inline=True)
             description += get_string("profile_view.info_tab.description")
             embed.description = description
+        
         elif self.current_page == "item":
             excluded_categories = [GEAR_CATEGORY, "農場_種", "農場_作物", BAIT_CATEGORY]
             general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
             item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`個" for n, c in general_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items"))
+        
         elif self.current_page == "gear":
             gear_categories = {"釣り": {"rod": "🎣 釣竿", "bait": "🐛 エサ"}, "農場": {"hoe": "🪓 クワ", "watering_can": "💧 じょうろ"}}
             for category_name, items in gear_categories.items():
@@ -100,6 +113,7 @@ class ProfileView(ui.View):
             else:
                 embed.add_field(name="\n**[ 所持している装備 ]**", value=get_string("profile_view.gear_tab.no_owned_gear"), inline=False)
             embed.description = description
+        
         elif self.current_page == "fish":
             aquarium = self.cached_data.get("aquarium", [])
             if not aquarium:
@@ -110,14 +124,17 @@ class ProfileView(ui.View):
                 fish_on_page = aquarium[self.fish_page_index * 10 : self.fish_page_index * 10 + 10]
                 embed.description = description + "\n".join([f"{f['emoji']} **{f['name']}**: `{f['size']}`cm" for f in fish_on_page])
                 embed.set_footer(text=get_string("profile_view.fish_tab.pagination_footer", current_page=self.fish_page_index + 1, total_pages=total_pages))
+        
         elif self.current_page == "seed":
             seed_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "農場_種"}
             item_list = [f"{item_db.get(n,{}).get('emoji','🌱')} **{n}**: `{c}`個" for n, c in seed_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.seed_tab.no_items"))
+        
         elif self.current_page == "crop":
             crop_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "農場_作物"}
             item_list = [f"{item_db.get(n,{}).get('emoji','🌾')} **{n}**: `{c}`個" for n, c in crop_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.crop_tab.no_items"))
+        
         else:
             embed.description = description + get_string("profile_view.wip_tab.description")
         return embed
