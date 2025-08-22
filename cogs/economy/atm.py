@@ -9,7 +9,8 @@ from utils.database import (
     get_wallet, supabase, get_config,
     save_panel_id, get_panel_id, get_embed_from_db, update_wallet
 )
-from utils.helpers import format_embed_from_db
+# [✅ 개선] helpers에서 CloseButtonView를 import 합니다.
+from utils.helpers import format_embed_from_db, CloseButtonView
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,8 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
 
             sender_wallet = await get_wallet(self.sender.id)
             if sender_wallet.get('balance', 0) < amount_to_send:
-                await interaction.response.send_message(f"❌ 残高が不足しています。(現在の残高: {sender_wallet.get('balance', 0):,}{self.currency_icon})", ephemeral=True, delete_after=10)
+                msg = await interaction.response.send_message(f"❌ 残高が不足しています。(現在の残高: {sender_wallet.get('balance', 0):,}{self.currency_icon})", ephemeral=True)
+                await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
                 return
 
             params = {'sender_id_param': str(self.sender.id), 'recipient_id_param': str(self.recipient.id), 'amount_param': amount_to_send}
@@ -40,7 +42,8 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
             if not response.data:
                  raise Exception("送金に失敗しました。残高不足またはデータベースエラーの可能性があります。")
 
-            await interaction.response.send_message("✅ 送金が完了しました。パネルを更新します。", ephemeral=True, delete_after=5)
+            msg = await interaction.response.send_message("✅ 送金が完了しました。パネルを更新します。", ephemeral=True)
+            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
 
             log_embed = None
             if embed_data := await get_embed_from_db("log_coin_transfer"):
@@ -49,13 +52,17 @@ class TransferAmountModal(ui.Modal, title="送金金額の入力"):
             await self.cog.regenerate_panel(interaction.channel, last_transfer_log=log_embed)
 
         except ValueError:
-            await interaction.response.send_message("❌ 金額は数字で入力してください。", ephemeral=True, delete_after=10)
+            msg = await interaction.response.send_message("❌ 金額は数字で入力してください。", ephemeral=True)
+            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+
         except Exception as e:
             logger.error(f"송금 처리 중 오류 발생: {e}", exc_info=True)
             if not interaction.response.is_done():
-                await interaction.response.send_message("❌ 送金中に予期せぬエラーが発生しました。", ephemeral=True, delete_after=10)
+                msg = await interaction.response.send_message("❌ 送金中に予期せぬエラーが発生しました。", ephemeral=True)
             else:
-                await interaction.followup.send("❌ 送金中に予期せぬエラーが発生しました。", ephemeral=True, delete_after=10)
+                msg = await interaction.followup.send("❌ 送金中に予期せぬエラーが発生しました。", ephemeral=True)
+            await msg.edit(view=CloseButtonView(interaction.user, target_message=msg))
+
 
 class AtmPanelView(ui.View):
     def __init__(self, cog_instance: 'Atm'):
@@ -70,20 +77,21 @@ class AtmPanelView(ui.View):
         view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="コインを送る相手を選んでください...")
         
-        # [✅✅✅ 핵심 수정 ✅✅✅] 누락되었던 함수의 내용을 복원합니다.
         async def select_callback(select_interaction: discord.Interaction):
             try:
                 selected_user_id = int(select_interaction.data["values"][0])
                 recipient = select_interaction.guild.get_member(selected_user_id)
 
                 if not recipient:
-                    await select_interaction.response.send_message("❌ ユーザーが見つかりませんでした。", ephemeral=True, delete_after=10)
+                    msg = await select_interaction.response.send_message("❌ ユーザーが見つかりませんでした。", ephemeral=True)
+                    await msg.edit(view=CloseButtonView(select_interaction.user, target_message=msg))
                     return
 
                 sender = select_interaction.user
 
                 if recipient.bot or recipient.id == sender.id:
-                    await select_interaction.response.send_message("❌ 自分自身やボットには送金できません。", ephemeral=True, delete_after=10)
+                    msg = await select_interaction.response.send_message("❌ 自分自身やボットには送金できません。", ephemeral=True)
+                    await msg.edit(view=CloseButtonView(select_interaction.user, target_message=msg))
                     return
 
                 modal = TransferAmountModal(sender, recipient, self.cog)
