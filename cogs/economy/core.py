@@ -4,12 +4,12 @@ from discord import app_commands, ui
 import random
 import asyncio
 import logging
-from typing import Optional, Dict
+from typing import Optional, Dict, List # List import 추가
 
 from utils.database import (
     get_wallet, update_wallet,
     get_id, supabase, get_embed_from_db, get_config,
-    increment_progress # [✅ 추가] 퀘스트 진행도 증가 함수 import
+    # [✅ 변경] increment_progress는 이제 사용하지 않으므로 제거합니다.
 )
 from utils.helpers import format_embed_from_db
 
@@ -48,18 +48,13 @@ class EconomyCore(commands.Cog):
             return
         
         user = message.author
-        # 이 부분은 현재 퀘스트와 직접적인 관련이 없으므로 그대로 둡니다.
-        # 만약 '채팅 퀘스트'를 추가한다면, 이곳에 increment_progress를 호출하는 로직을 추가할 수 있습니다.
         chat_req_config = get_config("CHAT_MESSAGE_REQUIREMENT")
         chat_req = int(chat_req_config) if chat_req_config else 10
         
         chat_reward_range_config = get_config("CHAT_REWARD_RANGE")
         chat_reward_range = chat_reward_range_config if chat_reward_range_config and len(chat_reward_range_config) == 2 else [5, 10]
 
-
         try:
-            # 이 RPC는 Supabase 함수이므로, 퀘스트와는 별개로 작동합니다.
-            # 그대로 두어도 문제 없습니다.
             params = {'p_user_id': str(user.id), 'p_chat_increment': 1}
             response = await supabase.rpc('increment_user_progress', params).execute()
 
@@ -84,6 +79,9 @@ class EconomyCore(commands.Cog):
 
             voice_reward_range_config = get_config("VOICE_REWARD_RANGE")
             voice_reward_range = voice_reward_range_config if voice_reward_range_config and len(voice_reward_range_config) == 2 else [10, 15]
+            
+            # [✅ 1단계: 최적화] 활동 중인 모든 유저의 ID를 저장할 리스트를 생성합니다.
+            active_user_ids: List[int] = []
 
             for guild in self.bot.guilds:
                 afk_ch_id = guild.afk_channel.id if guild.afk_channel else None
@@ -93,11 +91,11 @@ class EconomyCore(commands.Cog):
                     eligible_members = [m for m in vc.members if not m.bot and not m.voice.self_deaf and not m.voice.self_mute]
                     
                     for member in eligible_members:
+                        # [✅ 2단계: 최적화] 유저 ID를 리스트에 추가합니다.
+                        active_user_ids.append(member.id)
+                        
+                        # 기존의 코인 보상 로직은 그대로 유지합니다. (이 부분은 유저별로 처리해야 합니다)
                         try:
-                            # [✅ 수정] 음성 활동 퀘스트 카운트를 1분씩 증가시킵니다.
-                            await increment_progress(member.id, voice_minutes=1)
-                            
-                            # 기존 코인 보상 로직은 그대로 유지됩니다.
                             params = {'p_user_id': str(member.id), 'p_voice_increment': 1}
                             response = await supabase.rpc('increment_user_progress', params).execute()
                             
@@ -114,6 +112,17 @@ class EconomyCore(commands.Cog):
 
                         except Exception as e:
                             logger.error(f"음성 보상 처리 중 DB 오류 발생 (유저: {member.id}): {e}", exc_info=True)
+
+            # [✅ 3단계: 최적화] 루프가 끝난 후, 활동한 모든 유저의 퀘스트 데이터를 단 한 번의 DB 호출로 업데이트합니다.
+            if active_user_ids:
+                try:
+                    # 중복된 ID를 제거하고, 새로 만든 RPC 함수를 호출합니다.
+                    unique_user_ids = list(set(active_user_ids))
+                    await supabase.rpc('increment_voice_minutes_batch', {'user_ids_array': unique_user_ids}).execute()
+                    logger.info(f"{len(unique_user_ids)}명의 유저에게 음성 활동 퀘스트 시간을 일괄 부여했습니다.")
+                except Exception as e:
+                    logger.error(f"음성 활동 퀘스트 일괄 업데이트 중 DB 오류 발생: {e}", exc_info=True)
+
         except Exception as e:
             logger.error(f"음성 보상 루프 중 오류: {e}", exc_info=True)
         
