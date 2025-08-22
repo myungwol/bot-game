@@ -8,7 +8,7 @@ import asyncio
 import logging
 import time
 from typing import Optional, Dict, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta, time
 
 from utils.database import (
     get_wallet, update_wallet,
@@ -19,8 +19,11 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# [✅ 수정] 실제 DB 테이블 이름을 반영합니다.
-ACTIVITY_PROGRESS_TABLE = "user_activity_progress"
+# [✅ DB 구조 확인] 실제 DB 테이블 이름을 상수로 정의합니다.
+PROGRESS_TABLE = "user_progress"
+ACTIVITY_PROGRESS_TABLE = "user_activity_progress" # 채팅 보상용 테이블
+
+JST_MIDNIGHT = time(hour=0, minute=1, tzinfo=timezone(timedelta(hours=9))) # DB 쓰기 작업을 피하기 위해 1분 늦게 실행
 
 class EconomyCore(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -34,8 +37,9 @@ class EconomyCore(commands.Cog):
         self.chat_progress_cache: Dict[int, int] = {}
         self._cache_lock = asyncio.Lock()
 
-        self.voice_reward_loop.start()
+        self.reward_payout_loop.start()
         self.update_chat_progress_loop.start()
+        self.daily_reset_loop.start()
 
         logger.info("EconomyCore Cog가 성공적으로 초기화되었습니다.")
         
@@ -49,8 +53,9 @@ class EconomyCore(commands.Cog):
         logger.info("[EconomyCore Cog] 데이터베이스로부터 설정을 성공적으로 로드했습니다.")
         
     def cog_unload(self):
-        self.voice_reward_loop.cancel()
+        self.reward_payout_loop.cancel()
         self.update_chat_progress_loop.cancel()
+        self.daily_reset_loop.cancel()
     
     async def handle_level_up_event(self, user: discord.User, result_data: Dict):
         if not result_data or not result_data.get('leveled_up'):
@@ -64,6 +69,19 @@ class EconomyCore(commands.Cog):
             logger.info(f"유저 {user.display_name}(ID: {user.id})가 전직 가능 레벨({new_level})에 도달하여 DB에 요청을 기록했습니다.")
 
         await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
+
+    @tasks.loop(time=JST_MIDNIGHT)
+    async def daily_reset_loop(self):
+        logger.info("[일일 초기화] 모든 유저의 일일 퀘스트 진행도 초기화를 시작합니다.")
+        try:
+            await supabase.table(PROGRESS_TABLE).update({
+                "daily_voice_minutes": 0,
+                "daily_fish_count": 0
+            }).gt("user_id", 0).execute()
+            
+            logger.info("[일일 초기화] 성공적으로 완료되었습니다.")
+        except Exception as e:
+            logger.error(f"[일일 초기화] 진행도 초기화 중 오류 발생: {e}", exc_info=True)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -129,7 +147,6 @@ class EconomyCore(commands.Cog):
 
                 if duration_minutes > 0:
                     try:
-                        # [✅ 수정] RPC 함수가 user_activity_progress 테이블을 업데이트하도록 확인 필요
                         params = {'p_user_id': str(member.id), 'p_voice_minutes': duration_minutes}
                         await supabase.rpc('increment_user_progress', params).execute()
                     except Exception as e:
@@ -137,15 +154,15 @@ class EconomyCore(commands.Cog):
                         self.voice_sessions[member.id] = join_time
 
     @tasks.loop(minutes=1)
-    async def voice_reward_loop(self):
+    async def reward_payout_loop(self):
         try:
+            # --- 음성 보상 로직 ---
             voice_req_min_config = str(get_config("VOICE_TIME_REQUIREMENT_MINUTES", "10")).strip('"')
             voice_req_min = int(voice_req_min_config)
             voice_reward_range_config = str(get_config("VOICE_REWARD_RANGE", "[10, 15]"))
             voice_reward_range = eval(voice_reward_range_config)
             
-            # [✅ 오류 수정] 실제 테이블명과 컬럼명으로 수정
-            voice_response = await supabase.table(ACTIVITY_PROGRESS_TABLE).select('user_id, voice_progress').gte('voice_progress', voice_req_min).execute()
+            voice_response = await supabase.table(PROGRESS_TABLE).select('user_id, daily_voice_minutes').gte('daily_voice_minutes', voice_req_min).execute()
 
             if voice_response and voice_response.data:
                 for record in voice_response.data:
@@ -161,15 +178,15 @@ class EconomyCore(commands.Cog):
                         if res and res.data:
                             await self.handle_level_up_event(member, res.data[0])
                     finally:
-                        # [✅ 수정] RPC 함수가 user_activity_progress 테이블을 업데이트하도록 확인 필요
                         reset_params = {'p_user_id': str(member.id), 'p_reset_voice': True}
                         await supabase.rpc('reset_user_progress', reset_params).execute()
 
+            # --- 채팅 보상 로직 ---
             chat_req_config = str(get_config("CHAT_MESSAGE_REQUIREMENT", "10")).strip('"')
             chat_req = int(chat_req_config)
             chat_reward_range_config = str(get_config("CHAT_REWARD_RANGE", "[5, 10]"))
             chat_reward_range = eval(chat_reward_range_config)
-            # [✅ 오류 수정] 실제 테이블명으로 수정
+            
             chat_response = await supabase.table(ACTIVITY_PROGRESS_TABLE).select('user_id, chat_progress').gte('chat_progress', chat_req).execute()
 
             if chat_response and chat_response.data:
@@ -186,15 +203,14 @@ class EconomyCore(commands.Cog):
                         if res and res.data:
                             await self.handle_level_up_event(member, res.data[0])
                     finally:
-                        # [✅ 수정] RPC 함수가 user_activity_progress 테이블을 업데이트하도록 확인 필요
                         reset_params = {'p_user_id': str(member.id), 'p_reset_chat': True}
                         await supabase.rpc('reset_user_progress', reset_params).execute()
 
         except Exception as e:
             logger.error(f"음성/채팅 보상 지급 루프 중 오류: {e}", exc_info=True)
         
-    @voice_reward_loop.before_loop
-    async def before_voice_reward_loop(self):
+    @reward_payout_loop.before_loop
+    async def before_reward_payout_loop(self):
         await self.bot.wait_until_ready()
     
     async def log_coin_activity(self, user: discord.Member, amount: int, reason: str):
