@@ -8,35 +8,7 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-class CloseButtonView(ui.View):
-    def __init__(self, user: discord.User):
-        """
-        범용 닫기 버튼 View 입니다. 이 버튼이 부착된 메시지 자체를 삭제합니다.
-        :param user: 이 버튼을 누를 수 있는 유저입니다.
-        """
-        super().__init__(timeout=180)
-        self.user = user
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user.id:
-            await interaction.response.send_message("自分専用のメニューです。", ephemeral=True)
-            return False
-        return True
-        
-    @ui.button(label="閉じる", style=discord.ButtonStyle.secondary, emoji="✖️")
-    async def close_button(self, interaction: discord.Interaction, button: ui.Button):
-        try:
-            # [✅ 핵심 수정] 실제 행동을 하기 전에 defer()를 호출하여 상호작용에 먼저 응답합니다.
-            # 이 한 줄이 "상호작용 실패" 오류를 해결합니다.
-            await interaction.response.defer()
-            
-            # 그 다음, 이 버튼이 속한 메시지(interaction.message)를 삭제합니다.
-            await interaction.message.delete()
-        except discord.NotFound:
-            pass
-        except Exception as e:
-            logger.error(f"닫기 버튼으로 메시지 삭제 중 예외 발생: {e}", exc_info=True)
-
+# [✅ 수정] 더 이상 사용하지 않는 CloseButtonView 클래스를 완전히 제거합니다.
 
 def format_embed_from_db(embed_data: Dict[str, Any], **kwargs: Any) -> discord.Embed:
     if not isinstance(embed_data, dict):
