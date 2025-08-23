@@ -19,11 +19,11 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# [✅ 수정] user_activity_progress 테이블 정의 제거
 PROGRESS_TABLE = "user_progress"
 
 JST = timezone(timedelta(hours=9))
 JST_MIDNIGHT_RESET = dt_time(hour=0, minute=1, tzinfo=JST)
+JST_MONTHLY_RESET = dt_time(hour=0, minute=2, tzinfo=JST)
 
 class EconomyCore(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -40,6 +40,7 @@ class EconomyCore(commands.Cog):
         self.update_chat_progress_loop.start()
         self.daily_reset_loop.start()
         self.update_market_prices.start()
+        self.monthly_whale_reset.start()
 
         logger.info("EconomyCore Cog가 성공적으로 초기화되었습니다.")
         
@@ -56,6 +57,7 @@ class EconomyCore(commands.Cog):
         self.update_chat_progress_loop.cancel()
         self.daily_reset_loop.cancel()
         self.update_market_prices.cancel()
+        self.monthly_whale_reset.cancel()
     
     async def handle_level_up_event(self, user: discord.User, result_data: Dict):
         if not result_data or not result_data.get('leveled_up'):
@@ -81,10 +83,13 @@ class EconomyCore(commands.Cog):
             logger.info("[일일 초기화] 성공적으로 완료되었습니다.")
         except Exception as e:
             logger.error(f"[일일 초기화] 진행도 초기화 중 오류 발생: {e}", exc_info=True)
+            
+    @daily_reset_loop.before_loop
+    async def before_daily_reset_loop(self):
+        await self.bot.wait_until_ready()
 
     @tasks.loop(time=JST_MIDNIGHT_RESET)
     async def update_market_prices(self):
-        await self.bot.wait_until_ready()
         logger.info("[시장] 일일 아이템 가격 변동을 시작합니다.")
         try:
             response = await supabase.table('items').select('*').gt('volatility', 0).execute()
@@ -104,7 +109,7 @@ class EconomyCore(commands.Cog):
                 updates.append({'id': item['id'], 'current_price': new_price})
                 price_diff_ratio = (new_price - current_price) / current_price if current_price > 0 else 0
                 if abs(price_diff_ratio) > 0.3:
-                    status = "폭등 📈" if price_diff_ratio > 0 else "폭락 📉"
+                    status = "暴騰 📈" if price_diff_ratio > 0 else "暴落 📉"
                     announcements.append(f" - {item['name']}: `{current_price}` -> `{new_price}`{self.currency_icon} ({status})")
             
             await supabase.table('items').upsert(updates).execute()
@@ -120,6 +125,61 @@ class EconomyCore(commands.Cog):
                  logger.info("[시장] 게임 데이터 캐시 갱신을 요청했습니다.")
         except Exception as e:
             logger.error(f"[시장] 아이템 가격 업데이트 중 오류: {e}", exc_info=True)
+
+    @update_market_prices.before_loop
+    async def before_update_market_prices(self):
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(time=JST_MONTHLY_RESET)
+    async def monthly_whale_reset(self):
+        now = datetime.now(JST)
+        if now.day != 1:
+            return
+
+        logger.info("[월간 리셋] 고래 출현 공지 및 패널 재설치를 시작합니다.")
+        try:
+            sea_fishing_channel_id = get_id("sea_fishing_panel_channel_id")
+            if not sea_fishing_channel_id:
+                logger.warning("[월간 리셋] 바다 낚시터 채널이 설정되지 않아 공지를 보낼 수 없습니다.")
+                return
+            
+            channel = self.bot.get_channel(sea_fishing_channel_id)
+            if not isinstance(channel, discord.TextChannel):
+                logger.warning(f"[월간 리셋] 채널 ID {sea_fishing_channel_id}를 찾을 수 없거나 텍스트 채널이 아닙니다.")
+                return
+
+            fishing_cog = self.bot.get_cog("Fishing")
+            if not fishing_cog:
+                logger.error("[월간 리셋] Fishing Cog를 찾을 수 없습니다.")
+                return
+
+            old_msg_id = get_config("whale_announcement_message_id")
+            if old_msg_id:
+                try:
+                    old_msg = await channel.fetch_message(int(old_msg_id))
+                    await old_msg.delete()
+                    logger.info(f"[월간 리셋] 이전 고래 공지 메시지(ID: {old_msg_id})를 삭제했습니다.")
+                except (discord.NotFound, discord.Forbidden): pass
+
+            embed_data = await get_embed_from_db("embed_whale_reset_announcement")
+            if not embed_data:
+                logger.error("[월간 리셋] 고래 리셋 공지 임베드('embed_whale_reset_announcement')를 DB에서 찾을 수 없습니다.")
+                return
+
+            announcement_embed = discord.Embed.from_dict(embed_data)
+            announcement_msg = await channel.send(embed=announcement_embed)
+
+            await save_config_to_db("whale_announcement_message_id", announcement_msg.id)
+            logger.info(f"[월간 리셋] 새로운 고래 공지 메시지(ID: {announcement_msg.id})를 전송하고 DB에 저장했습니다.")
+
+            await fishing_cog.regenerate_panel(channel, panel_key="panel_fishing_sea")
+
+        except Exception as e:
+            logger.error(f"[월간 리셋] 고래 공지 처리 중 심각한 오류 발생: {e}", exc_info=True)
+
+    @monthly_whale_reset.before_loop
+    async def before_monthly_whale_reset(self):
+        await self.bot.wait_until_ready()
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -167,41 +227,29 @@ class EconomyCore(commands.Cog):
     async def reward_payout_loop(self):
         game_config = get_config("GAME_CONFIG", {})
         try:
-            voice_req = game_config.get("VOICE_TIME_REQUIREMENT_MINUTES", 10)
-            voice_reward = game_config.get("VOICE_REWARD_RANGE", [10, 15])
-            voice_xp = game_config.get("XP_FROM_VOICE", 10)
+            voice_req, voice_reward, voice_xp = game_config.get("VOICE_TIME_REQUIREMENT_MINUTES", 10), game_config.get("VOICE_REWARD_RANGE", [10, 15]), game_config.get("XP_FROM_VOICE", 10)
             await self.process_rewards('voice', voice_req, voice_reward, voice_xp, "ボイスチャット活動報酬")
-
-            chat_req = game_config.get("CHAT_MESSAGE_REQUIREMENT", 20)
-            chat_reward = game_config.get("CHAT_REWARD_RANGE", [5, 10])
-            chat_xp = game_config.get("XP_FROM_CHAT", 5)
+            chat_req, chat_reward, chat_xp = game_config.get("CHAT_MESSAGE_REQUIREMENT", 20), game_config.get("CHAT_REWARD_RANGE", [5, 10]), game_config.get("XP_FROM_CHAT", 5)
             await self.process_rewards('chat', chat_req, chat_reward, chat_xp, "チャット活動報酬")
         except Exception as e:
             logger.error(f"활동 보상 지급 루프 중 오류: {e}", exc_info=True)
 
     async def process_rewards(self, reward_type: str, requirement: int, reward_range: list[int], xp_reward: int, reason: str):
-        # [✅✅✅ 핵심 수정] 두 보상 모두 user_progress 테이블을 보도록 통합
-        table = PROGRESS_TABLE
-        column = 'daily_voice_minutes' if reward_type == 'voice' else 'chat_progress'
-        
+        table, column = PROGRESS_TABLE, 'daily_voice_minutes' if reward_type == 'voice' else 'chat_progress'
         response = await supabase.table(table).select('user_id').gte(column, requirement).execute()
         if not (response and response.data): return
-
         for record in response.data:
             user_id = int(record['user_id'])
             if not (member := self.bot.get_user(user_id)): continue
-            
             try:
                 reward = random.randint(reward_range[0], reward_range[1])
                 await update_wallet(member, reward)
                 await self.log_coin_activity(member, reward, reason)
-                
                 res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_reward, 'p_source': reward_type}).execute()
                 if res and res.data: await self.handle_level_up_event(member, res.data[0])
             except Exception as e:
                 logger.error(f"{reason} 처리 중 오류 (유저: {user_id}): {e}", exc_info=True)
             finally:
-                # [✅ 수정] RPC 호출 시 chat 리셋 파라미터도 사용하도록 변경
                 reset_params = {'p_user_id': str(user_id), f'p_reset_{reward_type}': True}
                 await supabase.rpc('reset_user_progress', reset_params).execute()
 
