@@ -17,7 +17,8 @@ _configs_cache: Dict[str, Any] = {"strings": UI_STRINGS}
 _channel_id_cache: Dict[str, int] = {}
 _item_database_cache: Dict[str, Dict[str, Any]] = {}
 _fishing_loot_cache: List[Dict[str, Any]] = []
-
+_user_abilities_cache = {} # [✅ 추가] 능력 정보 캐시
+CACHE_TTL = 300 # 5분
 supabase: AsyncClient = None
 try:
     url: str = os.environ.get("SUPABASE_URL")
@@ -315,3 +316,29 @@ async def set_cooldown(user_id_str: str, cooldown_key: str, timestamp: float = N
 async def sell_fish_from_db(user_id_str: str, fish_ids: List[int], total_sell_price: int):
     params = {'p_user_id': user_id_str, 'p_fish_ids': fish_ids, 'p_total_value': total_sell_price}
     await supabase.rpc('sell_fishes', params).execute()
+
+# [✅✅✅ 신규 추가: 유저 능력 조회 함수]
+@supabase_retry_handler()
+async def get_user_abilities(user_id: int) -> List[str]:
+    """사용자가 보유한 모든 능력의 키(key) 목록을 반환합니다. (5분 캐시 적용)"""
+    now = time.time()
+    user_id_str = str(user_id)
+
+    # 캐시 확인
+    if user_id_str in _user_abilities_cache:
+        cached_data, timestamp = _user_abilities_cache[user_id_str]
+        if now - timestamp < CACHE_TTL:
+            return cached_data
+
+    # DB에서 조회
+    response = await supabase.table('user_abilities').select('abilities(ability_key)').eq('user_id', user_id).execute()
+    
+    if response and response.data:
+        abilities = [item['abilities']['ability_key'] for item in response.data if 'abilities' in item and item['abilities']]
+        # 캐시 저장
+        _user_abilities_cache[user_id_str] = (abilities, now)
+        return abilities
+    
+    # 데이터가 없을 경우에도 캐시 저장 (불필요한 DB 조회 방지)
+    _user_abilities_cache[user_id_str] = ([], now)
+    return []
