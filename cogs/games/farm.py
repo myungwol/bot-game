@@ -7,7 +7,7 @@ import logging
 from typing import Optional, Dict, List, Any
 import asyncio
 import time
-import math # [추가] math 모듈 import
+import math
 from datetime import datetime, timezone, timedelta, time as dt_time
 
 from utils.database import (
@@ -60,7 +60,7 @@ class FarmNameModal(ui.Modal, title="農場名の変更"):
         await supabase.table('farms').update({'name': new_name}).eq('id', self.farm_data['id']).execute()
         self.farm_data['name'] = new_name
         farm_owner = self.cog.bot.get_user(self.farm_data['user_id'])
-        if farm_owner: await self.cog.update_farm_ui(interaction.channel, farm_owner, self.farm_data)
+        if farm_owner: await self.cog.update_farm_ui(interaction.channel, farm_owner, self.farm_data, force_new=True)
         await interaction.followup.send("✅ 農場の名前を変更しました。", ephemeral=True)
 
 class FarmActionView(ui.View):
@@ -101,14 +101,12 @@ class FarmActionView(ui.View):
         farmable_info = await get_farmable_item_info(self.selected_item)
         if not farmable_info: return
         sx, sy = farmable_info['space_required_x'], farmable_info['space_required_y']
-        available_plots = await self._find_available_space(sx, sy) # [수정] await 추가
+        available_plots = await self._find_available_space(sx, sy)
         if not available_plots: self.add_item(ui.Button(label=f"{sx}x{sy}の空き地がありません。", disabled=True)); return
         options = [discord.SelectOption(label=f"{p['pos_y']+1}行 {p['pos_x']+1}列", value=f"{p['pos_x']},{p['pos_y']}") for p in available_plots]
         select = ui.Select(placeholder="植える場所を選択...", options=options, custom_id="location_select")
         select.callback = self.on_location_select
         self.add_item(select)
-    
-    # [✅✅✅ 핵심 수정] def를 async def로 변경
     async def _find_available_space(self, required_x: int, required_y: int) -> List[Dict]:
         plot_count_res = await supabase.table('farm_plots').select('id', count='exact').eq('farm_id', self.farm_data['id']).execute()
         current_plot_count = plot_count_res.count if plot_count_res else 0
@@ -123,14 +121,11 @@ class FarmActionView(ui.View):
                 for dy in range(required_y):
                     for dx in range(required_x):
                         plot_x, plot_y = x + dx, y + dy
-                        # 현재 밭 개수를 초과하는 위치는 심을 수 없음
                         if (plot_y * size_x + plot_x) >= current_plot_count:
                             is_valid = False; break
-                        # 이미 무언가 심어져 있거나, 경작되지 않은 땅은 심을 수 없음
                         if plots.get((plot_x, plot_y), {}).get('state') != 'tilled':
                             is_valid = False; break
                     if not is_valid: break
-                
                 if is_valid:
                     valid_starts.append(plots[(x, y)])
         return valid_starts
@@ -218,27 +213,72 @@ class FarmUIView(ui.View):
     def __init__(self, cog_instance: 'Farm'):
         super().__init__(timeout=None)
         self.cog = cog_instance
-        buttons = [ui.Button(label="畑を耕す", emoji="🪓", row=0, custom_id="farm_till"), ui.Button(label="種を植える", emoji="🌱", row=0, custom_id="farm_plant"), ui.Button(label="水をやる", emoji="💧", row=0, custom_id="farm_water"), ui.Button(label="収穫する", emoji="🧺", row=0, custom_id="farm_harvest"), ui.Button(label="畑を整理する", emoji="🧹", row=0, custom_id="farm_uproot"), ui.Button(label="農場に招待", emoji="📢", row=1, custom_id="farm_invite"), ui.Button(label="権限を付与", emoji="🤝", row=1, custom_id="farm_share"), ui.Button(label="名前を変更", emoji="✏️", row=1, custom_id="farm_rename")]
+        buttons = [
+            ui.Button(label="畑を耕す", emoji="🪓", row=0, custom_id="farm_till"), 
+            ui.Button(label="種を植える", emoji="🌱", row=0, custom_id="farm_plant"), 
+            ui.Button(label="水をやる", emoji="💧", row=0, custom_id="farm_water"), 
+            ui.Button(label="収穫する", emoji="🧺", row=0, custom_id="farm_harvest"), 
+            ui.Button(label="畑を整理する", emoji="🧹", row=0, custom_id="farm_uproot"), 
+            ui.Button(label="農場に招待", emoji="📢", row=1, custom_id="farm_invite"), 
+            ui.Button(label="権限を付与", emoji="🤝", row=1, custom_id="farm_share"), 
+            ui.Button(label="名前を変更", emoji="✏️", row=1, custom_id="farm_rename"),
+            ui.Button(label="再設置", emoji="🔄", row=1, custom_id="farm_regenerate")
+        ]
         for item in buttons:
             item.callback = self.dispatch_callback
             self.add_item(item)
+    
     async def dispatch_callback(self, interaction: discord.Interaction):
         method_name = f"on_{interaction.data['custom_id']}_click"
         if hasattr(self, method_name):
             await getattr(self, method_name)(interaction)
+
+    # [✅✅✅ 핵심 수정] interaction_check 함수
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         self.farm_owner_id = await get_farm_owner_by_thread(interaction.channel.id)
-        if not self.farm_owner_id: await interaction.response.send_message("❌ この農場の情報を見つけられませんでした。", ephemeral=True); return False
+        if not self.farm_owner_id: 
+            await interaction.response.send_message("❌ この農場の情報を見つけられませんでした。", ephemeral=True)
+            return False
         self.farm_data = await get_farm_data(self.farm_owner_id)
-        if not self.farm_data: await interaction.response.send_message("❌ 農場データの読み込みに失敗しました。", ephemeral=True); return False
-        if interaction.user.id == self.farm_owner_id: return True
-        if interaction.data['custom_id'] in ["farm_invite", "farm_share", "farm_rename"]: await interaction.response.send_message("❌ この操作は農場の所有者のみ可能です。", ephemeral=True); return False
-        action_map = {"farm_till": "till", "farm_plant": "plant", "farm_water": "water", "farm_harvest": "harvest", "farm_uproot": "plant"}
+        if not self.farm_data: 
+            await interaction.response.send_message("❌ 農場データの読み込みに失敗しました。", ephemeral=True)
+            return False
+        
+        # 1. 농장 소유자인 경우 모든 버튼 사용 가능
+        if interaction.user.id == self.farm_owner_id: 
+            return True
+        
+        # 2. 소유자가 아닌 경우, 특정 버튼에 대한 권한 검사
+        # 소유자만 사용 가능한 버튼들
+        if interaction.data['custom_id'] in ["farm_invite", "farm_share", "farm_rename"]: 
+            await interaction.response.send_message("❌ この操作は農場の所有者のみ可能です。", ephemeral=True)
+            return False
+        
+        # 공유 권한으로 사용 가능한 버튼들
+        # [✅ 수정] 'farm_regenerate' (재설치)도 공유 권한으로 가능하도록 추가
+        action_map = {
+            "farm_till": "till", 
+            "farm_plant": "plant", 
+            "farm_water": "water", 
+            "farm_harvest": "harvest", 
+            "farm_uproot": "plant", # '밭 정리'는 '심기' 권한과 동일하게 취급
+            "farm_regenerate": "till" # '재설치'는 '경작' 권한과 동일하게 취급 (어떤 권한이든 상관없음)
+        }
         action = action_map.get(interaction.data['custom_id'])
-        if not action: return False
+        
+        if not action: # 매핑에 없는 버튼이면 (이런 경우는 없어야 함)
+            return False 
+            
         has_perm = await check_farm_permission(self.farm_data['id'], interaction.user.id, action)
-        if not has_perm: await interaction.response.send_message("❌ この操作を行う権限がありません。", ephemeral=True)
+        if not has_perm: 
+            await interaction.response.send_message("❌ この操作を行う権限がありません。", ephemeral=True)
         return has_perm
+        
+    async def on_farm_regenerate_click(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        farm_owner = self.cog.bot.get_user(self.farm_owner_id)
+        if farm_owner:
+            await self.cog.update_farm_ui(interaction.channel, farm_owner, self.farm_data, force_new=True)
     async def on_error(self, i: discord.Interaction, e: Exception, item: ui.Item) -> None:
         logger.error(f"FarmUIView 오류 (item: {item.custom_id}): {e}", exc_info=True)
         msg = "❌ 処理中に予期せぬエラーが発生しました。"
@@ -271,7 +311,6 @@ class FarmUIView(ui.View):
         view = FarmActionView(self.cog, self.farm_data, i.user, "uproot", self.farm_owner_id)
         await view.send_initial_message(i)
         
-    # [✅✅✅ 핵심 수정] 누락되었던 on_farm_water_click 함수를 다시 추가합니다.
     async def on_farm_water_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         gear = await get_user_gear(interaction.user)
@@ -312,7 +351,6 @@ class FarmUIView(ui.View):
         await interaction.followup.send(f"✅ **{can}** を使って、**{watered_count}マス**に水をやりました。", ephemeral=True)
         
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
-        # ... (이하 코드는 이전과 동일)
         await interaction.response.defer(ephemeral=True)
         harvested, plots_to_reset, trees_to_update, processed = {}, [], {}, set()
         info_map = await preload_farmable_info(self.farm_data)
@@ -365,7 +403,6 @@ class FarmUIView(ui.View):
                     await core_cog.handle_level_up_event(owner, res['data'][0]); break
         
         await interaction.followup.send(f"🎉 **{', '.join([f'{n} {q}個' for n, q in harvested.items()])}**を収穫しました！", ephemeral=True)
-
     async def on_farm_invite_click(self, i: discord.Interaction):
         view = ui.View(timeout=180)
         select = ui.UserSelect(placeholder="農場に招待するユーザーを選択...")
@@ -396,7 +433,6 @@ class FarmUIView(ui.View):
     async def on_farm_rename_click(self, i: discord.Interaction): await i.response.send_modal(FarmNameModal(self.cog, self.farm_data))
 
 class FarmCreationPanelView(ui.View):
-    # ... (변경 없음)
     def __init__(self, cog: 'Farm'):
         super().__init__(timeout=None)
         self.cog = cog
@@ -430,10 +466,7 @@ class Farm(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author.bot or not isinstance(message.channel, discord.Thread): return
-        if await get_farm_owner_by_thread(message.channel.id):
-            # [✅ 수정] delete() 대신 delete_after 사용
-            await message.channel.send(f"{message.author.mention}さん、農場での操作は下のボタンを使用してください。", delete_after=10)
+        pass # 채팅 허용
             
     async def register_persistent_views(self):
         self.bot.add_view(FarmCreationPanelView(self))
@@ -447,11 +480,9 @@ class Farm(commands.Cog):
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
             
-            # DB 함수에 성장 속도 및 물주기 능력 보유자 목록을 전달
             growth_boost_users = []
             water_retention_users = []
             
-            # 모든 농장주의 능력을 조회
             all_farms_res = await supabase.table('farms').select('user_id').execute()
             if all_farms_res.data:
                 user_ids = [farm['user_id'] for farm in all_farms_res.data]
@@ -466,7 +497,6 @@ class Farm(commands.Cog):
                         elif ability_key == 'farm_water_retention_1':
                             water_retention_users.append(user_id)
 
-            # 수정된 DB 함수 호출
             response = await supabase.rpc('process_daily_farm_update_with_abilities', {
                 'is_raining': is_raining,
                 'growth_boost_user_ids': growth_boost_users,
@@ -526,13 +556,10 @@ class Farm(commands.Cog):
     async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         info_map = await preload_farmable_info(farm_data)
         
-        # [✅ 수정] DB에서 직접 plot 수를 다시 세어, 정확한 크기를 계산합니다.
         plot_count_res = await supabase.table('farm_plots').select('id', count='exact').eq('farm_id', farm_data['id']).execute()
         current_plot_count = plot_count_res.count if plot_count_res else 0
         
-        # 농장 그리드 크기 결정 (최대 5x5)
-        sx = 5
-        sy = math.ceil(current_plot_count / sx) if current_plot_count > 0 else 1
+        sx, sy = 5, 5
         
         plots = {(p['pos_x'], p['pos_y']): p for p in farm_data.get('farm_plots', [])}
         grid, infos, processed = [['' for _ in range(sx)] for _ in range(sy)], [], set()
@@ -541,35 +568,37 @@ class Farm(commands.Cog):
         for y in range(sy):
             for x in range(sx):
                 if (x, y) in processed: continue
-                plot = plots.get((x, y))
-                emoji = '🟤'
-                if plot:
-                    state = plot['state']
-                    if state == 'tilled': emoji = '🟫'
-                    elif state == 'withered': emoji = '🥀'
-                    elif state == 'planted':
-                        name = plot['planted_item_name']
-                        info = info_map.get(name)
-                        if info:
-                            stage = plot['growth_stage']
-                            max_stage = info.get('max_growth_stage', 3)
-                            emoji = info.get('item_emoji') if stage >= max_stage else CROP_EMOJI_MAP.get(info.get('item_type', 'seed'), {}).get(stage, '🌱')
-                            item_sx, item_sy = info['space_required_x'], info['space_required_y']
-                            for dy in range(item_sy):
-                                for dx in range(item_sx):
-                                    if y + dy < sy and x + dx < sx:
-                                        grid[y+dy][x+dx] = emoji; processed.add((x + dx, y + dy))
-                            
-                            last_watered = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
-                            water_emoji = '💧' if last_watered >= today_jst_midnight else '➖'
-                            
-                            info_text = f"{emoji} **{name}** (水: {water_emoji}): "
-                            if stage >= max_stage: info_text += "収穫可能！ 🧺"
-                            else: info_text += f"成長 {stage+1}/{max_stage+1}段階目"
-                            infos.append(info_text)
-                # 현재 plot 개수를 초과하는 칸은 빈 땅(⬛)으로 표시
-                if (y * sx + x) >= current_plot_count:
-                    emoji = '⬛'
+                
+                is_owned_plot = (y * sx + x) < current_plot_count
+                emoji = '⬛'
+                
+                if is_owned_plot:
+                    plot = plots.get((x, y))
+                    emoji = '🟤'
+                    if plot:
+                        state = plot['state']
+                        if state == 'tilled': emoji = '🟫'
+                        elif state == 'withered': emoji = '🥀'
+                        elif state == 'planted':
+                            name = plot['planted_item_name']
+                            info = info_map.get(name)
+                            if info:
+                                stage = plot['growth_stage']
+                                max_stage = info.get('max_growth_stage', 3)
+                                emoji = info.get('item_emoji') if stage >= max_stage else CROP_EMOJI_MAP.get(info.get('item_type', 'seed'), {}).get(stage, '🌱')
+                                item_sx, item_sy = info['space_required_x'], info['space_required_y']
+                                for dy in range(item_sy):
+                                    for dx in range(item_sx):
+                                        if y + dy < sy and x + dx < sx:
+                                            grid[y+dy][x+dx] = emoji; processed.add((x + dx, y + dy))
+                                
+                                last_watered = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
+                                water_emoji = '💧' if last_watered >= today_jst_midnight else '➖'
+                                
+                                info_text = f"{emoji} **{name}** (水: {water_emoji}): "
+                                if stage >= max_stage: info_text += "収穫可能！ 🧺"
+                                else: info_text += f"成長 {stage+1}/{max_stage+1}段階目"
+                                infos.append(info_text)
 
                 if not (x,y) in processed: grid[y][x] = emoji
 
@@ -589,10 +618,14 @@ class Farm(commands.Cog):
             if not (user and farm_data): return
 
             try:
-                embed = await self.build_farm_embed(farm_data, user)
+                # [수정] DB에서 최신 farm_data를 다시 불러와 동기화
+                updated_farm_data = await get_farm_data(user.id)
+                if not updated_farm_data: return
+                
+                embed = await self.build_farm_embed(updated_farm_data, user)
                 view = FarmUIView(self)
                 
-                if message_id := farm_data.get("farm_message_id"):
+                if message_id := updated_farm_data.get("farm_message_id"):
                     try:
                         message = await thread.fetch_message(message_id)
                         await message.edit(embed=embed, view=view)
@@ -601,10 +634,8 @@ class Farm(commands.Cog):
                         logger.warning(f"농장 메시지(ID: {message_id})를 찾지 못하여 새로 생성합니다.")
                 
                 new_message = await thread.send(embed=embed, view=view)
-                await supabase.table('farms').update({'farm_message_id': new_message.id}).eq('id', farm_data['id']).execute()
-                # 로컬 데이터에도 메시지 ID 갱신
-                farm_data['farm_message_id'] = new_message.id
-
+                await supabase.table('farms').update({'farm_message_id': new_message.id}).eq('id', updated_farm_data['id']).execute()
+                
             except Exception as e:
                 logger.error(f"농장 UI 업데이트 중 오류: {e}", exc_info=True)
                 
