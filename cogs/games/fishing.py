@@ -296,10 +296,8 @@ class FishingPanelView(ui.View):
                 desc = "\n".join(desc_lines)
                 embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
                 
-                # [✅ 수정] URL을 가져온 후 양 끝의 큰따옴표를 제거합니다.
-                if image_url_raw := game_config.get("FISHING_WAITING_IMAGE_URL"):
-                    image_url = str(image_url_raw).strip('"') # .strip('"') 추가
-                    embed.set_thumbnail(url=image_url)
+                if image_url := game_config.get("FISHING_WAITING_IMAGE_URL"):
+                    embed.set_thumbnail(url=str(image_url))
                 
                 view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type, bite_range)
                 await view.start_game(interaction, embed)
@@ -324,6 +322,23 @@ class Fishing(commands.Cog):
         self.bot.add_view(FishingPanelView(self.bot, self, "panel_fishing_sea"))
 
     async def log_whale_catch(self, user: discord.Member, result_embed: discord.Embed):
+        """고래를 낚았을 때 공개적으로 알리고, 출현 공지를 삭제합니다."""
+        
+        announcement_msg_id = get_config("whale_announcement_message_id")
+        sea_fishing_channel_id = get_id("sea_fishing_panel_channel_id")
+
+        if announcement_msg_id and sea_fishing_channel_id:
+            if channel := self.bot.get_channel(sea_fishing_channel_id):
+                try:
+                    msg_to_delete = await channel.fetch_message(int(announcement_msg_id))
+                    await msg_to_delete.delete()
+                    logger.info(f"고래가 잡혀서 공지 메시지(ID: {announcement_msg_id})를 삭제했습니다.")
+                    await save_config_to_db("whale_announcement_message_id", None)
+                except (discord.NotFound, discord.Forbidden):
+                    logger.warning(f"고래 공지 메시지(ID: {announcement_msg_id})를 찾거나 삭제할 수 없습니다.")
+                except Exception as e:
+                    logger.error(f"고래 공지 메시지 삭제 중 오류: {e}", exc_info=True)
+
         if not self.fishing_log_channel_id or not (log_channel := self.bot.get_channel(self.fishing_log_channel_id)): return
         
         fish_field = next((f for f in result_embed.fields if f.name == "魚"), None)
@@ -362,7 +377,11 @@ class Fishing(commands.Cog):
         if panel_key not in ["panel_fishing_river", "panel_fishing_sea"]: return
         if (panel_info := get_panel_id(panel_key)):
             if (old_ch_id := panel_info.get("channel_id")) and (old_ch := self.bot.get_channel(old_ch_id)):
-                try: await (await old_ch.fetch_message(panel_info.get('message_id'))).delete()
+                try:
+                    async for message in old_ch.history(limit=10):
+                        if message.id == panel_info.get('message_id'):
+                            await message.delete()
+                            break
                 except (discord.NotFound, discord.Forbidden): pass
         
         embed_data = await get_embed_from_db(panel_key)
