@@ -17,7 +17,7 @@ from utils.database import (
     get_aquarium, get_fishing_loot, sell_fish_from_db,
     save_panel_id, get_panel_id, get_embed_from_db,
     update_inventory, update_wallet, get_farm_data, save_config_to_db,
-    load_game_data_from_db # [✅ 추가] 캐시 갱신을 위해 import
+    load_game_data_from_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -50,6 +50,7 @@ class ShopViewBase(ui.View):
 
     async def update_view(self, interaction: discord.Interaction):
         embed = await self.build_embed()
+        # [수정] build_components는 이제 비동기 함수가 될 수 있습니다.
         await self.build_components()
         await interaction.edit_original_response(embed=embed, view=self)
 
@@ -71,13 +72,43 @@ class BuyItemView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str):
         super().__init__(user)
         self.category = category
-        # [✅ 수정] 가격 변동을 위해 current_price 기준으로 정렬
-        self.items_in_category = sorted(
+        self.items_in_category = [] # [수정] 초기화는 비동기로 처리
+        self.page_index = 0
+        self.items_per_page = 20
+
+    # [✅✅✅ 핵심 수정] 상점 아이템 목록을 비동기적으로 필터링하는 함수
+    async def _filter_items_for_user(self):
+        """사용자 상태에 따라 상점 아이템 목록을 필터링합니다."""
+        all_items_in_category = sorted(
             [(n, d) for n, d in get_item_database().items() if d.get('buyable') and d.get('category') == self.category],
             key=lambda item: item[1].get('current_price', item[1].get('price', 0))
         )
-        self.page_index = 0
-        self.items_per_page = 20
+        
+        # 농장 확장권의 경우, 농장 크기를 확인해야 합니다.
+        farm_expansion_item_exists = any(item[1].get('effect_type') == 'expand_farm' for item in all_items_in_category)
+        
+        if not farm_expansion_item_exists:
+            self.items_in_category = all_items_in_category
+            return
+
+        farm_res = await supabase.table('farms').select('farm_plots(count)').eq('user_id', self.user.id).maybe_single().execute()
+        
+        current_plots = 0
+        if farm_res and farm_res.data and farm_res.data.get('farm_plots'):
+            current_plots = farm_res.data['farm_plots'][0]['count']
+        
+        is_farm_max_size = current_plots >= 25
+        
+        # 최종 아이템 목록 필터링
+        filtered_items = []
+        for name, data in all_items_in_category:
+            if data.get('effect_type') == 'expand_farm':
+                if not is_farm_max_size:
+                    filtered_items.append((name, data))
+            else:
+                filtered_items.append((name, data))
+        
+        self.items_in_category = filtered_items
 
     async def build_embed(self) -> discord.Embed:
         wallet = await get_wallet(self.user.id)
@@ -99,7 +130,6 @@ class BuyItemView(ShopViewBase):
             items_on_page = self.items_in_category[start_index:end_index]
 
             for name, data in items_on_page:
-                # [✅ 수정] price 대신 current_price를 우선적으로 사용
                 price = data.get('current_price', data.get('price', 0))
                 field_name = f"{data.get('emoji', '📦')} {name}"
                 field_value = f"**価格:** `{price:,}`{self.currency_icon}\n> {data.get('description', '説明がありません。')}"
@@ -114,13 +144,15 @@ class BuyItemView(ShopViewBase):
     async def build_components(self):
         self.clear_items()
         
+        # [수정] 컴포넌트를 빌드하기 전에 아이템 목록을 필터링합니다.
+        await self._filter_items_for_user()
+
         start_index, end_index = self.page_index * self.items_per_page, (self.page_index + 1) * self.items_per_page
         items_on_page = self.items_in_category[start_index:end_index]
 
         if items_on_page:
             options = []
             for name, data in items_on_page:
-                # [✅ 수정] price 대신 current_price를 우선적으로 사용
                 price = data.get('current_price', data.get('price', 0))
                 options.append(discord.SelectOption(label=name, value=name, description=f"価格: {price:,}{self.currency_icon}", emoji=data.get('emoji')))
             
@@ -162,29 +194,39 @@ class BuyItemView(ShopViewBase):
 
     async def handle_instant_use_item(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         await interaction.response.defer(ephemeral=True)
-        # [✅ 수정] price 대신 current_price 사용
         price = item_data.get('current_price', item_data.get('price', 0))
         wallet = await get_wallet(self.user.id)
         if wallet.get('balance', 0) < price:
             return await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
             
         if item_data.get('effect_type') == 'expand_farm':
-            farm_data = await get_farm_data(self.user.id)
-            if not farm_data:
-                return await interaction.followup.send("❌ 農場をまず作成してください。", ephemeral=True)
+            farm_res = await supabase.table('farms').select('id, farm_plots(count)').eq('user_id', self.user.id).maybe_single().execute()
             
-            plot_count = farm_data['size_x'] * farm_data['size_y']
-            if plot_count >= 25:
-                return await interaction.followup.send("❌ 農場はすでに最大サイズ(25칸)です。", ephemeral=True)
+            if not (farm_res and farm_res.data):
+                return await interaction.followup.send("❌ 農場をまず作成してください。", ephemeral=True)
+
+            farm_data = farm_res.data
+            current_plots = farm_data['farm_plots'][0]['count'] if farm_data.get('farm_plots') else 0
+            
+            if current_plots >= 25:
+                return await interaction.followup.send("❌ 農場はすでに最大サイズ(25マス)です。", ephemeral=True)
 
             await update_wallet(self.user, -price)
-            result = await supabase.rpc('expand_farm_single_plot', {'p_user_id': self.user.id}).execute()
             
-            if result and result.data:
-                new_size = result.data[0]
+            new_pos_x = current_plots % 5
+            new_pos_y = current_plots // 5
+
+            try:
+                await supabase.table('farm_plots').insert({
+                    'farm_id': farm_data['id'],
+                    'pos_x': new_pos_x,
+                    'pos_y': new_pos_y
+                }).execute()
+                
                 await save_config_to_db(f"farm_ui_update_request_{self.user.id}", time.time())
-                await interaction.followup.send(f"✅ 農場が **{new_size['new_size_x']}x{new_size['new_size_y']}**サイズに拡張されました！", ephemeral=True)
-            else:
+                await interaction.followup.send(f"✅ 農場が1マス拡張されました！ (現在の広さ: {current_plots + 1}/25)", ephemeral=True)
+            except Exception as e:
+                logger.error(f"농장 확장 DB 작업 중 오류 발생: {e}", exc_info=True)
                 await update_wallet(self.user, price)
                 await interaction.followup.send("❌ 農場の拡張中にエラーが発生しました。", ephemeral=True)
         else:
@@ -193,9 +235,9 @@ class BuyItemView(ShopViewBase):
         await self.update_view(interaction)
 
     async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
+        # ... (이전과 동일)
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
-        # [✅ 수정] price 대신 current_price 사용
         price = item_data.get('current_price', item_data.get('price', 0))
         max_buyable = balance // price if price > 0 else 999
         if max_buyable == 0:
@@ -219,9 +261,9 @@ class BuyItemView(ShopViewBase):
         await self.update_view(interaction)
 
     async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
+        # ... (이전과 동일)
         await interaction.response.defer(ephemeral=True)
         user = interaction.user
-        # [✅ 수정] price 대신 current_price 사용
         price = item_data.get('current_price', item_data.get('price', 0))
         wallet = await get_wallet(user.id)
         if wallet.get('balance', 0) < price:
