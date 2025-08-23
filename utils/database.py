@@ -109,13 +109,11 @@ async def get_user_progress(user_id: int) -> Dict[str, Any]:
         return response.data
     return default_progress
 
-# [✅ 개선] 안정성을 위해 재시도 핸들러를 추가합니다.
 @supabase_retry_handler()
 async def increment_progress(user_id: int, fish_count: int = 0, voice_minutes: int = 0):
     await supabase.rpc('increment_user_progress', {'p_user_id': user_id, 'p_fish_count': fish_count, 'p_voice_minutes': voice_minutes}).execute()
 
 # --- [공용 및 기타 게임 함수] ---
-# [✅ 개선] 안정성을 위해 재시도 핸들러를 추가합니다.
 @supabase_retry_handler()
 async def save_config(key: str, value: Any):
     global _configs_cache
@@ -124,13 +122,22 @@ async def save_config(key: str, value: Any):
     logger.info(f"설정이 업데이트되었습니다: {key} -> {value}")
 save_config_to_db = save_config
 
-ONE_WEEK_IN_SECONDS = 7 * 24 * 60 * 60
-async def is_legendary_fish_available() -> bool:
-    last_caught_ts = get_config("legendary_fish_last_caught_timestamp", 0)
-    return (time.time() - float(last_caught_ts)) > ONE_WEEK_IN_SECONDS
+JST = timezone(timedelta(hours=9))
 
-async def set_legendary_fish_cooldown():
-    await save_config("legendary_fish_last_caught_timestamp", time.time())
+async def is_whale_available() -> bool:
+    """고래를 이번 달에 잡을 수 있는지 확인합니다."""
+    last_caught_ts = get_config("whale_last_caught_timestamp", 0)
+    if not last_caught_ts or float(last_caught_ts) == 0:
+        return True
+    last_catch_time = datetime.fromtimestamp(float(last_caught_ts), tz=JST)
+    now = datetime.now(JST)
+    if last_catch_time.year < now.year or last_catch_time.month < now.month:
+        return True
+    return False
+
+async def set_whale_caught():
+    """고래가 잡혔다고 현재 시간을 기록합니다."""
+    await save_config("whale_last_caught_timestamp", time.time())
 
 async def load_all_data_from_db():
     logger.info("------ [ 모든 DB 데이터 로드 시작 ] ------")
@@ -189,8 +196,7 @@ async def load_game_data_from_db():
 
 def get_item_database() -> Dict[str, Dict[str, Any]]: return _item_database_cache
 def get_fishing_loot() -> List[Dict[str, Any]]: return _fishing_loot_cache
-    
-# [✅ 개선] 안정성을 위해 재시도 핸들러를 추가합니다.
+
 @supabase_retry_handler()
 async def save_id_to_db(key: str, object_id: int):
     global _channel_id_cache
@@ -217,7 +223,6 @@ async def get_panel_components_from_db(panel_key: str) -> list:
     response = await supabase.table('panel_components').select('*').eq('panel_key', panel_key).order('row', desc=False).order('order_in_row', desc=False).execute()
     return response.data if response and response.data else []
 
-# [✅ 개선] 안정성을 위해 재시도 핸들러를 추가합니다.
 @supabase_retry_handler()
 async def get_or_create_user(table_name: str, user_id_str: str, default_data: dict) -> dict:
     response = await supabase.table(table_name).select("*").eq("user_id", user_id_str).limit(1).execute()
@@ -318,7 +323,6 @@ async def sell_fish_from_db(user_id_str: str, fish_ids: List[int], total_sell_pr
     params = {'p_user_id': user_id_str, 'p_fish_ids': fish_ids, 'p_total_value': total_sell_price}
     await supabase.rpc('sell_fishes', params).execute()
 
-# [✅✅✅ 최종 수정: RPC 함수를 호출하도록 변경]
 @supabase_retry_handler()
 async def get_user_abilities(user_id: int) -> List[str]:
     """사용자가 보유한 모든 능력의 키(key) 목록을 반환합니다. (5분 캐시 적용)"""
@@ -330,7 +334,6 @@ async def get_user_abilities(user_id: int) -> List[str]:
         if now - timestamp < CACHE_TTL:
             return cached_data
 
-    # 새로 만든 DB 함수(RPC)를 호출합니다.
     response = await supabase.rpc('get_user_ability_keys', {'p_user_id': user_id}).execute()
     
     if response and response.data:
@@ -338,6 +341,5 @@ async def get_user_abilities(user_id: int) -> List[str]:
         _user_abilities_cache[user_id_str] = (abilities, now)
         return abilities
     
-    # 데이터가 없거나 오류가 발생해도 빈 리스트를 캐시하여 불필요한 DB 조회를 방지합니다.
     _user_abilities_cache[user_id_str] = ([], now)
     return []
