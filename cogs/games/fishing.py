@@ -27,15 +27,18 @@ logger = logging.getLogger(__name__)
 INTERMEDIATE_ROD_NAME = "鉄の釣竿"
 
 class FishingGameView(ui.View):
-    def __init__(self, bot: commands.Bot, user: discord.Member, used_rod: str, used_bait: str, remaining_baits: Dict[str, int], cog_instance: 'Fishing', location_type: str, bite_range: List[float], original_interaction: discord.Interaction):
+    def __init__(self, bot: commands.Bot, user: discord.Member, used_rod: str, used_bait: str, remaining_baits: Dict[str, int], cog_instance: 'Fishing', location_type: str, bite_range: List[float]):
         super().__init__(timeout=35)
-        self.bot = bot; self.player = user; self.message: Optional[discord.WebhookMessage] = None
-        self.game_state = "waiting"; self.game_task: Optional[asyncio.Task] = None
-        self.used_rod = used_rod; self.used_bait = used_bait; self.remaining_baits = remaining_baits
+        self.bot = bot
+        self.player = user
+        self.message: Optional[discord.WebhookMessage] = None
+        self.game_state = "waiting"
+        self.game_task: Optional[asyncio.Task] = None
+        self.used_rod = used_rod
+        self.used_bait = used_bait
+        self.remaining_baits = remaining_baits
         self.fishing_cog = cog_instance
         self.location_type = location_type
-        # [✅ 수정] 원본 interaction을 저장합니다.
-        self.original_interaction = original_interaction
         
         item_db = get_item_database()
         self.rod_data = item_db.get(self.used_rod, {})
@@ -45,9 +48,8 @@ class FishingGameView(ui.View):
         self.bite_reaction_time = game_config.get("FISHING_BITE_REACTION_TIME", 3.0)
         self.big_catch_threshold = game_config.get("FISHING_BIG_CATCH_THRESHOLD", 70.0)
 
-    async def start_game(self, embed: discord.Embed):
-        # [✅ 수정] followup.send는 WebhookMessage를 반환하므로 self.message에 저장합니다.
-        self.message = await self.original_interaction.followup.send(embed=embed, view=self, ephemeral=True)
+    async def start_game(self, interaction: discord.Interaction, embed: discord.Embed):
+        self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
         self.game_task = asyncio.create_task(self.game_flow())
 
     async def game_flow(self):
@@ -56,18 +58,21 @@ class FishingGameView(ui.View):
             if self.is_finished(): return
             self.game_state = "biting"
             if self.children and isinstance(catch_button := self.children[0], ui.Button):
-                catch_button.style = discord.ButtonStyle.success; catch_button.label = "釣り上げる！"
+                catch_button.style = discord.ButtonStyle.success
+                catch_button.label = "釣り上げる！"
             embed = discord.Embed(title="❗ アタリが来た！", description="今だ！ボタンを押して釣り上げよう！", color=discord.Color.red())
             if self.message: await self.message.edit(embed=embed, view=self)
             await asyncio.sleep(self.bite_reaction_time)
             if not self.is_finished() and self.game_state == "biting":
                 embed = discord.Embed(title="💧 逃げられた…", description=f"{self.player.mention}さんは反応が遅れてしまいました。", color=discord.Color.greyple())
-                await self._send_result(embed); self.stop()
+                await self._send_result(embed)
+                self.stop()
         except asyncio.CancelledError: pass
         except Exception as e:
             logger.error(f"{self.player.display_name}의낚시 게임 흐름 중 오류: {e}", exc_info=True)
             if not self.is_finished():
-                await self._send_result(discord.Embed(title="❌ エラー発生", description="釣りの処理中に予期せぬエラーが発生しました。", color=discord.Color.red())); self.stop()
+                await self._send_result(discord.Embed(title="❌ エラー発生", description="釣りの処理中に予期せぬエラーが発生しました。", color=discord.Color.red()))
+                self.stop()
 
     async def _handle_catch_logic(self) -> tuple[discord.Embed, bool, bool, bool]:
         all_loot = get_fishing_loot()
@@ -160,7 +165,6 @@ class FishingGameView(ui.View):
             await self._send_result(result_embed, log_publicly, is_big_catch, is_whale)
         self.stop()
 
-    # [✅✅✅ 핵심 수정] _send_result 메소드
     async def _send_result(self, embed: discord.Embed, log_publicly: bool = False, is_big_catch: bool = False, is_whale: bool = False):
         remaining_baits_config = get_config("FISHING_REMAINING_BAITS_DISPLAY", ['普通の釣りエサ', '高級釣りエサ'])
         footer_private = f"残りのエサ: {' / '.join([f'{b}({self.remaining_baits.get(b, 0)}個)' for b in remaining_baits_config])}"
@@ -174,14 +178,11 @@ class FishingGameView(ui.View):
                 try: await log_ch.send(content=content, embed=public_embed, allowed_mentions=discord.AllowedMentions(users=is_big_catch))
                 except Exception as e: logger.error(f"공개 낚시 로그 전송 실패: {e}", exc_info=True)
         embed.set_footer(text=f"{footer_public}\n{footer_private}")
-        
-        # [✅ 수정] self.message 대신 self.original_interaction을 통해 메시지를 수정합니다.
-        try:
-            await self.original_interaction.edit_original_response(embed=embed, view=None)
-            # Cog에 메시지 객체 대신 interaction 객체를 저장합니다.
-            self.fishing_cog.last_result_interactions[self.player.id] = self.original_interaction
-        except (discord.NotFound, AttributeError, discord.HTTPException): 
-            pass
+        if self.message:
+            try:
+                await self.message.edit(embed=embed, view=None)
+                self.fishing_cog.last_result_messages[self.player.id] = self.message
+            except (discord.NotFound, AttributeError, discord.HTTPException): pass
 
     async def on_timeout(self):
         if self.game_state != "finished":
@@ -211,7 +212,6 @@ class FishingPanelView(ui.View):
             sea_button.callback = self._start_fishing_callback
             self.add_item(sea_button)
     
-    # [✅✅✅ 핵심 수정] _start_fishing_callback 메소드
     async def _start_fishing_callback(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         lock = self.user_locks.setdefault(user_id, asyncio.Lock())
@@ -226,10 +226,9 @@ class FishingPanelView(ui.View):
 
             await interaction.response.defer(ephemeral=True)
             
-            # Cog에 저장된 이전 interaction을 가져와서 응답 메시지를 삭제합니다.
-            if last_interaction := self.fishing_cog.last_result_interactions.pop(user_id, None):
+            if last_message := self.fishing_cog.last_result_messages.pop(user_id, None):
                 try:
-                    await last_interaction.delete_original_response()
+                    await last_message.delete()
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     pass
             
@@ -306,9 +305,8 @@ class FishingPanelView(ui.View):
                 if image_url := get_config("FISHING_WAITING_IMAGE_URL"):
                     embed.set_thumbnail(url=str(image_url))
                 
-                # [✅ 수정] FishingGameView에 interaction 객체를 전달합니다.
-                view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type, bite_range, interaction)
-                await view.start_game(embed)
+                view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type, bite_range)
+                await view.start_game(interaction, embed)
             except Exception as e:
                 self.fishing_cog.active_fishing_sessions_by_user.discard(user_id)
                 logger.error(f"낚시 게임 시작 중 예측 못한 오류: {e}", exc_info=True)
@@ -319,8 +317,7 @@ class Fishing(commands.Cog):
         self.bot = bot
         self.active_fishing_sessions_by_user: Set[int] = set()
         self.fishing_log_channel_id: Optional[int] = None
-        # [✅✅✅ 핵심 수정] 메시지 객체 대신 interaction 객체를 저장합니다.
-        self.last_result_interactions: Dict[int, discord.Interaction] = {}
+        self.last_result_messages: Dict[int, discord.Message] = {}
         logger.info("Fishing Cog가 성공적으로 초기화되었습니다.")
     
     async def cog_load(self): await self.load_configs()
