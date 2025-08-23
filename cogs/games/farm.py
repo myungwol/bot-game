@@ -16,13 +16,12 @@ from utils.database import (
     get_farmable_item_info, update_inventory, BARE_HANDS,
     check_farm_permission, grant_farm_permission, clear_plots_db,
     get_farm_owner_by_thread, get_item_database, save_config_to_db,
-    get_user_abilities # [✅ 추가]
+    get_user_abilities
 )
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# ... (상수 및 헬퍼 클래스는 이전과 동일) ...
 CROP_EMOJI_MAP = { 'seed': {0: '🌱', 1: '🌿', 2: '🌾', 3: '🌾'}, 'sapling': {0: '🌱', 1: '🌳', 2: '🌳', 3: '🌳'} }
 WEATHER_TYPES = { "sunny": {"emoji": "☀️", "name": "晴れ", "water_effect": False}, "cloudy": {"emoji": "☁️", "name": "曇り", "water_effect": False}, "rainy": {"emoji": "🌧️", "name": "雨", "water_effect": True}, "stormy": {"emoji": "⛈️", "name": "嵐", "water_effect": True}, }
 JST = timezone(timedelta(hours=9))
@@ -461,8 +460,16 @@ class Farm(commands.Cog):
         
     async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         info_map = await preload_farmable_info(farm_data)
-        sx, sy = farm_data.get('size_x', 5), farm_data.get('size_y', 5)
-        plots = {(p['pos_x'], p['pos_y']): p for p in farm_data['farm_plots']}
+        
+        # [✅ 수정] DB에서 직접 plot 수를 다시 세어, 정확한 크기를 계산합니다.
+        plot_count_res = await supabase.table('farm_plots').select('id', count='exact').eq('farm_id', farm_data['id']).execute()
+        current_plot_count = plot_count_res.count if plot_count_res else 0
+        
+        # 농장 그리드 크기 결정 (최대 5x5)
+        sx = 5
+        sy = math.ceil(current_plot_count / sx) if current_plot_count > 0 else 1
+        
+        plots = {(p['pos_x'], p['pos_y']): p for p in farm_data.get('farm_plots', [])}
         grid, infos, processed = [['' for _ in range(sx)] for _ in range(sy)], [], set()
         today_jst_midnight = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -495,6 +502,10 @@ class Farm(commands.Cog):
                             if stage >= max_stage: info_text += "収穫可能！ 🧺"
                             else: info_text += f"成長 {stage+1}/{max_stage+1}段階目"
                             infos.append(info_text)
+                # 현재 plot 개수를 초과하는 칸은 빈 땅(⬛)으로 표시
+                if (y * sx + x) >= current_plot_count:
+                    emoji = '⬛'
+
                 if not (x,y) in processed: grid[y][x] = emoji
 
         farm_str = "\n".join("".join(row) for row in grid)
