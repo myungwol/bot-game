@@ -83,17 +83,21 @@ class FishingGameView(ui.View):
         if not loot_pool:
             return (discord.Embed(title="エラー", description="この場所では何も釣れないようです。", color=discord.Color.red()), False, False, False)
         
-        # [✅ 능력 적용] get_user_abilities가 실패할 경우를 대비해 기본값으로 빈 리스트를 사용합니다.
         user_abilities = await get_user_abilities(self.player.id) or []
-        
         rare_up_bonus = 0.2 if 'fish_rare_up_2' in user_abilities else 0.0
         size_multiplier = 1.2 if 'fish_size_up_2' in user_abilities else 1.0
         
         weights = []
         for item in loot_pool:
             weight = item['weight']
+            
+            # [✅✅✅ 버그 수정] base_value가 None(DB에서 NULL)인 경우를 안전하게 처리
+            base_value = item.get('base_value')
+            if base_value is None:
+                base_value = 0 # None이면 0으로 간주
+
             # 희귀 물고기(가치가 100 이상)에 가중치 보너스 적용
-            if item.get('base_value', 0) > 100:
+            if base_value > 100:
                 weight *= (1.0 + rod_bonus + rare_up_bonus)
             else:
                 weight *= (1.0 + rod_bonus)
@@ -105,9 +109,7 @@ class FishingGameView(ui.View):
         embed = discord.Embed()
         if catch_proto.get("min_size") is not None:
             log_publicly = True
-            # 사이즈 증가 능력 적용
-            min_s = catch_proto["min_size"] * size_multiplier
-            max_s = catch_proto["max_size"] * size_multiplier
+            min_s, max_s = catch_proto["min_size"] * size_multiplier, catch_proto["max_size"] * size_multiplier
             size = round(random.uniform(min_s, max_s), 1)
 
             if is_legendary_catch: await set_legendary_fish_cooldown()
@@ -118,9 +120,8 @@ class FishingGameView(ui.View):
             xp_to_add = get_config("GAME_CONFIG", {}).get("XP_FROM_FISHING", 20)
             res = await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add, 'p_source': 'fishing'}).execute()
             
-            if res and res.data:
-                if core_cog := self.bot.get_cog("EconomyCore"):
-                    await core_cog.handle_level_up_event(self.player, res.data[0])
+            if res and res.data and (core_cog := self.bot.get_cog("EconomyCore")):
+                await core_cog.handle_level_up_event(self.player, res.data[0])
 
             title = "🏆 大物を釣り上げた！ 🏆" if is_big_catch else "🎉 釣り成功！ 🎉"
             if is_legendary_catch: title = "👑 伝説の魚を釣り上げた！！ 👑"
@@ -182,7 +183,6 @@ class FishingGameView(ui.View):
         self.fishing_cog.active_fishing_sessions_by_user.discard(self.player.id)
         super().stop()
 
-
 class FishingPanelView(ui.View):
     def __init__(self, bot: commands.Bot, cog_instance: 'Fishing', panel_key: str):
         super().__init__(timeout=None)
@@ -231,7 +231,7 @@ class FishingPanelView(ui.View):
                     get_inventory(user),
                     get_user_abilities(user.id)
                 )
-                user_abilities = user_abilities or [] # None일 경우 빈 리스트로 처리
+                user_abilities = user_abilities or []
                 
                 rod, item_db = gear.get('rod', BARE_HANDS), get_item_database()
                 if rod == BARE_HANDS:
@@ -254,7 +254,7 @@ class FishingPanelView(ui.View):
                 
                 bait_saved = False
                 if bait != "エサなし" and 'fish_bait_saver_1' in user_abilities:
-                    if random.random() < 0.2: # 20% 확률
+                    if random.random() < 0.2:
                         bait_saved = True
 
                 if bait != "エサなし" and not bait_saved:
@@ -329,7 +329,9 @@ class Fishing(commands.Cog):
         if not fish_data: return
 
         size_cm = float(size_field.value.strip('`cm`'))
-        value = int(fish_data.get("base_value", 0) + (size_cm * fish_data.get("size_multiplier", 0)))
+        base_value = fish_data.get("base_value") or 0
+        size_multiplier = fish_data.get("size_multiplier") or 0
+        value = int(base_value + (size_cm * size_multiplier))
         
         embed_data = await get_embed_from_db("log_legendary_catch") or {}
 
