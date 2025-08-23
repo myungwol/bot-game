@@ -17,7 +17,8 @@ from utils.database import (
     get_config, get_string, save_config_to_db,
     is_legendary_fish_available, set_legendary_fish_cooldown,
     BARE_HANDS, DEFAULT_ROD,
-    increment_progress
+    increment_progress,
+    get_user_abilities
 )
 from utils.helpers import format_embed_from_db
 
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 INTERMEDIATE_ROD_NAME = "鉄の釣竿"
 
 class FishingGameView(ui.View):
+    # ... (init, start_game, game_flow 메서드는 이전과 동일) ...
     def __init__(self, bot: commands.Bot, user: discord.Member, used_rod: str, used_bait: str, remaining_baits: Dict[str, int], cog_instance: 'Fishing', location_type: str, bite_range: List[float]):
         super().__init__(timeout=35)
         self.bot = bot; self.player = user; self.message: Optional[discord.WebhookMessage] = None
@@ -38,12 +40,9 @@ class FishingGameView(ui.View):
         self.rod_data = item_db.get(self.used_rod, {})
         
         self.bite_range = bite_range
-
-        bite_reaction_time_config = get_config("FISHING_BITE_REACTION_TIME", "3.0")
-        self.bite_reaction_time = float(str(bite_reaction_time_config))
-
-        big_catch_threshold_config = get_config("FISHING_BIG_CATCH_THRESHOLD", "70.0")
-        self.big_catch_threshold = float(str(big_catch_threshold_config))
+        game_config = get_config("GAME_CONFIG", {})
+        self.bite_reaction_time = game_config.get("FISHING_BITE_REACTION_TIME", 3.0)
+        self.big_catch_threshold = game_config.get("FISHING_BIG_CATCH_THRESHOLD", 70.0)
 
     async def start_game(self, interaction: discord.Interaction, embed: discord.Embed):
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
@@ -64,7 +63,7 @@ class FishingGameView(ui.View):
                 await self._send_result(embed); self.stop()
         except asyncio.CancelledError: pass
         except Exception as e:
-            logger.error(f"{self.player.display_name}の낚시 게임 흐름 중 오류: {e}", exc_info=True)
+            logger.error(f"{self.player.display_name}의낚시 게임 흐름 중 오류: {e}", exc_info=True)
             if not self.is_finished():
                 await self._send_result(discord.Embed(title="❌ エラー発生", description="釣りの処理中に予期せぬエラーが発生しました。", color=discord.Color.red())); self.stop()
 
@@ -85,7 +84,22 @@ class FishingGameView(ui.View):
         if not loot_pool:
             return (discord.Embed(title="エラー", description="この場所では何も釣れないようです。", color=discord.Color.red()), False, False, False)
         
-        weights = [item['weight'] * (1.0 + rod_bonus if item.get('base_value') is not None else 1.0) for item in loot_pool]
+        # [✅✅✅ 핵심 수정: 낚시 능력 적용]
+        user_abilities = await get_user_abilities(self.player.id)
+        
+        # 2차 전직 능력
+        rare_up_bonus = 0.2 if 'fish_rare_up_2' in user_abilities else 0.0  # 20% 보너스
+        size_multiplier = 1.2 if 'fish_size_up_2' in user_abilities else 1.0 # 20% 크기 증가
+        
+        weights = []
+        for item in loot_pool:
+            weight = item['weight']
+            # 희귀 물고기(가치가 높은 물고기)에 가중치 보너스 적용
+            if item.get('base_value', 0) > 100:
+                weight *= (1.0 + rod_bonus + rare_up_bonus)
+            else:
+                weight *= (1.0 + rod_bonus)
+            weights.append(weight)
 
         catch_proto = random.choices(loot_pool, weights=weights, k=1)[0]
         is_legendary_catch, is_big_catch, log_publicly = catch_proto.get('name') == '伝説の魚', False, False
@@ -93,7 +107,11 @@ class FishingGameView(ui.View):
         embed = discord.Embed()
         if catch_proto.get("min_size") is not None:
             log_publicly = True
-            size = round(random.uniform(catch_proto["min_size"], catch_proto["max_size"]), 1)
+            # 사이즈 증가 능력 적용
+            min_s = catch_proto["min_size"] * size_multiplier
+            max_s = catch_proto["max_size"] * size_multiplier
+            size = round(random.uniform(min_s, max_s), 1)
+
             if is_legendary_catch: await set_legendary_fish_cooldown()
             await add_to_aquarium(str(self.player.id), {"name": catch_proto['name'], "size": size, "emoji": catch_proto.get('emoji', '🐠')})
             is_big_catch = size >= self.big_catch_threshold
@@ -120,6 +138,7 @@ class FishingGameView(ui.View):
             embed.set_thumbnail(url=image_url)
         return embed, log_publicly, is_big_catch, is_legendary_catch
 
+    # ... (catch_button, _send_result, on_timeout, stop 메서드는 이전과 동일) ...
     @ui.button(label="待機中...", style=discord.ButtonStyle.secondary, custom_id="catch_fish_button")
     async def catch_button(self, interaction: discord.Interaction, button: ui.Button):
         if self.game_task: self.game_task.cancel()
@@ -135,7 +154,6 @@ class FishingGameView(ui.View):
                 result_embed.set_thumbnail(url=self.player.display_avatar.url)
             await self._send_result(result_embed, log_publicly, is_big_catch, is_legendary)
         self.stop()
-
     async def _send_result(self, embed: discord.Embed, log_publicly: bool = False, is_big_catch: bool = False, is_legendary: bool = False):
         remaining_baits_config = get_config("FISHING_REMAINING_BAITS_DISPLAY", ['普通の釣りエサ', '高級釣りエサ'])
         footer_private = f"残りのエサ: {' / '.join([f'{b}({self.remaining_baits.get(b, 0)}個)' for b in remaining_baits_config])}"
@@ -154,19 +172,19 @@ class FishingGameView(ui.View):
                 await self.message.edit(embed=embed, view=None)
                 self.fishing_cog.last_result_messages[self.player.id] = self.message
             except (discord.NotFound, AttributeError, discord.HTTPException): pass
-
     async def on_timeout(self):
         if self.game_state != "finished":
             embed = discord.Embed(title="⏱️ 時間切れ", description=f"{self.player.mention}さんは時間内に反応がありませんでした。", color=discord.Color.darker_grey())
             await self._send_result(embed)
         self.stop()
-
     def stop(self):
         if self.game_task and not self.game_task.done(): self.game_task.cancel()
         self.fishing_cog.active_fishing_sessions_by_user.discard(self.player.id)
         super().stop()
 
+
 class FishingPanelView(ui.View):
+    # ... (init은 동일) ...
     def __init__(self, bot: commands.Bot, cog_instance: 'Fishing', panel_key: str):
         super().__init__(timeout=None)
         self.bot = bot
@@ -182,7 +200,7 @@ class FishingPanelView(ui.View):
             sea_button = ui.Button(label="海で釣りをする", style=discord.ButtonStyle.primary, emoji="🌊", custom_id="start_fishing_sea")
             sea_button.callback = self._start_fishing_callback
             self.add_item(sea_button)
-    
+
     async def _start_fishing_callback(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         lock = self.user_locks.setdefault(user_id, asyncio.Lock())
@@ -197,22 +215,23 @@ class FishingPanelView(ui.View):
 
             await interaction.response.defer(ephemeral=True)
             
-            # [✅ 수정] 만료된 토큰 문제를 해결하기 위해 메시지를 다시 fetch하여 삭제합니다.
             if last_message := self.fishing_cog.last_result_messages.pop(user_id, None):
                 try:
-                    # last_message 객체에 있는 채널 정보를 통해 메시지를 다시 가져와서 삭제합니다.
-                    # 이렇게 하면 상호작용 토큰이 만료되어도 봇의 권한으로 메시지를 삭제할 수 있습니다.
                     if last_message.channel:
                         msg_to_delete = await last_message.channel.fetch_message(last_message.id)
                         await msg_to_delete.delete()
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    # 메시지가 이미 삭제되었거나, 권한이 없는 경우 등은 조용히 넘어갑니다.
                     pass
             
             try:
                 location_type = interaction.data['custom_id'].split('_')[-1]
                 user = interaction.user
-                gear, inventory = await asyncio.gather(get_user_gear(user), get_inventory(user))
+                # [✅ 수정] 능력 정보도 함께 조회
+                gear, inventory, user_abilities = await asyncio.gather(
+                    get_user_gear(user), 
+                    get_inventory(user),
+                    get_user_abilities(user.id)
+                )
                 
                 rod, item_db = gear.get('rod', BARE_HANDS), get_item_database()
                 if rod == BARE_HANDS:
@@ -222,16 +241,24 @@ class FishingPanelView(ui.View):
                         await interaction.followup.send(f"❌ 釣りをするには、まず商店で「{DEFAULT_ROD}」を購入してください。", ephemeral=True)
                     return
                 
+                game_config = get_config("GAME_CONFIG", {})
                 if location_type == 'sea':
                     rod_data = item_db.get(rod, {})
-                    req_tier = get_config("GAME_CONFIG", {}).get("FISHING_SEA_REQ_TIER", 3)
+                    req_tier = game_config.get("FISHING_SEA_REQ_TIER", 3)
                     if rod_data.get('tier', 0) < req_tier:
                         await interaction.followup.send(f"❌ 海の釣りには「{INTERMEDIATE_ROD_NAME}」(等級{req_tier})以上の性能を持つ釣竿を**装備**する必要があります。", ephemeral=True)
                         return
 
                 self.fishing_cog.active_fishing_sessions_by_user.add(user.id)
                 bait = gear.get('bait', 'エサなし')
-                if bait != "エサなし":
+                
+                # [✅✅✅ 핵심 수정: 미끼 소모 방지 능력]
+                bait_saved = False
+                if bait != "エサなし" and 'fish_bait_saver_1' in user_abilities:
+                    if random.random() < 0.2: # 20% 확률로 미끼 소모 안 함
+                        bait_saved = True
+
+                if bait != "エサなし" and not bait_saved:
                     if inventory.get(bait, 0) > 0:
                         await update_inventory(str(user.id), bait, -1)
                         inventory[bait] = max(0, inventory.get(bait, 0) - 1)
@@ -244,12 +271,8 @@ class FishingPanelView(ui.View):
                 rod_data = item_db.get(rod, {})
                 loot_bonus = rod_data.get('loot_bonus', 0.0)
                 
-                default_times = {
-                    "エサなし": [10.0, 15.0],
-                    "普通の釣りエサ": [7.0, 12.0],
-                    "高級釣りエサ": [5.0, 10.0]
-                }
-                bite_times_config_raw = get_config("FISHING_BITE_TIMES_BY_BAIT", default_times)
+                default_times = { "エサなし": [10.0, 15.0], "普通の釣りエサ": [7.0, 12.0], "高級釣りエサ": [5.0, 10.0] }
+                bite_times_config_raw = game_config.get("FISHING_BITE_TIMES_BY_BAIT", default_times)
                 
                 bite_times_config = default_times
                 if isinstance(bite_times_config_raw, str):
@@ -259,17 +282,19 @@ class FishingPanelView(ui.View):
                     bite_times_config = bite_times_config_raw
 
                 bite_range = bite_times_config.get(bait, bite_times_config.get("エサなし", [10.0, 15.0]))
-
-                desc_lines = [
-                    f"### {location_name}にウキを投げました。",
-                    f"**🎣 使用中の釣竿:** `{rod}` (+{loot_bonus:.0%})",
-                    f"**🐛 使用中のエサ:** `{bait}` (⏱️ `{bite_range[0]}`～`{bite_range[1]}`秒)"
-                ]
                 
+                # [✅✅✅ 핵심 수정: 입질 시간 단축 능력]
+                if 'fish_bite_time_down_1' in user_abilities:
+                    bite_range = [max(0.5, t - 2.0) for t in bite_range] # 2초 단축
+
+                desc_lines = [ f"### {location_name}にウキを投げました。", f"**🎣 使用中の釣竿:** `{rod}` (+{loot_bonus:.0%})", f"**🐛 使用中のエサ:** `{bait}` (⏱️ `{bite_range[0]:.1f}`～`{bite_range[1]:.1f}`秒)" ]
+                if bait_saved:
+                    desc_lines.append("✨ 能力効果でエサを消費しませんでした！")
+
                 desc = "\n".join(desc_lines)
                 embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
                 
-                if image_url := get_config("FISHING_WAITING_IMAGE_URL"):
+                if image_url := game_config.get("FISHING_WAITING_IMAGE_URL"):
                     embed.set_thumbnail(url=str(image_url))
                 
                 view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type, bite_range)
@@ -279,6 +304,8 @@ class FishingPanelView(ui.View):
                 logger.error(f"낚시 게임 시작 중 예측 못한 오류: {e}", exc_info=True)
                 await interaction.followup.send(f"❌ 釣りの開始中に予期せぬエラーが発生しました。", ephemeral=True)
 
+# ... (Fishing Cog 클래스는 이전과 동일하게 유지) ...
+# ... (생략 없이 전체 코드를 보여드리기 위해 동일한 코드를 포함합니다) ...
 class Fishing(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
