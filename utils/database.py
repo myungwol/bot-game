@@ -189,7 +189,7 @@ async def load_game_data_from_db():
 
 def get_item_database() -> Dict[str, Dict[str, Any]]: return _item_database_cache
 def get_fishing_loot() -> List[Dict[str, Any]]: return _fishing_loot_cache
-
+    
 # [✅ 개선] 안정성을 위해 재시도 핸들러를 추가합니다.
 @supabase_retry_handler()
 async def save_id_to_db(key: str, object_id: int):
@@ -318,28 +318,26 @@ async def sell_fish_from_db(user_id_str: str, fish_ids: List[int], total_sell_pr
     params = {'p_user_id': user_id_str, 'p_fish_ids': fish_ids, 'p_total_value': total_sell_price}
     await supabase.rpc('sell_fishes', params).execute()
 
-# [✅✅✅ 핵심 수정: 유저 능력 조회 함수]
+# [✅✅✅ 최종 수정: RPC 함수를 호출하도록 변경]
 @supabase_retry_handler()
 async def get_user_abilities(user_id: int) -> List[str]:
     """사용자가 보유한 모든 능력의 키(key) 목록을 반환합니다. (5분 캐시 적용)"""
     now = time.time()
     user_id_str = str(user_id)
 
-    # 캐시 확인
     if user_id_str in _user_abilities_cache:
         cached_data, timestamp = _user_abilities_cache[user_id_str]
         if now - timestamp < CACHE_TTL:
             return cached_data
 
-    # [✅ 수정된 쿼리]
-    # 더 명시적인 JOIN 쿼리를 사용하여 API의 자동 관계 탐지 기능에 의존하지 않도록 변경합니다.
-    # user_abilities 테이블을 기준으로 abilities 테이블의 정보를 가져옵니다.
-    response = await supabase.table('user_abilities').select('abilities(ability_key)').eq('user_id', user_id).execute()
+    # 새로 만든 DB 함수(RPC)를 호출합니다.
+    response = await supabase.rpc('get_user_ability_keys', {'p_user_id': user_id}).execute()
     
     if response and response.data:
-        abilities = [item['abilities']['ability_key'] for item in response.data if 'abilities' in item and item.get('abilities')]
+        abilities = response.data
         _user_abilities_cache[user_id_str] = (abilities, now)
         return abilities
     
+    # 데이터가 없거나 오류가 발생해도 빈 리스트를 캐시하여 불필요한 DB 조회를 방지합니다.
     _user_abilities_cache[user_id_str] = ([], now)
     return []
