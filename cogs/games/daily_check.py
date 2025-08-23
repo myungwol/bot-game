@@ -47,6 +47,7 @@ class DailyCheckPanelView(ui.View):
         
         await interaction.followup.send(f"✅ 出席チェックが完了しました！ **`{attendance_reward}`**{self.cog.currency_icon}を獲得しました。", ephemeral=True)
 
+        # --- 로그 메시지 전송 로직 ---
         if embed_data := await get_embed_from_db("log_daily_check"):
             log_embed = format_embed_from_db(
                 embed_data, user_mention=user.mention, 
@@ -59,9 +60,11 @@ class DailyCheckPanelView(ui.View):
                 except Exception as e:
                     logger.error(f"출석체크 로그 메시지 전송에 실패했습니다: {e}")
             else:
+                # 이 경고가 로그에 표시된다면, 채널이 설정되지 않은 것입니다.
                 logger.warning("출석체크 로그 채널이 설정되지 않았거나, 채널을 찾을 수 없습니다.")
 
-        await self.cog.regenerate_panel(interaction.channel)
+        # 출석체크 패널 자체를 업데이트하는 것은 불필요하므로 이 라인은 제거해도 무방합니다.
+        # await self.cog.regenerate_panel(interaction.channel)
 
 
 class DailyCheck(commands.Cog):
