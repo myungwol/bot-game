@@ -296,7 +296,8 @@ class FishingPanelView(ui.View):
                 desc = "\n".join(desc_lines)
                 embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
                 
-                if image_url := game_config.get("FISHING_WAITING_IMAGE_URL"):
+                # [✅✅✅ 핵심 수정] GAME_CONFIG 내부가 아닌, 전체 설정에서 직접 이미지 URL을 가져오도록 수정합니다.
+                if image_url := get_config("FISHING_WAITING_IMAGE_URL"):
                     embed.set_thumbnail(url=str(image_url))
                 
                 view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type, bite_range)
