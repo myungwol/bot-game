@@ -173,6 +173,7 @@ class FishingGameView(ui.View):
         if self.message:
             try:
                 await self.message.edit(embed=embed, view=None)
+                # [✅✅✅ 핵심 수정] 결과 메시지를 Cog에 저장합니다.
                 self.fishing_cog.last_result_messages[self.player.id] = self.message
             except (discord.NotFound, AttributeError, discord.HTTPException): pass
 
@@ -218,12 +219,15 @@ class FishingPanelView(ui.View):
 
             await interaction.response.defer(ephemeral=True)
             
+            # [✅✅✅ 핵심 수정] 새로운 낚시를 시작하기 전에 이전 결과 메시지를 삭제합니다.
             if last_message := self.fishing_cog.last_result_messages.pop(user_id, None):
                 try:
+                    # 임시 메시지는 WebhookMessage일 수 있으므로 채널을 통해 다시 가져와서 삭제하는 것이 안전합니다.
                     if last_message.channel:
                         msg_to_delete = await last_message.channel.fetch_message(last_message.id)
                         await msg_to_delete.delete()
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    # 메시지를 찾을 수 없거나 삭제 권한이 없는 등 에러가 발생해도 무시하고 진행합니다.
                     pass
             
             try:
@@ -296,7 +300,6 @@ class FishingPanelView(ui.View):
                 desc = "\n".join(desc_lines)
                 embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
                 
-                # [✅✅✅ 핵심 수정] GAME_CONFIG 내부가 아닌, 전체 설정에서 직접 이미지 URL을 가져오도록 수정합니다.
                 if image_url := get_config("FISHING_WAITING_IMAGE_URL"):
                     embed.set_thumbnail(url=str(image_url))
                 
@@ -312,6 +315,7 @@ class Fishing(commands.Cog):
         self.bot = bot
         self.active_fishing_sessions_by_user: Set[int] = set()
         self.fishing_log_channel_id: Optional[int] = None
+        # [✅✅✅ 핵심 수정] 유저별 마지막 결과 메시지를 저장할 딕셔너리
         self.last_result_messages: Dict[int, discord.Message] = {}
         logger.info("Fishing Cog가 성공적으로 초기화되었습니다.")
     
@@ -323,8 +327,6 @@ class Fishing(commands.Cog):
         self.bot.add_view(FishingPanelView(self.bot, self, "panel_fishing_sea"))
 
     async def log_whale_catch(self, user: discord.Member, result_embed: discord.Embed):
-        """고래를 낚았을 때 공개적으로 알리고, 출현 공지를 삭제합니다."""
-        
         announcement_msg_id = get_config("whale_announcement_message_id")
         sea_fishing_channel_id = get_id("sea_fishing_panel_channel_id")
 
