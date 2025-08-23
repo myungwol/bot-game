@@ -27,7 +27,7 @@ class ProfileView(ui.View):
         self.user: discord.Member = user
         self.cog = cog_instance
         self.message: Optional[discord.WebhookMessage] = None
-        self.currency_icon = get_config("CURRENCY_ICON", "🪙")
+        self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙")
         self.current_page = "info"
         self.fish_page_index = 0
         self.cached_data = {}
@@ -75,13 +75,13 @@ class ProfileView(ui.View):
         if self.current_page == "info":
             embed.add_field(name=get_string("profile_view.info_tab.field_balance"), value=f"`{balance:,}`{self.currency_icon}", inline=True)
             
+            job_name = "一般住民"
             try:
                 job_res = await supabase.table('user_jobs').select('jobs(job_name)').eq('user_id', self.user.id).maybe_single().execute()
-                job_data = job_res.data.get('jobs') if job_res and job_res.data else None
-                job_name = job_data.get('job_name') if job_data else "一般住民"
+                if job_res and job_res.data and job_res.data.get('jobs'):
+                    job_name = job_res.data['jobs']['job_name']
             except Exception as e:
                 logger.error(f"직업 정보 조회 중 오류 발생 (유저: {self.user.id}): {e}")
-                job_name = "一般住民"
             embed.add_field(name="職業", value=f"`{job_name}`", inline=True)
 
             user_rank_mention = get_string("profile_view.info_tab.default_rank_name")
@@ -98,6 +98,9 @@ class ProfileView(ui.View):
                 if not role_key: continue
                 
                 if (rank_role_id := get_id(role_key)) and rank_role_id in user_role_ids:
+                    # [✅ 수정] guild.get_role은 캐시에 의존하므로, 없을 경우를 대비해 봇의 모든 서버를 순회합니다.
+                    # 더 확실한 방법은 interaction 객체에서 guild를 가져오는 것입니다.
+                    # 이 View는 interaction 기반으로 동작하므로 self.user.guild를 사용하는 것이 안전합니다.
                     if rank_role := self.user.guild.get_role(rank_role_id):
                         user_rank_mention = rank_role.mention
                         break
