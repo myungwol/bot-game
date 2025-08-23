@@ -15,7 +15,7 @@ from utils.database import (
     get_user_gear, set_user_gear, save_panel_id, get_panel_id, get_id,
     get_embed_from_db, supabase, get_item_database, get_fishing_loot, 
     get_config, get_string, save_config_to_db,
-    is_legendary_fish_available, set_legendary_fish_cooldown,
+    is_whale_available, set_whale_caught,
     BARE_HANDS, DEFAULT_ROD,
     increment_progress,
     get_user_abilities
@@ -72,13 +72,19 @@ class FishingGameView(ui.View):
         current_location_name = location_map.get(self.location_type, "川")
         base_loot = [item for item in all_loot if item.get('location_type') == current_location_name or item.get('location_type') is None]
 
-        rod_tier = self.rod_data.get('tier', 0)
-        rod_bonus = self.rod_data.get('loot_bonus', 0.0)
+        rod_data = self.rod_data
+        rod_tier = rod_data.get('tier', 0)
+        rod_bonus = rod_data.get('loot_bonus', 0.0)
         
-        if rod_tier < 5:
-            loot_pool = [item for item in base_loot if item.get('name') != 'クジラ']
-        else:
-            loot_pool = base_loot
+        loot_pool = []
+        is_whale_catchable = await is_whale_available()
+
+        for item in base_loot:
+            if item.get('name') == 'クジラ':
+                if rod_tier >= 5 and is_whale_catchable:
+                    loot_pool.append(item)
+            else:
+                loot_pool.append(item)
 
         if not loot_pool:
             return (discord.Embed(title="エラー", description="この場所では何も釣れないようです。", color=discord.Color.red()), False, False, False)
@@ -90,13 +96,8 @@ class FishingGameView(ui.View):
         weights = []
         for item in loot_pool:
             weight = item['weight']
-            
-            # [✅✅✅ 버그 수정] base_value가 None(DB에서 NULL)인 경우를 안전하게 처리
             base_value = item.get('base_value')
-            if base_value is None:
-                base_value = 0 # None이면 0으로 간주
-
-            # 희귀 물고기(가치가 100 이상)에 가중치 보너스 적용
+            if base_value is None: base_value = 0
             if base_value > 100:
                 weight *= (1.0 + rod_bonus + rare_up_bonus)
             else:
@@ -104,7 +105,8 @@ class FishingGameView(ui.View):
             weights.append(weight)
 
         catch_proto = random.choices(loot_pool, weights=weights, k=1)[0]
-        is_legendary_catch, is_big_catch, log_publicly = catch_proto.get('name') == '伝説の魚', False, False
+        is_whale_catch = catch_proto.get('name') == 'クジラ'
+        is_big_catch, log_publicly = False, False
         
         embed = discord.Embed()
         if catch_proto.get("min_size") is not None:
@@ -112,20 +114,21 @@ class FishingGameView(ui.View):
             min_s, max_s = catch_proto["min_size"] * size_multiplier, catch_proto["max_size"] * size_multiplier
             size = round(random.uniform(min_s, max_s), 1)
 
-            if is_legendary_catch: await set_legendary_fish_cooldown()
+            if is_whale_catch:
+                await set_whale_caught()
+
             await add_to_aquarium(str(self.player.id), {"name": catch_proto['name'], "size": size, "emoji": catch_proto.get('emoji', '🐠')})
             is_big_catch = size >= self.big_catch_threshold
             await increment_progress(self.player.id, fish_count=1)
 
             xp_to_add = get_config("GAME_CONFIG", {}).get("XP_FROM_FISHING", 20)
             res = await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add, 'p_source': 'fishing'}).execute()
-            
             if res and res.data and (core_cog := self.bot.get_cog("EconomyCore")):
                 await core_cog.handle_level_up_event(self.player, res.data[0])
 
             title = "🏆 大物を釣り上げた！ 🏆" if is_big_catch else "🎉 釣り成功！ 🎉"
-            if is_legendary_catch: title = "👑 伝説の魚を釣り上げた！！ 👑"
-            embed.title, embed.description, embed.color = title, f"{self.player.mention}さんが釣りに成功しました！", discord.Color.gold() if is_legendary_catch else discord.Color.blue()
+            if is_whale_catch: title = "🐋 今月のヌシ、クジラを釣り上げた！！ 🐋"
+            embed.title, embed.description, embed.color = title, f"{self.player.mention}さんが釣りに成功しました！", discord.Color.blue()
             embed.add_field(name="魚", value=f"{catch_proto.get('emoji', '🐠')} **{catch_proto['name']}**", inline=True)
             embed.add_field(name="サイズ", value=f"`{size}`cm", inline=True)
         else:
@@ -135,31 +138,32 @@ class FishingGameView(ui.View):
         
         if image_url := catch_proto.get('image_url'):
             embed.set_thumbnail(url=image_url)
-        return embed, log_publicly, is_big_catch, is_legendary_catch
+            
+        return embed, log_publicly, is_big_catch, is_whale_catch
 
     @ui.button(label="待機中...", style=discord.ButtonStyle.secondary, custom_id="catch_fish_button")
     async def catch_button(self, interaction: discord.Interaction, button: ui.Button):
         if self.game_task: self.game_task.cancel()
-        result_embed, log_publicly, is_big_catch, is_legendary = None, False, False, False
+        result_embed, log_publicly, is_big_catch, is_whale = None, False, False, False
         if self.game_state == "waiting":
             await interaction.response.defer()
             result_embed = discord.Embed(title="❌ 早すぎ！", description=f"{interaction.user.mention}さんは焦ってしまい、魚に気づかれてしまいました…", color=discord.Color.dark_grey())
         elif self.game_state == "biting":
             await interaction.response.defer(); self.game_state = "finished"
-            result_embed, log_publicly, is_big_catch, is_legendary = await self._handle_catch_logic()
+            result_embed, log_publicly, is_big_catch, is_whale = await self._handle_catch_logic()
         if result_embed:
             if self.player.display_avatar and not result_embed.thumbnail: 
                 result_embed.set_thumbnail(url=self.player.display_avatar.url)
-            await self._send_result(result_embed, log_publicly, is_big_catch, is_legendary)
+            await self._send_result(result_embed, log_publicly, is_big_catch, is_whale)
         self.stop()
 
-    async def _send_result(self, embed: discord.Embed, log_publicly: bool = False, is_big_catch: bool = False, is_legendary: bool = False):
+    async def _send_result(self, embed: discord.Embed, log_publicly: bool = False, is_big_catch: bool = False, is_whale: bool = False):
         remaining_baits_config = get_config("FISHING_REMAINING_BAITS_DISPLAY", ['普通の釣りエサ', '高級釣りエサ'])
         footer_private = f"残りのエサ: {' / '.join([f'{b}({self.remaining_baits.get(b, 0)}個)' for b in remaining_baits_config])}"
         footer_public = f"使用した装備: {self.used_rod} / {self.used_bait}"
         if log_publicly:
-            if is_legendary:
-                await self.fishing_cog.log_legendary_catch(self.player, embed)
+            if is_whale:
+                await self.fishing_cog.log_whale_catch(self.player, embed)
             elif (log_ch_id := self.fishing_cog.fishing_log_channel_id) and (log_ch := self.bot.get_channel(log_ch_id)):
                 public_embed = embed.copy(); public_embed.set_footer(text=footer_public)
                 content = self.player.mention if is_big_catch else None
@@ -319,7 +323,7 @@ class Fishing(commands.Cog):
         self.bot.add_view(FishingPanelView(self.bot, self, "panel_fishing_river"))
         self.bot.add_view(FishingPanelView(self.bot, self, "panel_fishing_sea"))
 
-    async def log_legendary_catch(self, user: discord.Member, result_embed: discord.Embed):
+    async def log_whale_catch(self, user: discord.Member, result_embed: discord.Embed):
         if not self.fishing_log_channel_id or not (log_channel := self.bot.get_channel(self.fishing_log_channel_id)): return
         
         fish_field = next((f for f in result_embed.fields if f.name == "魚"), None)
@@ -335,12 +339,12 @@ class Fishing(commands.Cog):
         size_multiplier = fish_data.get("size_multiplier") or 0
         value = int(base_value + (size_cm * size_multiplier))
         
-        embed_data = await get_embed_from_db("log_legendary_catch") or {}
+        embed_data = await get_embed_from_db("log_whale_catch") or {}
 
         embed = format_embed_from_db(
             embed_data, 
             user_mention=user.mention,
-            emoji=fish_data.get('emoji','👑'), 
+            emoji=fish_data.get('emoji','🐋'), 
             name=fish_name_raw, 
             size=size_cm, 
             value=f"{value:,}", 
@@ -352,7 +356,7 @@ class Fishing(commands.Cog):
         try:
             await log_channel.send(content="@here", embed=embed, allowed_mentions=discord.AllowedMentions(everyone=True))
         except Exception as e:
-            logger.error(f"전설의 물고기 공지 전송 실패: {e}", exc_info=True)
+            logger.error(f"고래 공지 전송 실패: {e}", exc_info=True)
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str):
         if panel_key not in ["panel_fishing_river", "panel_fishing_sea"]: return
