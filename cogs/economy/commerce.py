@@ -16,7 +16,8 @@ from utils.database import (
     get_config, get_string,
     get_aquarium, get_fishing_loot, sell_fish_from_db,
     save_panel_id, get_panel_id, get_embed_from_db,
-    update_inventory, update_wallet, get_farm_data, save_config_to_db
+    update_inventory, update_wallet, get_farm_data, save_config_to_db,
+    load_game_data_from_db # [✅ 추가] 캐시 갱신을 위해 import
 )
 from utils.helpers import format_embed_from_db
 
@@ -70,9 +71,10 @@ class BuyItemView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str):
         super().__init__(user)
         self.category = category
+        # [✅ 수정] 가격 변동을 위해 current_price 기준으로 정렬
         self.items_in_category = sorted(
             [(n, d) for n, d in get_item_database().items() if d.get('buyable') and d.get('category') == self.category],
-            key=lambda item: item[1].get('price', 0)
+            key=lambda item: item[1].get('current_price', item[1].get('price', 0))
         )
         self.page_index = 0
         self.items_per_page = 20
@@ -97,8 +99,10 @@ class BuyItemView(ShopViewBase):
             items_on_page = self.items_in_category[start_index:end_index]
 
             for name, data in items_on_page:
+                # [✅ 수정] price 대신 current_price를 우선적으로 사용
+                price = data.get('current_price', data.get('price', 0))
                 field_name = f"{data.get('emoji', '📦')} {name}"
-                field_value = f"**価格:** `{data.get('price', 0):,}`{self.currency_icon}\n> {data.get('description', '説明がありません。')}"
+                field_value = f"**価格:** `{price:,}`{self.currency_icon}\n> {data.get('description', '説明がありません。')}"
                 embed.add_field(name=field_name, value=field_value, inline=False)
             
             total_pages = math.ceil(len(self.items_in_category) / self.items_per_page)
@@ -114,7 +118,12 @@ class BuyItemView(ShopViewBase):
         items_on_page = self.items_in_category[start_index:end_index]
 
         if items_on_page:
-            options = [discord.SelectOption(label=name, value=name, description=f"価格: {data['price']:,}{self.currency_icon}", emoji=data.get('emoji')) for name, data in items_on_page]
+            options = []
+            for name, data in items_on_page:
+                # [✅ 수정] price 대신 current_price를 우선적으로 사용
+                price = data.get('current_price', data.get('price', 0))
+                options.append(discord.SelectOption(label=name, value=name, description=f"価格: {price:,}{self.currency_icon}", emoji=data.get('emoji')))
+            
             select = ui.Select(placeholder="購入したい商品を選択...", options=options)
             select.callback = self.select_callback
             self.add_item(select)
@@ -153,8 +162,10 @@ class BuyItemView(ShopViewBase):
 
     async def handle_instant_use_item(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         await interaction.response.defer(ephemeral=True)
+        # [✅ 수정] price 대신 current_price 사용
+        price = item_data.get('current_price', item_data.get('price', 0))
         wallet = await get_wallet(self.user.id)
-        if wallet.get('balance', 0) < item_data['price']:
+        if wallet.get('balance', 0) < price:
             return await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
             
         if item_data.get('effect_type') == 'expand_farm':
@@ -166,18 +177,15 @@ class BuyItemView(ShopViewBase):
             if plot_count >= 25:
                 return await interaction.followup.send("❌ 農場はすでに最大サイズ(25칸)です。", ephemeral=True)
 
-            await update_wallet(self.user, -item_data['price'])
-            # [✅ 수정] 새로운 DB 함수 호출
+            await update_wallet(self.user, -price)
             result = await supabase.rpc('expand_farm_single_plot', {'p_user_id': self.user.id}).execute()
             
             if result and result.data:
                 new_size = result.data[0]
-                # UI 업데이트 요청
                 await save_config_to_db(f"farm_ui_update_request_{self.user.id}", time.time())
                 await interaction.followup.send(f"✅ 農場が **{new_size['new_size_x']}x{new_size['new_size_y']}**サイズに拡張されました！", ephemeral=True)
             else:
-                # 돈 환불
-                await update_wallet(self.user, item_data['price'])
+                await update_wallet(self.user, price)
                 await interaction.followup.send("❌ 農場の拡張中にエラーが発生しました。", ephemeral=True)
         else:
             await interaction.followup.send("❓ 未知の即時使用アイテムです。", ephemeral=True)
@@ -187,7 +195,9 @@ class BuyItemView(ShopViewBase):
     async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
-        max_buyable = balance // item_data['price'] if item_data['price'] > 0 else 999
+        # [✅ 수정] price 대신 current_price 사용
+        price = item_data.get('current_price', item_data.get('price', 0))
+        max_buyable = balance // price if price > 0 else 999
         if max_buyable == 0:
             return await interaction.response.send_message("❌ 残高が不足しています。", ephemeral=True)
             
@@ -197,9 +207,8 @@ class BuyItemView(ShopViewBase):
         
         if modal.value is None: return
 
-        quantity, total_price = modal.value, item_data['price'] * modal.value
+        quantity, total_price = modal.value, price * modal.value
         
-        # 다시 한번 잔액 확인
         current_wallet = await get_wallet(self.user.id)
         if current_wallet.get('balance', 0) < total_price:
             return await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
@@ -211,16 +220,18 @@ class BuyItemView(ShopViewBase):
 
     async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         await interaction.response.defer(ephemeral=True)
-        user, guild = interaction.user, interaction.guild
+        user = interaction.user
+        # [✅ 수정] price 대신 current_price 사용
+        price = item_data.get('current_price', item_data.get('price', 0))
         wallet = await get_wallet(user.id)
-        if wallet.get('balance', 0) < item_data['price']:
+        if wallet.get('balance', 0) < price:
             return await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
         
         inventory = await get_inventory(user)
         if inventory.get(item_name, 0) > 0:
             return await interaction.followup.send(f"❌ 「{item_name}」は既に所持しています。1つしか持てません。", ephemeral=True)
         
-        await update_wallet(user, -item_data['price'])
+        await update_wallet(user, -price)
         await update_inventory(str(user.id), item_name, 1)
         await interaction.followup.send(f"✅ **{item_name}**を購入しました。", ephemeral=True)
         await self.update_view(interaction)
@@ -247,6 +258,8 @@ class BuyCategoryView(ShopViewBase):
                 self.add_item(button)
     async def category_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        # [✅ 추가] 상점 열 때 최신 아이템 정보를 반영하기 위해 캐시 갱신
+        await load_game_data_from_db()
         category_db_name = interaction.data['custom_id'].split('buy_category_')[-1]
         item_view = BuyItemView(self.user, category_db_name)
         item_view.message = self.message
@@ -275,7 +288,9 @@ class SellFishView(ShopViewBase):
             for fish in aquarium:
                 fish_id_str = str(fish['id'])
                 loot_info = loot_db.get(fish['name'], {})
-                price = int(loot_info.get('base_value', 0) + (fish['size'] * loot_info.get('size_multiplier', 0)))
+                # [✅ 수정] 고정 가격 대신 아이템 DB의 현재 시세를 가져옴
+                item_data = get_item_database().get(fish['name'], {})
+                price = item_data.get('current_price', int(loot_info.get('base_value', 0) + (fish['size'] * loot_info.get('size_multiplier', 0))))
                 self.fish_data_map[fish_id_str] = {'price': price, 'name': fish['name']}
                 options.append(discord.SelectOption(label=f"{fish['name']} ({fish['size']}cm)", value=fish_id_str, description=f"{price}{self.currency_icon}"))
         
@@ -343,7 +358,8 @@ class SellCropView(ShopViewBase):
                 options = []
                 for name, qty in crop_items.items():
                     item_data = item_db.get(name, {})
-                    price = int(item_data.get('sell_price', 0))
+                    # [✅ 수정] sell_price 대신 current_price 사용
+                    price = item_data.get('current_price', item_data.get('sell_price', 0))
                     self.crop_data_map[name] = {'price': price, 'max_qty': qty}
                     options.append(discord.SelectOption(label=f"{name} (所持: {qty}個)", value=name, description=f"単価: {price}{self.currency_icon}", emoji=item_data.get('emoji')))
                 select = ui.Select(placeholder="売却する作物を選択...", options=options)
@@ -392,6 +408,8 @@ class SellCategoryView(ShopViewBase):
             if isinstance(child, ui.Button): child.callback = self.on_button_click
     async def on_button_click(self, interaction: discord.Interaction):
         await interaction.response.defer()
+        # [✅ 추가] 판매 시 최신 시세 반영
+        await load_game_data_from_db()
         category = interaction.data['custom_id'].split('_')[-1]
         view = None
         if category == "fish": view = SellFishView(self.user)
