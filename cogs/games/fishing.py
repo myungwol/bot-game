@@ -292,8 +292,10 @@ class FishingPanelView(ui.View):
                 desc = "\n".join(desc_lines)
                 embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
                 
-                if image_url := game_config.get("FISHING_WAITING_IMAGE_URL"):
-                    embed.set_thumbnail(url=str(image_url))
+                # [✅ 수정] URL을 가져온 후 양 끝의 큰따옴표를 제거합니다.
+                if image_url_raw := game_config.get("FISHING_WAITING_IMAGE_URL"):
+                    image_url = str(image_url_raw).strip('"') # .strip('"') 추가
+                    embed.set_thumbnail(url=image_url)
                 
                 view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type, bite_range)
                 await view.start_game(interaction, embed)
