@@ -7,6 +7,7 @@ import logging
 from typing import Optional, Dict, List, Any
 import asyncio
 import time
+import math # [추가] math 모듈 import
 from datetime import datetime, timezone, timedelta, time as dt_time
 
 from utils.database import (
@@ -100,13 +101,15 @@ class FarmActionView(ui.View):
         farmable_info = await get_farmable_item_info(self.selected_item)
         if not farmable_info: return
         sx, sy = farmable_info['space_required_x'], farmable_info['space_required_y']
-        available_plots = self._find_available_space(sx, sy)
+        available_plots = await self._find_available_space(sx, sy) # [수정] await 추가
         if not available_plots: self.add_item(ui.Button(label=f"{sx}x{sy}の空き地がありません。", disabled=True)); return
         options = [discord.SelectOption(label=f"{p['pos_y']+1}行 {p['pos_x']+1}列", value=f"{p['pos_x']},{p['pos_y']}") for p in available_plots]
         select = ui.Select(placeholder="植える場所を選択...", options=options, custom_id="location_select")
         select.callback = self.on_location_select
         self.add_item(select)
-    def _find_available_space(self, required_x: int, required_y: int) -> List[Dict]:
+    
+    # [✅✅✅ 핵심 수정] def를 async def로 변경
+    async def _find_available_space(self, required_x: int, required_y: int) -> List[Dict]:
         plot_count_res = await supabase.table('farm_plots').select('id', count='exact').eq('farm_id', self.farm_data['id']).execute()
         current_plot_count = plot_count_res.count if plot_count_res else 0
         size_x = 5
@@ -120,11 +123,14 @@ class FarmActionView(ui.View):
                 for dy in range(required_y):
                     for dx in range(required_x):
                         plot_x, plot_y = x + dx, y + dy
+                        # 현재 밭 개수를 초과하는 위치는 심을 수 없음
                         if (plot_y * size_x + plot_x) >= current_plot_count:
                             is_valid = False; break
+                        # 이미 무언가 심어져 있거나, 경작되지 않은 땅은 심을 수 없음
                         if plots.get((plot_x, plot_y), {}).get('state') != 'tilled':
                             is_valid = False; break
                     if not is_valid: break
+                
                 if is_valid:
                     valid_starts.append(plots[(x, y)])
         return valid_starts
