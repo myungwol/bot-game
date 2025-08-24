@@ -215,32 +215,37 @@ class LevelSystem(commands.Cog):
         logger.info("LevelSystem Cog (게임봇)가 성공적으로 초기화되었습니다.")
     
     async def register_persistent_views(self):
-        """봇이 재시작되어도 View가 동작하도록 등록합니다."""
         self.bot.add_view(LevelPanelView(self))
         logger.info("✅ 레벨 시스템의 영구 View가 성공적으로 등록되었습니다。")
         
     async def load_configs(self):
         pass
-            
+    
+    # [✅✅✅ 핵심 수정] DB 요청 대신, JobAndTierHandler Cog를 직접 호출하도록 변경
     async def handle_level_up_event(self, user: discord.Member, result_data: Dict):
         if not result_data: return
         
         new_level = result_data.get('new_level')
         logger.info(f"유저 {user.display_name}(ID: {user.id})가 레벨 {new_level}(으)로 레벨업했습니다.")
         
+        # JobAndTierHandler Cog를 가져옵니다.
+        handler_cog = self.bot.get_cog("JobAndTierHandler")
+        if not handler_cog:
+            logger.error("JobAndTierHandler Cog를 찾을 수 없습니다. 전직/등급 처리를 건너뜁니다.")
+            return
+
+        # 1. 등급 역할 업데이트는 항상 실행
+        await handler_cog.update_tier_role(user, new_level)
+        logger.info(f"{user.name}님의 등급 역할 업데이트를 요청했습니다.")
+
+        # 2. 전직 가능 레벨인지 확인하고, 맞다면 전직 절차 시작
         game_config = get_config("GAME_CONFIG", {})
         job_advancement_levels = game_config.get("JOB_ADVANCEMENT_LEVELS", [50, 100])
         
-        timestamp = time.time()
-        
         if new_level in job_advancement_levels:
-            await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": timestamp})
-            logger.info(f"유저가 전직 가능 레벨({new_level})에 도달하여 관리 봇에게 전직 요청을 보냈습니다.")
+            await handler_cog.start_advancement_process(user, new_level)
+            logger.info(f"유저가 전직 가능 레벨({new_level})에 도달하여 전직 절차를 시작합니다.")
 
-        await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": timestamp})
-        logger.info(f"유저의 레벨이 변경되어 관리 봇에게 등급 역할 업데이트 요청을 보냈습니다.")
-
-    # [✅ 신규 추가] 관리자 요청을 처리하는 중앙 함수
     async def update_user_xp_and_level_from_admin(self, user: discord.Member, xp_to_add: int = 0, exact_level: Optional[int] = None):
         """관리자 요청에 따라 사용자의 XP 또는 레벨을 업데이트하고, 레벨업 이벤트를 처리합니다."""
         try:
