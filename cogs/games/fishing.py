@@ -14,10 +14,9 @@ from utils.database import (
     update_wallet, get_inventory, update_inventory, add_to_aquarium,
     get_user_gear, set_user_gear, save_panel_id, get_panel_id, get_id,
     get_embed_from_db, supabase, get_item_database, get_fishing_loot, 
-    get_config, get_string, save_config_to_db,
+    get_config, save_config_to_db,
     is_whale_available, set_whale_caught,
     BARE_HANDS, DEFAULT_ROD,
-    increment_progress,
     get_user_abilities
 )
 from utils.helpers import format_embed_from_db
@@ -97,7 +96,8 @@ class FishingGameView(ui.View):
         if not loot_pool:
             return (discord.Embed(title="エラー", description="この場所では何も釣れないようです。", color=discord.Color.red()), False, False, False)
         
-        user_abilities = await get_user_abilities(self.player.id) or []
+        # [개선] 사용자 능력치 로드
+        user_abilities = await get_user_abilities(self.player.id)
         rare_up_bonus = 0.2 if 'fish_rare_up_2' in user_abilities else 0.0
         size_multiplier = 1.2 if 'fish_size_up_2' in user_abilities else 1.0
         
@@ -107,6 +107,7 @@ class FishingGameView(ui.View):
             base_value = item.get('base_value')
             if base_value is None: base_value = 0
             if base_value > 100:
+                # [개선] 희귀도 보너스 적용
                 weight *= (1.0 + rod_bonus + rare_up_bonus)
             else:
                 weight *= (1.0 + rod_bonus)
@@ -119,6 +120,7 @@ class FishingGameView(ui.View):
         embed = discord.Embed()
         if catch_proto.get("min_size") is not None:
             log_publicly = True
+            # [개선] 사이즈 보너스 적용
             min_s, max_s = catch_proto["min_size"] * size_multiplier, catch_proto["max_size"] * size_multiplier
             size = round(random.uniform(min_s, max_s), 1)
 
@@ -127,12 +129,11 @@ class FishingGameView(ui.View):
 
             await add_to_aquarium(str(self.player.id), {"name": catch_proto['name'], "size": size, "emoji": catch_proto.get('emoji', '🐠')})
             is_big_catch = size >= self.big_catch_threshold
-            await increment_progress(self.player.id, fish_count=1)
 
             xp_to_add = get_config("GAME_CONFIG", {}).get("XP_FROM_FISHING", 20)
             res = await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add, 'p_source': 'fishing'}).execute()
-            if res and res.data and (core_cog := self.bot.get_cog("EconomyCore")):
-                await core_cog.handle_level_up_event(self.player, res.data[0])
+            if res and res.data:
+                await self.fishing_cog.handle_level_up_event(self.player, res.data[0])
 
             title = "🏆 大物を釣り上げた！ 🏆" if is_big_catch else "🎉 釣り成功！ 🎉"
             if is_whale_catch: title = "🐋 今月のヌシ、クジラを釣り上げた！！ 🐋"
@@ -241,7 +242,6 @@ class FishingPanelView(ui.View):
                     get_inventory(user),
                     get_user_abilities(user.id)
                 )
-                user_abilities = user_abilities or []
                 
                 rod, item_db = gear.get('rod', BARE_HANDS), get_item_database()
                 if rod == BARE_HANDS:
@@ -262,6 +262,7 @@ class FishingPanelView(ui.View):
                 self.fishing_cog.active_fishing_sessions_by_user.add(user.id)
                 bait = gear.get('bait', 'エサなし')
                 
+                # [개선] 미끼 절약 능력 확인
                 bait_saved = False
                 if bait != "エサなし" and 'fish_bait_saver_1' in user_abilities:
                     if random.random() < 0.2:
@@ -281,17 +282,11 @@ class FishingPanelView(ui.View):
                 loot_bonus = rod_data.get('loot_bonus', 0.0)
                 
                 default_times = { "エサなし": [10.0, 15.0], "普通の釣りエサ": [7.0, 12.0], "高級釣りエサ": [5.0, 10.0] }
-                bite_times_config_raw = game_config.get("FISHING_BITE_TIMES_BY_BAIT", default_times)
-                
-                bite_times_config = default_times
-                if isinstance(bite_times_config_raw, str):
-                    try: bite_times_config = json.loads(bite_times_config_raw)
-                    except json.JSONDecodeError: pass
-                elif isinstance(bite_times_config_raw, dict):
-                    bite_times_config = bite_times_config_raw
+                bite_times_config = game_config.get("FISHING_BITE_TIMES_BY_BAIT", default_times)
 
                 bite_range = bite_times_config.get(bait, bite_times_config.get("エサなし", [10.0, 15.0]))
                 
+                # [개선] 입질 시간 단축 능력 확인
                 if 'fish_bite_time_down_1' in user_abilities:
                     bite_range = [max(0.5, t - 2.0) for t in bite_range]
 
@@ -302,7 +297,7 @@ class FishingPanelView(ui.View):
                 desc = "\n".join(desc_lines)
                 embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
                 
-                if image_url := get_config("FISHING_WAITING_IMAGE_URL"):
+                if image_url := game_config.get("FISHING_WAITING_IMAGE_URL"):
                     embed.set_thumbnail(url=str(image_url))
                 
                 view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type, bite_range)
@@ -326,6 +321,15 @@ class Fishing(commands.Cog):
     async def register_persistent_views(self):
         self.bot.add_view(FishingPanelView(self.bot, self, "panel_fishing_river"))
         self.bot.add_view(FishingPanelView(self.bot, self, "panel_fishing_sea"))
+        
+    async def handle_level_up_event(self, user: discord.User, result_data: Dict):
+        if not result_data or not result_data.get('leveled_up'): return
+        new_level = result_data.get('new_level')
+        await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
+        job_advancement_levels = get_config("GAME_CONFIG", {}).get("JOB_ADVANCEMENT_LEVELS", [])
+        if new_level in job_advancement_levels:
+            await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": time.time()})
+            logger.info(f"유저 {user.display_name}가 전직 가능 레벨({new_level})에 도달하여 DB에 요청을 기록했습니다.")
 
     async def log_whale_catch(self, user: discord.Member, result_embed: discord.Embed):
         announcement_msg_id = get_config("whale_announcement_message_id")
@@ -338,10 +342,8 @@ class Fishing(commands.Cog):
                     await msg_to_delete.delete()
                     logger.info(f"고래가 잡혀서 공지 메시지(ID: {announcement_msg_id})를 삭제했습니다.")
                     await save_config_to_db("whale_announcement_message_id", None)
-                except (discord.NotFound, discord.Forbidden):
-                    logger.warning(f"고래 공지 메시지(ID: {announcement_msg_id})를 찾거나 삭제할 수 없습니다.")
-                except Exception as e:
-                    logger.error(f"고래 공지 메시지 삭제 중 오류: {e}", exc_info=True)
+                except (discord.NotFound, discord.Forbidden): pass
+                except Exception as e: logger.error(f"고래 공지 메시지 삭제 중 오류: {e}", exc_info=True)
 
         if not self.fishing_log_channel_id or not (log_channel := self.bot.get_channel(self.fishing_log_channel_id)): return
         
