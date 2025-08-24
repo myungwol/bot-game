@@ -51,13 +51,12 @@ class MyBot(commands.Bot):
         await self.load_all_extensions()
         
         # [✅✅✅ 핵심 수정]
-        # JobAndTierHandler를 영구 View 목록에 추가합니다.
+        # JobAndTierHandler를 영구 View 목록에서 제거합니다.
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
             "DiceGame", "SlotMachine", "RPSGame",
             "DailyCheck", "Quests", "Farm", "PanelUpdater",
-            "WorldSystem", "EconomyCore", "LevelSystem",
-            "JobAndTierHandler"  # JobAndTierHandler 추가
+            "WorldSystem", "EconomyCore", "LevelSystem"
         ]
         
         registered_views_count = 0
@@ -81,26 +80,19 @@ class MyBot(commands.Bot):
 
         loaded_count = 0
         failed_count = 0
-        for root, dirs, files in os.walk(cogs_dir):
-            if '__pycache__' in dirs:
-                dirs.remove('__pycache__')
-            # [✅ 추가] system 폴더도 로드하도록 보장
-            if 'systems' not in dirs and 'games' not in dirs and 'economy' not in dirs:
-                 dirs.append('systems')
-                 dirs.append('games')
-                 dirs.append('economy')
-
-            for filename in files:
-                if filename.endswith('.py') and not filename.startswith('__'):
-                    path = os.path.join(root, filename)
-                    extension_path = os.path.splitext(path)[0].replace(os.path.sep, '.')
-                    try:
-                        await self.load_extension(extension_path)
-                        logger.info(f'✅ Cog 로드 성공: {extension_path}')
-                        loaded_count += 1
-                    except Exception as e:
-                        logger.error(f'❌ Cog 로드 실패: {extension_path} | {e}', exc_info=True)
-                        failed_count += 1
+        # [수정] os.walk 대신 glob을 사용하여 더 명확하게 탐색합니다.
+        from glob import glob
+        for path in glob(f'{cogs_dir}/**/*.py', recursive=True):
+            if '__init__' in path:
+                continue
+            extension_path = path.replace('.py', '').replace(os.path.sep, '.')
+            try:
+                await self.load_extension(extension_path)
+                logger.info(f'✅ Cog 로드 성공: {extension_path}')
+                loaded_count += 1
+            except Exception as e:
+                logger.error(f'❌ Cog 로드 실패: {extension_path} | {e}', exc_info=True)
+                failed_count += 1
         logger.info(f"------ [ Cog 로드 완료 | 성공: {loaded_count} / 실패: {failed_count} ] ------")
 
 bot = MyBot(command_prefix="/", intents=intents)
