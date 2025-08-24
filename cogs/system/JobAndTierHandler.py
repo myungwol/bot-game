@@ -13,15 +13,13 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# [✅✅✅ 핵심 수정] 새로운 전직 UI View 클래스
 class JobAdvancementView(ui.View):
     def __init__(self, bot: commands.Bot, user: discord.Member, jobs: List[Dict[str, Any]]):
-        super().__init__(timeout=3600) # 1시간 동안 유효
+        super().__init__(timeout=3600)
         self.bot = bot
         self.user = user
         self.jobs_data = {job['job_key']: job for job in jobs}
         
-        # 현재 선택 상태 저장
         self.selected_job_key: str | None = None
         self.selected_ability_key: str | None = None
 
@@ -34,10 +32,8 @@ class JobAdvancementView(ui.View):
         return True
 
     def build_components(self):
-        """UI 컴포넌트(드롭다운, 버튼)를 현재 상태에 맞게 다시 그립니다."""
         self.clear_items()
 
-        # 1. 직업 선택 드롭다운
         job_options = [
             discord.SelectOption(label=job['job_name'], value=job['job_key'], description=job['description'][:100])
             for job in self.jobs_data.values()
@@ -46,7 +42,6 @@ class JobAdvancementView(ui.View):
         job_select.callback = self.on_job_select
         self.add_item(job_select)
 
-        # 2. 능력 선택 드롭다운
         ability_options = []
         is_ability_disabled = True
         if self.selected_job_key:
@@ -62,20 +57,18 @@ class JobAdvancementView(ui.View):
         ability_select.callback = self.on_ability_select
         self.add_item(ability_select)
 
-        # 3. 확정 버튼
         is_confirm_disabled = not (self.selected_job_key and self.selected_ability_key)
         confirm_button = ui.Button(label="確定する", style=discord.ButtonStyle.success, disabled=is_confirm_disabled, custom_id="confirm_advancement")
         confirm_button.callback = self.on_confirm
         self.add_item(confirm_button)
 
     async def update_view(self, interaction: discord.Interaction):
-        """컴포넌트 상태가 변경되었을 때 메시지를 업데이트합니다."""
         self.build_components()
         await interaction.response.edit_message(view=self)
 
     async def on_job_select(self, interaction: discord.Interaction):
         self.selected_job_key = interaction.data['values'][0]
-        self.selected_ability_key = None # 직업을 바꾸면 능력 선택은 초기화
+        self.selected_ability_key = None
         await self.update_view(interaction)
 
     async def on_ability_select(self, interaction: discord.Interaction):
@@ -133,7 +126,6 @@ class JobAdvancementView(ui.View):
             logger.error(f"전직 처리 중 오류 발생 (유저: {self.user.id}): {e}", exc_info=True)
             await interaction.edit_original_response(content="❌ 転職処理中にエラーが発生しました。管理者にお問い合わせください。", view=None)
 
-# [✅✅✅ 핵심 수정] 초기 안내 및 시작 버튼을 위한 View
 class StartAdvancementView(ui.View):
     def __init__(self, bot: commands.Bot, user: discord.Member, jobs: List[Dict[str, Any]], level: int):
         super().__init__(timeout=3600)
@@ -150,7 +142,6 @@ class StartAdvancementView(ui.View):
 
     @ui.button(label="転職を開始する", style=discord.ButtonStyle.primary, emoji="✨")
     async def start_button(self, interaction: discord.Interaction, button: ui.Button):
-        # 상세 정보 임베드 생성
         embed = discord.Embed(
             title=f"職業・能力選択 (レベル{self.level})",
             description="転職したい職業とその能力を一つずつ選択し、下の「確定する」ボタンを押してください。",
@@ -167,7 +158,6 @@ class StartAdvancementView(ui.View):
                 inline=False
             )
         
-        # 메인 View로 교체
         view = JobAdvancementView(self.bot, self.user, self.jobs_data)
         await interaction.response.edit_message(embed=embed, view=view)
         self.stop()
@@ -177,6 +167,7 @@ class JobAndTierHandler(commands.Cog):
         self.bot = bot
         logger.info("JobAndTierHandler Cog (전직/등급 처리)가 성공적으로 초기화되었습니다.")
 
+    # [✅✅✅ 핵심 수정] 전직 절차 시작 시, 유저의 현재 직업을 확인하고 상위 직업을 필터링합니다.
     async def start_advancement_process(self, member: discord.Member, level: int):
         try:
             channel_id = get_id("job_advancement_channel_id")
@@ -188,9 +179,29 @@ class JobAndTierHandler(commands.Cog):
                 logger.warning(f"{member.name}님의 전직 스레드가 이미 존재하여 생성을 건너뜁니다.")
                 return
 
-            advancement_data = JOB_ADVANCEMENT_DATA.get(level, [])
-            if not advancement_data: return
+            # DB에서 유저의 현재 직업 정보를 가져옵니다.
+            user_job_res = await supabase.table('user_jobs').select('jobs(job_key)').eq('user_id', member.id).maybe_single().execute()
+            current_job_key = None
+            if user_job_res and user_job_res.data and user_job_res.data.get('jobs'):
+                current_job_key = user_job_res.data['jobs']['job_key']
 
+            # 설정 파일에서 해당 레벨의 모든 전직 정보를 가져옵니다.
+            all_advancement_jobs = JOB_ADVANCEMENT_DATA.get(level, [])
+            
+            # 유저의 현재 직업에 맞는 상위 직업만 필터링합니다.
+            filtered_jobs = []
+            for job_info in all_advancement_jobs:
+                prerequisite = job_info.get("prerequisite_job")
+                # 전직 조건이 없거나(Lv.50), 전직 조건이 현재 직업과 일치하는 경우에만 목록에 추가합니다.
+                if not prerequisite or prerequisite == current_job_key:
+                    filtered_jobs.append(job_info)
+
+            # 표시할 상위 직업이 없으면 함수를 종료합니다.
+            if not filtered_jobs:
+                logger.warning(f"{member.name} (현재 직업: {current_job_key}) 님을 위한 레벨 {level} 상위 직업을 찾을 수 없습니다.")
+                return
+
+            # 필터링된 직업 목록으로 전직 절차를 시작합니다.
             thread = await channel.create_thread(name=f"転職｜{member.name}", type=discord.ChannelType.private_thread, invitable=False)
             await thread.add_user(member)
             
@@ -200,11 +211,9 @@ class JobAndTierHandler(commands.Cog):
                             "下のボタンを押して、転職手続きを開始してください。",
                 color=0xFFD700
             )
-            # [✅ 수정] 새로운 시작 View를 보냅니다.
-            view = StartAdvancementView(self.bot, member, advancement_data, level)
+            view = StartAdvancementView(self.bot, member, filtered_jobs, level)
             await thread.send(embed=embed, view=view)
             
-            # 봇이 재시작되어도 버튼이 작동하도록 View를 등록합니다.
             self.bot.add_view(view)
             logger.info(f"{member.name}님의 레벨 {level} 전직 스레드를 성공적으로 생성하고 View를 등록했습니다.")
 
