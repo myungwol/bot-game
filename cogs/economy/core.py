@@ -37,15 +37,17 @@ class EconomyCore(commands.Cog):
         
         # 모든 채팅 기록을 위한 캐시
         self.all_chat_cache: Dict[int, int] = {}
-        # 코인 보상용 채팅 기록 캐시
+        # 코인/경험치 보상용 채팅 기록 캐시
         self.coin_chat_cache: Dict[int, int] = {}
         self._cache_lock = asyncio.Lock()
 
-        # 코인 보상 설정
+        # 코인 및 경험치 보상 설정
         self.voice_time_requirement_minutes = 10
         self.voice_reward_range = [10, 15]
         self.chat_message_requirement = 20
         self.chat_reward_range = [10, 15]
+        self.xp_from_chat = 5
+        self.xp_from_voice = 10
 
         # 로그 발송 큐
         self.coin_log_queue: Deque[discord.Embed] = deque()
@@ -74,6 +76,8 @@ class EconomyCore(commands.Cog):
         self.voice_reward_range = game_config.get("VOICE_REWARD_RANGE", [10, 15])
         self.chat_message_requirement = game_config.get("CHAT_MESSAGE_REQUIREMENT", 20)
         self.chat_reward_range = game_config.get("CHAT_REWARD_RANGE", [10, 15])
+        self.xp_from_chat = game_config.get("XP_FROM_CHAT", 5)
+        self.xp_from_voice = game_config.get("XP_FROM_VOICE", 10)
 
         logger.info("[EconomyCore Cog] 데이터베이스로부터 설정을 성공적으로 로드했습니다.")
         
@@ -151,6 +155,17 @@ class EconomyCore(commands.Cog):
         
         for user_id, count in data_to_check.items():
             try:
+                user = self.bot.get_user(user_id)
+                if not user: continue
+
+                # 경험치 지급: 유효 채팅 1회당 XP 지급
+                if count > 0:
+                    xp_to_add = self.xp_from_chat * count
+                    xp_res = await supabase.rpc('add_xp', {'p_user_id': user_id, 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
+                    if xp_res and xp_res.data:
+                        await self.handle_level_up_event(user, xp_res.data[0])
+
+                # 코인 보상 확인
                 reward_res = await supabase.table('user_activity_logs').select('id', count='exact').eq('user_id', user_id).eq('activity_type', 'coin_reward_chat').gte('created_at', today_start_utc).execute()
                 if reward_res.count > 0:
                     continue
@@ -165,15 +180,13 @@ class EconomyCore(commands.Cog):
                 total_valid_chats = upsert_res.data if upsert_res.data else 0
 
                 if total_valid_chats >= self.chat_message_requirement:
-                    user = self.bot.get_user(user_id)
-                    if user:
-                        reward = random.randint(*self.chat_reward_range)
-                        await update_wallet(user, reward)
-                        await log_user_activity(user_id, 'coin_reward_chat', reward)
-                        await self.log_coin_activity(user, reward, f"チャット{self.chat_message_requirement}回達成")
+                    reward = random.randint(*self.chat_reward_range)
+                    await update_wallet(user, reward)
+                    await log_user_activity(user_id, 'coin_reward_chat', reward)
+                    await self.log_coin_activity(user, reward, f"チャット{self.chat_message_requirement}回達成")
 
             except Exception as e:
-                 logger.error(f"코인 보상 확인 중 오류 (유저: {user_id}): {e}", exc_info=True)
+                 logger.error(f"코인/경험치 보상 확인 중 오류 (유저: {user_id}): {e}", exc_info=True)
                  async with self._cache_lock:
                      self.coin_chat_cache[user_id] = self.coin_chat_cache.get(user_id, 0) + count
 
@@ -208,6 +221,12 @@ class EconomyCore(commands.Cog):
                 if duration_minutes >= 1:
                     await log_user_activity(member.id, 'voice', round(duration_minutes))
 
+                    xp_to_add = round(self.xp_from_voice * (duration_minutes / self.voice_time_requirement_minutes))
+                    if xp_to_add > 0:
+                        xp_res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
+                        if xp_res and xp_res.data:
+                            await self.handle_level_up_event(member, xp_res.data[0])
+
                     today_start_utc = (datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=9)).isoformat()
                     res = await supabase.table('user_activity_logs').select('amount', count='exact').eq('user_id', member.id).eq('activity_type', 'voice').gte('created_at', today_start_utc).execute()
                     
@@ -220,6 +239,22 @@ class EconomyCore(commands.Cog):
                         await update_wallet(member, reward)
                         await log_user_activity(member.id, 'coin_reward_voice', reward)
                         await self.log_coin_activity(member, reward, f"ボイスチャンネルに{self.voice_time_requirement_minutes}分参加")
+
+    async def handle_level_up_event(self, user: discord.User, result_data: Dict):
+        if not result_data or not result_data.get('leveled_up'):
+            return
+
+        new_level = result_data.get('new_level')
+        logger.info(f"유저 {user.display_name}(ID: {user.id})가 레벨 {new_level}(으)로 레벨업했습니다.")
+        
+        game_config = get_config("GAME_CONFIG", {})
+        job_advancement_levels = game_config.get("JOB_ADVANCEMENT_LEVELS", [50, 100])
+        
+        if new_level in job_advancement_levels:
+            await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": time.time()})
+            logger.info(f"유저가 전직 가능 레벨({new_level})에 도달하여 DB에 요청을 기록했습니다.")
+
+        await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
 
     async def log_coin_activity(self, user: discord.Member, amount: int, reason: str):
         if not (embed_data := await get_embed_from_db("log_coin_gain")): return
