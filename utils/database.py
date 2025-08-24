@@ -30,7 +30,6 @@ _fishing_loot_cache: List[Dict[str, Any]] = {}
 _user_abilities_cache: Dict[int, tuple[List[str], float]] = {}
 JST = timezone(timedelta(hours=9))
 BARE_HANDS = "素手"
-# [✅✅✅ 핵심 수정 ✅✅✅] 누락된 상수 추가
 DEFAULT_ROD = "普通の釣竿"
 
 def supabase_retry_handler(retries: int = 3, delay: int = 2):
@@ -116,19 +115,10 @@ def get_panel_id(panel_name: str) -> Optional[Dict[str, int]]:
     channel_id = get_id(f"panel_{panel_name}_channel_id")
     return {"message_id": message_id, "channel_id": channel_id} if message_id and channel_id else None
 
-# [✅✅✅ 핵심 수정 ✅✅✅] 누락된 함수 2개 추가
 def is_whale_available() -> bool:
-    """
-    今月のクジラがまだ捕まえられていないかを確認します。
-    キャッシュされた設定から'whale_announcement_message_id'が存在するかチェックします。
-    """
     return get_config("whale_announcement_message_id") is not None
 
 async def set_whale_caught():
-    """
-    クジラが捕まえられたことを記録します。
-    'whale_announcement_message_id'をNoneに設定します。
-    """
     await save_config_to_db("whale_announcement_message_id", None)
 
 @supabase_retry_handler()
@@ -216,22 +206,69 @@ async def set_cooldown(user_id: int, cooldown_key: str):
     iso_timestamp = datetime.now(timezone.utc).isoformat()
     await supabase.table('cooldowns').upsert({"user_id": user_id, "cooldown_key": cooldown_key, "last_cooldown_timestamp": iso_timestamp}).execute()
 
+# [✅ 수정] 새로운 DB 함수를 호출하도록 변경
+@supabase_retry_handler()
+async def get_user_activity_summary(user_id: int) -> Dict[str, Any]:
+    """새로운 DB 함수를 호출하여 사용자의 일간/주간 활동 요약을 가져옵니다."""
+    try:
+        response = await supabase.rpc('get_user_activity_summary', {'p_user_id': user_id}).single().execute()
+        return response.data if response and response.data else {}
+    except Exception as e:
+        logger.error(f"유저 활동 요약 정보(get_user_activity_summary) 조회 중 오류: {e}")
+        return {}
+
+# [✨ 신규] 모든 활동을 기록하기 위한 새로운 함수
+@supabase_retry_handler()
+async def log_user_activity(user_id: int, activity_type: str, amount: int = 1, metadata: Optional[Dict] = None):
+    """사용자의 활동을 user_activity_logs 테이블에 기록합니다."""
+    try:
+        log_entry = {
+            'user_id': user_id,
+            'activity_type': activity_type,
+            'amount': amount,
+            'metadata': metadata
+        }
+        await supabase.table('user_activity_logs').insert(log_entry).execute()
+    except Exception as e:
+        # DB에 정의되지 않은 activity_type을 보내는 경우 등 에러가 발생할 수 있습니다.
+        logger.error(f"사용자 활동 로그 기록 중 오류 발생: {e}", exc_info=True)
+
+# [✨ 신규] 여러 채팅 활동을 한번에 기록하기 위한 함수
+@supabase_retry_handler()
+async def batch_log_chat_activity(chat_data: List[Dict[str, Any]]):
+    """여러 사용자의 채팅 활동을 한 번의 요청으로 DB에 기록합니다."""
+    if not chat_data:
+        return
+    try:
+        await supabase.table('user_activity_logs').insert(chat_data).execute()
+    except Exception as e:
+        logger.error(f"채팅 활동 일괄 기록 중 오류: {e}", exc_info=True)
+
+
 @supabase_retry_handler()
 async def has_checked_in_today(user_id: int) -> bool:
-    today_jst_start = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
-    response = await supabase.table('attendance_logs').select('id', count='exact').eq('user_id', user_id).gte('checked_in_at', today_jst_start.isoformat()).limit(1).execute()
+    # 출석 체크는 별도의 테이블(attendance_logs)을 사용하거나,
+    # user_activity_logs에 'daily_check_in' 타입으로 기록하고 조회할 수 있습니다.
+    # 여기서는 후자의 방식을 사용하도록 수정합니다.
+    today_start_jst = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    response = await supabase.table('user_activity_logs') \
+        .select('id', count='exact') \
+        .eq('user_id', user_id) \
+        .eq('activity_type', 'daily_check_in') \
+        .gte('created_at', today_start_jst.isoformat()) \
+        .limit(1) \
+        .execute()
+        
     return response.count > 0 if response and hasattr(response, 'count') else False
 
 @supabase_retry_handler()
 async def record_attendance(user_id: int):
-    await supabase.table('attendance_logs').insert({'user_id': user_id}).execute()
-    await supabase.rpc('increment_user_progress', {'p_user_id': user_id, 'p_attendance_count': 1}).execute()
+    # 출석 체크를 새로운 활동 로그 시스템에 기록합니다.
+    await log_user_activity(user_id, 'daily_check_in', 1)
 
-@supabase_retry_handler()
-async def get_user_progress(user_id: int) -> Dict[str, Any]:
-    default = {'daily_voice_minutes': 0, 'daily_fish_count': 0, 'weekly_attendance_count': 0}
-    response = await supabase.table('user_progress').select('*').eq('user_id', user_id).maybe_single().execute()
-    return response.data if response and hasattr(response, 'data') and response.data else default
+# [❌ 삭제] 오래된 get_user_progress 함수는 get_user_activity_summary로 대체되었으므로 삭제합니다.
+# async def get_user_progress(user_id: int) -> Dict[str, Any]: ...
 
 @supabase_retry_handler()
 async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
