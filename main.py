@@ -9,8 +9,6 @@ import logging.handlers
 from datetime import datetime, timezone
 from typing import Optional
 
-# [✅✅✅ 핵심 수정 ✅✅✅]
-# 게임 봇의 database.py에 존재하지 않는 sync_defaults_to_db 함수 임포트 제거
 from utils.database import load_all_data_from_db
 
 # --- 중앙 로깅 설정 ---
@@ -50,17 +48,15 @@ class MyBot(commands.Bot):
         super().__init__(*args, **kwargs)
 
     async def setup_hook(self):
-        # [✅✅✅ 핵심 수정 ✅✅✅]
-        # 게임 봇은 DB 초기화(sync)를 수행하지 않으므로 해당 코드 라인 제거
-        
         await self.load_all_extensions()
         
-        # 게임 봇이 사용하는 영구 View 기능 목록
+        # [✅✅✅ 핵심 수정 ✅✅✅]
+        # 이제 LevelSystem을 포함하여 영구 View가 필요한 모든 Cog를 이 목록에 추가합니다.
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
             "DiceGame", "SlotMachine", "RPSGame",
             "DailyCheck", "Quests", "Farm", "PanelUpdater",
-            "WorldSystem", "EconomyCore"
+            "WorldSystem", "EconomyCore", "LevelSystem"  # LevelSystem 추가
         ]
         
         registered_views_count = 0
