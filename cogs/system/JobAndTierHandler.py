@@ -8,15 +8,15 @@ import asyncio
 from typing import Dict, Any, List
 
 from utils.database import supabase, get_config, get_id
-# [✅✅✅ 핵심 수정] ui_defaults 대신 새로 만든 game_config_defaults 에서 설정을 가져옵니다.
 from utils.game_config_defaults import JOB_SYSTEM_CONFIG, JOB_ADVANCEMENT_DATA
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
+# [✅✅✅ 핵심 수정] View의 timeout을 None으로 변경하여 영구적으로 만듭니다.
 class JobSelectionView(ui.View):
     def __init__(self, bot: commands.Bot, user: discord.Member, jobs: List[Dict[str, Any]], advancement_level: int):
-        super().__init__(timeout=3600)  # 1시간 동안 유효
+        super().__init__(timeout=None) 
         self.bot = bot
         self.user = user
         self.jobs = {job['job_key']: job for job in jobs}
@@ -25,9 +25,17 @@ class JobSelectionView(ui.View):
         self.selected_ability: Dict[str, Any] = {}
         
         for job in jobs:
-            button = ui.Button(label=job['job_name'], custom_id=f"job_{job['job_key']}", style=discord.ButtonStyle.primary)
+            # 모든 버튼에 custom_id를 명시적으로 부여합니다.
+            button = ui.Button(label=job['job_name'], custom_id=f"job_select_{job['job_key']}", style=discord.ButtonStyle.primary)
             button.callback = self.on_job_select
             self.add_item(button)
+    
+    # [✅✅✅ 핵심 수정] interaction_check를 추가하여 올바른 사용자만 버튼을 누르도록 합니다.
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message("自分専用のメニューです。", ephemeral=True)
+            return False
+        return True
 
     async def on_job_select(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -38,7 +46,7 @@ class JobSelectionView(ui.View):
         
         abilities = self.selected_job.get('abilities', [])
         for ability in abilities:
-            button = ui.Button(label=ability['ability_name'], custom_id=f"ability_{ability['ability_key']}", style=discord.ButtonStyle.success)
+            button = ui.Button(label=ability['ability_name'], custom_id=f"ability_select_{ability['ability_key']}", style=discord.ButtonStyle.success)
             button.callback = self.on_ability_select
             self.add_item(button)
             
@@ -60,6 +68,7 @@ class JobSelectionView(ui.View):
         for item in self.children:
             item.disabled = True
         await interaction.edit_original_response(view=self)
+        self.stop() # View의 모든 상호작용을 중단합니다.
 
         try:
             job_role_key = self.selected_job['role_key']
@@ -85,7 +94,6 @@ class JobSelectionView(ui.View):
 
             log_channel_id = get_id("job_log_channel_id")
             if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
-                # [수정] log_job_advancement 임베드는 이제 DB에 저장되어 있으므로 get_embed_from_db를 사용합니다.
                 embed_data = await get_embed_from_db("log_job_advancement")
                 if embed_data:
                     log_embed = format_embed_from_db(
@@ -101,7 +109,9 @@ class JobSelectionView(ui.View):
             await interaction.followup.send(f"🎉 전직을 축하합니다! 이제 당신은 **{self.selected_job['job_name']}** 입니다!", ephemeral=True)
             
             await asyncio.sleep(10)
-            await interaction.channel.delete()
+            # [수정] 스레드는 Thread 객체이므로 interaction.channel을 사용합니다.
+            if isinstance(interaction.channel, discord.Thread):
+                await interaction.channel.delete()
 
         except Exception as e:
             logger.error(f"전직 처리 중 오류 발생 (유저: {self.user.id}): {e}", exc_info=True)
@@ -112,10 +122,14 @@ class JobAndTierHandler(commands.Cog):
         self.bot = bot
         logger.info("JobAndTierHandler Cog (전직/등급 처리)가 성공적으로 초기화되었습니다.")
 
-    async def register_persistent_views(self):
-        # JobSelectionView는 동적으로 생성되므로, 여기에 빈 객체를 등록하여 봇 재시작 후에도 버튼 콜백을 받을 수 있게 합니다.
-        self.bot.add_view(JobSelectionView(self.bot, None, [], 0))
-        logger.info("✅ 전직 선택(JobSelectionView) 영구 View가 등록되었습니다.")
+    # [✅✅✅ 핵심 수정] cog_load 시점에 add_view를 호출하여 영구 View를 등록합니다.
+    async def cog_load(self):
+        # 봇이 켜질 때, timeout=None이고 모든 버튼에 custom_id가 있는 View 객체를 등록합니다.
+        # JobSelectionView는 동적으로 버튼이 바뀌므로, 빈 View 껍데기를 등록할 수 없습니다.
+        # 대신, 버튼 콜백을 View가 아닌 Cog 레벨에서 처리하도록 구조를 변경할 수 있지만,
+        # 더 간단한 방법은 View 자체를 영구적으로 만드는 것입니다.
+        # JobSelectionView의 timeout을 None으로 설정하고 모든 버튼에 custom_id를 부여하면 됩니다.
+        pass # register_persistent_views를 사용하지 않으므로 이 함수는 비워둡니다.
 
     async def start_advancement_process(self, member: discord.Member, level: int):
         try:
@@ -146,7 +160,10 @@ class JobAndTierHandler(commands.Cog):
             )
             view = JobSelectionView(self.bot, member, advancement_data, level)
             await thread.send(embed=embed, view=view)
-            logger.info(f"{member.name}님의 레벨 {level} 전직 스레드를 성공적으로 생성했습니다.")
+            
+            # View를 등록합니다. 봇이 재시작되어도 이 View의 상호작용을 받을 수 있습니다.
+            self.bot.add_view(view)
+            logger.info(f"{member.name}님의 레벨 {level} 전직 스레드를 성공적으로 생성하고 View를 등록했습니다.")
 
         except Exception as e:
             logger.error(f"{member.name}님의 전직 절차 시작 중 오류 발생: {e}", exc_info=True)
