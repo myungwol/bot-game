@@ -35,7 +35,7 @@ async def preload_farmable_info(farm_data: Dict) -> Dict[str, Dict]:
     tasks = [get_farmable_item_info(name) for name in item_names]
     results = await asyncio.gather(*tasks)
     return {info['item_name']: info for info in results if info}
-    
+
 class ConfirmationView(ui.View):
     def __init__(self, user: discord.User): super().__init__(timeout=60); self.value = None; self.user = user
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -59,7 +59,6 @@ class FarmNameModal(ui.Modal, title="農場名の変更"):
             try: await thread.edit(name=f"🌱｜{new_name}")
             except Exception as e: logger.error(f"농장 스레드 이름 변경 실패: {e}")
         await supabase.table('farms').update({'name': new_name}).eq('id', self.farm_data['id']).execute()
-        self.farm_data['name'] = new_name
         
         await self.cog.request_farm_ui_update(self.farm_data['user_id'])
         await interaction.followup.send("✅ 農場の名前を変更しました。", ephemeral=True)
@@ -385,8 +384,6 @@ class FarmUIView(ui.View):
         
         await self.cog.request_farm_ui_update(self.farm_owner_id)
 
-        # [✅✅✅ 핵심 수정 ✅✅✅]
-        # 수확 결과 메시지에 능력 발동 여부를 추가합니다.
         followup_message = f"🎉 **{', '.join([f'{n} {q}個' for n, q in harvested.items()])}**を収穫しました！"
         if yield_bonus > 0.0:
             followup_message += "\n✨ **大農家**の能力で、収穫量が大幅に増加しました！"
@@ -395,7 +392,7 @@ class FarmUIView(ui.View):
             if isinstance(res, dict) and 'data' in res and res['data']:
                 if (core_cog := self.cog.bot.get_cog("EconomyCore")):
                     await core_cog.handle_level_up_event(owner, res['data'][0])
-                break # XP 부여 결과는 하나만 처리
+                break
         
         await interaction.followup.send(followup_message, ephemeral=True)
     
@@ -545,8 +542,6 @@ class Farm(commands.Cog):
         config_value = {"timestamp": time.time(), "force_new": force_new}
         await save_config_to_db(config_key, config_value)
         
-    # [✅✅✅ 핵심 수정 ✅✅✅]
-    # 농장 UI 임베드를 만드는 이 함수에 패시브 능력 표시 로직을 추가합니다.
     async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         info_map = await preload_farmable_info(farm_data)
         
@@ -602,14 +597,13 @@ class Farm(commands.Cog):
         if infos:
             embed.description += "\n" + "\n".join(sorted(infos))
         
-        # --- [ 패시브 능력 표시 로직 시작 ] ---
         owner_abilities = await get_user_abilities(user.id)
         
         all_farm_abilities_map = {}
         job_advancement_data = get_config("JOB_ADVANCEMENT_DATA", {})
         for level_data in job_advancement_data.values():
             for job in level_data:
-                if 'farmer' in job.get('job_key', ''): # 농부/대농가 직업만 필터링
+                if 'farmer' in job.get('job_key', ''):
                     for ability in job.get('abilities', []):
                         all_farm_abilities_map[ability['ability_key']] = {
                             'name': ability['ability_name'],
@@ -627,7 +621,6 @@ class Farm(commands.Cog):
         
         if active_effects:
             embed.description += "\n\n**--- 農場のパッシブ効果 ---**\n" + "\n".join(active_effects)
-        # --- [ 패시브 능력 표시 로직 끝 ] ---
 
         weather_key = get_config("current_weather", "sunny")
         weather = WEATHER_TYPES.get(weather_key, {"emoji": "❔", "name": "不明"})
@@ -640,18 +633,20 @@ class Farm(commands.Cog):
             if not (user and farm_data): return
 
             try:
+                if force_new:
+                    try:
+                        async for message in thread.history(limit=50):
+                            if message.author.id == self.bot.user.id:
+                                await message.delete()
+                    except (discord.Forbidden, discord.HTTPException) as e:
+                        logger.warning(f"농장 스레드(ID: {thread.id})의 메시지를 정리하는 중 오류 발생: {e}")
+                    farm_data['farm_message_id'] = None
+
                 embed = await self.build_farm_embed(farm_data, user)
                 view = FarmUIView(self)
                 
                 message_id = farm_data.get("farm_message_id")
                 
-                if force_new and message_id:
-                    try:
-                        old_message = await thread.fetch_message(message_id)
-                        await old_message.delete()
-                    except (discord.NotFound, discord.Forbidden): pass
-                    message_id = None
-
                 if message_id and not force_new:
                     try:
                         message = await thread.fetch_message(message_id)
