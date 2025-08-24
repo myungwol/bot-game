@@ -69,7 +69,7 @@ class FishingGameView(ui.View):
                 self.stop()
         except asyncio.CancelledError: pass
         except Exception as e:
-            logger.error(f"{self.player.display_name}의낚시 게임 흐름 중 오류: {e}", exc_info=True)
+            logger.error(f"{self.player.display_name}の낚시 게임 흐름 중 오류: {e}", exc_info=True)
             if not self.is_finished():
                 await self._send_result(discord.Embed(title="❌ エラー発生", description="釣りの処理中に予期せぬエラーが発生しました。", color=discord.Color.red()))
                 self.stop()
@@ -99,6 +99,13 @@ class FishingGameView(ui.View):
         
         await log_user_activity(self.player.id, 'fishing_catch', 1)
         
+        # --- [✅✅✅ 핵심 수정 ✅✅✅] ---
+        # 경험치 부여 로직을 여기로 이동하여, 물고기/쓰레기 구분 없이 낚시에 성공하면 무조건 경험치를 얻도록 합니다.
+        xp_to_add = get_config("GAME_CONFIG", {}).get("XP_FROM_FISHING", 20)
+        res = await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add, 'p_source': 'fishing'}).execute()
+        if res and res.data:
+            await self.fishing_cog.handle_level_up_event(self.player, res.data[0])
+
         user_abilities = await get_user_abilities(self.player.id)
         rare_up_bonus = 0.2 if 'fish_rare_up_2' in user_abilities else 0.0
         size_multiplier = 1.2 if 'fish_size_up_2' in user_abilities else 1.0
@@ -130,11 +137,6 @@ class FishingGameView(ui.View):
 
             await add_to_aquarium(str(self.player.id), {"name": catch_proto['name'], "size": size, "emoji": catch_proto.get('emoji', '🐠')})
             is_big_catch = size >= self.big_catch_threshold
-
-            xp_to_add = get_config("GAME_CONFIG", {}).get("XP_FROM_FISHING", 20)
-            res = await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add, 'p_source': 'fishing'}).execute()
-            if res and res.data:
-                await self.fishing_cog.handle_level_up_event(self.player, res.data[0])
 
             title = "🏆 大物を釣り上げた！ 🏆" if is_big_catch else "🎉 釣り成功！ 🎉"
             if is_whale_catch: title = "🐋 今月のヌシ、クジラを釣り上げた！！ 🐋"
@@ -298,8 +300,6 @@ class FishingPanelView(ui.View):
                 if bait_saved:
                     desc_lines.append("✨ 能力効果でエサを消費しませんでした！")
 
-                # [✅✅✅ 핵심 수정 ✅✅✅]
-                # 활성화된 전직 효과를 표시하는 부분을 추가합니다.
                 active_effects = []
                 if 'fish_bite_time_down_1' in user_abilities:
                     active_effects.append("> ⏱️ 魚が早く食いつく")
@@ -307,7 +307,7 @@ class FishingPanelView(ui.View):
                     active_effects.append("> ⭐ 珍しい魚を釣りやすい")
                 if 'fish_size_up_2' in user_abilities:
                     active_effects.append("> 📏 より大きな魚が釣れる")
-                if 'fish_bait_saver_1' in user_abilities and not bait_saved: # 미끼 절약이 발동 안했을 때만 잠재력을 표시
+                if 'fish_bait_saver_1' in user_abilities and not bait_saved:
                     active_effects.append("> ✨ 確率でエサを消費しない")
                 
                 if active_effects:
