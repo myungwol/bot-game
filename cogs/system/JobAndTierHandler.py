@@ -7,7 +7,8 @@ import logging
 import asyncio
 from typing import Dict, Any, List
 
-from utils.database import supabase, get_config, get_id
+# [✅✅✅ 핵심 수정] get_embed_from_db를 import 목록에 추가합니다.
+from utils.database import supabase, get_config, get_id, get_embed_from_db
 from utils.game_config_defaults import JOB_SYSTEM_CONFIG, JOB_ADVANCEMENT_DATA
 from utils.helpers import format_embed_from_db
 
@@ -94,10 +95,19 @@ class JobAdvancementView(ui.View):
     async def on_ability_select(self, interaction: discord.Interaction):
         if interaction.data['values'][0] == "no_abilities_placeholder":
             return await interaction.response.defer()
-            
-        self.build_components()
+
+        # [수정] 능력 선택 시 직업 선택 상태를 잃지 않도록 수정
+        job_select = discord.utils.get(self.children, custom_id='job_adv_job_select')
+        if not job_select or not job_select.values or job_select.values[0] == 'no_jobs_available':
+             await interaction.response.send_message("先に職業を選択してください。", ephemeral=True)
+             return
+        self.selected_job_key = job_select.values[0]
+
         self.selected_ability_key = interaction.data['values'][0]
+        
+        self.build_components()
         await interaction.response.edit_message(view=self)
+
 
     async def on_confirm(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -117,8 +127,6 @@ class JobAdvancementView(ui.View):
             selected_job_data = self.jobs_data[self.selected_job_key]
             selected_ability_data = next(a for a in selected_job_data['abilities'] if a['ability_key'] == self.selected_ability_key)
 
-            # [✅✅✅ 핵심 수정] DB 함수가 요구하는 숫자 ID를 조회합니다.
-            # 1. 선택된 key를 기반으로 DB에서 실제 ID를 조회합니다.
             job_res = await supabase.table('jobs').select('id').eq('job_key', self.selected_job_key).single().execute()
             ability_res = await supabase.table('abilities').select('id').eq('ability_key', self.selected_ability_key).single().execute()
 
@@ -128,7 +136,6 @@ class JobAdvancementView(ui.View):
             job_id = job_res.data['id']
             ability_id = ability_res.data['id']
             
-            # 역할 처리
             job_role_key = selected_job_data['role_key']
             all_job_role_keys = list(JOB_SYSTEM_CONFIG.get("JOB_ROLE_MAP", {}).values())
             
@@ -139,10 +146,8 @@ class JobAdvancementView(ui.View):
                 if new_role := interaction.guild.get_role(new_role_id):
                     await user.add_roles(new_role, reason="전직 완료")
 
-            # 2. 조회한 ID를 사용하여 DB 함수를 호출합니다.
             await supabase.rpc('set_user_job_and_ability', {'p_user_id': user.id, 'p_job_id': job_id, 'p_ability_id': ability_id}).execute()
 
-            # 로그 기록
             if log_channel_id := get_id("job_log_channel_id"):
                 if log_channel := self.bot.get_channel(log_channel_id):
                     if embed_data := await get_embed_from_db("log_job_advancement"):
