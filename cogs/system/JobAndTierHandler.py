@@ -34,11 +34,16 @@ class JobAdvancementView(ui.View):
     def build_components(self):
         self.clear_items()
 
-        job_options = [
-            discord.SelectOption(label=job['job_name'], value=job['job_key'], description=job['description'][:100])
-            for job in self.jobs_data.values()
-        ]
-        job_select = ui.Select(placeholder="① まずは職業を選択してください...", options=job_options, custom_id="job_select")
+        job_options = []
+        if self.jobs_data:
+            job_options = [
+                discord.SelectOption(label=job['job_name'], value=job['job_key'], description=job['description'][:100])
+                for job in self.jobs_data.values()
+            ]
+        else:
+            job_options.append(discord.SelectOption(label="選択できる職業がありません。", value="no_jobs_available", default=True))
+        
+        job_select = ui.Select(placeholder="① まずは職業を選択してください...", options=job_options, custom_id="job_select", disabled=(not self.jobs_data))
         job_select.callback = self.on_job_select
         self.add_item(job_select)
 
@@ -67,6 +72,8 @@ class JobAdvancementView(ui.View):
         await interaction.response.edit_message(view=self)
 
     async def on_job_select(self, interaction: discord.Interaction):
+        if interaction.data['values'][0] == "no_jobs_available":
+            return await interaction.response.defer()
         self.selected_job_key = interaction.data['values'][0]
         self.selected_ability_key = None
         await self.update_view(interaction)
@@ -128,6 +135,7 @@ class JobAdvancementView(ui.View):
 
 class StartAdvancementView(ui.View):
     def __init__(self, bot: commands.Bot, user: discord.Member, jobs: List[Dict[str, Any]], level: int):
+        # [✅✅✅ 핵심 수정] timeout을 명확하게 설정합니다 (1시간).
         super().__init__(timeout=3600)
         self.bot = bot
         self.user = user
@@ -142,6 +150,8 @@ class StartAdvancementView(ui.View):
 
     @ui.button(label="転職を開始する", style=discord.ButtonStyle.primary, emoji="✨")
     async def start_button(self, interaction: discord.Interaction, button: ui.Button):
+        self.stop()
+        
         embed = discord.Embed(
             title=f"職業・能力選択 (レベル{self.level})",
             description="転職したい職業とその能力を一つずつ選択し、下の「確定する」ボタンを押してください。",
@@ -158,16 +168,15 @@ class StartAdvancementView(ui.View):
                 inline=False
             )
         
-        view = JobAdvancementView(self.bot, self.user, self.jobs_data)
+        view = JobAdvancementView(self.bot, interaction.user, self.jobs_data)
         await interaction.response.edit_message(embed=embed, view=view)
-        self.stop()
+
 
 class JobAndTierHandler(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         logger.info("JobAndTierHandler Cog (전직/등급 처리)가 성공적으로 초기화되었습니다.")
 
-    # [✅✅✅ 핵심 수정] 전직 절차 시작 시, 유저의 현재 직업을 확인하고 상위 직업을 필터링합니다.
     async def start_advancement_process(self, member: discord.Member, level: int):
         try:
             channel_id = get_id("job_advancement_channel_id")
@@ -179,29 +188,31 @@ class JobAndTierHandler(commands.Cog):
                 logger.warning(f"{member.name}님의 전직 스레드가 이미 존재하여 생성을 건너뜁니다.")
                 return
 
-            # DB에서 유저의 현재 직업 정보를 가져옵니다.
             user_job_res = await supabase.table('user_jobs').select('jobs(job_key)').eq('user_id', member.id).maybe_single().execute()
             current_job_key = None
             if user_job_res and user_job_res.data and user_job_res.data.get('jobs'):
                 current_job_key = user_job_res.data['jobs']['job_key']
 
-            # 설정 파일에서 해당 레벨의 모든 전직 정보를 가져옵니다.
             all_advancement_jobs = JOB_ADVANCEMENT_DATA.get(level, [])
             
-            # 유저의 현재 직업에 맞는 상위 직업만 필터링합니다.
             filtered_jobs = []
             for job_info in all_advancement_jobs:
                 prerequisite = job_info.get("prerequisite_job")
-                # 전직 조건이 없거나(Lv.50), 전직 조건이 현재 직업과 일치하는 경우에만 목록에 추가합니다.
                 if not prerequisite or prerequisite == current_job_key:
                     filtered_jobs.append(job_info)
 
-            # 표시할 상위 직업이 없으면 함수를 종료합니다.
             if not filtered_jobs:
-                logger.warning(f"{member.name} (현재 직업: {current_job_key}) 님을 위한 레벨 {level} 상위 직업을 찾을 수 없습니다.")
+                if level >= 100 and not current_job_key:
+                    logger.warning(f"{member.name}님은 1차 전직을 하지 않아 2차 전직을 진행할 수 없습니다.")
+                    try:
+                        await member.send(f"レベル{level}転職のご案内\n"
+                                          f"2次転職のためには、まずレベル50の転職を完了する必要があります。")
+                    except discord.Forbidden:
+                        pass
+                else:
+                    logger.warning(f"{member.name} (현재 직업: {current_job_key}) 님을 위한 레벨 {level} 상위 직업을 찾을 수 없습니다.")
                 return
 
-            # 필터링된 직업 목록으로 전직 절차를 시작합니다.
             thread = await channel.create_thread(name=f"転職｜{member.name}", type=discord.ChannelType.private_thread, invitable=False)
             await thread.add_user(member)
             
@@ -211,11 +222,12 @@ class JobAndTierHandler(commands.Cog):
                             "下のボタンを押して、転職手続きを開始してください。",
                 color=0xFFD700
             )
+            
             view = StartAdvancementView(self.bot, member, filtered_jobs, level)
             await thread.send(embed=embed, view=view)
             
-            self.bot.add_view(view)
-            logger.info(f"{member.name}님의 레벨 {level} 전직 스레드를 성공적으로 생성하고 View를 등록했습니다.")
+            # [✅✅✅ 핵심 수정] 불필요하고 에러를 유발하는 add_view 호출을 삭제합니다.
+            logger.info(f"{member.name}님의 레벨 {level} 전직 스레드를 성공적으로 생성했습니다.")
 
         except Exception as e:
             logger.error(f"{member.name}님의 전직 절차 시작 중 오류 발생: {e}", exc_info=True)
