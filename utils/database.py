@@ -26,6 +26,7 @@ except ImportError:
     UI_EMBEDS, UI_PANEL_COMPONENTS, UI_ROLE_KEY_MAP = {}, [], {}
     SETUP_COMMAND_MAP, JOB_SYSTEM_CONFIG, AGE_ROLE_MAPPING, GAME_CONFIG, ONBOARDING_CHOICES = {}, {}, {}, {}, {}
 
+
 logger = logging.getLogger(__name__)
 
 JST = timezone(timedelta(hours=9))
@@ -85,7 +86,7 @@ def supabase_retry_handler(retries: int = 3, delay: int = 2):
     return decorator
 
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-# 3. 데이터 로드 및 동기화
+# 3. 데이터 로드 및 동기화 (서버 관리 봇 전용)
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 async def sync_defaults_to_db():
     logger.info("------ [ 기본값 DB 동기화 시작 (서버 관리 봇) ] ------")
@@ -171,11 +172,8 @@ async def save_id_to_db(key: str, object_id: int) -> bool:
         response = await supabase.table('channel_configs').upsert({"channel_key": key, "channel_id": str(object_id)}, on_conflict="channel_key").execute()
         if response and response.data:
             _channel_id_cache[key] = object_id
-            logger.info(f"✅ '{key}' ID({object_id})를 DB와 캐시에 저장했습니다.")
             return True
-        else:
-            logger.error(f"❌ '{key}' ID({object_id})를 DB에 저장하려 했으나, DB가 성공 응답을 반환하지 않았습니다.")
-            return False
+        return False
     except Exception as e:
         logger.error(f"❌ '{key}' ID 저장 중 예외 발생: {e}", exc_info=True)
         return False
@@ -234,50 +232,6 @@ async def set_cooldown(user_id_str: str, cooldown_key: str):
 # 7. 서버 관리 기능 관련 함수
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 @supabase_retry_handler()
-async def get_all_stats_channels() -> List[Dict[str, Any]]:
-    response = await supabase.table('stats_channels').select('*').execute()
-    return response.data if response and response.data else []
-@supabase_retry_handler()
-async def add_stats_channel(channel_id: int, guild_id: int, stat_type: str, template: str, role_id: Optional[int] = None):
-    await supabase.table('stats_channels').upsert({"channel_id": channel_id, "guild_id": guild_id, "stat_type": stat_type, "channel_name_template": template, "role_id": role_id}, on_conflict="channel_id").execute()
-@supabase_retry_handler()
-async def remove_stats_channel(channel_id: int):
-    await supabase.table('stats_channels').delete().eq('channel_id', channel_id).execute()
-@supabase_retry_handler()
-async def get_all_temp_channels() -> List[Dict[str, Any]]:
-    response = await supabase.table('temp_voice_channels').select('*').execute()
-    return response.data if response and response.data else []
-@supabase_retry_handler()
-async def add_temp_channel(channel_id: int, owner_id: int, guild_id: int, message_id: int, channel_type: str):
-    await supabase.table('temp_voice_channels').insert({"channel_id": channel_id, "owner_id": owner_id, "guild_id": guild_id, "message_id": message_id, "channel_type": channel_type}).execute()
-@supabase_retry_handler()
-async def update_temp_channel_owner(channel_id: int, new_owner_id: int):
-    await supabase.table('temp_voice_channels').update({"owner_id": new_owner_id}).eq('channel_id', channel_id).execute()
-@supabase_retry_handler()
-async def remove_temp_channel(channel_id: int):
-    await supabase.table('temp_voice_channels').delete().eq('channel_id', channel_id).execute()
-@supabase_retry_handler()
-async def remove_multiple_temp_channels(channel_ids: List[int]):
-    if not channel_ids: return
-    await supabase.table('temp_voice_channels').delete().in_('channel_id', channel_ids).execute()
-@supabase_retry_handler()
-async def get_all_tickets() -> List[Dict[str, Any]]:
-    response = await supabase.table('tickets').select('*').execute()
-    return response.data if response and response.data else []
-@supabase_retry_handler()
-async def add_ticket(thread_id: int, owner_id: int, guild_id: int, ticket_type: str):
-    await supabase.table('tickets').insert({"thread_id": thread_id, "owner_id": owner_id, "guild_id": guild_id, "ticket_type": ticket_type}).execute()
-@supabase_retry_handler()
-async def remove_ticket(thread_id: int):
-    await supabase.table('tickets').delete().eq('thread_id', thread_id).execute()
-@supabase_retry_handler()
-async def update_ticket_lock_status(thread_id: int, is_locked: bool):
-    await supabase.table('tickets').update({"is_locked": is_locked}).eq('thread_id', thread_id).execute()
-@supabase_retry_handler()
-async def remove_multiple_tickets(thread_ids: List[int]):
-    if not thread_ids: return
-    await supabase.table('tickets').delete().in_('thread_id', thread_ids).execute()
-@supabase_retry_handler()
 async def add_warning(guild_id: int, user_id: int, moderator_id: int, reason: str, amount: int) -> Optional[dict]:
     response = await supabase.table('warnings').insert({"guild_id": guild_id, "user_id": user_id, "moderator_id": moderator_id, "reason": reason, "amount": amount}).select().execute()
     return response.data[0] if response and response.data else None
@@ -295,18 +249,6 @@ async def has_posted_anonymously_today(user_id: int) -> bool:
     response = await supabase.table('anonymous_messages').select('id', count='exact').eq('user_id', user_id).gte('created_at', today_utc_start.isoformat()).limit(1).execute()
     return response.count > 0 if response else False
 @supabase_retry_handler()
-async def schedule_reminder(guild_id: int, reminder_type: str, remind_at: datetime):
-    await supabase.table('reminders').update({"is_active": False}).eq('guild_id', guild_id).eq('reminder_type', reminder_type).eq('is_active', True).execute()
-    await supabase.table('reminders').insert({"guild_id": guild_id, "reminder_type": reminder_type, "remind_at": remind_at.isoformat(), "is_active": True}).execute()
-@supabase_retry_handler()
-async def get_due_reminders() -> List[Dict[str, Any]]:
-    now = datetime.now(timezone.utc).isoformat()
-    response = await supabase.table('reminders').select('*').eq('is_active', True).lte('remind_at', now).execute()
-    return response.data if response and response.data else []
-@supabase_retry_handler()
-async def deactivate_reminder(reminder_id: int):
-    await supabase.table('reminders').update({"is_active": False}).eq('id', reminder_id).execute()
-@supabase_retry_handler()
 async def backup_member_data(user_id: int, guild_id: int, role_ids: List[int], nickname: Optional[str]):
     await supabase.table('left_members').upsert({ 'user_id': user_id, 'guild_id': guild_id, 'roles': role_ids, 'nickname': nickname, 'left_at': datetime.now(timezone.utc).isoformat() }).execute()
 @supabase_retry_handler()
@@ -318,30 +260,21 @@ async def delete_member_backup(user_id: int, guild_id: int):
     await supabase.table('left_members').delete().eq('user_id', user_id).eq('guild_id', guild_id).execute()
 
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-# 8. 게임 기능 관련 함수
+# 8. 게임 및 경제 기능 관련 함수
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 @supabase_retry_handler()
-async def update_wallet(user: discord.User, amount: int) -> Optional[dict]:
-    params = {'p_user_id': str(user.id), 'p_amount': amount}
-    response = await supabase.rpc('update_wallet_balance', params).execute()
-    return response.data[0] if response and response.data else None
-    
-@supabase_retry_handler()
-async def get_user_abilities(user_id: int) -> List[str]:
-    CACHE_TTL = 300
-    now = time.time()
-    if user_id in _user_abilities_cache:
-        cached_data, timestamp = _user_abilities_cache[user_id]
-        if now - timestamp < CACHE_TTL:
-            return cached_data
-    response = await supabase.rpc('get_user_ability_keys', {'p_user_id': user_id}).execute()
-    if response and hasattr(response, 'data'):
-        abilities = response.data if response.data else []
-        _user_abilities_cache[user_id] = (abilities, now)
-        return abilities
-    _user_abilities_cache[user_id] = ([], now)
-    return []
-    
+async def load_game_data_from_db():
+    global _item_database_cache, _fishing_loot_cache
+    item_response = await supabase.table('items').select('*').execute()
+    if item_response and item_response.data:
+        _item_database_cache = {item.pop('name'): item for item in item_response.data}
+    loot_response = await supabase.table('fishing_loots').select('*').execute()
+    if loot_response and loot_response.data:
+        _fishing_loot_cache = loot_response.data
+
+def get_item_database() -> Dict[str, Dict[str, Any]]: return _item_database_cache
+def get_fishing_loot() -> List[Dict[str, Any]]: return _fishing_loot_cache
+
 @supabase_retry_handler()
 async def get_or_create_user(table_name: str, user_id_str: str, default_data: dict) -> dict:
     response = await supabase.table(table_name).select("*").eq("user_id", user_id_str).limit(1).execute()
@@ -352,8 +285,92 @@ async def get_or_create_user(table_name: str, user_id_str: str, default_data: di
 
 async def get_wallet(user_id: int) -> dict:
     return await get_or_create_user('wallets', str(user_id), {"balance": 0})
+
+@supabase_retry_handler()
+async def update_wallet(user: discord.User, amount: int) -> Optional[dict]:
+    params = {'p_user_id': str(user.id), 'p_amount': amount}
+    response = await supabase.rpc('update_wallet_balance', params).execute()
+    return response.data[0] if response and response.data else None
     
+@supabase_retry_handler()
+async def get_inventory(user: discord.User) -> Dict[str, int]:
+    user_id_str = str(user.id)
+    response = await supabase.table('inventories').select('item_name, quantity').eq('user_id', user_id_str).gt('quantity', 0).execute()
+    return {item['item_name']: item['quantity'] for item in response.data} if response and response.data else {}
+
+@supabase_retry_handler()
+async def update_inventory(user_id_str: str, item_name: str, quantity: int):
+    params = {'p_user_id': user_id_str, 'p_item_name': item_name, 'p_quantity_delta': quantity}
+    await supabase.rpc('update_inventory_quantity', params).execute()
+
+@supabase_retry_handler()
+async def get_user_gear(user: discord.User) -> dict:
+    default_gear = {"rod": "素手", "bait": "エサなし", "hoe": "素手", "watering_can": "素手"}
+    return await get_or_create_user('gear_setups', str(user.id), default_gear)
+
+@supabase_retry_handler()
+async def set_user_gear(user_id_str: str, **kwargs):
+    if kwargs:
+        await supabase.table('gear_setups').update(kwargs).eq('user_id', user_id_str).execute()
+
+@supabase_retry_handler()
+async def get_aquarium(user_id_str: str) -> list:
+    response = await supabase.table('aquariums').select('id, name, size, emoji').eq('user_id', user_id_str).execute()
+    return response.data if response and response.data else []
+
+@supabase_retry_handler()
+async def add_to_aquarium(user_id_str: str, fish_data: dict):
+    await supabase.table('aquariums').insert({"user_id": user_id_str, **fish_data}).execute()
+
+@supabase_retry_handler()
+async def sell_fish_from_db(user_id_str: str, fish_ids: List[int], total_sell_price: int):
+    params = {'p_user_id': user_id_str, 'p_fish_ids': fish_ids, 'p_total_value': total_sell_price}
+    await supabase.rpc('sell_fishes', params).execute()
+
+@supabase_retry_handler()
+async def get_user_abilities(user_id: int) -> List[str]:
+    CACHE_TTL = 300
+    now = time.time()
+    if user_id in _user_abilities_cache:
+        cached_data, timestamp = _user_abilities_cache[user_id]
+        if now - timestamp < CACHE_TTL: return cached_data
+    response = await supabase.rpc('get_user_ability_keys', {'p_user_id': user_id}).execute()
+    abilities = response.data if response and hasattr(response, 'data') and response.data else []
+    _user_abilities_cache[user_id] = (abilities, now)
+    return abilities
+
+@supabase_retry_handler()
+async def has_checked_in_today(user_id: int) -> bool:
+    today_jst_start = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
+    response = await supabase.table('attendance_logs').select('id', count='exact').eq('user_id', user_id).gte('checked_in_at', today_jst_start.isoformat()).limit(1).execute()
+    return response.count > 0 if response and hasattr(response, 'count') else False
+
+@supabase_retry_handler()
+async def record_attendance(user_id: int):
+    await supabase.table('attendance_logs').insert({'user_id': user_id}).execute()
+    await supabase.rpc('increment_user_progress', {'p_user_id': user_id, 'p_attendance_count': 1}).execute()
+
+@supabase_retry_handler()
+async def get_user_progress(user_id: int) -> Dict[str, Any]:
+    default = {'daily_voice_minutes': 0, 'daily_fish_count': 0, 'weekly_attendance_count': 0}
+    response = await supabase.table('user_progress').select('*').eq('user_id', user_id).maybe_single().execute()
+    return response.data if response and hasattr(response, 'data') and response.data else default
+
+@supabase_retry_handler()
+async def increment_progress(user_id: int, fish_count: int = 0, voice_minutes: int = 0):
+    await supabase.rpc('increment_user_progress', {'p_user_id': user_id, 'p_fish_count': fish_count, 'p_voice_minutes': voice_minutes}).execute()
+
 @supabase_retry_handler()
 async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
     response = await supabase.table('farms').select('*, farm_plots(*)').eq('user_id', user_id).maybe_single().execute()
+    return response.data if response and hasattr(response, 'data') else None
+
+@supabase_retry_handler()
+async def create_farm(user_id: int) -> Optional[Dict[str, Any]]:
+    rpc_response = await supabase.rpc('create_farm_for_user', {'p_user_id': user_id}).execute()
+    return await get_farm_data(user_id) if rpc_response and rpc_response.data else None
+
+@supabase_retry_handler()
+async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
+    response = await supabase.table('farm_item_details').select('*').eq('item_name', item_name).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
