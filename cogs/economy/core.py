@@ -8,21 +8,21 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone, timedelta, time as dt_time
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 from utils.database import (
-    get_wallet, update_wallet,
-    get_id, supabase, get_embed_from_db, get_config,
-    save_config_to_db
+    get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
+    save_config_to_db, 
+    # [✅ 수정] 새로운 활동 기록 함수들을 가져옵니다.
+    log_user_activity, batch_log_chat_activity
 )
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-PROGRESS_TABLE = "user_progress"
-
 JST = timezone(timedelta(hours=9))
-JST_MIDNIGHT_RESET = dt_time(hour=0, minute=1, tzinfo=JST)
+# [❌ 삭제] 일일/주간 리셋 로직은 더 이상 필요 없습니다.
+# JST_MIDNIGHT_RESET = dt_time(hour=0, minute=1, tzinfo=JST) 
 JST_MONTHLY_RESET = dt_time(hour=0, minute=2, tzinfo=JST)
 
 class EconomyCore(commands.Cog):
@@ -36,9 +36,11 @@ class EconomyCore(commands.Cog):
         self.chat_progress_cache: Dict[int, int] = {}
         self._cache_lock = asyncio.Lock()
 
-        self.reward_payout_loop.start()
+        # [❌ 삭제] 활동 보상 루프는 삭제합니다. 활동은 실시간으로 기록됩니다.
+        # self.reward_payout_loop.start()
         self.update_chat_progress_loop.start()
-        self.daily_reset_loop.start()
+        # [❌ 삭제] 일일 리셋 루프는 삭제합니다.
+        # self.daily_reset_loop.start()
         self.update_market_prices.start()
         self.monthly_whale_reset.start()
 
@@ -53,9 +55,10 @@ class EconomyCore(commands.Cog):
         logger.info("[EconomyCore Cog] 데이터베이스로부터 설정을 성공적으로 로드했습니다.")
         
     def cog_unload(self):
-        self.reward_payout_loop.cancel()
+        # [❌ 삭제] 루프 2개 삭제
+        # self.reward_payout_loop.cancel()
         self.update_chat_progress_loop.cancel()
-        self.daily_reset_loop.cancel()
+        # self.daily_reset_loop.cancel()
         self.update_market_prices.cancel()
         self.monthly_whale_reset.cancel()
     
@@ -75,18 +78,9 @@ class EconomyCore(commands.Cog):
 
         await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
 
-    @tasks.loop(time=JST_MIDNIGHT_RESET)
-    async def daily_reset_loop(self):
-        logger.info("[일일 초기화] 모든 유저의 일일 퀘스트 진행도 초기화를 시작합니다.")
-        try:
-            await supabase.rpc('reset_daily_progress_all_users').execute()
-            logger.info("[일일 초기화] 성공적으로 완료되었습니다.")
-        except Exception as e:
-            logger.error(f"[일일 초기화] 진행도 초기화 중 오류 발생: {e}", exc_info=True)
-            
-    @daily_reset_loop.before_loop
-    async def before_daily_reset_loop(self):
-        await self.bot.wait_until_ready()
+    # [❌ 삭제] daily_reset_loop는 더 이상 필요 없습니다.
+    # @tasks.loop(time=JST_MIDNIGHT_RESET)
+    # async def daily_reset_loop(self): ...
 
     @tasks.loop(time=JST_MIDNIGHT_RESET)
     async def update_market_prices(self):
@@ -196,67 +190,46 @@ class EconomyCore(commands.Cog):
             if not self.chat_progress_cache: return
             data_to_update = self.chat_progress_cache.copy()
             self.chat_progress_cache.clear()
+
+        # [✅ 수정] 새로운 일괄 기록 함수를 사용합니다.
         try:
-            user_updates_json = [{"user_id": str(uid), "chat_count": count} for uid, count in data_to_update.items()]
-            await supabase.rpc('batch_increment_chat_progress', {'p_user_updates': user_updates_json}).execute()
+            # DB에 보낼 데이터 형식에 맞게 변환
+            chat_logs_to_insert: List[Dict] = [
+                {'user_id': uid, 'activity_type': 'chat', 'amount': count}
+                for uid, count in data_to_update.items()
+            ]
+            await batch_log_chat_activity(chat_logs_to_insert)
         except Exception as e:
             logger.error(f"채팅 활동 일괄 업데이트 중 DB 오류: {e}", exc_info=True)
+            # 실패 시 데이터를 캐시에 다시 추가하여 유실 방지
             async with self._cache_lock:
-                for user_update in user_updates_json:
-                    uid, count = int(user_update['user_id']), int(user_update['chat_count'])
+                for log in chat_logs_to_insert:
+                    uid, count = log['user_id'], log['amount']
                     self.chat_progress_cache[uid] = self.chat_progress_cache.get(uid, 0) + count
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         if member.bot: return
-        is_valid = lambda state: state.channel and state.channel.id != member.guild.afk_channel.id if member.guild.afk_channel else True
+        # AFK 채널 확인 로직 개선
+        afk_channel_id = member.guild.afk_channel.id if member.guild.afk_channel else None
+        
+        is_valid = lambda state: state.channel and state.channel.id != afk_channel_id
         is_active = lambda state: not state.self_deaf and not state.self_mute
-        if not (is_valid(before) and is_active(before)) and (is_valid(after) and is_active(after)):
+
+        was_active = is_valid(before) and is_active(before)
+        is_now_active = is_valid(after) and is_active(after)
+
+        if not was_active and is_now_active:
+            # 활동 시작
             self.voice_sessions[member.id] = datetime.now(timezone.utc)
-        elif (is_valid(before) and is_active(before)) and not (is_valid(after) and is_active(after)):
+        elif was_active and not is_now_active:
+            # 활동 종료
             if join_time := self.voice_sessions.pop(member.id, None):
                 duration_minutes = (datetime.now(timezone.utc) - join_time).total_seconds() / 60.0
-                if duration_minutes > 0.1:
-                    try:
-                        await supabase.rpc('increment_user_progress', {'p_user_id': str(member.id), 'p_voice_minutes': duration_minutes}).execute()
-                    except Exception as e:
-                        logger.error(f"음성 시간 DB 업데이트 중 오류: {e}", exc_info=True)
-                        self.voice_sessions[member.id] = join_time
+                if duration_minutes >= 1: # 최소 1분 이상 참여했을 때만 기록
+                    # [✅ 수정] 활동 로그 기록
+                    await log_user_activity(member.id, 'voice', round(duration_minutes))
 
-    @tasks.loop(minutes=5)
-    async def reward_payout_loop(self):
-        game_config = get_config("GAME_CONFIG", {})
-        try:
-            voice_req, voice_reward, voice_xp = game_config.get("VOICE_TIME_REQUIREMENT_MINUTES", 10), game_config.get("VOICE_REWARD_RANGE", [10, 15]), game_config.get("XP_FROM_VOICE", 10)
-            await self.process_rewards('voice', voice_req, voice_reward, voice_xp, "ボイスチャット活動報酬")
-            chat_req, chat_reward, chat_xp = game_config.get("CHAT_MESSAGE_REQUIREMENT", 20), game_config.get("CHAT_REWARD_RANGE", [5, 10]), game_config.get("XP_FROM_CHAT", 5)
-            await self.process_rewards('chat', chat_req, chat_reward, chat_xp, "チャット活動報酬")
-        except Exception as e:
-            logger.error(f"활동 보상 지급 루프 중 오류: {e}", exc_info=True)
-
-    async def process_rewards(self, reward_type: str, requirement: int, reward_range: list[int], xp_reward: int, reason: str):
-        table, column = PROGRESS_TABLE, 'daily_voice_minutes' if reward_type == 'voice' else 'chat_progress'
-        response = await supabase.table(table).select('user_id').gte(column, requirement).execute()
-        if not (response and response.data): return
-        for record in response.data:
-            user_id = int(record['user_id'])
-            if not (member := self.bot.get_user(user_id)): continue
-            try:
-                reward = random.randint(reward_range[0], reward_range[1])
-                await update_wallet(member, reward)
-                await self.log_coin_activity(member, reward, reason)
-                res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_reward, 'p_source': reward_type}).execute()
-                if res and res.data: await self.handle_level_up_event(member, res.data[0])
-            except Exception as e:
-                logger.error(f"{reason} 처리 중 오류 (유저: {user_id}): {e}", exc_info=True)
-            finally:
-                reset_params = {'p_user_id': str(user_id), f'p_reset_{reward_type}': True}
-                await supabase.rpc('reset_user_progress', reset_params).execute()
-
-    @reward_payout_loop.before_loop
-    async def before_reward_payout_loop(self):
-        await self.bot.wait_until_ready()
-    
     async def log_coin_activity(self, user: discord.Member, amount: int, reason: str):
         if not self.coin_log_channel_id or not (log_channel := self.bot.get_channel(self.coin_log_channel_id)): return
         if not (embed_data := await get_embed_from_db("log_coin_gain")): return
