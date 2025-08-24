@@ -7,8 +7,9 @@ import logging
 import asyncio
 from typing import Dict, Any, List
 
-from utils.database import supabase, get_config, get_id, save_config_to_db
-from utils.ui_defaults import JOB_SYSTEM_CONFIG, JOB_ADVANCEMENT_DATA
+from utils.database import supabase, get_config, get_id
+# [✅✅✅ 핵심 수정] ui_defaults 대신 새로 만든 game_config_defaults 에서 설정을 가져옵니다.
+from utils.game_config_defaults import JOB_SYSTEM_CONFIG, JOB_ADVANCEMENT_DATA
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,7 @@ class JobSelectionView(ui.View):
 
             log_channel_id = get_id("job_log_channel_id")
             if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
+                # [수정] log_job_advancement 임베드는 이제 DB에 저장되어 있으므로 get_embed_from_db를 사용합니다.
                 embed_data = await get_embed_from_db("log_job_advancement")
                 if embed_data:
                     log_embed = format_embed_from_db(
@@ -111,7 +113,7 @@ class JobAndTierHandler(commands.Cog):
         logger.info("JobAndTierHandler Cog (전직/등급 처리)가 성공적으로 초기화되었습니다.")
 
     async def register_persistent_views(self):
-        # 전직 선택 View는 동적으로 생성되므로, 봇 재시작 후에도 버튼이 동작하게 하려면 등록이 필요합니다.
+        # JobSelectionView는 동적으로 생성되므로, 여기에 빈 객체를 등록하여 봇 재시작 후에도 버튼 콜백을 받을 수 있게 합니다.
         self.bot.add_view(JobSelectionView(self.bot, None, [], 0))
         logger.info("✅ 전직 선택(JobSelectionView) 영구 View가 등록되었습니다.")
 
