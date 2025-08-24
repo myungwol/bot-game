@@ -21,6 +21,26 @@ class AdminBridge(commands.Cog):
     @tasks.loop(seconds=10.0)
     async def check_for_admin_requests(self):
         try:
+            # [✅ 수정] SERVER_ID가 설정되어 있는지 먼저 확인하고, 없으면 에러 로그를 남기고 대기합니다.
+            server_id_str = get_config("SERVER_ID")
+            if not server_id_str:
+                logger.error("DB에 'SERVER_ID'가 설정되지 않았습니다. 관리자 봇에서 `/admin set_server_id` 명령어를 실행해주세요.")
+                await asyncio.sleep(60) # 60초 대기 후 다시 시도
+                return
+
+            try:
+                server_id = int(server_id_str)
+            except (ValueError, TypeError):
+                logger.error(f"DB에 저장된 'SERVER_ID'({server_id_str})가 올바른 숫자 형식이 아닙니다.")
+                await asyncio.sleep(60)
+                return
+
+            guild = self.bot.get_guild(server_id)
+            if not guild:
+                logger.error(f"설정된 SERVER_ID({server_id})에 해당하는 서버를 찾을 수 없습니다. 봇이 해당 서버에 참여해있는지 확인해주세요.")
+                await asyncio.sleep(60)
+                return
+
             # XP 및 레벨 업데이트 요청 확인
             response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', 'xp_admin_update_request_%').execute()
             
@@ -33,11 +53,6 @@ class AdminBridge(commands.Cog):
             level_cog = self.bot.get_cog("LevelSystem")
             if not level_cog:
                 logger.error("LevelSystem Cog를 찾을 수 없어 관리자 요청을 처리할 수 없습니다.")
-                return
-
-            guild = self.bot.get_guild(int(get_config("1404822997482606703")))
-            if not guild:
-                logger.error("SERVER_ID가 설정되지 않았거나 길드를 찾을 수 없습니다.")
                 return
 
             tasks = []
@@ -77,6 +92,4 @@ class AdminBridge(commands.Cog):
         await asyncio.sleep(5)
 
 async def setup(bot: commands.Bot):
-    # [중요] 이 Cog는 영구 View가 없으므로 main.py의 cogs_with_persistent_views 목록에 추가할 필요가 없습니다.
-    # 봇 시작 시 자동으로 로드됩니다.
     await bot.add_cog(AdminBridge(bot))
