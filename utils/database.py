@@ -1,6 +1,6 @@
-# utils/database.py (양쪽 봇 공용)
+# game-bot/utils/database.py (게임 봇 전용)
 """
-Supabase 데이터베이스와의 모든 상호작용을 관리하는 중앙 파일입니다.
+Supabase 데이터베이스와의 모든 상호작용을 관리하는 중앙 파일입니다. (게임 봇 버전)
 """
 import os
 import asyncio
@@ -15,10 +15,10 @@ import discord
 from supabase import create_client, AsyncClient
 from postgrest.exceptions import APIError
 
+# [✅✅✅ 핵심 수정 ✅✅✅]
+# 게임 봇의 ui_defaults.py에 없는 변수들의 import를 제거합니다.
 from .ui_defaults import (
-    UI_EMBEDS, UI_PANEL_COMPONENTS, UI_ROLE_KEY_MAP, 
-    SETUP_COMMAND_MAP, JOB_SYSTEM_CONFIG, AGE_ROLE_MAPPING, GAME_CONFIG,
-    ONBOARDING_CHOICES
+    UI_EMBEDS, UI_PANEL_COMPONENTS, GAME_CONFIG
 )
 
 logger = logging.getLogger(__name__)
@@ -81,45 +81,8 @@ def supabase_retry_handler(retries: int = 3, delay: int = 2):
     return decorator
 
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-# 3. 데이터 로드 및 동기화
+# 3. 데이터 로드 (게임 봇은 동기화(sync) 기능이 필요 없음)
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-async def sync_defaults_to_db():
-    logger.info("------ [ 기본값 DB 동기화 시작 ] ------")
-    try:
-        role_name_map = {key: info["name"] for key, info in UI_ROLE_KEY_MAP.items()}
-        await save_config_to_db("ROLE_KEY_MAP", role_name_map)
-        
-        prefix_hierarchy = sorted(
-            [info["name"] for info in UI_ROLE_KEY_MAP.values() if info.get("is_prefix")],
-            key=lambda name: next((info.get("priority", 0) for info in UI_ROLE_KEY_MAP.values() if info["name"] == name), 0),
-            reverse=True
-        )
-        await save_config_to_db("NICKNAME_PREFIX_HIERARCHY", prefix_hierarchy)
-        
-        await asyncio.gather(
-            *[save_embed_to_db(key, data) for key, data in UI_EMBEDS.items()],
-            *[save_panel_component_to_db(comp) for comp in UI_PANEL_COMPONENTS],
-            save_config_to_db("SETUP_COMMAND_MAP", SETUP_COMMAND_MAP),
-            save_config_to_db("JOB_SYSTEM_CONFIG", JOB_SYSTEM_CONFIG),
-            save_config_to_db("AGE_ROLE_MAPPING", AGE_ROLE_MAPPING),
-            save_config_to_db("GAME_CONFIG", GAME_CONFIG),
-            save_config_to_db("ONBOARDING_CHOICES", ONBOARDING_CHOICES)
-        )
-
-        all_role_keys = list(UI_ROLE_KEY_MAP.keys())
-        all_channel_keys = [info['key'] for info in SETUP_COMMAND_MAP.values()]
-        
-        placeholder_records = [{"channel_key": key, "channel_id": "0"} for key in set(all_role_keys + all_channel_keys)]
-        
-        if placeholder_records:
-            await supabase.table('channel_configs').upsert(placeholder_records, on_conflict="channel_key", ignore_duplicates=True).execute()
-
-        logger.info(f"✅ 설정, 임베드({len(UI_EMBEDS)}개), 컴포넌트({len(UI_PANEL_COMPONENTS)}개), 게임/나이/온보딩 설정 동기화 완료.")
-
-    except Exception as e:
-        logger.error(f"❌ 기본값 DB 동기화 중 치명적 오류 발생: {e}", exc_info=True)
-    logger.info("------ [ 기본값 DB 동기화 완료 ] ------")
-
 async def load_all_data_from_db():
     logger.info("------ [ 모든 DB 데이터 캐시 로드 시작 ] ------")
     await asyncio.gather(load_bot_configs_from_db(), load_channel_ids_from_db())
@@ -188,23 +151,9 @@ def get_panel_id(panel_name: str) -> Optional[Dict[str, int]]:
 # 6. 임베드 및 UI 컴포넌트 관련 함수
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 @supabase_retry_handler()
-async def save_embed_to_db(embed_key: str, embed_data: dict):
-    await supabase.table('embeds').upsert({'embed_key': embed_key, 'embed_data': embed_data}, on_conflict='embed_key').execute()
-@supabase_retry_handler()
 async def get_embed_from_db(embed_key: str) -> Optional[dict]:
     response = await supabase.table('embeds').select('embed_data').eq('embed_key', embed_key).limit(1).execute()
     return response.data[0]['embed_data'] if response and response.data else None
-@supabase_retry_handler()
-async def get_all_embeds() -> List[Dict[str, Any]]:
-    response = await supabase.table('embeds').select('embed_key, embed_data').order('embed_key').execute()
-    return response.data if response and response.data else []
-@supabase_retry_handler()
-async def get_onboarding_steps() -> List[dict]:
-    response = await supabase.table('onboarding_steps').select('*, embed_data:embeds(embed_data)').order('step_number', desc=False).execute()
-    return response.data if response and response.data else []
-@supabase_retry_handler()
-async def save_panel_component_to_db(component_data: dict):
-    await supabase.table('panel_components').upsert(component_data, on_conflict='component_key').execute()
 @supabase_retry_handler()
 async def get_panel_components_from_db(panel_key: str) -> list:
     response = await supabase.table('panel_components').select('*').eq('panel_key', panel_key).order('row', desc=False).order('order_in_row', desc=False).execute()
@@ -221,94 +170,15 @@ async def get_cooldown(user_id_str: str, cooldown_key: str) -> float:
 @supabase_retry_handler()
 async def set_cooldown(user_id_str: str, cooldown_key: str):
     await supabase.table('cooldowns').upsert({ "user_id": user_id_str, "cooldown_key": cooldown_key, "last_cooldown_timestamp": datetime.now(timezone.utc).isoformat() }, on_conflict='user_id, cooldown_key').execute()
-@supabase_retry_handler()
-async def get_all_stats_channels() -> List[Dict[str, Any]]:
-    response = await supabase.table('stats_channels').select('*').execute()
-    return response.data if response and response.data else []
-@supabase_retry_handler()
-async def add_stats_channel(channel_id: int, guild_id: int, stat_type: str, template: str, role_id: Optional[int] = None):
-    await supabase.table('stats_channels').upsert({"channel_id": channel_id, "guild_id": guild_id, "stat_type": stat_type, "channel_name_template": template, "role_id": role_id}, on_conflict="channel_id").execute()
-@supabase_retry_handler()
-async def remove_stats_channel(channel_id: int):
-    await supabase.table('stats_channels').delete().eq('channel_id', channel_id).execute()
-@supabase_retry_handler()
-async def get_all_temp_channels() -> List[Dict[str, Any]]:
-    response = await supabase.table('temp_voice_channels').select('*').execute()
-    return response.data if response and response.data else []
-@supabase_retry_handler()
-async def add_temp_channel(channel_id: int, owner_id: int, guild_id: int, message_id: int, channel_type: str):
-    await supabase.table('temp_voice_channels').insert({"channel_id": channel_id, "owner_id": owner_id, "guild_id": guild_id, "message_id": message_id, "channel_type": channel_type}).execute()
-@supabase_retry_handler()
-async def update_temp_channel_owner(channel_id: int, new_owner_id: int):
-    await supabase.table('temp_voice_channels').update({"owner_id": new_owner_id}).eq('channel_id', channel_id).execute()
-@supabase_retry_handler()
-async def remove_temp_channel(channel_id: int):
-    await supabase.table('temp_voice_channels').delete().eq('channel_id', channel_id).execute()
-@supabase_retry_handler()
-async def remove_multiple_temp_channels(channel_ids: List[int]):
-    if not channel_ids: return
-    await supabase.table('temp_voice_channels').delete().in_('channel_id', channel_ids).execute()
-@supabase_retry_handler()
-async def get_all_tickets() -> List[Dict[str, Any]]:
-    response = await supabase.table('tickets').select('*').execute()
-    return response.data if response and response.data else []
-@supabase_retry_handler()
-async def add_ticket(thread_id: int, owner_id: int, guild_id: int, ticket_type: str):
-    await supabase.table('tickets').insert({"thread_id": thread_id, "owner_id": owner_id, "guild_id": guild_id, "ticket_type": ticket_type}).execute()
-@supabase_retry_handler()
-async def remove_ticket(thread_id: int):
-    await supabase.table('tickets').delete().eq('thread_id', thread_id).execute()
-@supabase_retry_handler()
-async def update_ticket_lock_status(thread_id: int, is_locked: bool):
-    await supabase.table('tickets').update({"is_locked": is_locked}).eq('thread_id', thread_id).execute()
-@supabase_retry_handler()
-async def remove_multiple_tickets(thread_ids: List[int]):
-    if not thread_ids: return
-    await supabase.table('tickets').delete().in_('thread_id', thread_ids).execute()
-@supabase_retry_handler()
-async def add_warning(guild_id: int, user_id: int, moderator_id: int, reason: str, amount: int) -> Optional[dict]:
-    response = await supabase.table('warnings').insert({"guild_id": guild_id, "user_id": user_id, "moderator_id": moderator_id, "reason": reason, "amount": amount}).select().execute()
-    return response.data[0] if response and response.data else None
-@supabase_retry_handler()
-async def get_total_warning_count(user_id: int, guild_id: int) -> int:
-    response = await supabase.table('warnings').select('amount').eq('user_id', user_id).eq('guild_id', guild_id).execute()
-    return sum(item['amount'] for item in response.data) if response and response.data else 0
-@supabase_retry_handler()
-async def add_anonymous_message(guild_id: int, user_id: int, content: str):
-    await supabase.table('anonymous_messages').insert({"guild_id": guild_id, "user_id": user_id, "message_content": content}).execute()
-@supabase_retry_handler()
-async def has_posted_anonymously_today(user_id: int) -> bool:
-    today_jst_start = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
-    today_utc_start = today_jst_start.astimezone(timezone.utc)
-    response = await supabase.table('anonymous_messages').select('id', count='exact').eq('user_id', user_id).gte('created_at', today_utc_start.isoformat()).limit(1).execute()
-    return response.count > 0 if response else False
-@supabase_retry_handler()
-async def schedule_reminder(guild_id: int, reminder_type: str, remind_at: datetime):
-    await supabase.table('reminders').update({"is_active": False}).eq('guild_id', guild_id).eq('reminder_type', reminder_type).eq('is_active', True).execute()
-    await supabase.table('reminders').insert({"guild_id": guild_id, "reminder_type": reminder_type, "remind_at": remind_at.isoformat(), "is_active": True}).execute()
-@supabase_retry_handler()
-async def get_due_reminders() -> List[Dict[str, Any]]:
-    now = datetime.now(timezone.utc).isoformat()
-    response = await supabase.table('reminders').select('*').eq('is_active', True).lte('remind_at', now).execute()
-    return response.data if response and response.data else []
-@supabase_retry_handler()
-async def deactivate_reminder(reminder_id: int):
-    await supabase.table('reminders').update({"is_active": False}).eq('id', reminder_id).execute()
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# 7. 게임 관련 함수
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 @supabase_retry_handler()
 async def update_wallet(user: discord.User, amount: int) -> Optional[dict]:
     params = {'p_user_id': str(user.id), 'p_amount': amount}
     response = await supabase.rpc('update_wallet_balance', params).execute()
     return response.data[0] if response and response.data else None
-@supabase_retry_handler()
-async def backup_member_data(user_id: int, guild_id: int, role_ids: List[int], nickname: Optional[str]):
-    await supabase.table('left_members').upsert({ 'user_id': user_id, 'guild_id': guild_id, 'roles': role_ids, 'nickname': nickname, 'left_at': datetime.now(timezone.utc).isoformat() }).execute()
-@supabase_retry_handler()
-async def get_member_backup(user_id: int, guild_id: int) -> Optional[Dict[str, Any]]:
-    response = await supabase.table('left_members').select('*').eq('user_id', user_id).eq('guild_id', guild_id).maybe_single().execute()
-    return response.data if response else None
-@supabase_retry_handler()
-async def delete_member_backup(user_id: int, guild_id: int):
-    await supabase.table('left_members').delete().eq('user_id', user_id).eq('guild_id', guild_id).execute()
 @supabase_retry_handler()
 async def get_user_abilities(user_id: int) -> List[str]:
     CACHE_TTL = 300
