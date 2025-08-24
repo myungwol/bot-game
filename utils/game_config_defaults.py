@@ -73,6 +73,7 @@ JOB_ADVANCEMENT_DATA = {
             "job_name": "太公望",
             "role_key": "role_job_master_angler",
             "description": "釣りの道を極め、伝説の魚を追い求める者。釣り人の上位職です。",
+            "prerequisite_job": "fisherman", # [✅✅✅ 핵심 수정] '낚시꾼'이 필요하다고 명시
             "abilities": [
                 {
                     "ability_key": "fish_rare_up_2",
@@ -91,6 +92,7 @@ JOB_ADVANCEMENT_DATA = {
             "job_name": "大農家",
             "role_key": "role_job_master_farmer",
             "description": "農業の神髄を悟り、大地から最大の恵みを得る者。農家の上位職です。",
+            "prerequisite_job": "farmer", # [✅✅✅ 핵심 수정] '농가'가 필요하다고 명시
             "abilities": [
                 {
                     "ability_key": "farm_yield_up_2",
