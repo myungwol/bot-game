@@ -289,17 +289,35 @@ class FishingPanelView(ui.View):
                 if 'fish_bite_time_down_1' in user_abilities:
                     bite_range = [max(0.5, t - 2.0) for t in bite_range]
 
-                desc_lines = [ f"### {location_name}にウキを投げました。", f"**🎣 使用中の釣竿:** `{rod}` (+{loot_bonus:.0%})", f"**🐛 使用中のエサ:** `{bait}` (⏱️ `{bite_range[0]:.1f}`～`{bite_range[1]:.1f}`秒)" ]
+                desc_lines = [
+                    f"### {location_name}にウキを投げました。",
+                    f"**🎣 使用中の釣竿:** `{rod}` (+{loot_bonus:.0%})",
+                    f"**🐛 使用中のエサ:** `{bait}` (⏱️ `{bite_range[0]:.1f}`～`{bite_range[1]:.1f}`秒)"
+                ]
+
                 if bait_saved:
                     desc_lines.append("✨ 能力効果でエサを消費しませんでした！")
+
+                # [✅✅✅ 핵심 수정 ✅✅✅]
+                # 활성화된 전직 효과를 표시하는 부분을 추가합니다.
+                active_effects = []
+                if 'fish_bite_time_down_1' in user_abilities:
+                    active_effects.append("> ⏱️ 魚が早く食いつく")
+                if 'fish_rare_up_2' in user_abilities:
+                    active_effects.append("> ⭐ 珍しい魚を釣りやすい")
+                if 'fish_size_up_2' in user_abilities:
+                    active_effects.append("> 📏 より大きな魚が釣れる")
+                if 'fish_bait_saver_1' in user_abilities and not bait_saved: # 미끼 절약이 발동 안했을 때만 잠재력을 표시
+                    active_effects.append("> ✨ 確率でエサを消費しない")
+                
+                if active_effects:
+                    desc_lines.append("\n**--- 発動中の効果 ---**")
+                    desc_lines.extend(active_effects)
 
                 desc = "\n".join(desc_lines)
                 embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
                 
-                # [✅✅✅ 핵심 수정 ✅✅✅]
-                # DB에서 직접 FISHING_WAITING_IMAGE_URL 설정을 가져옵니다.
                 if image_url := get_config("FISHING_WAITING_IMAGE_URL"):
-                    # DB 값에 따옴표가 포함되어 있을 경우를 대비해 제거합니다.
                     embed.set_thumbnail(url=str(image_url).strip('"'))
                 
                 view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type, bite_range)
