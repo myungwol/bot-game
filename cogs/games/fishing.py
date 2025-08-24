@@ -85,7 +85,7 @@ class FishingGameView(ui.View):
         rod_bonus = rod_data.get('loot_bonus', 0.0)
         
         loot_pool = []
-        is_whale_catchable = await is_whale_available()
+        is_whale_catchable = is_whale_available()
 
         for item in base_loot:
             if item.get('name') == 'クジラ':
