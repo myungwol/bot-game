@@ -35,7 +35,7 @@ class AdminBridge(commands.Cog):
                 logger.error("LevelSystem Cog를 찾을 수 없어 관리자 요청을 처리할 수 없습니다.")
                 return
 
-            guild = self.bot.get_guild(int(get_config("SERVER_ID")))
+            guild = self.bot.get_guild(int(get_config("1404822997482606703")))
             if not guild:
                 logger.error("SERVER_ID가 설정되지 않았거나 길드를 찾을 수 없습니다.")
                 return
