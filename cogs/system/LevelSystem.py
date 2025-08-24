@@ -96,109 +96,6 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
         logger.error(f"레벨 임베드 생성 중 오류 (유저: {user.id}): {e}", exc_info=True)
         return discord.Embed(title="エラー", description="ステータス情報の読み込み中にエラーが発生しました。", color=discord.Color.red())
 
-# --- [✅ 신규 추가] 전직 UI ---
-class JobAdvancementView(ui.View):
-    def __init__(self, user: discord.Member, level: int, cog_instance: 'LevelSystem'):
-        super().__init__(timeout=86400) # 24시간
-        self.user = user
-        self.level = level
-        self.cog = cog_instance
-        self.selected_job_key: Optional[str] = None
-        self.jobs_for_level = get_config("JOB_ADVANCEMENT_DATA", {}).get(str(level), [])
-
-        self.add_item(self.create_job_select())
-
-    def create_job_select(self) -> ui.Select:
-        options = []
-        for job in self.jobs_for_level:
-            options.append(discord.SelectOption(
-                label=job['job_name'],
-                description=job['description'],
-                value=job['job_key']
-            ))
-        select = ui.Select(placeholder="転職したい職業を選択してください...", options=options, custom_id="job_select")
-        select.callback = self.on_job_select
-        return select
-
-    def create_ability_select(self) -> ui.Select:
-        job_data = next((j for j in self.jobs_for_level if j['job_key'] == self.selected_job_key), None)
-        if not job_data: return None
-
-        options = []
-        for ability in job_data['abilities']:
-            options.append(discord.SelectOption(
-                label=ability['ability_name'],
-                description=ability['description'],
-                value=ability['ability_key']
-            ))
-        select = ui.Select(placeholder="習得する能力を選択してください...", options=options, custom_id="ability_select")
-        select.callback = self.on_ability_select
-        return select
-
-    async def on_job_select(self, interaction: discord.Interaction):
-        self.selected_job_key = interaction.data['values'][0]
-        
-        self.clear_items()
-        ability_select = self.create_ability_select()
-        if ability_select:
-            self.add_item(ability_select)
-            await interaction.response.edit_message(content="次に、習得したい能力を選択してください。", view=self)
-        else:
-            await interaction.response.edit_message(content="エラー: 職業情報が見つかりません。", view=None)
-
-    async def on_ability_select(self, interaction: discord.Interaction):
-        selected_ability_key = interaction.data['values'][0]
-        
-        await interaction.response.defer()
-        
-        job_data = next((j for j in self.jobs_for_level if j['job_key'] == self.selected_job_key), None)
-        ability_data = next((a for a in job_data['abilities'] if a['ability_key'] == selected_ability_key), None)
-
-        if not job_data or not ability_data:
-            return await interaction.edit_message(content="❌ エラーが発生しました。もう一度お試しください。", view=None)
-
-        try:
-            # DB에 전직 및 능력 정보 저장
-            job_res = await supabase.table('jobs').select('id').eq('job_key', self.selected_job_key).single().execute()
-            ability_res = await supabase.table('abilities').select('id').eq('ability_key', selected_ability_key).single().execute()
-            
-            if not (job_res.data and ability_res.data):
-                raise Exception("DB에서 직업 또는 능력 ID를 찾을 수 없습니다.")
-
-            job_id, ability_id = job_res.data['id'], ability_res.data['id']
-            
-            await supabase.table('user_jobs').upsert({'user_id': self.user.id, 'job_id': job_id}).execute()
-            await supabase.table('user_abilities').upsert({'user_id': self.user.id, 'ability_id': ability_id}).execute()
-            
-            # 관리 봇에 역할 부여 요청
-            role_key = job_data.get('role_key')
-            if role_key:
-                await save_config_to_db(f"job_role_update_request_{self.user.id}", {'role_key': role_key, 'timestamp': time.time()})
-
-            # 로그 채널에 알림
-            log_channel_id = get_id("job_log_channel_id")
-            if log_channel_id and (log_channel := self.cog.bot.get_channel(log_channel_id)):
-                embed_data = await get_embed_from_db("log_job_advancement")
-                if embed_data:
-                    embed = format_embed_from_db(
-                        embed_data, 
-                        user_mention=self.user.mention,
-                        job_name=job_data['job_name'],
-                        ability_name=ability_data['ability_name']
-                    )
-                    if self.user.display_avatar:
-                        embed.set_thumbnail(url=self.user.display_avatar.url)
-                    await log_channel.send(embed=embed)
-
-            await interaction.edit_message(
-                content=f"🎉 **{job_data['job_name']}**に転職し、**{ability_data['ability_name']}**の能力を習得しました！",
-                view=None
-            )
-            self.stop()
-        except Exception as e:
-            logger.error(f"전직 처리 중 DB 오류 (유저: {self.user.id}): {e}", exc_info=True)
-            await interaction.edit_message(content="❌ 転職処理中にエラーが発生しました。管理者にお問い合わせください。", view=None)
-
 # --- UI Views ---
 class RankingView(ui.View):
     def __init__(self, user: discord.Member, total_users: int):
@@ -326,36 +223,63 @@ class LevelSystem(commands.Cog):
         pass
             
     async def handle_level_up_event(self, user: discord.Member, result_data: Dict):
-        """레벨업 이벤트를 중앙에서 처리하는 함수 (전직 안내, 역할 부여 요청 등)"""
-        if not result_data or not result_data.get('leveled_up'):
-            return
+        if not result_data: return
         
         new_level = result_data.get('new_level')
         logger.info(f"유저 {user.display_name}(ID: {user.id})가 레벨 {new_level}(으)로 레벨업했습니다.")
         
-        # 1. 서버 관리 봇에 등급 역할 업데이트 요청 (항상 실행)
-        await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
+        game_config = get_config("GAME_CONFIG", {})
+        job_advancement_levels = game_config.get("JOB_ADVANCEMENT_LEVELS", [50, 100])
+        
+        timestamp = time.time()
+        
+        if new_level in job_advancement_levels:
+            await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": timestamp})
+            logger.info(f"유저가 전직 가능 레벨({new_level})에 도달하여 관리 봇에게 전직 요청을 보냈습니다.")
+
+        await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": timestamp})
         logger.info(f"유저의 레벨이 변경되어 관리 봇에게 등급 역할 업데이트 요청을 보냈습니다.")
 
-        # 2. 전직 가능 레벨인지 확인하고, DM으로 안내 전송
-        game_config = get_config("GAME_CONFIG", {})
-        # [수정] 키를 문자열로 변환하여 JSONB와 호환되도록 함
-        job_advancement_levels = [str(lvl) for lvl in game_config.get("JOB_ADVANCEMENT_LEVELS", [])]
+    # [✅ 신규 추가] 관리자 요청을 처리하는 중앙 함수
+    async def update_user_xp_and_level_from_admin(self, user: discord.Member, xp_to_add: int = 0, exact_level: Optional[int] = None):
+        """관리자 요청에 따라 사용자의 XP 또는 레벨을 업데이트하고, 레벨업 이벤트를 처리합니다."""
+        try:
+            res = await supabase.table('user_levels').select('level, xp').eq('user_id', user.id).maybe_single().execute()
+            
+            current_data = res.data if res and res.data else {'level': 1, 'xp': 0}
+            current_level, current_xp = current_data['level'], current_data['xp']
+            
+            new_total_xp = current_xp
+            leveled_up = False
 
-        if str(new_level) in job_advancement_levels:
-            logger.info(f"유저가 전직 가능 레벨({new_level})에 도달하여 DM으로 안내를 보냅니다.")
-            try:
-                embed = discord.Embed(
-                    title="🎉 転職のご案内",
-                    description=f"**Lv.{new_level}**達成、おめでとうございます！\n新しい職業に転職できます。\n\n下のメニューから転職したい職業を選択してください。",
-                    color=0xFFD700
-                )
-                view = JobAdvancementView(user, new_level, self)
-                await user.send(embed=embed, view=view)
-            except discord.Forbidden:
-                logger.warning(f"유저 {user.display_name}(ID: {user.id})에게 DM을 보낼 수 없어 전직 안내에 실패했습니다.")
-            except Exception as e:
-                logger.error(f"전직 안내 DM 발송 중 오류: {e}", exc_info=True)
+            if exact_level is not None:
+                new_level = exact_level
+                new_total_xp = calculate_xp_for_level(new_level)
+                if new_level > current_level:
+                    leveled_up = True
+            else:
+                new_total_xp += xp_to_add
+                if xp_to_add > 0:
+                    await supabase.table('xp_logs').insert({'user_id': user.id, 'source': 'admin', 'xp_amount': xp_to_add}).execute()
+                
+                new_level = current_level
+                while new_total_xp >= calculate_xp_for_level(new_level + 1):
+                    new_level += 1
+                
+                if new_level > current_level:
+                    leveled_up = True
+            
+            await supabase.table('user_levels').upsert({
+                'user_id': user.id,
+                'level': new_level,
+                'xp': new_total_xp
+            }).execute()
+            
+            if leveled_up:
+                await self.handle_level_up_event(user, {"leveled_up": True, "new_level": new_level})
+        
+        except Exception as e:
+            logger.error(f"관리자 요청으로 레벨/XP 업데이트 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_level_check") -> bool:
         try:
