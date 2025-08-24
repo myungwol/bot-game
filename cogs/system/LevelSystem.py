@@ -69,7 +69,6 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
                 if source_name in aggregated_xp:
                     aggregated_xp[source_name] += log['xp_amount']
         
-        # [✅ 수정] 경험치 획득 여부와 관계없이 모든 분야를 표시합니다.
         details = []
         for display_name in source_map.values():
             amount = aggregated_xp.get(display_name, 0)
@@ -99,7 +98,6 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
 
 # --- UI Views ---
 class RankingView(ui.View):
-    # (이 클래스는 수정 사항 없음)
     def __init__(self, user: discord.Member, total_users: int):
         super().__init__(timeout=180)
         self.user = user
@@ -163,8 +161,6 @@ class LevelPanelView(ui.View):
         super().__init__(timeout=None)
         self.cog = cog_instance
 
-    # [✅✅✅ 핵심 수정 ✅✅✅]
-    # 버튼을 누르면 공개 메시지를 보내고, 패널을 다시 생성하도록 로직을 완전히 변경합니다.
     @ui.button(label="ステータス確認", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
     async def check_level_button(self, interaction: discord.Interaction, button: ui.Button):
         user = interaction.user
@@ -178,19 +174,16 @@ class LevelPanelView(ui.View):
             await interaction.response.send_message(f"⏳ このボタンは <t:{can_use_time}:R> に再度使用できます。", ephemeral=True)
             return
             
-        await interaction.response.defer(ephemeral=True) # 상호작용 자체는 나만 보이도록 처리
+        await interaction.response.defer(ephemeral=True)
         
         try:
             await set_cooldown(user.id, cooldown_key)
             
-            # 1. 모두에게 보이는 공개 레벨 임베드를 생성하고 전송합니다.
             public_embed = await build_level_embed(user)
             await interaction.channel.send(embed=public_embed)
 
-            # 2. 기존 패널을 지우고 그 아래에 새 패널을 다시 생성합니다.
             await self.cog.regenerate_panel(interaction.channel, "panel_level_check")
 
-            # 3. 버튼을 누른 사람에게만 확인 메시지를 보냅니다.
             await interaction.followup.send("✅ レベル情報を表示しました。", ephemeral=True)
 
         except Exception as e:
@@ -221,9 +214,12 @@ class LevelSystem(commands.Cog):
         self.bot = bot
         logger.info("LevelSystem Cog (게임봇)가 성공적으로 초기화되었습니다.")
     
+    # [✅✅✅ 핵심 수정 ✅✅✅]
+    # 봇이 시작될 때 영구 View를 등록하는 함수를 추가합니다.
     async def register_persistent_views(self):
+        """봇이 재시작되어도 View가 동작하도록 등록합니다."""
         self.bot.add_view(LevelPanelView(self))
-        logger.info("✅ 레벨 시스템의 영구 View가 성공적으로 등록되었습니다.")
+        logger.info("✅ 레벨 시스템의 영구 View가 성공적으로 등록되었습니다。")
         
     async def load_configs(self):
         pass
