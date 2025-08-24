@@ -50,13 +50,14 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         await self.load_all_extensions()
         
-        # [✅✅✅ 핵심 수정 ✅✅✅]
-        # 이제 LevelSystem을 포함하여 영구 View가 필요한 모든 Cog를 이 목록에 추가합니다.
+        # [✅✅✅ 핵심 수정]
+        # JobAndTierHandler를 영구 View 목록에 추가합니다.
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
             "DiceGame", "SlotMachine", "RPSGame",
             "DailyCheck", "Quests", "Farm", "PanelUpdater",
-            "WorldSystem", "EconomyCore", "LevelSystem"  # LevelSystem 추가
+            "WorldSystem", "EconomyCore", "LevelSystem",
+            "JobAndTierHandler"  # JobAndTierHandler 추가
         ]
         
         registered_views_count = 0
@@ -83,6 +84,12 @@ class MyBot(commands.Bot):
         for root, dirs, files in os.walk(cogs_dir):
             if '__pycache__' in dirs:
                 dirs.remove('__pycache__')
+            # [✅ 추가] system 폴더도 로드하도록 보장
+            if 'systems' not in dirs and 'games' not in dirs and 'economy' not in dirs:
+                 dirs.append('systems')
+                 dirs.append('games')
+                 dirs.append('economy')
+
             for filename in files:
                 if filename.endswith('.py') and not filename.startswith('__'):
                     path = os.path.join(root, filename)
