@@ -37,8 +37,16 @@ def format_embed_from_db(embed_data: Dict[str, Any], **kwargs: Any) -> discord.E
         return discord.Embed(title="오류", description="임베드 포맷팅 실패.", color=discord.Color.red())
 
 def calculate_xp_for_level(level: int) -> int:
-    if level <= 1: return 0
+    """
+    특정 레벨에 도달하기 위해 필요한 *총* 경험치를 계산합니다.
+    (예: level=3을 입력하면, Lv.1 -> Lv.2 -> Lv.3에 필요한 총 XP가 반환됩니다.)
+    """
+    if level <= 1: 
+        return 0
+        
     total_xp = 0
     for l in range(1, level):
-        total_xp += 5 * (l ** 2) + (50 * l) + 100
+        xp_for_this_level = 3 * (l ** 2) + (10 * l) + 37
+        total_xp += xp_for_this_level
+        
     return total_xp
