@@ -1,3 +1,53 @@
+-- 활동 요약 정보를 가져오는 함수를 개선된 버전으로 교체합니다.
+CREATE OR REPLACE FUNCTION get_user_activity_summary(p_user_id BIGINT)
+RETURNS TABLE (
+    daily_voice_minutes INT,
+    daily_fish_count INT,
+    daily_farm_harvest_count INT,
+    daily_chat_count INT,
+    daily_attendance_count INT, -- 일일 출석 확인을 위해 이 필드를 추가합니다.
+    weekly_attendance_count INT,
+    weekly_voice_minutes INT,
+    weekly_fish_count INT,
+    weekly_farm_harvest_count INT,
+    weekly_chat_count INT
+)
+AS $$
+DECLARE
+    -- 일본 시간(JST) 기준으로 오늘 시작과 이번 주 시작(월요일)을 계산합니다.
+    today_start timestamptz := date_trunc('day', now() at time zone 'jst');
+    week_start timestamptz := date_trunc('week', now() at time zone 'jst');
+BEGIN
+    RETURN QUERY
+    SELECT
+        -- --- 오늘(Daily) 활동량 집계 ---
+        COALESCE(SUM(CASE WHEN activity_type = 'voice' AND created_at >= today_start THEN amount ELSE 0 END), 0)::INT,
+        COALESCE(SUM(CASE WHEN activity_type = 'fishing_catch' AND created_at >= today_start THEN amount ELSE 0 END), 0)::INT,
+        COALESCE(SUM(CASE WHEN activity_type = 'farm_harvest' AND created_at >= today_start THEN amount ELSE 0 END), 0)::INT,
+        COALESCE(SUM(CASE WHEN activity_type = 'chat' AND created_at >= today_start THEN amount ELSE 0 END), 0)::INT,
+        COALESCE(SUM(CASE WHEN activity_type = 'daily_check_in' AND created_at >= today_start THEN amount ELSE 0 END), 0)::INT,
+        
+        -- --- 이번 주(Weekly) 활동량 집계 ---
+        COALESCE(SUM(CASE WHEN activity_type = 'daily_check_in' AND created_at >= week_start THEN amount ELSE 0 END), 0)::INT,
+        COALESCE(SUM(CASE WHEN activity_type = 'voice' AND created_at >= week_start THEN amount ELSE 0 END), 0)::INT,
+        COALESCE(SUM(CASE WHEN activity_type = 'fishing_catch' AND created_at >= week_start THEN amount ELSE 0 END), 0)::INT,
+        COALESCE(SUM(CASE WHEN activity_type = 'farm_harvest' AND created_at >= week_start THEN amount ELSE 0 END), 0)::INT,
+        COALESCE(SUM(CASE WHEN activity_type = 'chat' AND created_at >= week_start THEN amount ELSE 0 END), 0)::INT
+
+    FROM public.user_activity_logs
+    WHERE user_id = p_user_id AND created_at >= week_start;
+END;
+$$ LANGUAGE plpgsql;```
+
+---
+
+### 📝 2단계: `quests.py` 파일 수정 (게임 봇)
+
+이제 수정된 DB 함수를 사용하도록 `quests.py` 코드를 업데이트합니다. 일일 출석 확인도 `has_checked_in_today` 대신 새로운 중앙 함수를 사용하도록 변경하여 코드의 일관성을 높였습니다.
+
+아래 코드 블록을 복사해서 **게임 봇**의 `cogs/games/quests.py` 파일 **전체 내용과 교체**해주세요.
+
+```python
 # cogs/games/quests.py
 
 import discord
@@ -9,9 +59,8 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 
 from utils.database import (
-    # [✅ 수정] get_user_progress 대신 get_user_activity_summary를 사용합니다.
+    # [✅ 수정] has_checked_in_today는 이제 사용하지 않습니다.
     get_user_activity_summary, 
-    has_checked_in_today,
     get_config,
     save_panel_id, get_panel_id, get_embed_from_db,
     update_wallet, set_cooldown, get_cooldown
@@ -51,7 +100,6 @@ class QuestView(ui.View):
         await interaction.edit_original_response(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
-        # [✅ 수정] 새로운 함수를 사용하여 활동 요약 정보를 가져옵니다.
         summary = await get_user_activity_summary(self.user.id)
         
         embed = discord.Embed(color=0x2ECC71)
@@ -59,9 +107,11 @@ class QuestView(ui.View):
         quests_to_show = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
         rewards = QUEST_REWARDS[self.current_tab]
         
+        # [✅✅✅ 핵심 수정 ✅✅✅]
+        # 모든 퀘스트 진행도를 새로운 DB 함수가 반환하는 'summary'에서 가져오도록 통일합니다.
         progress_values = {
             "daily": {
-                "attendance": 1 if await has_checked_in_today(self.user.id) else 0, 
+                "attendance": summary.get('daily_attendance_count', 0), 
                 "voice": summary.get('daily_voice_minutes', 0), 
                 "fishing": summary.get('daily_fish_count', 0)
             },
@@ -109,7 +159,6 @@ class QuestView(ui.View):
     @ui.button(label="完了したクエストの報酬を受け取る", style=discord.ButtonStyle.success, emoji="💰", row=1)
     async def claim_rewards_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
-        # [✅ 수정] 새로운 함수를 사용하여 활동 요약 정보를 가져옵니다.
         summary = await get_user_activity_summary(self.user.id)
         
         total_reward = 0
@@ -117,9 +166,10 @@ class QuestView(ui.View):
         quests_to_check = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
         rewards = QUEST_REWARDS[self.current_tab]
         
+        # [✅ 수정] 여기도 동일하게 summary 값을 사용합니다.
         progress_values = {
             "daily": {
-                "attendance": 1 if await has_checked_in_today(self.user.id) else 0,
+                "attendance": summary.get('daily_attendance_count', 0),
                 "voice": summary.get('daily_voice_minutes', 0), 
                 "fishing": summary.get('daily_fish_count', 0)
             },
@@ -190,7 +240,7 @@ class Quests(commands.Cog):
         self.currency_icon = "🪙"
     
     async def cog_load(self):
-        self.currency_icon = get_config("CURRENCY_ICON", "🪙")
+        self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙")
 
     async def register_persistent_views(self):
         self.bot.add_view(QuestPanelView(self))
