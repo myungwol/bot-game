@@ -9,7 +9,12 @@ import time
 import math
 from typing import Optional, Dict, List, Any
 
-from utils.database import supabase, get_panel_id, save_panel_id, get_id, get_config, get_cooldown, set_cooldown, save_config_to_db
+from utils.database import (
+    supabase, get_panel_id, save_panel_id, get_id, get_config, 
+    get_cooldown, set_cooldown, save_config_to_db,
+    # [✅ 추가] 패널 생성을 위해 임베드 DB 함수를 가져옵니다.
+    get_embed_from_db
+)
 from utils.helpers import format_embed_from_db, calculate_xp_for_level
 
 logger = logging.getLogger(__name__)
@@ -90,11 +95,12 @@ class LevelPanelView(ui.View):
     @ui.button(label="ステータス確認", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
     async def check_level_button(self, interaction: discord.Interaction, button: ui.Button):
         user = interaction.user
-        user_id_str = str(user.id)
-        cooldown_key = "level_check_cooldown"
+        
+        # [수정] cooldown key에 유저 ID 포함
+        cooldown_key = f"level_check_cooldown_{user.id}"
         cooldown_seconds = 60
 
-        last_used = await get_cooldown(user_id_str, cooldown_key)
+        last_used = await get_cooldown(user.id, cooldown_key)
         if time.time() - last_used < cooldown_seconds:
             can_use_time = int(last_used + cooldown_seconds)
             await interaction.response.send_message(f"⏳ このボタンは <t:{can_use_time}:R> に再度使用できます。", ephemeral=True)
@@ -103,7 +109,8 @@ class LevelPanelView(ui.View):
         await interaction.response.defer(ephemeral=True, thinking=True)
         
         try:
-            await set_cooldown(user_id_str, cooldown_key)
+            # [수정] cooldown key에 유저 ID 포함
+            await set_cooldown(user.id, cooldown_key)
             
             level_res_task = supabase.table('user_levels').select('*').eq('user_id', user.id).maybe_single().execute()
             job_res_task = supabase.table('user_jobs').select('jobs(*)').eq('user_id', user.id).maybe_single().execute()
@@ -200,31 +207,7 @@ class LevelSystem(commands.Cog):
         logger.info("✅ 레벨 시스템의 영구 View가 성공적으로 등록되었습니다.")
         
     async def load_configs(self):
-        pass # 게임 봇에서는 특별히 로드할 설정이 없을 수 있습니다.
-        
-    async def add_xp(self, user: discord.User, amount: int, source: str):
-        """다른 Cog에서 이 함수를 호출하여 경험치를 추가합니다."""
-        if not isinstance(user, discord.Member):
-            # 서버에 없는 유저일 경우를 대비 (예: DM)
-            # 이 프로젝트에서는 서버 멤버에게만 경험치를 주므로, 멤버 객체로 변환 시도
-            guild = self.bot.get_guild(get_id("main_guild_id")) # 설정된 메인 길드 ID 필요
-            if not guild: return
-            member = guild.get_member(user.id)
-            if not member: return
-        else:
-            member = user
-
-        try:
-            res = await supabase.rpc('add_xp', {
-                'p_user_id': member.id,
-                'p_xp_to_add': amount,
-                'p_source': source
-            }).execute()
-
-            if res and res.data and res.data[0].get('leveled_up'):
-                await self.handle_level_up_event(member, res.data[0])
-        except Exception as e:
-            logger.error(f"경험치 추가 중 오류 발생 (유저: {member.id}): {e}", exc_info=True)
+        pass
             
     async def handle_level_up_event(self, user: discord.Member, result_data: Dict):
         if not result_data: return
@@ -237,7 +220,6 @@ class LevelSystem(commands.Cog):
         
         timestamp = time.time()
         
-        # 관리 봇에게 DB를 통해 전직/등급 업데이트를 요청합니다.
         if new_level in job_advancement_levels:
             await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": timestamp})
             logger.info(f"유저가 전직 가능 레벨({new_level})에 도달하여 관리 봇에게 전직 요청을 보냈습니다.")
@@ -247,6 +229,7 @@ class LevelSystem(commands.Cog):
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_level_check") -> bool:
         try:
+            # 이전 패널 메시지 삭제
             panel_info = get_panel_id(panel_key)
             if panel_info and panel_info.get('channel_id') and panel_info.get('message_id'):
                 if (ch := self.bot.get_channel(panel_info['channel_id'])):
@@ -255,9 +238,24 @@ class LevelSystem(commands.Cog):
                         await msg.delete()
                     except (discord.NotFound, discord.Forbidden): pass
             
-            embed = discord.Embed(title="📊 レベル＆ランキング", description="下のボタンでご自身のレベルを確認したり、サーバーのランキングを見ることができます。", color=0x5865F2)
+            # [✅✅✅ 핵심 수정 ✅✅✅]
+            # DB에서 패널용 임베드 정보를 가져옵니다.
+            embed_data = await get_embed_from_db("panel_level_check")
+            if not embed_data:
+                # DB에 정보가 없을 경우를 대비한 기본값
+                embed_data = {
+                    "title": "📊 レベル＆ランキング",
+                    "description": "下のボタンでご自身のレベルを確認したり、サーバーのランキングを見ることができます。",
+                    "color": 0x5865F2
+                }
+                logger.warning(f"DB에서 'panel_level_check' 임베드를 찾을 수 없어 기본값으로 패널을 생성합니다.")
+
+            embed = discord.Embed.from_dict(embed_data)
+            
+            # 새로운 패널 메시지 전송 및 DB에 ID 저장
             message = await channel.send(embed=embed, view=LevelPanelView(self))
             await save_panel_id(panel_key, message.id, channel.id)
+            
             logger.info(f"✅ 「{panel_key}」パネルを #{channel.name} に再設置しました。")
             return True
         except Exception as e:
