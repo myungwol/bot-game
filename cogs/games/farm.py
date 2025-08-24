@@ -374,9 +374,15 @@ class FarmUIView(ui.View):
         
         if not harvested:
             await interaction.followup.send("ℹ️ 収穫できる作物がありません。", ephemeral=True); return
-        
+
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if not owner: return
+
+        # [✨ 신규] 농사 활동 기록
+        total_harvested_amount = sum(harvested.values())
+        if total_harvested_amount > 0:
+            await log_user_activity(owner.id, 'farm_harvest', total_harvested_amount)
+
         db_tasks = [update_inventory(str(owner.id), n, q) for n, q in harvested.items()]
         if plots_to_reset: db_tasks.append(clear_plots_db(plots_to_reset))
         if trees_to_update:
