@@ -169,10 +169,20 @@ def get_string(key_path: str, default: Any = None, **kwargs) -> Any:
         return default if default is not None else f"[{key_path}]"
         
 @supabase_retry_handler()
+async def save_embed_to_db(embed_key: str, embed_data: dict):
+    await supabase.table('embeds').upsert({'embed_key': embed_key, 'embed_data': embed_data}, on_conflict='embed_key').execute()
+@supabase_retry_handler()
 async def get_embed_from_db(embed_key: str) -> Optional[dict]:
     response = await supabase.table('embeds').select('embed_data').eq('embed_key', embed_key).limit(1).execute()
     return response.data[0]['embed_data'] if response and response.data else None
-
+@supabase_retry_handler()
+async def save_panel_component_to_db(component_data: dict):
+    await supabase.table('panel_components').upsert(component_data, on_conflict='component_key').execute()
+@supabase_retry_handler()
+async def get_panel_components_from_db(panel_key: str) -> list:
+    response = await supabase.table('panel_components').select('*').eq('panel_key', panel_key).order('row').order('order_in_row').execute()
+    return response.data if response and response.data else []
+    
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 # 5. ID (channel_configs) 관련 함수
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
@@ -184,8 +194,25 @@ async def load_channel_ids_from_db():
         _channel_id_cache = {item['channel_key']: int(item['channel_id']) for item in response.data if item.get('channel_id') and item['channel_id'] != '0'}
         logger.info(f"✅ {len(_channel_id_cache)}개의 유효한 채널/역할 ID를 DB에서 캐시로 로드했습니다.")
 
+@supabase_retry_handler()
+async def save_id_to_db(key: str, object_id: int) -> bool:
+    global _channel_id_cache
+    try:
+        response = await supabase.table('channel_configs').upsert({"channel_key": key, "channel_id": str(object_id)}, on_conflict="channel_key").execute()
+        if response and response.data:
+            _channel_id_cache[key] = object_id
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"❌ '{key}' ID 저장 중 예외 발생: {e}", exc_info=True)
+        return False
+
 def get_id(key: str) -> Optional[int]:
     return _channel_id_cache.get(key)
+
+async def save_panel_id(panel_name: str, message_id: int, channel_id: int):
+    await save_id_to_db(f"panel_{panel_name}_message_id", message_id)
+    await save_id_to_db(f"panel_{panel_name}_channel_id", channel_id)
 
 def get_panel_id(panel_name: str) -> Optional[Dict[str, int]]:
     message_id = get_id(f"panel_{panel_name}_message_id")
@@ -220,7 +247,7 @@ async def set_whale_caught():
     await save_config_to_db("whale_last_caught_timestamp", time.time())
 
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-# 7. 유저 데이터 관련 함수 (지갑, 인벤토리, 장비, 능력 등)
+# 7. 유저 데이터 관련 함수
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 @supabase_retry_handler()
 async def get_or_create_user(table_name: str, user_id: int, default_data: dict) -> dict:
@@ -257,7 +284,7 @@ async def get_user_gear(user: discord.User) -> dict:
 async def set_user_gear(user_id: int, **kwargs):
     if kwargs:
         await supabase.table('gear_setups').update(kwargs).eq('user_id', user_id).execute()
-
+        
 @supabase_retry_handler()
 async def get_aquarium(user_id: int) -> list:
     response = await supabase.table('aquariums').select('id, name, size, emoji').eq('user_id', user_id).execute()
@@ -310,7 +337,7 @@ async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
 async def create_farm(user_id: int) -> Optional[Dict[str, Any]]:
     rpc_response = await supabase.rpc('create_farm_for_user', {'p_user_id': user_id}).execute()
     return await get_farm_data(user_id) if rpc_response and rpc_response.data else None
-    
+
 @supabase_retry_handler()
 async def update_plot(plot_id: int, updates: Dict[str, Any]):
     await supabase.table('farm_plots').update(updates).eq('id', plot_id).execute()
