@@ -30,6 +30,8 @@ _fishing_loot_cache: List[Dict[str, Any]] = {}
 _user_abilities_cache: Dict[int, tuple[List[str], float]] = {}
 JST = timezone(timedelta(hours=9))
 BARE_HANDS = "素手"
+# [✅✅✅ 핵심 수정 ✅✅✅] 누락된 상수 추가
+DEFAULT_ROD = "普通の釣竿"
 
 def supabase_retry_handler(retries: int = 3, delay: int = 2):
     def decorator(func: Callable) -> Callable:
@@ -113,6 +115,21 @@ def get_panel_id(panel_name: str) -> Optional[Dict[str, int]]:
     message_id = get_id(f"panel_{panel_name}_message_id")
     channel_id = get_id(f"panel_{panel_name}_channel_id")
     return {"message_id": message_id, "channel_id": channel_id} if message_id and channel_id else None
+
+# [✅✅✅ 핵심 수정 ✅✅✅] 누락된 함수 2개 추가
+def is_whale_available() -> bool:
+    """
+    今月のクジラがまだ捕まえられていないかを確認します。
+    キャッシュされた設定から'whale_announcement_message_id'が存在するかチェックします。
+    """
+    return get_config("whale_announcement_message_id") is not None
+
+async def set_whale_caught():
+    """
+    クジラが捕まえられたことを記録します。
+    'whale_announcement_message_id'をNoneに設定します。
+    """
+    await save_config_to_db("whale_announcement_message_id", None)
 
 @supabase_retry_handler()
 async def get_embed_from_db(embed_key: str) -> Optional[dict]:
