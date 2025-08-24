@@ -7,7 +7,6 @@ import logging
 import asyncio
 from typing import Dict, Any, List
 
-# [✅✅✅ 핵심 수정] get_embed_from_db를 import 목록에 추가합니다.
 from utils.database import supabase, get_config, get_id, get_embed_from_db
 from utils.game_config_defaults import JOB_SYSTEM_CONFIG, JOB_ADVANCEMENT_DATA
 from utils.helpers import format_embed_from_db
@@ -37,17 +36,15 @@ class JobAdvancementView(ui.View):
         self.clear_items()
 
         job_options = []
-        is_job_disabled = True
         if self.jobs_data:
             job_options = [
                 discord.SelectOption(label=job['job_name'], value=job['job_key'], description=job['description'][:100])
                 for job in self.jobs_data.values()
             ]
-            is_job_disabled = False
         else:
             job_options.append(discord.SelectOption(label="選択できる職業がありません。", value="no_jobs_available", default=True))
         
-        job_select = ui.Select(placeholder="① まずは職業を選択してください...", options=job_options, custom_id="job_adv_job_select", disabled=is_job_disabled)
+        job_select = ui.Select(placeholder="① まずは職業を選択してください...", options=job_options, custom_id="job_adv_job_select", disabled=(not self.jobs_data))
         if self.selected_job_key:
             job_select.placeholder = self.jobs_data[self.selected_job_key]['job_name']
         job_select.callback = self.on_job_select
@@ -56,15 +53,12 @@ class JobAdvancementView(ui.View):
         ability_options = []
         is_ability_disabled = True
         ability_placeholder = "先に職業を選択してください。"
-
         if self.selected_job_key and self.selected_job_key in self.jobs_data:
             is_ability_disabled = False
             ability_placeholder = "② 次に能力を選択してください..."
             selected_job = self.jobs_data[self.selected_job_key]
             for ability in selected_job.get('abilities', []):
-                ability_options.append(
-                    discord.SelectOption(label=ability['ability_name'], value=ability['ability_key'], description=ability['description'][:100])
-                )
+                ability_options.append(discord.SelectOption(label=ability['ability_name'], value=ability['ability_key'], description=ability['description'][:100]))
         
         if not ability_options:
             ability_options.append(discord.SelectOption(label="...", value="no_abilities_placeholder", default=True))
@@ -83,8 +77,7 @@ class JobAdvancementView(ui.View):
         self.add_item(confirm_button)
 
     async def on_job_select(self, interaction: discord.Interaction):
-        if interaction.data['values'][0] == "no_jobs_available":
-            return await interaction.response.defer()
+        if interaction.data['values'][0] == "no_jobs_available": return await interaction.response.defer()
         
         self.selected_job_key = interaction.data['values'][0]
         self.selected_ability_key = None
@@ -93,21 +86,12 @@ class JobAdvancementView(ui.View):
         await interaction.response.edit_message(view=self)
 
     async def on_ability_select(self, interaction: discord.Interaction):
-        if interaction.data['values'][0] == "no_abilities_placeholder":
-            return await interaction.response.defer()
-
-        # [수정] 능력 선택 시 직업 선택 상태를 잃지 않도록 수정
-        job_select = discord.utils.get(self.children, custom_id='job_adv_job_select')
-        if not job_select or not job_select.values or job_select.values[0] == 'no_jobs_available':
-             await interaction.response.send_message("先に職業を選択してください。", ephemeral=True)
-             return
-        self.selected_job_key = job_select.values[0]
-
+        if interaction.data['values'][0] == "no_abilities_placeholder": return await interaction.response.defer()
+        
         self.selected_ability_key = interaction.data['values'][0]
         
         self.build_components()
         await interaction.response.edit_message(view=self)
-
 
     async def on_confirm(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -129,12 +113,10 @@ class JobAdvancementView(ui.View):
 
             job_res = await supabase.table('jobs').select('id').eq('job_key', self.selected_job_key).single().execute()
             ability_res = await supabase.table('abilities').select('id').eq('ability_key', self.selected_ability_key).single().execute()
-
             if not (job_res.data and ability_res.data):
-                raise Exception(f"DB에서 직업 또는 능력 ID를 찾을 수 없습니다. (job: {self.selected_job_key}, ability: {self.selected_ability_key})")
+                raise Exception(f"DB에서 직업 또는 능력 ID를 찾을 수 없습니다.")
             
-            job_id = job_res.data['id']
-            ability_id = ability_res.data['id']
+            job_id, ability_id = job_res.data['id'], ability_res.data['id']
             
             job_role_key = selected_job_data['role_key']
             all_job_role_keys = list(JOB_SYSTEM_CONFIG.get("JOB_ROLE_MAP", {}).values())
@@ -197,7 +179,6 @@ class JobAndTierHandler(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         if self.active_views_loaded: return
-        
         logger.info("이전에 활성화된 전직 View들을 다시 로드합니다...")
         channel_id = get_id("job_advancement_channel_id")
         if not (channel_id and (channel := self.bot.get_channel(channel_id))):
