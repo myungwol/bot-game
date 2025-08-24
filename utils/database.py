@@ -1,25 +1,33 @@
-# bot-game/utils/database.py
-
+# utils/database.py (양쪽 봇 공용)
+"""
+Supabase 데이터베이스와의 모든 상호작용을 관리하는 중앙 파일입니다.
+"""
 import os
-import discord
-from supabase import create_client, AsyncClient
-import logging
 import asyncio
+import logging
 import time
-from typing import Dict, Callable, Any, List, Optional, Union
 from functools import wraps
-from utils.ui_defaults import UI_STRINGS
 from datetime import datetime, timezone, timedelta
+
+from typing import Dict, Callable, Any, List, Optional
+import discord
+
+from supabase import create_client, AsyncClient
+from postgrest.exceptions import APIError
+
+from .ui_defaults import (
+    UI_EMBEDS, UI_PANEL_COMPONENTS, UI_ROLE_KEY_MAP, 
+    SETUP_COMMAND_MAP, JOB_SYSTEM_CONFIG, AGE_ROLE_MAPPING, GAME_CONFIG,
+    ONBOARDING_CHOICES
+)
 
 logger = logging.getLogger(__name__)
 
-_configs_cache: Dict[str, Any] = {"strings": UI_STRINGS}
-_channel_id_cache: Dict[str, int] = {}
-_item_database_cache: Dict[str, Dict[str, Any]] = {}
-_fishing_loot_cache: List[Dict[str, Any]] = []
-_user_abilities_cache = {} # 능력 정보 캐시
-CACHE_TTL = 300 # 5분
+JST = timezone(timedelta(hours=9))
 
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# 1. 클라이언트 초기화 및 캐시
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 supabase: AsyncClient = None
 try:
     url: str = os.environ.get("SUPABASE_URL")
@@ -30,316 +38,289 @@ try:
     logger.info("✅ Supabase 비동기 클라이언트가 성공적으로 생성되었습니다.")
 except Exception as e:
     logger.critical(f"❌ Supabase 클라이언트 생성 실패: {e}", exc_info=True)
+    supabase = None
 
+_bot_configs_cache: Dict[str, Any] = {}
+_channel_id_cache: Dict[str, int] = {}
+_user_abilities_cache: Dict[int, tuple[List[str], float]] = {}
 
-def supabase_retry_handler(retries: int = 3, delay: int = 5):
-    def decorator(func: Callable):
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# 2. DB 오류 처리 데코레이터
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+def supabase_retry_handler(retries: int = 3, delay: int = 2):
+    def decorator(func: Callable) -> Callable:
         @wraps(func)
-        async def wrapper(*args, **kwargs):
-            if not supabase: logger.error(f"❌ Supabase 클라이언트가 없어 '{func.__name__}' 함수를 실행할 수 없습니다."); return None
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            if not supabase:
+                logger.error(f"❌ Supabase 클라이언트가 초기화되지 않아 '{func.__name__}' 함수를 실행할 수 없습니다.")
+                return None
+            
+            last_exception = None
             for attempt in range(retries):
-                try: return await func(*args, **kwargs)
+                try:
+                    return await func(*args, **kwargs)
+                except APIError as e:
+                    logger.warning(f"⚠️ '{func.__name__}' 함수 실행 중 Supabase API 오류 발생 (시도 {attempt + 1}/{retries}): {e.message}")
+                    last_exception = e
                 except Exception as e:
-                    logger.warning(f"⚠️ '{func.__name__}' 함수 실행 중 오류 발생 (시도 {attempt + 1}/{retries}): {e}")
-                    if attempt < retries - 1: await asyncio.sleep(delay)
-            logger.error(f"❌ '{func.__name__}' 함수가 모든 재시도({retries}번)에 실패했습니다.", exc_info=True); return None
+                    logger.warning(f"⚠️ '{func.__name__}' 함수 실행 중 예기치 않은 오류 발생 (시도 {attempt + 1}/{retries}): {e}")
+                    last_exception = e
+                
+                if attempt < retries - 1:
+                    await asyncio.sleep(delay * (attempt + 1))
+            
+            logger.error(f"❌ '{func.__name__}' 함수가 모든 재시도({retries}번)에 실패했습니다. 마지막 오류: {last_exception}", exc_info=True)
+            
+            return_type = func.__annotations__.get("return")
+            if return_type:
+                type_str = str(return_type).lower()
+                if "dict" in type_str: return {}
+                if "list" in type_str: return []
+            return None
         return wrapper
     return decorator
 
-BARE_HANDS = "素手"
-DEFAULT_ROD = "木の釣竿"
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# 3. 데이터 로드 및 동기화
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+async def sync_defaults_to_db():
+    logger.info("------ [ 기본값 DB 동기화 시작 ] ------")
+    try:
+        role_name_map = {key: info["name"] for key, info in UI_ROLE_KEY_MAP.items()}
+        await save_config_to_db("ROLE_KEY_MAP", role_name_map)
+        
+        prefix_hierarchy = sorted(
+            [info["name"] for info in UI_ROLE_KEY_MAP.values() if info.get("is_prefix")],
+            key=lambda name: next((info.get("priority", 0) for info in UI_ROLE_KEY_MAP.values() if info["name"] == name), 0),
+            reverse=True
+        )
+        await save_config_to_db("NICKNAME_PREFIX_HIERARCHY", prefix_hierarchy)
+        
+        await asyncio.gather(
+            *[save_embed_to_db(key, data) for key, data in UI_EMBEDS.items()],
+            *[save_panel_component_to_db(comp) for comp in UI_PANEL_COMPONENTS],
+            save_config_to_db("SETUP_COMMAND_MAP", SETUP_COMMAND_MAP),
+            save_config_to_db("JOB_SYSTEM_CONFIG", JOB_SYSTEM_CONFIG),
+            save_config_to_db("AGE_ROLE_MAPPING", AGE_ROLE_MAPPING),
+            save_config_to_db("GAME_CONFIG", GAME_CONFIG),
+            save_config_to_db("ONBOARDING_CHOICES", ONBOARDING_CHOICES)
+        )
 
-# --- [농장 시스템 함수] ---
-@supabase_retry_handler()
-async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
-    response = await supabase.table('farms').select('*, farm_plots(*)').eq('user_id', user_id).maybe_single().execute()
-    return response.data if response and hasattr(response, 'data') else None
-@supabase_retry_handler()
-async def get_farm_owner_by_thread(thread_id: int) -> Optional[int]:
-    response = await supabase.table('farms').select('user_id').eq('thread_id', thread_id).maybe_single().execute()
-    return response.data['user_id'] if response and hasattr(response, 'data') and response.data else None
-@supabase_retry_handler()
-async def create_farm(user_id: int) -> Optional[Dict[str, Any]]:
-    rpc_response = await supabase.rpc('create_farm_for_user', {'p_user_id': user_id}).execute()
-    if rpc_response and rpc_response.data:
-        return await get_farm_data(user_id)
-    return None
+        all_role_keys = list(UI_ROLE_KEY_MAP.keys())
+        all_channel_keys = [info['key'] for info in SETUP_COMMAND_MAP.values()]
+        
+        placeholder_records = [{"channel_key": key, "channel_id": "0"} for key in set(all_role_keys + all_channel_keys)]
+        
+        if placeholder_records:
+            await supabase.table('channel_configs').upsert(placeholder_records, on_conflict="channel_key", ignore_duplicates=True).execute()
 
-@supabase_retry_handler()
-async def update_plot(plot_id: int, updates: Dict[str, Any]):
-    await supabase.table('farm_plots').update(updates).eq('id', plot_id).execute()
-@supabase_retry_handler()
-async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
-    response = await supabase.table('farm_item_details').select('*').eq('item_name', item_name).maybe_single().execute()
-    return response.data if response and hasattr(response, 'data') else None
-@supabase_retry_handler()
-async def clear_plots_db(plot_ids: List[int]):
-    await supabase.rpc('clear_plots_to_default', {'p_plot_ids': plot_ids}).execute()
-@supabase_retry_handler()
-async def check_farm_permission(farm_id: int, user_id: int, action: str) -> bool:
-    permission_column = f"can_{action}"
-    response = await supabase.table('farm_permissions').select(permission_column, count='exact').eq('farm_id', farm_id).eq('granted_to_user_id', user_id).eq(permission_column, True).execute()
-    return response.count > 0
-@supabase_retry_handler()
-async def grant_farm_permission(farm_id: int, user_id: int):
-    await supabase.table('farm_permissions').upsert({
-        'farm_id': farm_id, 'granted_to_user_id': user_id, 'can_till': True, 'can_plant': True,
-        'can_water': True, 'can_harvest': True
-    }, on_conflict='farm_id, granted_to_user_id').execute()
+        logger.info(f"✅ 설정, 임베드({len(UI_EMBEDS)}개), 컴포넌트({len(UI_PANEL_COMPONENTS)}개), 게임/나이/온보딩 설정 동기화 완료.")
 
-# --- [퀘스트 및 출석체크 함수] ---
-@supabase_retry_handler()
-async def has_checked_in_today(user_id: int) -> bool:
-    JST = timezone(timedelta(hours=9))
-    today_jst_start = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
-    response = await supabase.table('attendance_logs').select('id', count='exact').eq('user_id', user_id).gte('checked_in_at', today_jst_start.isoformat()).limit(1).execute()
-    return response.count > 0
-@supabase_retry_handler()
-async def record_attendance(user_id: int):
-    await supabase.table('attendance_logs').insert({'user_id': user_id}).execute()
-    await supabase.rpc('increment_user_progress', {'p_user_id': user_id, 'p_attendance_count': 1}).execute()
-@supabase_retry_handler()
-async def get_user_progress(user_id: int) -> Dict[str, Any]:
-    default_progress = {
-        'daily_voice_minutes': 0, 'daily_fish_count': 0, 'weekly_attendance_count': 0, 'weekly_voice_minutes': 0,
-        'weekly_fish_count': 0, 'last_daily_reset': None, 'last_weekly_reset': None
-    }
-    response = await supabase.table('user_progress').select('*').eq('user_id', user_id).maybe_single().execute()
-    if response and hasattr(response, 'data') and response.data:
-        return response.data
-    return default_progress
-
-@supabase_retry_handler()
-async def increment_progress(user_id: int, fish_count: int = 0, voice_minutes: int = 0):
-    await supabase.rpc('increment_user_progress', {'p_user_id': user_id, 'p_fish_count': fish_count, 'p_voice_minutes': voice_minutes}).execute()
-
-# --- [공용 및 기타 게임 함수] ---
-@supabase_retry_handler()
-async def save_config(key: str, value: Any):
-    global _configs_cache
-    await supabase.table('bot_configs').upsert({"config_key": key, "config_value": value}).execute()
-    _configs_cache[key] = value
-    logger.info(f"설정이 업데이트되었습니다: {key} -> {value}")
-save_config_to_db = save_config
-
-JST = timezone(timedelta(hours=9))
-
-async def is_whale_available() -> bool:
-    """고래를 이번 달에 잡을 수 있는지 확인합니다."""
-    last_caught_ts = get_config("whale_last_caught_timestamp", 0)
-    if not last_caught_ts or float(last_caught_ts) == 0:
-        return True
-    last_catch_time = datetime.fromtimestamp(float(last_caught_ts), tz=JST)
-    now = datetime.now(JST)
-    if last_catch_time.year < now.year or last_catch_time.month < now.month:
-        return True
-    return False
-
-async def set_whale_caught():
-    """고래가 잡혔다고 현재 시간을 기록합니다."""
-    await save_config("whale_last_caught_timestamp", time.time())
+    except Exception as e:
+        logger.error(f"❌ 기본값 DB 동기화 중 치명적 오류 발생: {e}", exc_info=True)
+    logger.info("------ [ 기본값 DB 동기화 완료 ] ------")
 
 async def load_all_data_from_db():
-    logger.info("------ [ 모든 DB 데이터 로드 시작 ] ------")
-    await asyncio.gather(load_bot_configs_from_db(), load_channel_ids_from_db(), load_game_data_from_db())
-    logger.info("------ [ 모든 DB 데이터 로드 완료 ] ------")
+    logger.info("------ [ 모든 DB 데이터 캐시 로드 시작 ] ------")
+    await asyncio.gather(load_bot_configs_from_db(), load_channel_ids_from_db())
+    logger.info("------ [ 모든 DB 데이터 캐시 로드 완료 ] ------")
 
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# 4. 설정 (bot_configs) 관련 함수
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 @supabase_retry_handler()
 async def load_bot_configs_from_db():
-    global _configs_cache
+    global _bot_configs_cache
     response = await supabase.table('bot_configs').select('config_key, config_value').execute()
     if response and response.data:
-        for item in response.data: _configs_cache[item['config_key']] = item['config_value']
-        logger.info(f"✅ {len(response.data)}개의 봇 설정을 DB에서 로드하고 캐시에 병합했습니다.")
-    else: logger.warning("DB 'bot_configs' 테이블에서 설정 정보를 찾을 수 없습니다.")
+        _bot_configs_cache = {item['config_key']: item['config_value'] for item in response.data}
+        logger.info(f"✅ {len(_bot_configs_cache)}개의 봇 설정을 DB에서 캐시로 로드했습니다.")
+
+@supabase_retry_handler()
+async def save_config_to_db(key: str, value: Any):
+    global _bot_configs_cache
+    await supabase.table('bot_configs').upsert({"config_key": key, "config_value": value}).execute()
+    _bot_configs_cache[key] = value
 
 def get_config(key: str, default: Any = None) -> Any:
-    value = _configs_cache.get(key, default)
-    if isinstance(value, str) and value.startswith('"') and value.endswith('"'):
-        return value.strip('"')
-    return value
+    return _bot_configs_cache.get(key, default)
 
-def get_string(key_path: str, default: Any = None, **kwargs) -> Any:
-    try:
-        keys = key_path.split('.'); value = _configs_cache.get("strings", {})
-        for key in keys: value = value[key]
-        if isinstance(value, str) and kwargs:
-            class SafeFormatter(dict):
-                def __missing__(self, key: str) -> str: return f'{{{key}}}'
-            return value.format_map(SafeFormatter(**kwargs))
-        return value
-    except (KeyError, TypeError):
-        return default if default is not None else f"[{key_path}]"
-
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# 5. ID (channel_configs) 관련 함수
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 @supabase_retry_handler()
 async def load_channel_ids_from_db():
     global _channel_id_cache
-    response = await supabase.table('channel_configs').select('channel_key', 'channel_id').limit(1000).execute()
+    response = await supabase.table('channel_configs').select('channel_key, channel_id').execute()
     if response and response.data:
         _channel_id_cache = {item['channel_key']: int(item['channel_id']) for item in response.data if item.get('channel_id') and item['channel_id'] != '0'}
-        logger.info(f"✅ {len(_channel_id_cache)}개의 채널/역할 ID를 DB에서 로드했습니다.")
-    else: logger.warning("DB 'channel_configs' 테이블에서 ID 정보를 찾을 수 없습니다.")
-
-def get_id(key: str) -> Optional[int]: return _channel_id_cache.get(key)
+        logger.info(f"✅ {len(_channel_id_cache)}개의 유효한 채널/역할 ID를 DB에서 캐시로 로드했습니다.")
 
 @supabase_retry_handler()
-async def load_game_data_from_db():
-    global _item_database_cache, _fishing_loot_cache
-    item_response = await supabase.table('items').select('*').execute()
-    if item_response and item_response.data:
-        _item_database_cache = {item.pop('name'): item for item in item_response.data}
-        logger.info(f"✅ {len(_item_database_cache)}개의 아이템 정보를 DB에서 로드했습니다.")
-    loot_response = await supabase.table('fishing_loots').select('*').execute()
-    if loot_response and loot_response.data:
-        _fishing_loot_cache = loot_response.data
-        logger.info(f"✅ {len(_fishing_loot_cache)}개의 낚시 결과물 정보를 DB에서 로드했습니다.")
-
-def get_item_database() -> Dict[str, Dict[str, Any]]: return _item_database_cache
-def get_fishing_loot() -> List[Dict[str, Any]]: return _fishing_loot_cache
-
-@supabase_retry_handler()
-async def save_id_to_db(key: str, object_id: int):
+async def save_id_to_db(key: str, object_id: int) -> bool:
     global _channel_id_cache
-    await supabase.table('channel_configs').upsert({"channel_key": key, "channel_id": str(object_id)}, on_conflict="channel_key").execute()
-    _channel_id_cache[key] = object_id
+    try:
+        response = await supabase.table('channel_configs').upsert({"channel_key": key, "channel_id": str(object_id)}, on_conflict="channel_key").execute()
+        if response.data:
+            _channel_id_cache[key] = object_id
+            logger.info(f"✅ '{key}' ID({object_id})를 DB와 캐시에 저장했습니다.")
+            return True
+        else:
+            logger.error(f"❌ '{key}' ID({object_id})를 DB에 저장하려 했으나, DB가 성공 응답을 반환하지 않았습니다.")
+            return False
+    except Exception as e:
+        logger.error(f"❌ '{key}' ID 저장 중 예외 발생: {e}", exc_info=True)
+        return False
+
+def get_id(key: str) -> Optional[int]:
+    return _channel_id_cache.get(key)
 
 async def save_panel_id(panel_name: str, message_id: int, channel_id: int):
-    db_panel_name = panel_name.replace("panel_", "")
-    await save_id_to_db(f"panel_{db_panel_name}_message_id", message_id)
-    await save_id_to_db(f"panel_{db_panel_name}_channel_id", channel_id)
+    await save_id_to_db(f"panel_{panel_name}_message_id", message_id)
+    await save_id_to_db(f"panel_{panel_name}_channel_id", channel_id)
 
-def get_panel_id(panel_name: str) -> Optional[dict]:
-    db_panel_name = panel_name.replace("panel_", "")
-    message_id, channel_id = get_id(f"panel_{db_panel_name}_message_id"), get_id(f"panel_{db_panel_name}_channel_id")
+def get_panel_id(panel_name: str) -> Optional[Dict[str, int]]:
+    message_id = get_id(f"panel_{panel_name}_message_id")
+    channel_id = get_id(f"panel_{panel_name}_channel_id")
     return {"message_id": message_id, "channel_id": channel_id} if message_id and channel_id else None
 
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+# 6. 임베드 및 UI 컴포넌트 관련 함수
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+@supabase_retry_handler()
+async def save_embed_to_db(embed_key: str, embed_data: dict):
+    await supabase.table('embeds').upsert({'embed_key': embed_key, 'embed_data': embed_data}, on_conflict='embed_key').execute()
 @supabase_retry_handler()
 async def get_embed_from_db(embed_key: str) -> Optional[dict]:
     response = await supabase.table('embeds').select('embed_data').eq('embed_key', embed_key).limit(1).execute()
     return response.data[0]['embed_data'] if response and response.data else None
-
+@supabase_retry_handler()
+async def get_all_embeds() -> List[Dict[str, Any]]:
+    response = await supabase.table('embeds').select('embed_key, embed_data').order('embed_key').execute()
+    return response.data if response and response.data else []
+@supabase_retry_handler()
+async def get_onboarding_steps() -> List[dict]:
+    response = await supabase.table('onboarding_steps').select('*, embed_data:embeds(embed_data)').order('step_number', desc=False).execute()
+    return response.data if response and response.data else []
+@supabase_retry_handler()
+async def save_panel_component_to_db(component_data: dict):
+    await supabase.table('panel_components').upsert(component_data, on_conflict='component_key').execute()
 @supabase_retry_handler()
 async def get_panel_components_from_db(panel_key: str) -> list:
     response = await supabase.table('panel_components').select('*').eq('panel_key', panel_key).order('row', desc=False).order('order_in_row', desc=False).execute()
     return response.data if response and response.data else []
-
 @supabase_retry_handler()
-async def get_or_create_user(table_name: str, user_id_str: str, default_data: dict) -> dict:
-    response = await supabase.table(table_name).select("*").eq("user_id", user_id_str).limit(1).execute()
-    if response and response.data: return response.data[0]
-    insert_data = {"user_id": user_id_str, **default_data}
-    response = await supabase.table(table_name).insert(insert_data, returning="representation").execute()
-    return response.data[0] if response and response.data else default_data
-
-async def get_wallet(user_id: int) -> dict:
-    return await get_or_create_user('wallets', str(user_id), {"balance": 0})
-
+async def get_cooldown(user_id_str: str, cooldown_key: str) -> float:
+    response = await supabase.table('cooldowns').select('last_cooldown_timestamp').eq('user_id', user_id_str).eq('cooldown_key', cooldown_key).limit(1).execute()
+    if response and response.data and (timestamp_str := response.data[0].get('last_cooldown_timestamp')) is not None:
+        try:
+            if timestamp_str.endswith('Z'): timestamp_str = timestamp_str[:-1] + '+00:00'
+            return datetime.fromisoformat(timestamp_str).timestamp()
+        except (ValueError, TypeError): return 0.0
+    return 0.0
+@supabase_retry_handler()
+async def set_cooldown(user_id_str: str, cooldown_key: str):
+    await supabase.table('cooldowns').upsert({ "user_id": user_id_str, "cooldown_key": cooldown_key, "last_cooldown_timestamp": datetime.now(timezone.utc).isoformat() }, on_conflict='user_id, cooldown_key').execute()
+@supabase_retry_handler()
+async def get_all_stats_channels() -> List[Dict[str, Any]]:
+    response = await supabase.table('stats_channels').select('*').execute()
+    return response.data if response and response.data else []
+@supabase_retry_handler()
+async def add_stats_channel(channel_id: int, guild_id: int, stat_type: str, template: str, role_id: Optional[int] = None):
+    await supabase.table('stats_channels').upsert({"channel_id": channel_id, "guild_id": guild_id, "stat_type": stat_type, "channel_name_template": template, "role_id": role_id}, on_conflict="channel_id").execute()
+@supabase_retry_handler()
+async def remove_stats_channel(channel_id: int):
+    await supabase.table('stats_channels').delete().eq('channel_id', channel_id).execute()
+@supabase_retry_handler()
+async def get_all_temp_channels() -> List[Dict[str, Any]]:
+    response = await supabase.table('temp_voice_channels').select('*').execute()
+    return response.data if response and response.data else []
+@supabase_retry_handler()
+async def add_temp_channel(channel_id: int, owner_id: int, guild_id: int, message_id: int, channel_type: str):
+    await supabase.table('temp_voice_channels').insert({"channel_id": channel_id, "owner_id": owner_id, "guild_id": guild_id, "message_id": message_id, "channel_type": channel_type}).execute()
+@supabase_retry_handler()
+async def update_temp_channel_owner(channel_id: int, new_owner_id: int):
+    await supabase.table('temp_voice_channels').update({"owner_id": new_owner_id}).eq('channel_id', channel_id).execute()
+@supabase_retry_handler()
+async def remove_temp_channel(channel_id: int):
+    await supabase.table('temp_voice_channels').delete().eq('channel_id', channel_id).execute()
+@supabase_retry_handler()
+async def remove_multiple_temp_channels(channel_ids: List[int]):
+    if not channel_ids: return
+    await supabase.table('temp_voice_channels').delete().in_('channel_id', channel_ids).execute()
+@supabase_retry_handler()
+async def get_all_tickets() -> List[Dict[str, Any]]:
+    response = await supabase.table('tickets').select('*').execute()
+    return response.data if response and response.data else []
+@supabase_retry_handler()
+async def add_ticket(thread_id: int, owner_id: int, guild_id: int, ticket_type: str):
+    await supabase.table('tickets').insert({"thread_id": thread_id, "owner_id": owner_id, "guild_id": guild_id, "ticket_type": ticket_type}).execute()
+@supabase_retry_handler()
+async def remove_ticket(thread_id: int):
+    await supabase.table('tickets').delete().eq('thread_id', thread_id).execute()
+@supabase_retry_handler()
+async def update_ticket_lock_status(thread_id: int, is_locked: bool):
+    await supabase.table('tickets').update({"is_locked": is_locked}).eq('thread_id', thread_id).execute()
+@supabase_retry_handler()
+async def remove_multiple_tickets(thread_ids: List[int]):
+    if not thread_ids: return
+    await supabase.table('tickets').delete().in_('thread_id', thread_ids).execute()
+@supabase_retry_handler()
+async def add_warning(guild_id: int, user_id: int, moderator_id: int, reason: str, amount: int) -> Optional[dict]:
+    response = await supabase.table('warnings').insert({"guild_id": guild_id, "user_id": user_id, "moderator_id": moderator_id, "reason": reason, "amount": amount}).select().execute()
+    return response.data[0] if response and response.data else None
+@supabase_retry_handler()
+async def get_total_warning_count(user_id: int, guild_id: int) -> int:
+    response = await supabase.table('warnings').select('amount').eq('user_id', user_id).eq('guild_id', guild_id).execute()
+    return sum(item['amount'] for item in response.data) if response and response.data else 0
+@supabase_retry_handler()
+async def add_anonymous_message(guild_id: int, user_id: int, content: str):
+    await supabase.table('anonymous_messages').insert({"guild_id": guild_id, "user_id": user_id, "message_content": content}).execute()
+@supabase_retry_handler()
+async def has_posted_anonymously_today(user_id: int) -> bool:
+    today_jst_start = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_utc_start = today_jst_start.astimezone(timezone.utc)
+    response = await supabase.table('anonymous_messages').select('id', count='exact').eq('user_id', user_id).gte('created_at', today_utc_start.isoformat()).limit(1).execute()
+    return response.count > 0 if response else False
+@supabase_retry_handler()
+async def schedule_reminder(guild_id: int, reminder_type: str, remind_at: datetime):
+    await supabase.table('reminders').update({"is_active": False}).eq('guild_id', guild_id).eq('reminder_type', reminder_type).eq('is_active', True).execute()
+    await supabase.table('reminders').insert({"guild_id": guild_id, "reminder_type": reminder_type, "remind_at": remind_at.isoformat(), "is_active": True}).execute()
+@supabase_retry_handler()
+async def get_due_reminders() -> List[Dict[str, Any]]:
+    now = datetime.now(timezone.utc).isoformat()
+    response = await supabase.table('reminders').select('*').eq('is_active', True).lte('remind_at', now).execute()
+    return response.data if response and response.data else []
+@supabase_retry_handler()
+async def deactivate_reminder(reminder_id: int):
+    await supabase.table('reminders').update({"is_active": False}).eq('id', reminder_id).execute()
 @supabase_retry_handler()
 async def update_wallet(user: discord.User, amount: int) -> Optional[dict]:
     params = {'p_user_id': str(user.id), 'p_amount': amount}
     response = await supabase.rpc('update_wallet_balance', params).execute()
     return response.data[0] if response and response.data else None
-
 @supabase_retry_handler()
-async def get_inventory(user: Union[discord.Member, discord.User]) -> Dict[str, int]:
-    user_id_str = str(user.id)
-    response = await supabase.table('inventories').select('item_name, quantity').eq('user_id', user_id_str).gt('quantity', 0).execute()
-    inventory = {item['item_name']: item['quantity'] for item in response.data} if response and response.data else {}
-    item_db = get_item_database()
-    if isinstance(user, discord.Member):
-        user_role_ids = {role.id for role in user.roles}
-        for item_name, item_data in item_db.items():
-            if (role_key := item_data.get('role_key')) and (role_id := get_id(role_key)) and role_id in user_role_ids:
-                inventory[item_name] = inventory.get(item_name, 0) + 1
-    return inventory
-
+async def backup_member_data(user_id: int, guild_id: int, role_ids: List[int], nickname: Optional[str]):
+    await supabase.table('left_members').upsert({ 'user_id': user_id, 'guild_id': guild_id, 'roles': role_ids, 'nickname': nickname, 'left_at': datetime.now(timezone.utc).isoformat() }).execute()
 @supabase_retry_handler()
-async def update_inventory(user_id_str: str, item_name: str, quantity: int):
-    params = {'p_user_id': user_id_str, 'p_item_name': item_name, 'p_quantity_delta': quantity}
-    await supabase.rpc('update_inventory_quantity', params).execute()
-
-async def get_user_gear(user: Union[discord.Member, discord.User]) -> dict:
-    default_bait = "エサなし"
-    default_gear = {"rod": BARE_HANDS, "bait": default_bait, "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
-    
-    user_id_str = str(user.id)
-    gear = await get_or_create_user('gear_setups', user_id_str, default_gear)
-    
-    inv = await get_inventory(user)
-    
-    if inv is None:
-        logger.error(f"'{user.name}'님의 인벤토리를 불러오는 데 실패하여, 장비 검사를 건너뜁니다.")
-        return gear
-
-    gear_to_check = {"rod": BARE_HANDS, "bait": default_bait, "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
-    updated = False
-    for gear_type, default_item in gear_to_check.items():
-        equipped_item = gear.get(gear_type, default_item)
-        if equipped_item != default_item and inv.get(equipped_item, 0) <= 0:
-            gear[gear_type] = default_item
-            updated = True
-    
-    if updated:
-        gear_updates = {k: v for k, v in gear.items() if k in gear_to_check}
-        await set_user_gear(user_id_str, **gear_updates)
-        
-    return gear
-
+async def get_member_backup(user_id: int, guild_id: int) -> Optional[Dict[str, Any]]:
+    response = await supabase.table('left_members').select('*').eq('user_id', user_id).eq('guild_id', guild_id).maybe_single().execute()
+    return response.data if response else None
 @supabase_retry_handler()
-async def set_user_gear(user_id_str: str, rod: str = None, bait: str = None, hoe: str = None, watering_can: str = None):
-    data_to_update = {}
-    if rod is not None: data_to_update['rod'] = rod
-    if bait is not None: data_to_update['bait'] = bait
-    if hoe is not None: data_to_update['hoe'] = hoe
-    if watering_can is not None: data_to_update['watering_can'] = watering_can
-    if data_to_update:
-        await supabase.table('gear_setups').update(data_to_update).eq('user_id', user_id_str).execute()
-
-@supabase_retry_handler()
-async def get_aquarium(user_id_str: str) -> list:
-    response = await supabase.table('aquariums').select('id, name, size, emoji').eq('user_id', user_id_str).execute()
-    return response.data if response and response.data else []
-
-@supabase_retry_handler()
-async def add_to_aquarium(user_id_str: str, fish_data: dict):
-    await supabase.table('aquariums').insert({"user_id": user_id_str, **fish_data}).execute()
-
-@supabase_retry_handler()
-async def get_cooldown(user_id_str: str, cooldown_key: str) -> float:
-    response = await supabase.table('cooldowns').select('last_cooldown_timestamp').eq('user_id', user_id_str).eq('cooldown_key', cooldown_key).limit(1).execute()
-    if response and response.data and (ts_str := response.data[0].get('last_cooldown_timestamp')):
-        try: return datetime.fromisoformat(ts_str.replace('Z', '+00:00')).timestamp()
-        except (ValueError, TypeError): return 0.0
-    return 0.0
-
-@supabase_retry_handler()
-async def set_cooldown(user_id_str: str, cooldown_key: str, timestamp: float = None):
-    ts = timestamp or time.time()
-    iso_timestamp = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-    await supabase.table('cooldowns').upsert({"user_id": user_id_str, "cooldown_key": cooldown_key, "last_cooldown_timestamp": iso_timestamp}, on_conflict="user_id,cooldown_key").execute()
-
-@supabase_retry_handler()
-async def sell_fish_from_db(user_id_str: str, fish_ids: List[int], total_sell_price: int):
-    params = {'p_user_id': user_id_str, 'p_fish_ids': fish_ids, 'p_total_value': total_sell_price}
-    await supabase.rpc('sell_fishes', params).execute()
-
+async def delete_member_backup(user_id: int, guild_id: int):
+    await supabase.table('left_members').delete().eq('user_id', user_id).eq('guild_id', guild_id).execute()
 @supabase_retry_handler()
 async def get_user_abilities(user_id: int) -> List[str]:
-    """사용자가 보유한 모든 능력의 키(key) 목록을 반환합니다. (5분 캐시 적용)"""
+    CACHE_TTL = 300
     now = time.time()
-    user_id_str = str(user_id)
-
-    if user_id_str in _user_abilities_cache:
-        cached_data, timestamp = _user_abilities_cache[user_id_str]
+    if user_id in _user_abilities_cache:
+        cached_data, timestamp = _user_abilities_cache[user_id]
         if now - timestamp < CACHE_TTL:
             return cached_data
-
     response = await supabase.rpc('get_user_ability_keys', {'p_user_id': user_id}).execute()
-    
-    if response and response.data:
-        abilities = response.data
-        _user_abilities_cache[user_id_str] = (abilities, now)
+    if response and hasattr(response, 'data'):
+        abilities = response.data if response.data else []
+        _user_abilities_cache[user_id] = (abilities, now)
         return abilities
-    
-    _user_abilities_cache[user_id_str] = ([], now)
+    _user_abilities_cache[user_id] = ([], now)
     return []
