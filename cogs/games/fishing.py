@@ -120,7 +120,6 @@ class FishingGameView(ui.View):
         embed = discord.Embed()
         if catch_proto.get("min_size") is not None:
             log_publicly = True
-            # [개선] 사이즈 보너스 적용
             min_s, max_s = catch_proto["min_size"] * size_multiplier, catch_proto["max_size"] * size_multiplier
             size = round(random.uniform(min_s, max_s), 1)
 
@@ -129,6 +128,9 @@ class FishingGameView(ui.View):
 
             await add_to_aquarium(str(self.player.id), {"name": catch_proto['name'], "size": size, "emoji": catch_proto.get('emoji', '🐠')})
             is_big_catch = size >= self.big_catch_threshold
+
+            # [✨ 신규] 낚시 활동 기록
+            await log_user_activity(self.player.id, 'fishing_catch', 1)
 
             xp_to_add = get_config("GAME_CONFIG", {}).get("XP_FROM_FISHING", 20)
             res = await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add, 'p_source': 'fishing'}).execute()
