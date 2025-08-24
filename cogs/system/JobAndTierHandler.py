@@ -21,6 +21,10 @@ class JobAdvancementView(ui.View):
         self.jobs_data = {job['job_key']: job for job in jobs}
         self.level = level
         
+        # [✅ 수정] 선택 상태를 명시적으로 초기화합니다.
+        self.selected_job_key: str | None = None
+        self.selected_ability_key: str | None = None
+        
         self.build_components()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -29,7 +33,7 @@ class JobAdvancementView(ui.View):
             return False
         return True
 
-    def build_components(self, selected_job_key: str | None = None, selected_ability_key: str | None = None):
+    def build_components(self):
         self.clear_items()
 
         job_options = []
@@ -44,70 +48,75 @@ class JobAdvancementView(ui.View):
             job_options.append(discord.SelectOption(label="選択できる職業がありません。", value="no_jobs_available", default=True))
         
         job_select = ui.Select(placeholder="① まずは職業を選択してください...", options=job_options, custom_id="job_adv_job_select", disabled=is_job_disabled)
+        # [✅ 수정] 현재 선택된 직업 값을 드롭다운에 반영합니다.
+        if self.selected_job_key:
+            job_select.placeholder = self.jobs_data[self.selected_job_key]['job_name']
         job_select.callback = self.on_job_select
         self.add_item(job_select)
 
-        # [✅✅✅ 핵심 수정] 능력 선택 드롭다운에도 예외 처리를 추가합니다.
         ability_options = []
         is_ability_disabled = True
         ability_placeholder = "先に職業を選択してください。"
 
-        if selected_job_key and selected_job_key in self.jobs_data:
+        if self.selected_job_key and self.selected_job_key in self.jobs_data:
             is_ability_disabled = False
             ability_placeholder = "② 次に能力を選択してください..."
-            selected_job = self.jobs_data[selected_job_key]
+            selected_job = self.jobs_data[self.selected_job_key]
             for ability in selected_job.get('abilities', []):
                 ability_options.append(
                     discord.SelectOption(label=ability['ability_name'], value=ability['ability_key'], description=ability['description'][:100])
                 )
         
-        # 선택할 능력이 없을 경우, 플레이스홀더 옵션을 추가합니다.
         if not ability_options:
             ability_options.append(discord.SelectOption(label="...", value="no_abilities_placeholder", default=True))
 
         ability_select = ui.Select(placeholder=ability_placeholder, options=ability_options, disabled=is_ability_disabled, custom_id="job_adv_ability_select")
+        # [✅ 수정] 현재 선택된 능력 값을 드롭다운에 반영합니다.
+        if self.selected_ability_key:
+            selected_job = self.jobs_data[self.selected_job_key]
+            ability_name = next((a['ability_name'] for a in selected_job['abilities'] if a['ability_key'] == self.selected_ability_key), "能力を選択")
+            ability_select.placeholder = ability_name
         ability_select.callback = self.on_ability_select
         self.add_item(ability_select)
 
-        is_confirm_disabled = not (selected_job_key and selected_ability_key)
+        is_confirm_disabled = not (self.selected_job_key and self.selected_ability_key)
         confirm_button = ui.Button(label="確定する", style=discord.ButtonStyle.success, disabled=is_confirm_disabled, custom_id="job_adv_confirm")
         confirm_button.callback = self.on_confirm
         self.add_item(confirm_button)
 
+    # [✅✅✅ 핵심 수정] View 업데이트 로직을 개선합니다.
     async def on_job_select(self, interaction: discord.Interaction):
         if interaction.data['values'][0] == "no_jobs_available":
             return await interaction.response.defer()
-        selected_job_key = interaction.data['values'][0]
-        self.build_components(selected_job_key=selected_job_key)
+        
+        # 상태 업데이트
+        self.selected_job_key = interaction.data['values'][0]
+        self.selected_ability_key = None # 직업을 바꾸면 능력 선택은 초기화
+        
+        # 업데이트된 상태로 컴포넌트 다시 빌드
+        self.build_components()
         await interaction.response.edit_message(view=self)
 
     async def on_ability_select(self, interaction: discord.Interaction):
         if interaction.data['values'][0] == "no_abilities_placeholder":
             return await interaction.response.defer()
             
-        job_select = discord.utils.get(self.children, custom_id='job_adv_job_select')
-        if not job_select or not job_select.values or job_select.values[0] == 'no_jobs_available':
-            await interaction.response.send_message("先に職業を選択してください。", ephemeral=True)
-            return
+        # 상태 업데이트
+        self.selected_ability_key = interaction.data['values'][0]
         
-        selected_job_key = job_select.values[0]
-        selected_ability_key = interaction.data['values'][0]
-        self.build_components(selected_job_key=selected_job_key, selected_ability_key=selected_ability_key)
+        # 업데이트된 상태로 컴포넌트 다시 빌드
+        self.build_components()
         await interaction.response.edit_message(view=self)
 
     async def on_confirm(self, interaction: discord.Interaction):
         await interaction.response.defer()
 
-        job_select = discord.utils.get(self.children, custom_id='job_adv_job_select')
-        ability_select = discord.utils.get(self.children, custom_id='job_adv_ability_select')
-
-        if not (job_select and job_select.values and ability_select and ability_select.values):
+        # [✅ 수정] View의 인스턴스 변수에서 최종 선택 값을 가져옵니다.
+        if not (self.selected_job_key and self.selected_ability_key):
             await interaction.followup.send("職業と能力の両方を選択してください。", ephemeral=True)
+            # 버튼이 활성화되었다는 것은 두 값이 모두 있어야 하므로, 이 경우는 거의 발생하지 않습니다.
             return
 
-        selected_job_key = job_select.values[0]
-        selected_ability_key = ability_select.values[0]
-        
         for item in self.children: item.disabled = True
         await interaction.edit_original_response(content="しばらくお待ちください...", embed=None, view=self)
         self.stop()
@@ -116,8 +125,8 @@ class JobAdvancementView(ui.View):
             user = await interaction.guild.fetch_member(self.user_id)
             if not user: raise Exception("유저를 찾을 수 없습니다.")
 
-            selected_job = self.jobs_data[selected_job_key]
-            selected_ability = next(a for a in selected_job['abilities'] if a['ability_key'] == selected_ability_key)
+            selected_job = self.jobs_data[self.selected_job_key]
+            selected_ability = next(a for a in selected_job['abilities'] if a['ability_key'] == self.selected_ability_key)
 
             job_role_key = selected_job['role_key']
             all_job_role_keys = list(JOB_SYSTEM_CONFIG.get("JOB_ROLE_MAP", {}).values())
@@ -214,7 +223,6 @@ class JobAndTierHandler(commands.Cog):
                             logger.info(f"'{thread.name}' 스레드에서 StartAdvancementView를 다시 로드했습니다.")
                         elif isinstance(comp, discord.ui.Select) and comp.custom_id == "job_adv_job_select":
                             # 이미 전직 선택 화면으로 넘어간 경우, 레벨 정보가 필요
-                            # 이 로직을 정확히 구현하려면 메시지 임베드에서 레벨을 파싱해야 함
                             pass
                         break
             except Exception as e:
