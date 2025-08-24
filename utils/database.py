@@ -83,7 +83,7 @@ def get_fishing_loot() -> List[Dict[str, Any]]: return _fishing_loot_cache
 def get_string(key_path: str, default: Any = None, **kwargs) -> Any:
     try:
         keys = key_path.split('.')
-        value = _bot_configs_cache.get("strings", {}) # strings는 DB에 없을 수 있으므로 기본값 처리
+        value = _bot_configs_cache.get("strings", {})
         for key in keys: value = value[key]
         if isinstance(value, str) and kwargs:
             class SafeFormatter(dict):
