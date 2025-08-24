@@ -1,3 +1,5 @@
+# cogs/panel_updater.py
+
 import discord
 from discord.ext import commands, tasks
 import logging
