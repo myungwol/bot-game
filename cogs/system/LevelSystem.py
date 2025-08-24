@@ -15,6 +15,8 @@ from utils.database import (
     get_embed_from_db
 )
 from utils.helpers import format_embed_from_db, calculate_xp_for_level
+# [✅ 수정] game_config_defaults 에서 전직 레벨 정보를 가져옵니다.
+from utils.game_config_defaults import JOB_ADVANCEMENT_DATA, GAME_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -221,26 +223,21 @@ class LevelSystem(commands.Cog):
     async def load_configs(self):
         pass
     
-    # [✅✅✅ 핵심 수정] DB 요청 대신, JobAndTierHandler Cog를 직접 호출하도록 변경
     async def handle_level_up_event(self, user: discord.Member, result_data: Dict):
         if not result_data: return
         
         new_level = result_data.get('new_level')
         logger.info(f"유저 {user.display_name}(ID: {user.id})가 레벨 {new_level}(으)로 레벨업했습니다.")
         
-        # JobAndTierHandler Cog를 가져옵니다.
         handler_cog = self.bot.get_cog("JobAndTierHandler")
         if not handler_cog:
             logger.error("JobAndTierHandler Cog를 찾을 수 없습니다. 전직/등급 처리를 건너뜁니다.")
             return
 
-        # 1. 등급 역할 업데이트는 항상 실행
         await handler_cog.update_tier_role(user, new_level)
         logger.info(f"{user.name}님의 등급 역할 업데이트를 요청했습니다.")
 
-        # 2. 전직 가능 레벨인지 확인하고, 맞다면 전직 절차 시작
-        game_config = get_config("GAME_CONFIG", {})
-        job_advancement_levels = game_config.get("JOB_ADVANCEMENT_LEVELS", [50, 100])
+        job_advancement_levels = GAME_CONFIG.get("JOB_ADVANCEMENT_LEVELS", [50, 100])
         
         if new_level in job_advancement_levels:
             await handler_cog.start_advancement_process(user, new_level)
