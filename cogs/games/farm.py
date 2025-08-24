@@ -378,7 +378,8 @@ class FarmUIView(ui.View):
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if not owner: return
 
-        # [✨ 신규] 농사 활동 기록
+        # [✅✅✅ 핵심 수정 ✅✅✅]
+        # 수확한 작물의 총 개수를 'farm_harvest' 활동으로 기록합니다.
         total_harvested_amount = sum(harvested.values())
         if total_harvested_amount > 0:
             await log_user_activity(owner.id, 'farm_harvest', total_harvested_amount)
