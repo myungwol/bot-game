@@ -32,7 +32,6 @@ class JobAdvancementView(ui.View):
     def build_components(self, selected_job_key: str | None = None, selected_ability_key: str | None = None):
         self.clear_items()
 
-        # [✅✅✅ 핵심 수정] 선택할 직업이 없을 경우를 대비한 예외 처리
         job_options = []
         is_job_disabled = True
         if self.jobs_data:
@@ -48,17 +47,24 @@ class JobAdvancementView(ui.View):
         job_select.callback = self.on_job_select
         self.add_item(job_select)
 
+        # [✅✅✅ 핵심 수정] 능력 선택 드롭다운에도 예외 처리를 추가합니다.
         ability_options = []
         is_ability_disabled = True
-        if selected_job_key:
+        ability_placeholder = "先に職業を選択してください。"
+
+        if selected_job_key and selected_job_key in self.jobs_data:
             is_ability_disabled = False
+            ability_placeholder = "② 次に能力を選択してください..."
             selected_job = self.jobs_data[selected_job_key]
             for ability in selected_job.get('abilities', []):
                 ability_options.append(
                     discord.SelectOption(label=ability['ability_name'], value=ability['ability_key'], description=ability['description'][:100])
                 )
         
-        ability_placeholder = "② 次に能力を選択してください..." if selected_job_key else "先に職業を選択してください。"
+        # 선택할 능력이 없을 경우, 플레이스홀더 옵션을 추가합니다.
+        if not ability_options:
+            ability_options.append(discord.SelectOption(label="...", value="no_abilities_placeholder", default=True))
+
         ability_select = ui.Select(placeholder=ability_placeholder, options=ability_options, disabled=is_ability_disabled, custom_id="job_adv_ability_select")
         ability_select.callback = self.on_ability_select
         self.add_item(ability_select)
@@ -76,6 +82,9 @@ class JobAdvancementView(ui.View):
         await interaction.response.edit_message(view=self)
 
     async def on_ability_select(self, interaction: discord.Interaction):
+        if interaction.data['values'][0] == "no_abilities_placeholder":
+            return await interaction.response.defer()
+            
         job_select = discord.utils.get(self.children, custom_id='job_adv_job_select')
         if not job_select or not job_select.values or job_select.values[0] == 'no_jobs_available':
             await interaction.response.send_message("先に職業を選択してください。", ephemeral=True)
@@ -206,7 +215,6 @@ class JobAndTierHandler(commands.Cog):
                         elif isinstance(comp, discord.ui.Select) and comp.custom_id == "job_adv_job_select":
                             # 이미 전직 선택 화면으로 넘어간 경우, 레벨 정보가 필요
                             # 이 로직을 정확히 구현하려면 메시지 임베드에서 레벨을 파싱해야 함
-                            # 우선 StartAdvancementView 복구에 집중
                             pass
                         break
             except Exception as e:
