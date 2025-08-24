@@ -1,45 +1,73 @@
-# cogs/games/commerce.py -> BuyItemView 클래스 내부
+# bot-game/cogs/commerce.py
 
-    # [✅✅✅ 핵심 수정] 상점 아이템 목록을 비동기적으로 필터링하는 함수
-    async def _filter_items_for_user(self):
-        """사용자 상태에 따라 상점 아이템 목록을 필터링합니다."""
-        all_items_in_category = sorted(
-            [(n, d) for n, d in get_item_database().items() if d.get('buyable') and d.get('category') == self.category],
-            key=lambda item: item[1].get('current_price', item[1].get('price', 0))
-        )
-        
-        # 농장 확장권의 경우, 농장 크기를 확인해야 합니다.
-        farm_expansion_item_exists = any(item[1].get('effect_type') == 'expand_farm' for item in all_items_in_category)
-        
-        if not farm_expansion_item_exists:
-            self.items_in_category = all_items_in_category
-            return
+import discord
+from discord.ext import commands
+from discord import ui
+import logging
+import asyncio
+import math
+import time
+from typing import Optional, Dict, List, Any
 
-        farm_res = await supabase.table('farms').select('farm_plots(count)').eq('user_id', self.user.id).maybe_single().execute()
-        
-        current_plots = 0
-        if farm_res and farm_res.data and farm_res.data.get('farm_plots'):
-            current_plots = farm_res.data['farm_plots'][0]['count']
-        
-        is_farm_max_size = current_plots >= 25
-        
-        # 최종 아이템 목록 필터링
-        filtered_items = []
-        for name, data in all_items_in_category:
-            if data.get('effect_type') == 'expand_farm':
-                if not is_farm_max_size:
-                    filtered_items.append((name, data))
-            else:
-                filtered_items.append((name, data))
-        
-        self.items_in_category = filtered_items
+logger = logging.getLogger(__name__)
+
+from utils.database import (
+    get_inventory, get_wallet, supabase, get_id, get_item_database,
+    get_config, get_string,
+    get_aquarium, get_fishing_loot, sell_fish_from_db,
+    save_panel_id, get_panel_id, get_embed_from_db,
+    update_inventory, update_wallet, get_farm_data, save_config_to_db,
+    load_game_data_from_db
+)
+from utils.helpers import format_embed_from_db
+
+class QuantityModal(ui.Modal):
+    quantity = ui.TextInput(label="数量", placeholder="例: 10", required=True, max_length=5)
+    def __init__(self, title: str, max_value: int):
+        super().__init__(title=title)
+        self.quantity.placeholder = f"最大 {max_value}個まで"
+        self.max_value = max_value
+        self.value: Optional[int] = None
+    async def on_submit(self, i: discord.Interaction):
+        try:
+            q_val = int(self.quantity.value)
+            if not (1 <= q_val <= self.max_value):
+                await i.response.send_message(f"1から{self.max_value}までの数字を入力してください。", ephemeral=True)
+                return
+            self.value = q_val
+            await i.response.defer(ephemeral=True)
+        except ValueError:
+            await i.response.send_message("数字のみ入力してください。", ephemeral=True)
+        except Exception:
+            self.stop()
+
+class ShopViewBase(ui.View):
+    def __init__(self, user: discord.Member):
+        super().__init__(timeout=300)
+        self.user = user
+        self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙")
+        self.message: Optional[discord.WebhookMessage] = None
+
+    async def update_view(self, interaction: discord.Interaction):
+        embed = await self.build_embed()
+        # [수정] build_components는 이제 비동기 함수가 될 수 있습니다.
+        await self.build_components()
+        await interaction.edit_original_response(embed=embed, view=self)
+
+    async def build_embed(self) -> discord.Embed:
+        raise NotImplementedError("build_embed must be implemented in subclasses")
 
     async def build_components(self):
-        self.clear_items()
-        
-        # [수정] 컴포넌트를 빌드하기 전에 아이템 목록을 필터링합니다.
-        await self._filter_items_for_user()
-        
+        raise NotImplementedError("build_components must be implemented in subclasses")
+
+    async def handle_error(self, interaction: discord.Interaction, error: Exception, custom_message: str = ""):
+        logger.error(f"상점 처리 중 오류 발생: {error}", exc_info=True)
+        message_content = custom_message or "❌ 処理中にエラーが発生しました。"
+        if interaction.response.is_done():
+            await interaction.followup.send(message_content, ephemeral=True)
+        else:
+            await interaction.response.send_message(message_content, ephemeral=True)
+
 class BuyItemView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str):
         super().__init__(user)
