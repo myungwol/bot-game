@@ -17,7 +17,9 @@ from utils.database import (
     get_config, save_config_to_db,
     is_whale_available, set_whale_caught,
     BARE_HANDS, DEFAULT_ROD,
-    get_user_abilities
+    get_user_abilities,
+    # [✅ 추가] 활동 기록 함수를 가져옵니다.
+    log_user_activity
 )
 from utils.helpers import format_embed_from_db
 
@@ -96,7 +98,6 @@ class FishingGameView(ui.View):
         if not loot_pool:
             return (discord.Embed(title="エラー", description="この場所では何も釣れないようです。", color=discord.Color.red()), False, False, False)
         
-        # [개선] 사용자 능력치 로드
         user_abilities = await get_user_abilities(self.player.id)
         rare_up_bonus = 0.2 if 'fish_rare_up_2' in user_abilities else 0.0
         size_multiplier = 1.2 if 'fish_size_up_2' in user_abilities else 1.0
@@ -107,13 +108,17 @@ class FishingGameView(ui.View):
             base_value = item.get('base_value')
             if base_value is None: base_value = 0
             if base_value > 100:
-                # [개선] 희귀도 보너스 적용
                 weight *= (1.0 + rod_bonus + rare_up_bonus)
             else:
                 weight *= (1.0 + rod_bonus)
             weights.append(weight)
 
         catch_proto = random.choices(loot_pool, weights=weights, k=1)[0]
+        
+        # [✅✅✅ 핵심 수정 ✅✅✅]
+        # 낚시에 성공하면(쓰레기 포함) 무조건 활동을 기록합니다.
+        await log_user_activity(self.player.id, 'fishing_catch', 1)
+        
         is_whale_catch = catch_proto.get('name') == 'クジラ'
         is_big_catch, log_publicly = False, False
         
@@ -128,9 +133,6 @@ class FishingGameView(ui.View):
 
             await add_to_aquarium(str(self.player.id), {"name": catch_proto['name'], "size": size, "emoji": catch_proto.get('emoji', '🐠')})
             is_big_catch = size >= self.big_catch_threshold
-
-            # [✨ 신규] 낚시 활동 기록
-            await log_user_activity(self.player.id, 'fishing_catch', 1)
 
             xp_to_add = get_config("GAME_CONFIG", {}).get("XP_FROM_FISHING", 20)
             res = await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add, 'p_source': 'fishing'}).execute()
@@ -264,7 +266,6 @@ class FishingPanelView(ui.View):
                 self.fishing_cog.active_fishing_sessions_by_user.add(user.id)
                 bait = gear.get('bait', 'エサなし')
                 
-                # [개선] 미끼 절약 능력 확인
                 bait_saved = False
                 if bait != "エサなし" and 'fish_bait_saver_1' in user_abilities:
                     if random.random() < 0.2:
@@ -288,7 +289,6 @@ class FishingPanelView(ui.View):
 
                 bite_range = bite_times_config.get(bait, bite_times_config.get("エサなし", [10.0, 15.0]))
                 
-                # [개선] 입질 시간 단축 능력 확인
                 if 'fish_bite_time_down_1' in user_abilities:
                     bite_range = [max(0.5, t - 2.0) for t in bite_range]
 
