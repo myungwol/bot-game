@@ -18,7 +18,6 @@ from utils.database import (
     is_whale_available, set_whale_caught,
     BARE_HANDS, DEFAULT_ROD,
     get_user_abilities,
-    # [✅ 추가] 활동 기록 함수를 가져옵니다.
     log_user_activity
 )
 from utils.helpers import format_embed_from_db
@@ -98,6 +97,8 @@ class FishingGameView(ui.View):
         if not loot_pool:
             return (discord.Embed(title="エラー", description="この場所では何も釣れないようです。", color=discord.Color.red()), False, False, False)
         
+        await log_user_activity(self.player.id, 'fishing_catch', 1)
+        
         user_abilities = await get_user_abilities(self.player.id)
         rare_up_bonus = 0.2 if 'fish_rare_up_2' in user_abilities else 0.0
         size_multiplier = 1.2 if 'fish_size_up_2' in user_abilities else 1.0
@@ -114,10 +115,6 @@ class FishingGameView(ui.View):
             weights.append(weight)
 
         catch_proto = random.choices(loot_pool, weights=weights, k=1)[0]
-        
-        # [✅✅✅ 핵심 수정 ✅✅✅]
-        # 낚시에 성공하면(쓰레기 포함) 무조건 활동을 기록합니다.
-        await log_user_activity(self.player.id, 'fishing_catch', 1)
         
         is_whale_catch = catch_proto.get('name') == 'クジラ'
         is_big_catch, log_publicly = False, False
@@ -299,8 +296,11 @@ class FishingPanelView(ui.View):
                 desc = "\n".join(desc_lines)
                 embed = discord.Embed(title=f"🎣 {location_name}での釣りを開始しました！", description=desc, color=discord.Color.light_grey())
                 
-                if image_url := game_config.get("FISHING_WAITING_IMAGE_URL"):
-                    embed.set_thumbnail(url=str(image_url))
+                # [✅✅✅ 핵심 수정 ✅✅✅]
+                # DB에서 직접 FISHING_WAITING_IMAGE_URL 설정을 가져옵니다.
+                if image_url := get_config("FISHING_WAITING_IMAGE_URL"):
+                    # DB 값에 따옴표가 포함되어 있을 경우를 대비해 제거합니다.
+                    embed.set_thumbnail(url=str(image_url).strip('"'))
                 
                 view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type, bite_range)
                 await view.start_game(interaction, embed)
