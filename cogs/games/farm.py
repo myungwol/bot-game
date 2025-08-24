@@ -35,7 +35,7 @@ async def preload_farmable_info(farm_data: Dict) -> Dict[str, Dict]:
     tasks = [get_farmable_item_info(name) for name in item_names]
     results = await asyncio.gather(*tasks)
     return {info['item_name']: info for info in results if info}
-
+    
 class ConfirmationView(ui.View):
     def __init__(self, user: discord.User): super().__init__(timeout=60); self.value = None; self.user = user
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -61,7 +61,6 @@ class FarmNameModal(ui.Modal, title="農場名の変更"):
         await supabase.table('farms').update({'name': new_name}).eq('id', self.farm_data['id']).execute()
         self.farm_data['name'] = new_name
         
-        # [✅ 요청사항 2] 변경 감지 시 UI 업데이트 요청
         await self.cog.request_farm_ui_update(self.farm_data['user_id'])
         await interaction.followup.send("✅ 農場の名前を変更しました。", ephemeral=True)
 
@@ -160,7 +159,6 @@ class FarmActionView(ui.View):
 
         await asyncio.gather(*db_tasks)
         
-        # [✅ 요청사항 2] 변경 감지 시 UI 업데이트 요청
         await self.cog.request_farm_ui_update(self.farm_owner_id)
 
         followup_message = f"✅ 「{self.selected_item}」を植えました。"
@@ -195,7 +193,6 @@ class FarmActionView(ui.View):
         await view.wait()
         if view.value:
             await clear_plots_db(plot_ids)
-            # [✅ 요청사항 2] 변경 감지 시 UI 업데이트 요청
             await self.cog.request_farm_ui_update(self.farm_owner_id)
             await interaction.edit_original_response(content="✅ 作物を撤去しました。", view=None)
         else:
@@ -244,8 +241,8 @@ class FarmUIView(ui.View):
             await interaction.response.send_message("❌ この操作は農場の所有者のみ可能です。", ephemeral=True)
             return False
         
-        self.farm_data = await get_farm_data(self.farm_owner_id)
-        if not self.farm_data:
+        farm_data = await get_farm_data(self.farm_owner_id)
+        if not farm_data:
             return False
 
         action_map = { "farm_till": "till", "farm_plant": "plant", "farm_water": "water", "farm_harvest": "harvest", "farm_uproot": "plant", "farm_regenerate": "till" }
@@ -253,7 +250,7 @@ class FarmUIView(ui.View):
         
         if not action: return False 
             
-        has_perm = await check_farm_permission(self.farm_data['id'], interaction.user.id, action)
+        has_perm = await check_farm_permission(farm_data['id'], interaction.user.id, action)
         if not has_perm: await interaction.response.send_message("❌ この操作を行う権限がありません。", ephemeral=True)
         return has_perm
         
@@ -288,7 +285,6 @@ class FarmUIView(ui.View):
 
         await supabase.table('farm_plots').update({'state': 'tilled'}).in_('id', plots_to_update_db).execute()
         
-        # [✅ 요청사항 2] 변경 감지 시 UI 업데이트 요청
         await self.cog.request_farm_ui_update(self.farm_owner_id)
         await interaction.followup.send(f"✅ **{hoe}** を使って、畑を**{tilled}マス**耕しました。", ephemeral=True)
     
@@ -334,7 +330,6 @@ class FarmUIView(ui.View):
         ]
         await asyncio.gather(*tasks)
 
-        # [✅ 요청사항 2] 변경 감지 시 UI 업데이트 요청
         await self.cog.request_farm_ui_update(self.farm_owner_id)
         await interaction.followup.send(f"✅ **{can}** を使って、**{watered_count}マス**に水をやりました。", ephemeral=True)
         
@@ -386,16 +381,23 @@ class FarmUIView(ui.View):
         total_xp = sum(harvested.values()) * xp_per_crop
         if total_xp > 0: db_tasks.append(supabase.rpc('add_xp', {'p_user_id': owner.id, 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute())
         
-        await asyncio.gather(*db_tasks, return_exceptions=True)
-
-        # [✅ 요청사항 2] 변경 감지 시 UI 업데이트 요청
+        results = await asyncio.gather(*db_tasks, return_exceptions=True)
+        
         await self.cog.request_farm_ui_update(self.farm_owner_id)
+
+        # [✅✅✅ 핵심 수정 ✅✅✅]
+        # 수확 결과 메시지에 능력 발동 여부를 추가합니다.
+        followup_message = f"🎉 **{', '.join([f'{n} {q}個' for n, q in harvested.items()])}**を収穫しました！"
+        if yield_bonus > 0.0:
+            followup_message += "\n✨ **大農家**の能力で、収穫量が大幅に増加しました！"
         
-        results = [r for r in db_tasks if isinstance(r, dict) and 'data' in r and r['data']]
-        if results and (core_cog := self.cog.bot.get_cog("EconomyCore")):
-            await core_cog.handle_level_up_event(owner, results[0]['data'][0])
+        for res in results:
+            if isinstance(res, dict) and 'data' in res and res['data']:
+                if (core_cog := self.cog.bot.get_cog("EconomyCore")):
+                    await core_cog.handle_level_up_event(owner, res['data'][0])
+                break # XP 부여 결과는 하나만 처리
         
-        await interaction.followup.send(f"🎉 **{', '.join([f'{n} {q}個' for n, q in harvested.items()])}**を収穫しました！", ephemeral=True)
+        await interaction.followup.send(followup_message, ephemeral=True)
     
     async def on_farm_invite_click(self, i: discord.Interaction):
         view = ui.View(timeout=180)
@@ -458,8 +460,6 @@ class Farm(commands.Cog):
         self.bot = bot
         self.thread_locks: Dict[int, asyncio.Lock] = {}
         self.daily_crop_update.start()
-        # [✅✅✅ 핵심 수정 ✅✅✅]
-        # 주기적으로 UI 업데이트 요청을 확인하는 새로운 루프를 추가합니다.
         self.farm_ui_updater_task.start()
         
     def cog_unload(self):
@@ -509,24 +509,23 @@ class Farm(commands.Cog):
     async def before_daily_crop_update(self):
         await self.bot.wait_until_ready()
 
-    # [✅✅✅ 핵심 추가 ✅✅✅]
-    # 5초마다 DB를 확인하여 UI 업데이트 요청이 있는지 확인하고 처리하는 루프
     @tasks.loop(seconds=5.0)
     async def farm_ui_updater_task(self):
         try:
-            response = await supabase.table('bot_configs').select('config_key').like('config_key', 'farm_ui_update_request_%').execute()
+            response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', 'farm_ui_update_request_%').execute()
             if not response.data: return
             
             keys_to_delete = [req['config_key'] for req in response.data]
-            user_ids = {int(key.split('_')[-1]) for key in keys_to_delete}
-
+            
             tasks = []
-            for user_id in user_ids:
+            for req in response.data:
+                user_id = int(req['config_key'].split('_')[-1])
                 user = self.bot.get_user(user_id)
                 farm_data = await get_farm_data(user_id)
                 if user and farm_data and farm_data.get('thread_id'):
                     if thread := self.bot.get_channel(farm_data['thread_id']):
-                        tasks.append(self.update_farm_ui(thread, user, farm_data))
+                        force_new = req.get('config_value', {}).get('force_new', False)
+                        tasks.append(self.update_farm_ui(thread, user, farm_data, force_new))
             
             if tasks:
                 await asyncio.gather(*tasks)
@@ -541,13 +540,13 @@ class Farm(commands.Cog):
     async def before_farm_ui_updater_task(self):
         await self.bot.wait_until_ready()
 
-    # [✅✅✅ 핵심 추가 ✅✅✅]
-    # UI 업데이트가 필요할 때, 직접 UI를 수정하는 대신 DB에 요청을 기록하는 함수
     async def request_farm_ui_update(self, user_id: int, force_new: bool = False):
         config_key = f"farm_ui_update_request_{user_id}"
         config_value = {"timestamp": time.time(), "force_new": force_new}
         await save_config_to_db(config_key, config_value)
         
+    # [✅✅✅ 핵심 수정 ✅✅✅]
+    # 농장 UI 임베드를 만드는 이 함수에 패시브 능력 표시 로직을 추가합니다.
     async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         info_map = await preload_farmable_info(farm_data)
         
@@ -599,14 +598,43 @@ class Farm(commands.Cog):
         farm_str = "\n".join("".join(row) for row in grid)
         farm_name = farm_data.get('name') or user.display_name
         embed = discord.Embed(title=f"**{farm_name}さんの農場**", color=0x8BC34A, description=f"```{farm_str}```")
-        if infos: embed.description += "\n" + "\n".join(sorted(infos))
         
+        if infos:
+            embed.description += "\n" + "\n".join(sorted(infos))
+        
+        # --- [ 패시브 능력 표시 로직 시작 ] ---
+        owner_abilities = await get_user_abilities(user.id)
+        
+        all_farm_abilities_map = {}
+        job_advancement_data = get_config("JOB_ADVANCEMENT_DATA", {})
+        for level_data in job_advancement_data.values():
+            for job in level_data:
+                if 'farmer' in job.get('job_key', ''): # 농부/대농가 직업만 필터링
+                    for ability in job.get('abilities', []):
+                        all_farm_abilities_map[ability['ability_key']] = {
+                            'name': ability['ability_name'],
+                            'description': ability['description']
+                        }
+        
+        active_effects = []
+        EMOJI_MAP = {'seed': '🌱', 'water': '💧', 'yield': '🧺', 'growth': '⏱️'}
+        
+        for ability_key in owner_abilities:
+            if ability_key in all_farm_abilities_map:
+                ability_info = all_farm_abilities_map[ability_key]
+                emoji = next((e for key, e in EMOJI_MAP.items() if key in ability_key), '✨')
+                active_effects.append(f"> {emoji} **{ability_info['name']}**: {ability_info['description']}")
+        
+        if active_effects:
+            embed.description += "\n\n**--- 農場のパッシブ効果 ---**\n" + "\n".join(active_effects)
+        # --- [ 패시브 능력 표시 로직 끝 ] ---
+
         weather_key = get_config("current_weather", "sunny")
         weather = WEATHER_TYPES.get(weather_key, {"emoji": "❔", "name": "不明"})
         embed.description += f"\n\n**今日の天気:** {weather['emoji']} {weather['name']}"
         return embed
         
-    async def update_farm_ui(self, thread: discord.Thread, user: discord.User, farm_data: Dict):
+    async def update_farm_ui(self, thread: discord.Thread, user: discord.User, farm_data: Dict, force_new: bool = False):
         lock = self.thread_locks.setdefault(thread.id, asyncio.Lock())
         async with lock:
             if not (user and farm_data): return
@@ -615,9 +643,6 @@ class Farm(commands.Cog):
                 embed = await self.build_farm_embed(farm_data, user)
                 view = FarmUIView(self)
                 
-                req_data = await get_config(f"farm_ui_update_request_{user.id}", {})
-                force_new = req_data.get("force_new", False) if isinstance(req_data, dict) else False
-
                 message_id = farm_data.get("farm_message_id")
                 
                 if force_new and message_id:
