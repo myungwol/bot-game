@@ -21,7 +21,6 @@ class JobAdvancementView(ui.View):
         self.jobs_data = {job['job_key']: job for job in jobs}
         self.level = level
         
-        # [✅ 수정] 선택 상태를 명시적으로 초기화합니다.
         self.selected_job_key: str | None = None
         self.selected_ability_key: str | None = None
         
@@ -48,7 +47,6 @@ class JobAdvancementView(ui.View):
             job_options.append(discord.SelectOption(label="選択できる職業がありません。", value="no_jobs_available", default=True))
         
         job_select = ui.Select(placeholder="① まずは職業を選択してください...", options=job_options, custom_id="job_adv_job_select", disabled=is_job_disabled)
-        # [✅ 수정] 현재 선택된 직업 값을 드롭다운에 반영합니다.
         if self.selected_job_key:
             job_select.placeholder = self.jobs_data[self.selected_job_key]['job_name']
         job_select.callback = self.on_job_select
@@ -71,7 +69,6 @@ class JobAdvancementView(ui.View):
             ability_options.append(discord.SelectOption(label="...", value="no_abilities_placeholder", default=True))
 
         ability_select = ui.Select(placeholder=ability_placeholder, options=ability_options, disabled=is_ability_disabled, custom_id="job_adv_ability_select")
-        # [✅ 수정] 현재 선택된 능력 값을 드롭다운에 반영합니다.
         if self.selected_ability_key:
             selected_job = self.jobs_data[self.selected_job_key]
             ability_name = next((a['ability_name'] for a in selected_job['abilities'] if a['ability_key'] == self.selected_ability_key), "能力を選択")
@@ -84,16 +81,13 @@ class JobAdvancementView(ui.View):
         confirm_button.callback = self.on_confirm
         self.add_item(confirm_button)
 
-    # [✅✅✅ 핵심 수정] View 업데이트 로직을 개선합니다.
     async def on_job_select(self, interaction: discord.Interaction):
         if interaction.data['values'][0] == "no_jobs_available":
             return await interaction.response.defer()
         
-        # 상태 업데이트
         self.selected_job_key = interaction.data['values'][0]
-        self.selected_ability_key = None # 직업을 바꾸면 능력 선택은 초기화
+        self.selected_ability_key = None
         
-        # 업데이트된 상태로 컴포넌트 다시 빌드
         self.build_components()
         await interaction.response.edit_message(view=self)
 
@@ -101,20 +95,15 @@ class JobAdvancementView(ui.View):
         if interaction.data['values'][0] == "no_abilities_placeholder":
             return await interaction.response.defer()
             
-        # 상태 업데이트
-        self.selected_ability_key = interaction.data['values'][0]
-        
-        # 업데이트된 상태로 컴포넌트 다시 빌드
         self.build_components()
+        self.selected_ability_key = interaction.data['values'][0]
         await interaction.response.edit_message(view=self)
 
     async def on_confirm(self, interaction: discord.Interaction):
         await interaction.response.defer()
 
-        # [✅ 수정] View의 인스턴스 변수에서 최종 선택 값을 가져옵니다.
         if not (self.selected_job_key and self.selected_ability_key):
             await interaction.followup.send("職業と能力の両方を選択してください。", ephemeral=True)
-            # 버튼이 활성화되었다는 것은 두 값이 모두 있어야 하므로, 이 경우는 거의 발생하지 않습니다.
             return
 
         for item in self.children: item.disabled = True
@@ -125,10 +114,22 @@ class JobAdvancementView(ui.View):
             user = await interaction.guild.fetch_member(self.user_id)
             if not user: raise Exception("유저를 찾을 수 없습니다.")
 
-            selected_job = self.jobs_data[self.selected_job_key]
-            selected_ability = next(a for a in selected_job['abilities'] if a['ability_key'] == self.selected_ability_key)
+            selected_job_data = self.jobs_data[self.selected_job_key]
+            selected_ability_data = next(a for a in selected_job_data['abilities'] if a['ability_key'] == self.selected_ability_key)
 
-            job_role_key = selected_job['role_key']
+            # [✅✅✅ 핵심 수정] DB 함수가 요구하는 숫자 ID를 조회합니다.
+            # 1. 선택된 key를 기반으로 DB에서 실제 ID를 조회합니다.
+            job_res = await supabase.table('jobs').select('id').eq('job_key', self.selected_job_key).single().execute()
+            ability_res = await supabase.table('abilities').select('id').eq('ability_key', self.selected_ability_key).single().execute()
+
+            if not (job_res.data and ability_res.data):
+                raise Exception(f"DB에서 직업 또는 능력 ID를 찾을 수 없습니다. (job: {self.selected_job_key}, ability: {self.selected_ability_key})")
+            
+            job_id = job_res.data['id']
+            ability_id = ability_res.data['id']
+            
+            # 역할 처리
+            job_role_key = selected_job_data['role_key']
             all_job_role_keys = list(JOB_SYSTEM_CONFIG.get("JOB_ROLE_MAP", {}).values())
             
             roles_to_remove = [role for key in all_job_role_keys if (role_id := get_id(key)) and (role := interaction.guild.get_role(role_id)) and role in user.roles and key != job_role_key]
@@ -138,16 +139,18 @@ class JobAdvancementView(ui.View):
                 if new_role := interaction.guild.get_role(new_role_id):
                     await user.add_roles(new_role, reason="전직 완료")
 
-            await supabase.rpc('set_user_job_and_ability', {'p_user_id': user.id, 'p_job_key': selected_job['job_key'], 'p_ability_key': selected_ability['ability_key']}).execute()
+            # 2. 조회한 ID를 사용하여 DB 함수를 호출합니다.
+            await supabase.rpc('set_user_job_and_ability', {'p_user_id': user.id, 'p_job_id': job_id, 'p_ability_id': ability_id}).execute()
 
+            # 로그 기록
             if log_channel_id := get_id("job_log_channel_id"):
                 if log_channel := self.bot.get_channel(log_channel_id):
                     if embed_data := await get_embed_from_db("log_job_advancement"):
-                        log_embed = format_embed_from_db(embed_data, user_mention=user.mention, job_name=selected_job['job_name'], ability_name=selected_ability['ability_name'])
+                        log_embed = format_embed_from_db(embed_data, user_mention=user.mention, job_name=selected_job_data['job_name'], ability_name=selected_ability_data['ability_name'])
                         if user.display_avatar: log_embed.set_thumbnail(url=user.display_avatar.url)
                         await log_channel.send(embed=log_embed)
 
-            await interaction.edit_original_response(content=f"🎉 **転職完了！**\nおめでとうございます！あなたは **{selected_job['job_name']}** になりました。", view=None)
+            await interaction.edit_original_response(content=f"🎉 **転職完了！**\nおめでとうございます！あなたは **{selected_job_data['job_name']}** になりました。", view=None)
             await asyncio.sleep(15)
             if isinstance(interaction.channel, discord.Thread): await interaction.channel.delete()
         except Exception as e:
@@ -198,12 +201,11 @@ class JobAndTierHandler(commands.Cog):
             return
 
         active_threads = channel.threads
-        if not active_threads:
-            try:
-                archived_threads = [t async for t in channel.archived_threads(limit=None)]
-                active_threads.extend(archived_threads)
-            except Exception as e:
-                logger.error(f"아카이브된 스레드를 가져오는 중 오류: {e}")
+        try:
+            archived_threads = [t async for t in channel.archived_threads(limit=None)]
+            active_threads.extend(archived_threads)
+        except Exception as e:
+            logger.error(f"아카이브된 스레드를 가져오는 중 오류: {e}")
 
         for thread in active_threads:
             try:
@@ -222,7 +224,7 @@ class JobAndTierHandler(commands.Cog):
                             self.bot.add_view(view, message_id=message.id)
                             logger.info(f"'{thread.name}' 스레드에서 StartAdvancementView를 다시 로드했습니다.")
                         elif isinstance(comp, discord.ui.Select) and comp.custom_id == "job_adv_job_select":
-                            # 이미 전직 선택 화면으로 넘어간 경우, 레벨 정보가 필요
+                            # TODO: JobAdvancementView 복구 로직 (필요 시 구현)
                             pass
                         break
             except Exception as e:
