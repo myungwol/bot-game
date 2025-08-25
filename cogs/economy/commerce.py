@@ -77,8 +77,9 @@ class BuyItemView(ShopViewBase):
 
     async def _filter_items_for_user(self):
         """사용자 상태에 따라 상점 아이템 목록을 필터링합니다."""
+        # [✅✅✅ 핵심 수정] d.get('category', '').strip()을 사용하여 데이터베이스의 카테고리 이름에서 공백을 제거합니다.
         all_items_in_category = sorted(
-            [(n, d) for n, d in get_item_database().items() if d.get('buyable') and d.get('category') == self.category],
+            [(n, d) for n, d in get_item_database().items() if d.get('buyable') and d.get('category', '').strip() == self.category],
             key=lambda item: item[1].get('current_price', item[1].get('price', 0))
         )
         
@@ -110,7 +111,6 @@ class BuyItemView(ShopViewBase):
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
         
-        # [✅✅✅ 핵심 수정] get_config를 사용하여 전체 UI 텍스트 딕셔너리를 한번에 가져옵니다.
         all_ui_strings = get_config("strings", {})
         commerce_strings = all_ui_strings.get("commerce", {})
         
@@ -289,7 +289,8 @@ class BuyCategoryView(ShopViewBase):
     async def build_components(self):
         self.clear_items()
         item_db = get_item_database()
-        available_categories = {d['category'] for d in item_db.values() if d.get('buyable') and d.get('category')}
+        # [✅✅✅ 핵심 수정] d.get('category', '').strip()을 사용하여 카테고리를 가져올 때 공백을 제거합니다.
+        available_categories = {d.get('category', '').strip() for d in item_db.values() if d.get('buyable') and d.get('category')}
         category_map = [("アイテム 📜", "アイテム"), ("装備 ⚒️", "装備"), ("エサ 🐛", "エサ"), ("種 🌱", "農場_種"),]
         
         for display_name, db_category in category_map:
