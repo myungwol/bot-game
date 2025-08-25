@@ -8,7 +8,8 @@ from typing import Optional, Dict, List, Any
 import asyncio
 import time
 import math
-from datetime import datetime, timezone, timedelta
+# [✅✅✅ 핵심 수정] 빠져있던 'time as dt_time'을 다시 import합니다.
+from datetime import datetime, timezone, timedelta, time as dt_time
 
 from utils.database import (
     get_farm_data, create_farm, get_config, expand_farm_db,
@@ -154,7 +155,7 @@ class FarmActionView(ui.View):
             seed_saved = True
         
         if not seed_saved:
-            db_tasks.append(update_inventory(str(self.user.id), self.selected_item, -1))
+            db_tasks.append(update_inventory(self.user.id, self.selected_item, -1))
 
         await asyncio.gather(*db_tasks)
         
@@ -314,8 +315,10 @@ class FarmUIView(ui.View):
 
         watered_count, plots_to_update_db = 0, set()
         for p in farm_data['farm_plots']:
-            last_watered = datetime.fromisoformat(p['last_watered_at']) if p['last_watered_at'] else datetime.fromtimestamp(0, tz=JST)
-            if p['state'] == 'planted' and last_watered < today_jst_midnight and watered_count < power:
+            last_watered_dt = datetime.fromisoformat(p['last_watered_at']) if p['last_watered_at'] else datetime.fromtimestamp(0, tz=JST)
+            last_watered_jst = last_watered_dt.astimezone(JST)
+
+            if p['state'] == 'planted' and last_watered_jst < today_jst_midnight and watered_count < power:
                 plots_to_update_db.add(p['id'])
                 watered_count += 1
         
@@ -361,8 +364,7 @@ class FarmUIView(ui.View):
                 for pid in plot_ids: trees_to_update[pid] = info.get('regrowth_hours', 24)
         
         if not harvested:
-            await interaction.followup.send("ℹ️ 収穫できる作物がありません。", ephemeral=True)
-            return
+            await interaction.followup.send("ℹ️ 収穫できる作物がありません。", ephemeral=True); return
 
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if not owner: return
@@ -469,7 +471,7 @@ class Farm(commands.Cog):
     async def register_persistent_views(self):
         self.bot.add_view(FarmCreationPanelView(self))
         self.bot.add_view(FarmUIView(self))
-        logger.info("✅ 농장 관련 영구 View가 성공적으로 등록되었습니다.")
+        logger.info("✅ 農場関連の永続Viewが正常に登録されました。")
         
     @tasks.loop(time=JST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
@@ -583,8 +585,10 @@ class Farm(commands.Cog):
                                         if y + dy < sy and x + dx < sx:
                                             grid[y+dy][x+dx] = emoji; processed.add((x + dx, y + dy))
                                 
-                                last_watered = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
-                                water_emoji = '💧' if last_watered >= today_jst_midnight else '➖'
+                                last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
+                                last_watered_jst = last_watered_dt.astimezone(JST)
+
+                                water_emoji = '💧' if last_watered_jst >= today_jst_midnight else '➖'
                                 
                                 info_text = f"{emoji} **{name}** (水: {water_emoji}): "
                                 if stage >= max_stage: info_text += "収穫可能！ 🧺"
@@ -608,10 +612,7 @@ class Farm(commands.Cog):
             for job in level_data:
                 if 'farmer' in job.get('job_key', ''):
                     for ability in job.get('abilities', []):
-                        all_farm_abilities_map[ability['ability_key']] = {
-                            'name': ability['ability_name'],
-                            'description': ability['description']
-                        }
+                        all_farm_abilities_map[ability['ability_key']] = {'name': ability['ability_name'], 'description': ability['description']}
         
         active_effects = []
         EMOJI_MAP = {'seed': '🌱', 'water': '💧', 'yield': '🧺', 'growth': '⏱️'}
