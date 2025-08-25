@@ -35,13 +35,10 @@ class EconomyCore(commands.Cog):
 
         self.voice_sessions: Dict[int, datetime] = {}
         
-        # 모든 채팅 기록을 위한 캐시
         self.all_chat_cache: Dict[int, int] = {}
-        # 코인/경험치 보상용 채팅 기록 캐시
         self.coin_chat_cache: Dict[int, int] = {}
         self._cache_lock = asyncio.Lock()
 
-        # 코인 및 경험치 보상 설정
         self.voice_time_requirement_minutes = 10
         self.voice_reward_range = [10, 15]
         self.chat_message_requirement = 20
@@ -49,12 +46,10 @@ class EconomyCore(commands.Cog):
         self.xp_from_chat = 5
         self.xp_from_voice = 10
 
-        # 로그 발송 큐
         self.coin_log_queue: Deque[discord.Embed] = deque()
         self.log_sender_task: Optional[asyncio.Task] = None
         self.log_sender_lock = asyncio.Lock()
 
-        # 루프 시작
         self.activity_log_loop.start()
         self.coin_reward_check_loop.start()
         self.update_market_prices.start()
@@ -292,37 +287,60 @@ class EconomyCore(commands.Cog):
 
     @tasks.loop(time=JST_MIDNIGHT_AGGREGATE)
     async def update_market_prices(self):
-        logger.info("[시장] 일일 아이템 가격 변동을 시작합니다.")
+        logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
         try:
-            response = await supabase.table('items').select('*').gt('volatility', 0).execute()
-            if not response.data: return
+            # [✅ 핵심 수정] items와 fishing_loots 두 테이블을 모두 조회합니다.
+            item_res_task = supabase.table('items').select('*').gt('volatility', 0).execute()
+            fish_res_task = supabase.table('fishing_loots').select('*').gt('volatility', 0).execute()
+            item_res, fish_res = await asyncio.gather(item_res_task, fish_res_task)
 
-            updates, announcements, fluctuation_data = [], [], []
-            for item in response.data:
-                base_price = item.get('base_price', item.get('price', 0))
-                volatility = item.get('volatility', 0.0)
-                current_price = item.get('current_price', base_price)
-                min_price = item.get('min_price', int(base_price * 0.5))
-                max_price = item.get('max_price', int(base_price * 2.0))
-                change_percent = random.uniform(-volatility, volatility)
-                new_price = max(min_price, min(max_price, int(current_price * (1 + change_percent))))
-                updates.append({'id': item['id'], 'current_price': new_price})
-                price_diff_ratio = (new_price - current_price) / current_price if current_price > 0 else 0
-                
-                # [✅ 핵심 수정] 변동률이 30% 이상인 아이템만 저장
-                if abs(price_diff_ratio) > 0.3:
-                    status = "暴騰 📈" if price_diff_ratio > 0 else "暴落 📉"
-                    announcement_text = f" - {item['name']}: `{current_price}` → `{new_price}`{self.currency_icon} ({status})"
-                    announcements.append(announcement_text)
-                    fluctuation_data.append(announcement_text)
+            all_updates = []
+            announcements = []
+            fluctuation_data = []
+
+            # 1. 일반 아이템 가격 변동
+            if item_res.data:
+                item_updates = []
+                for item in item_res.data:
+                    current_price = item.get('current_price', item.get('price', 0))
+                    new_price = self._calculate_new_price(
+                        current_price, item.get('volatility', 0), 
+                        item.get('min_price'), item.get('max_price')
+                    )
+                    item_updates.append({'id': item['id'], 'current_price': new_price})
+                    
+                    if abs((new_price - current_price) / (current_price or 1)) > 0.3:
+                        status = "暴騰 📈" if new_price > current_price else "暴落 📉"
+                        announcement_text = f" - {item.get('name', 'N/A')}: `{current_price}` → `{new_price}`{self.currency_icon} ({status})"
+                        announcements.append(announcement_text)
+                        fluctuation_data.append(announcement_text)
+                if item_updates:
+                    all_updates.append(supabase.table('items').upsert(item_updates).execute())
             
-            if updates:
-                await supabase.table('items').upsert(updates).execute()
-            
-            # [✅ 핵심 수정] 계산된 변동 내역을 DB에 저장
+            # 2. 물고기 기본 가격 변동
+            if fish_res.data:
+                fish_updates = []
+                for fish in fish_res.data:
+                    current_price = fish.get('current_base_value', fish.get('base_value', 0))
+                    new_price = self._calculate_new_price(
+                        current_price, fish.get('volatility', 0), 
+                        fish.get('min_base_value'), fish.get('max_base_value')
+                    )
+                    fish_updates.append({'id': fish['id'], 'current_base_value': new_price})
+
+                    if abs((new_price - current_price) / (current_price or 1)) > 0.3:
+                        status = "豊漁 📈" if new_price > current_price else "不漁 📉"
+                        announcement_text = f" - {fish.get('name', 'N/A')} (基本価値): `{current_price}` → `{new_price}`{self.currency_icon} ({status})"
+                        announcements.append(announcement_text)
+                        fluctuation_data.append(announcement_text)
+                if fish_updates:
+                    all_updates.append(supabase.table('fishing_loots').upsert(fish_updates).execute())
+
+            if all_updates:
+                await asyncio.gather(*all_updates)
+
             await save_config_to_db("market_fluctuations", fluctuation_data)
 
-            # [✅ 핵심 수정] Commerce Cog를 찾아서 패널 재생성을 직접 요청
             commerce_cog = self.bot.get_cog("Commerce")
             if commerce_cog:
                 commerce_channel_id = get_id("commerce_panel_channel_id")
@@ -330,7 +348,6 @@ class EconomyCore(commands.Cog):
                     await commerce_cog.regenerate_panel(channel)
                     logger.info("상점 패널(panel_commerce)에 가격 변동 정보 업데이트를 요청했습니다.")
             
-            # 기존 로그 채널 알림 기능은 그대로 유지
             if announcements and (log_channel_id := get_id("market_log_channel_id")):
                 if log_channel := self.bot.get_channel(log_channel_id):
                     embed = discord.Embed(title="📢 今日の主な相場変動情報", description="\n".join(announcements), color=0xFEE75C)
@@ -338,7 +355,20 @@ class EconomyCore(commands.Cog):
             
         except Exception as e:
             logger.error(f"[시장] 아이템 가격 업데이트 중 오류: {e}", exc_info=True)
-
+    
+    # [✅ 핵심 수정] 가격 계산 로직을 별도 함수로 분리
+    def _calculate_new_price(self, current, volatility, min_p, max_p):
+        base_price = current
+        change_percent = random.uniform(-volatility, volatility)
+        new_price = int(base_price * (1 + change_percent))
+        
+        # min/max_p가 None이 아닐 경우에만 비교
+        if min_p is not None:
+            new_price = max(min_p, new_price)
+        if max_p is not None:
+            new_price = min(max_p, new_price)
+            
+        return new_price
 
     @update_market_prices.before_loop
     async def before_update_market_prices(self):
