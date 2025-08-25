@@ -58,19 +58,25 @@ class ProfileView(ui.View):
         )
         self.cached_data = {"wallet": wallet_data, "inventory": inventory, "aquarium": aquarium, "gear": gear}
 
-    # [✅ 핵심 수정] 딕셔너리 대신 리스트에서 현재 탭 정보를 찾도록 수정
     def _get_current_tab_config(self) -> Dict:
-        tabs_config = get_string("profile_view.tabs", [])
-        return next((tab for tab in tabs_config if tab["key"] == self.current_page), {})
+        # [✅✅✅ 핵심 수정] get_string 대신 get_config를 사용하여 전체 UI 텍스트 딕셔너리를 가져옵니다.
+        all_ui_strings = get_config("strings", {})
+        # 가져온 딕셔너리에서 profile_view.tabs 경로로 직접 접근합니다.
+        tabs_config = all_ui_strings.get("profile_view", {}).get("tabs", [])
+        return next((tab for tab in tabs_config if tab.get("key") == self.current_page), {})
 
     async def build_embed(self) -> discord.Embed:
         inventory = self.cached_data.get("inventory", {})
         gear = self.cached_data.get("gear", {})
         balance = self.cached_data.get("wallet", {}).get('balance', 0)
         item_db = get_item_database()
-        base_title = get_string("profile_view.base_title", user_name=self.user.display_name)
         
-        # [✅ 수정] 새로운 방식에 맞춰 title_suffix를 가져옵니다.
+        # [✅ 수정] 여기도 get_config를 통해 텍스트를 가져오도록 수정합니다.
+        all_ui_strings = get_config("strings", {})
+        profile_strings = all_ui_strings.get("profile_view", {})
+
+        base_title = profile_strings.get("base_title", "{user_name}の持ち物").format(user_name=self.user.display_name)
+        
         current_tab_config = self._get_current_tab_config()
         title_suffix = current_tab_config.get("title_suffix", "")
 
@@ -82,7 +88,8 @@ class ProfileView(ui.View):
             description += f"**{self.status_message}**\n\n"
         
         if self.current_page == "info":
-            embed.add_field(name=get_string("profile_view.info_tab.field_balance"), value=f"`{balance:,}`{self.currency_icon}", inline=True)
+            info_tab_strings = profile_strings.get("info_tab", {})
+            embed.add_field(name=info_tab_strings.get("field_balance", "所持金"), value=f"`{balance:,}`{self.currency_icon}", inline=True)
             
             job_name = "一般住民"
             try:
@@ -93,7 +100,7 @@ class ProfileView(ui.View):
                 logger.error(f"직업 정보 조회 중 오류 발생 (유저: {self.user.id}): {e}")
             embed.add_field(name="職業", value=f"`{job_name}`", inline=True)
 
-            user_rank_mention = get_string("profile_view.info_tab.default_rank_name")
+            user_rank_mention = info_tab_strings.get("default_rank_name", "かけだし住民")
             
             job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
             level_tier_roles = job_system_config.get("LEVEL_TIER_ROLES", [])
@@ -111,16 +118,16 @@ class ProfileView(ui.View):
                         user_rank_mention = rank_role.mention
                         break
             
-            embed.add_field(name=get_string("profile_view.info_tab.field_rank"), value=user_rank_mention, inline=True)
+            embed.add_field(name=info_tab_strings.get("field_rank", "等級"), value=user_rank_mention, inline=True)
             
-            description += get_string("profile_view.info_tab.description")
+            description += info_tab_strings.get("description", "下のタブを選択して、詳細情報を確認できます。")
             embed.description = description
         
         elif self.current_page == "item":
             excluded_categories = [GEAR_CATEGORY, "農場_種", "農場_作物", BAIT_CATEGORY]
             general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
             item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`個" for n, c in general_items.items()]
-            embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items"))
+            embed.description = description + ("\n".join(item_list) or profile_strings.get("item_tab", {}).get("no_items", "所持しているアイテムがありません。"))
         
         elif self.current_page == "gear":
             gear_categories = {"釣り": {"rod": "🎣 釣竿", "bait": "🐛 エサ"}, "農場": {"hoe": "🪓 クワ", "watering_can": "💧 じょうろ"}}
@@ -132,41 +139,46 @@ class ProfileView(ui.View):
                 gear_list = [f"{item_db.get(n,{}).get('emoji','🔧')} **{n}**: `{c}`個" for n, c in owned_gear_items.items()]
                 embed.add_field(name="\n**[ 所持している装備 ]**", value="\n".join(gear_list), inline=False)
             else:
-                embed.add_field(name="\n**[ 所持している装備 ]**", value=get_string("profile_view.gear_tab.no_owned_gear"), inline=False)
+                embed.add_field(name="\n**[ 所持している装備 ]**", value=profile_strings.get("gear_tab", {}).get("no_owned_gear", "所持している装備がありません。"), inline=False)
             embed.description = description
         
         elif self.current_page == "fish":
+            fish_tab_strings = profile_strings.get("fish_tab", {})
             aquarium = self.cached_data.get("aquarium", [])
             if not aquarium:
-                embed.description = description + get_string("profile_view.fish_tab.no_fish")
+                embed.description = description + fish_tab_strings.get("no_fish", "水槽に魚がいません。")
             else:
                 total_pages = math.ceil(len(aquarium) / 10)
                 self.fish_page_index = max(0, min(self.fish_page_index, total_pages - 1))
                 fish_on_page = aquarium[self.fish_page_index * 10 : self.fish_page_index * 10 + 10]
                 embed.description = description + "\n".join([f"{f['emoji']} **{f['name']}**: `{f['size']}`cm" for f in fish_on_page])
-                embed.set_footer(text=get_string("profile_view.fish_tab.pagination_footer", current_page=self.fish_page_index + 1, total_pages=total_pages))
+                embed.set_footer(text=fish_tab_strings.get("pagination_footer", "ページ {current_page} / {total_pages}").format(current_page=self.fish_page_index + 1, total_pages=total_pages))
         
         elif self.current_page == "seed":
             seed_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "農場_種"}
             item_list = [f"{item_db.get(n,{}).get('emoji','🌱')} **{n}**: `{c}`個" for n, c in seed_items.items()]
-            embed.description = description + ("\n".join(item_list) or get_string("profile_view.seed_tab.no_items"))
+            embed.description = description + ("\n".join(item_list) or profile_strings.get("seed_tab", {}).get("no_items", "所持している種がありません。"))
         
         elif self.current_page == "crop":
             crop_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "農場_作物"}
             item_list = [f"{item_db.get(n,{}).get('emoji','🌾')} **{n}**: `{c}`個" for n, c in crop_items.items()]
-            embed.description = description + ("\n".join(item_list) or get_string("profile_view.crop_tab.no_items"))
+            embed.description = description + ("\n".join(item_list) or profile_strings.get("crop_tab", {}).get("no_items", "所持している作物がありません。"))
         
         else:
-            embed.description = description + get_string("profile_view.wip_tab.description")
+            embed.description = description + profile_strings.get("wip_tab", {}).get("description", "この機能は現在準備中です。")
         return embed
 
     def build_components(self):
         self.clear_items()
-        # [✅ 핵심 수정] 딕셔너리가 아닌 리스트를 순회하며 순서대로 버튼을 생성합니다.
-        tabs_config = get_string("profile_view.tabs", [])
+        all_ui_strings = get_config("strings", {})
+        profile_strings = all_ui_strings.get("profile_view", {})
+        tabs_config = profile_strings.get("tabs", [])
+        
         row_counter, tab_buttons_in_row = 0, 0
         for config in tabs_config:
-            key = config["key"]
+            key = config.get("key")
+            if not key: continue
+
             if tab_buttons_in_row >= 5:
                 row_counter += 1
                 tab_buttons_in_row = 0
@@ -187,8 +199,9 @@ class ProfileView(ui.View):
         if self.current_page == "fish" and self.cached_data.get("aquarium"):
             if math.ceil(len(self.cached_data["aquarium"]) / 10) > 1:
                 total_pages = math.ceil(len(self.cached_data["aquarium"]) / 10)
-                self.add_item(ui.Button(label=get_string("profile_view.pagination_buttons.prev"), custom_id="profile_fish_prev", disabled=self.fish_page_index == 0, row=row_counter))
-                self.add_item(ui.Button(label=get_string("profile_view.pagination_buttons.next"), custom_id="profile_fish_next", disabled=self.fish_page_index >= total_pages - 1, row=row_counter))
+                pagination_buttons = profile_strings.get("pagination_buttons", {})
+                self.add_item(ui.Button(label=pagination_buttons.get("prev", "◀"), custom_id="profile_fish_prev", disabled=self.fish_page_index == 0, row=row_counter))
+                self.add_item(ui.Button(label=pagination_buttons.get("next", "▶"), custom_id="profile_fish_next", disabled=self.fish_page_index >= total_pages - 1, row=row_counter))
         
         for child in self.children:
             if isinstance(child, ui.Button):
@@ -235,24 +248,28 @@ class GearSelectView(ui.View):
     async def setup_and_update(self, interaction: discord.Interaction):
         await interaction.response.defer()
         inventory, item_db = self.parent_view.cached_data.get("inventory", {}), get_item_database()
-        options = [discord.SelectOption(label=f'{get_string("gear_select_view.unequip_prefix", "✋")} {self.unequip_label}', value="unequip")]
+        
+        all_ui_strings = get_config("strings", {})
+        gear_select_strings = all_ui_strings.get("profile_view", {}).get("gear_select_view", {})
+
+        options = [discord.SelectOption(label=f'{gear_select_strings.get("unequip_prefix", "✋")} {self.unequip_label}', value="unequip")]
         
         for name, count in inventory.items():
             item_data = item_db.get(name)
             if item_data and item_data.get('category') == self.db_category and item_data.get('gear_type') == self.gear_type:
                  options.append(discord.SelectOption(label=f"{name} ({count}個)", value=name, emoji=item_data.get('emoji')))
 
-        select = ui.Select(placeholder=get_string("gear_select_view.placeholder", category_name=self.category_name), options=options)
+        select = ui.Select(placeholder=gear_select_strings.get("placeholder", "{category_name}を選択...").format(category_name=self.category_name), options=options)
         select.callback = self.select_callback
         self.add_item(select)
 
-        back_button = ui.Button(label=get_string("gear_select_view.back_button", "戻る"), style=discord.ButtonStyle.grey, row=1)
+        back_button = ui.Button(label=gear_select_strings.get("back_button", "戻る"), style=discord.ButtonStyle.grey, row=1)
         back_button.callback = self.back_callback
         self.add_item(back_button)
 
         embed = discord.Embed(
-            title=get_string("gear_select_view.embed_title", category_name=self.category_name), 
-            description=get_string("gear_select_view.embed_description"), 
+            title=gear_select_strings.get("embed_title", "{category_name} 変更").format(category_name=self.category_name), 
+            description=gear_select_strings.get("embed_description", "装備したいアイテムを選択してください。"), 
             color=self.user.color
         )
         await interaction.edit_original_response(embed=embed, view=self)
