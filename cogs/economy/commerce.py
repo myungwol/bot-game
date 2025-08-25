@@ -1,4 +1,4 @@
-# bot-game/cogs/commerce.py
+# cogs/economy/commerce.py
 
 import discord
 from discord.ext import commands
@@ -76,7 +76,6 @@ class BuyItemView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str):
         super().__init__(user)
         self.category = category
-        # [✅ FIX] 아이템을 필터링할 때, DB에서 가져온 카테고리 이름의 공백을 제거하고 비교합니다.
         self.items_in_category = sorted(
             [(n, d) for n, d in get_item_database().items() if d.get('buyable') and d.get('category', '').strip() == self.category],
             key=lambda item: item[1].get('price', 0)
@@ -138,7 +137,6 @@ class BuyItemView(ShopViewBase):
             else:
                 await self.handle_single_purchase(interaction, item_name, item_data)
             
-            # 구매 후 UI를 다시 로드하여 최신 상태를 반영
             await self.update_view(interaction)
 
         except Exception as e:
@@ -153,27 +151,32 @@ class BuyItemView(ShopViewBase):
             return
 
         if item_data.get('effect_type') == 'expand_farm':
-            farm_data = await get_farm_data(self.user.id)
-            if not farm_data:
+            farm_res = await supabase.table('farms').select('id, farm_plots(count)').eq('user_id', self.user.id).maybe_single().execute()
+            
+            if not (farm_res and farm_res.data):
                 msg = await interaction.followup.send("❌ 農場をまず作成してください。", ephemeral=True)
                 asyncio.create_task(delete_after(msg, 5))
                 return
 
-            size_x, size_y = farm_data['size_x'], farm_data['size_y']
-            if size_x >= 4 and size_y >= 4:
-                msg = await interaction.followup.send("❌ 農場はすでに最大サイズです。", ephemeral=True)
+            farm_data = farm_res.data
+            farm_id = farm_data['id']
+            current_plots = farm_data['farm_plots'][0]['count'] if farm_data.get('farm_plots') else 0
+
+            if current_plots >= 25:
+                msg = await interaction.followup.send("❌ 農場はすでに最大サイズ(25マス)です。", ephemeral=True)
                 asyncio.create_task(delete_after(msg, 5))
                 return
 
-            new_x, new_y = size_x, size_y
-            if size_x <= size_y and size_x < 4: new_x += 1
-            elif size_y < 4: new_y += 1
-            else: new_x +=1
-
-            await expand_farm_db(farm_data['id'], new_x, new_y)
             await update_wallet(self.user, -item_data['price'])
-            msg = await interaction.followup.send(f"✅ 農場が **{new_x}x{new_y}**サイズに拡張されました！", ephemeral=True)
-            asyncio.create_task(delete_after(msg, 10))
+            success = await expand_farm_db(farm_id, current_plots)
+
+            if success:
+                msg = await interaction.followup.send(f"✅ 農場が1マス拡張されました！ (現在の広さ: {current_plots + 1}/25)", ephemeral=True)
+                asyncio.create_task(delete_after(msg, 10))
+            else:
+                await update_wallet(self.user, item_data['price']) # 환불
+                msg = await interaction.followup.send("❌ 農場の拡張中にエラーが発生しました。", ephemeral=True)
+                asyncio.create_task(delete_after(msg, 5))
         else:
             msg = await interaction.followup.send("❓ 未知の即時使用アイテムです。", ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
@@ -192,7 +195,6 @@ class BuyItemView(ShopViewBase):
         await modal.wait()
 
         if modal.value is None:
-            # 사용자가 모달을 닫은 경우, 상호작용이 이미 응답되었을 수 있으므로 followup 사용
             if interaction.response.is_done():
                 msg = await interaction.followup.send("購入がキャンセルされました。", ephemeral=True)
                 asyncio.create_task(delete_after(msg, 5))
@@ -217,7 +219,7 @@ class BuyItemView(ShopViewBase):
 
     async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         await interaction.response.defer(ephemeral=True)
-        wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(str(self.user.id)))
+        wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(self.user))
 
         if inventory.get(item_name, 0) > 0 and item_data.get('max_ownable', 1) == 1:
             error_message = f"❌ 「{item_name}」は既に所持しています。1つしか持てません。"
@@ -259,7 +261,6 @@ class BuyCategoryView(ShopViewBase):
         self.clear_items()
         item_db = get_item_database()
         
-        # [✅ FIX] .strip()을 사용하여 카테고리 이름에서 공백을 제거한 후 Set에 추가합니다.
         available_categories = set(
             d.get('category', '').strip() for d in item_db.values() if d.get('buyable') and d.get('category')
         )
@@ -277,7 +278,6 @@ class BuyCategoryView(ShopViewBase):
             return
 
         for category_name in sorted_categories:
-            # [✅ FIX] 버튼의 custom_id에도 공백이 없는 깨끗한 카테고리 이름을 사용합니다.
             button = ui.Button(label=category_name, custom_id=f"buy_category_{category_name}")
             button.callback = self.category_callback
             self.add_item(button)
@@ -397,7 +397,7 @@ class SellCropView(ShopViewBase):
 
     async def build_components(self):
         self.clear_items()
-        inventory = await get_inventory(str(self.user.id))
+        inventory = await get_inventory(self.user)
         item_db = get_item_database()
         self.crop_data_map.clear()
         
