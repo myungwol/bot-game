@@ -49,45 +49,48 @@ class WorldSystem(commands.Cog):
 
     @tasks.loop(time=JST_MIDNIGHT)
     async def update_weather(self):
-        weather_key = random.choices(
-            population=list(WEATHER_TYPES.keys()),
-            weights=[0.5, 0.25, 0.2, 0.05],
-            k=1
-        )
+        # [✅ 핵심 수정] 랜덤 선택 로직을 더 명확하게 변경
+        weather_keys = list(WEATHER_TYPES.keys())
+        weights = [0.5, 0.25, 0.2, 0.05]
+        chosen_key = random.choices(population=weather_keys, weights=weights, k=1)[0]
         
-        await save_config_to_db("current_weather", weather_key)
-        weather_info = WEATHER_TYPES[weather_key]
+        await save_config_to_db("current_weather", chosen_key)
+        weather_info = WEATHER_TYPES[chosen_key]
         logger.info(f"今日の天気が '{weather_info['name']}' に変わりました。")
         
         announcement_channel_id = get_id("weather_channel_id")
-        if not (announcement_channel_id and (channel := self.bot.get_channel(announcement_channel_id))):
-            return
+        if announcement_channel_id and (channel := self.bot.get_channel(announcement_channel_id)):
+            try:
+                embed_data = await get_embed_from_db("embed_weather_forecast")
+                
+                if not embed_data:
+                    logger.warning("DB에서 'embed_weather_forecast' 템플릿을 찾을 수 없어 기본 템플릿으로 전송합니다.")
+                    embed_data = {
+                        "title": "{emoji} Dico森の今日の天気予報",
+                        "description": "今日の天気は「**{weather_name}**」です！\n\n> {description}",
+                        "fields": [{"name": "💡 今日のヒント", "value": "> {tip}", "inline": False}],
+                        "footer": {"text": "天気は毎日午前0時に変わります。"}
+                    }
 
-        try:
-            embed_data = await get_embed_from_db("embed_weather_forecast")
-            
-            if not embed_data:
-                embed_data = {
-                    "title": "{emoji} Dico森の今日の天気予報",
-                    "description": "今日の天気は「**{weather_name}**」です！\n\n> {description}",
-                    "fields": [{"name": "💡 今日のヒント", "value": "> {tip}", "inline": False}],
-                    "footer": {"text": "天気は毎日午前0時に変わります。"}
-                }
+                # [✅ 핵심 수정] embed_data가 None일 경우를 대비하여 로직 안정화
+                embed_data_copy = embed_data.copy()
+                embed_data_copy['color'] = weather_info['color']
 
-            embed_data_copy = embed_data.copy()
-            embed_data_copy['color'] = weather_info['color']
+                embed = format_embed_from_db(
+                    embed_data_copy,
+                    emoji=weather_info['emoji'],
+                    weather_name=weather_info['name'],
+                    description=weather_info['description'],
+                    tip=weather_info['tip']
+                )
+                
+                await channel.send(embed=embed)
+            except Exception as e:
+                logger.error(f"天気予報の送信に失敗しました: {e}", exc_info=True)
+        else:
+            # [✅ 핵심 수정] 채널이 설정되지 않았을 때, 명확한 에러 로그를 남깁니다.
+            logger.error("날씨 예보를 전송할 채널이 설정되지 않았습니다. 관리자 명령어 `/admin setup`을 통해 [알림] 날씨 예보 채널을 설정해주세요.")
 
-            embed = format_embed_from_db(
-                embed_data_copy,
-                emoji=weather_info['emoji'],
-                weather_name=weather_info['name'],
-                description=weather_info['description'],
-                tip=weather_info['tip']
-            )
-            
-            await channel.send(embed=embed)
-        except Exception as e:
-            logger.error(f"天気予報の送信に失敗しました: {e}", exc_info=True)
 
     @update_weather.before_loop
     async def before_update_weather(self):
@@ -96,7 +99,9 @@ class WorldSystem(commands.Cog):
         
         if get_config("current_weather") is None:
             logger.info("現在の天気が設定されていないため、初回設定を実行します。")
-            await self.update_weather()
+            # 루프가 즉시 실행되도록 수정 (기존에는 update_weather()를 직접 호출했으나, loop.start()가 더 안정적)
+            if not self.update_weather.is_running():
+                self.update_weather.start()
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(WorldSystem(bot))
