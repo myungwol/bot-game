@@ -206,7 +206,6 @@ async def set_cooldown(user_id: int, cooldown_key: str):
     iso_timestamp = datetime.now(timezone.utc).isoformat()
     await supabase.table('cooldowns').upsert({"user_id": user_id, "cooldown_key": cooldown_key, "last_cooldown_timestamp": iso_timestamp}).execute()
 
-# [✅ 수정] 새로운 DB 함수를 호출하도록 변경
 @supabase_retry_handler()
 async def get_user_activity_summary(user_id: int) -> Dict[str, Any]:
     """새로운 DB 함수를 호출하여 사용자의 일간/주간 활동 요약을 가져옵니다."""
@@ -217,7 +216,6 @@ async def get_user_activity_summary(user_id: int) -> Dict[str, Any]:
         logger.error(f"유저 활동 요약 정보(get_user_activity_summary) 조회 중 오류: {e}")
         return {}
 
-# [✨ 신규] 모든 활동을 기록하기 위한 새로운 함수
 @supabase_retry_handler()
 async def log_user_activity(user_id: int, activity_type: str, amount: int = 1, metadata: Optional[Dict] = None):
     """사용자의 활동을 user_activity_logs 테이블에 기록합니다."""
@@ -230,10 +228,8 @@ async def log_user_activity(user_id: int, activity_type: str, amount: int = 1, m
         }
         await supabase.table('user_activity_logs').insert(log_entry).execute()
     except Exception as e:
-        # DB에 정의되지 않은 activity_type을 보내는 경우 등 에러가 발생할 수 있습니다.
         logger.error(f"사용자 활동 로그 기록 중 오류 발생: {e}", exc_info=True)
 
-# [✨ 신규] 여러 채팅 활동을 한번에 기록하기 위한 함수
 @supabase_retry_handler()
 async def batch_log_chat_activity(chat_data: List[Dict[str, Any]]):
     """여러 사용자의 채팅 활동을 한 번의 요청으로 DB에 기록합니다."""
@@ -244,12 +240,8 @@ async def batch_log_chat_activity(chat_data: List[Dict[str, Any]]):
     except Exception as e:
         logger.error(f"채팅 활동 일괄 기록 중 오류: {e}", exc_info=True)
 
-
 @supabase_retry_handler()
 async def has_checked_in_today(user_id: int) -> bool:
-    # 출석 체크는 별도의 테이블(attendance_logs)을 사용하거나,
-    # user_activity_logs에 'daily_check_in' 타입으로 기록하고 조회할 수 있습니다.
-    # 여기서는 후자의 방식을 사용하도록 수정합니다.
     today_start_jst = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
     
     response = await supabase.table('user_activity_logs') \
@@ -264,11 +256,7 @@ async def has_checked_in_today(user_id: int) -> bool:
 
 @supabase_retry_handler()
 async def record_attendance(user_id: int):
-    # 출석 체크를 새로운 활동 로그 시스템에 기록합니다.
     await log_user_activity(user_id, 'daily_check_in', 1)
-
-# [❌ 삭제] 오래된 get_user_progress 함수는 get_user_activity_summary로 대체되었으므로 삭제합니다.
-# async def get_user_progress(user_id: int) -> Dict[str, Any]: ...
 
 @supabase_retry_handler()
 async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
@@ -287,6 +275,28 @@ async def update_plot(plot_id: int, updates: Dict[str, Any]):
 @supabase_retry_handler()
 async def clear_plots_db(plot_ids: List[int]):
     await supabase.rpc('clear_plots_to_default', {'p_plot_ids': plot_ids}).execute()
+
+# [✅✅✅ 신규 추가] commerce.py에서 사용할 농장 확장 함수
+@supabase_retry_handler()
+async def expand_farm_db(farm_id: int, current_plot_count: int) -> bool:
+    """農場に新しいプロットを1つ追加します。"""
+    if current_plot_count >= 25:
+        return False
+
+    try:
+        new_pos_x = current_plot_count % 5
+        new_pos_y = current_plot_count // 5
+        
+        await supabase.table('farm_plots').insert({
+            'farm_id': farm_id,
+            'pos_x': new_pos_x,
+            'pos_y': new_pos_y,
+            'state': 'default'
+        }).execute()
+        return True
+    except Exception as e:
+        logger.error(f"농장 확장 DB 작업(farm_id: {farm_id}) 중 오류: {e}", exc_info=True)
+        return False
 
 @supabase_retry_handler()
 async def check_farm_permission(farm_id: int, user_id: int, action: str) -> bool:
