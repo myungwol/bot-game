@@ -158,14 +158,12 @@ class EconomyCore(commands.Cog):
                 user = self.bot.get_user(user_id)
                 if not user: continue
 
-                # 경험치 지급: 유효 채팅 1회당 XP 지급
                 if count > 0:
                     xp_to_add = self.xp_from_chat * count
                     xp_res = await supabase.rpc('add_xp', {'p_user_id': user_id, 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
                     if xp_res and xp_res.data:
                         await self.handle_level_up_event(user, xp_res.data[0])
 
-                # 코인 보상 확인
                 reward_res = await supabase.table('user_activity_logs').select('id', count='exact').eq('user_id', user_id).eq('activity_type', 'coin_reward_chat').gte('created_at', today_start_utc).execute()
                 if reward_res.count > 0:
                     continue
@@ -299,7 +297,7 @@ class EconomyCore(commands.Cog):
             response = await supabase.table('items').select('*').gt('volatility', 0).execute()
             if not response.data: return
 
-            updates, announcements = [], []
+            updates, announcements, fluctuation_data = [], [], []
             for item in response.data:
                 base_price = item.get('base_price', item.get('price', 0))
                 volatility = item.get('volatility', 0.0)
@@ -310,21 +308,37 @@ class EconomyCore(commands.Cog):
                 new_price = max(min_price, min(max_price, int(current_price * (1 + change_percent))))
                 updates.append({'id': item['id'], 'current_price': new_price})
                 price_diff_ratio = (new_price - current_price) / current_price if current_price > 0 else 0
+                
+                # [✅ 핵심 수정] 변동률이 30% 이상인 아이템만 저장
                 if abs(price_diff_ratio) > 0.3:
                     status = "暴騰 📈" if price_diff_ratio > 0 else "暴落 📉"
-                    announcements.append(f" - {item['name']}: `{current_price}` -> `{new_price}`{self.currency_icon} ({status})")
+                    announcement_text = f" - {item['name']}: `{current_price}` → `{new_price}`{self.currency_icon} ({status})"
+                    announcements.append(announcement_text)
+                    fluctuation_data.append(announcement_text)
             
-            await supabase.table('items').upsert(updates).execute()
+            if updates:
+                await supabase.table('items').upsert(updates).execute()
             
+            # [✅ 핵심 수정] 계산된 변동 내역을 DB에 저장
+            await save_config_to_db("market_fluctuations", fluctuation_data)
+
+            # [✅ 핵심 수정] Commerce Cog를 찾아서 패널 재생성을 직접 요청
+            commerce_cog = self.bot.get_cog("Commerce")
+            if commerce_cog:
+                commerce_channel_id = get_id("commerce_panel_channel_id")
+                if commerce_channel_id and (channel := self.bot.get_channel(commerce_channel_id)):
+                    await commerce_cog.regenerate_panel(channel)
+                    logger.info("상점 패널(panel_commerce)에 가격 변동 정보 업데이트를 요청했습니다.")
+            
+            # 기존 로그 채널 알림 기능은 그대로 유지
             if announcements and (log_channel_id := get_id("market_log_channel_id")):
                 if log_channel := self.bot.get_channel(log_channel_id):
                     embed = discord.Embed(title="📢 今日の主な相場変動情報", description="\n".join(announcements), color=0xFEE75C)
                     await log_channel.send(embed=embed)
             
-            if (commerce_cog := self.bot.get_cog("Commerce")) and hasattr(commerce_cog, "load_game_data_from_db"):
-                 asyncio.create_task(commerce_cog.load_game_data_from_db())
         except Exception as e:
             logger.error(f"[시장] 아이템 가격 업데이트 중 오류: {e}", exc_info=True)
+
 
     @update_market_prices.before_loop
     async def before_update_market_prices(self):
