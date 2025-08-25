@@ -8,17 +8,17 @@ from typing import Optional, Dict, List, Any
 import asyncio
 import time
 import math
-from datetime import datetime, timezone, timedelta, time as dt_time
+from datetime import datetime, timezone, timedelta
 
 from utils.database import (
-    get_farm_data, create_farm, get_config,
+    get_farm_data, create_farm, get_config, expand_farm_db,
     save_panel_id, get_panel_id, get_embed_from_db,
     supabase, get_inventory, get_user_gear, update_plot,
     get_farmable_item_info, update_inventory, BARE_HANDS,
     check_farm_permission, grant_farm_permission, clear_plots_db,
     get_farm_owner_by_thread, get_item_database, save_config_to_db,
     get_user_abilities,
-    log_user_activity
+    log_activity
 )
 from utils.helpers import format_embed_from_db
 
@@ -361,24 +361,27 @@ class FarmUIView(ui.View):
                 for pid in plot_ids: trees_to_update[pid] = info.get('regrowth_hours', 24)
         
         if not harvested:
-            await interaction.followup.send("ℹ️ 収穫できる作物がありません。", ephemeral=True); return
+            await interaction.followup.send("ℹ️ 収穫できる作物がありません。", ephemeral=True)
+            return
 
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if not owner: return
 
         total_harvested_amount = sum(harvested.values())
+        xp_per_crop = get_config("GAME_CONFIG", {}).get("XP_FROM_FARMING", 15)
+        total_xp = total_harvested_amount * xp_per_crop
+        
         if total_harvested_amount > 0:
-            await log_user_activity(owner.id, 'farm_harvest', total_harvested_amount)
+            await log_activity(owner.id, 'farm_harvest', amount=total_harvested_amount, xp_earned=total_xp)
 
-        db_tasks = [update_inventory(str(owner.id), n, q) for n, q in harvested.items()]
+        db_tasks = [update_inventory(owner.id, n, q) for n, q in harvested.items()]
         if plots_to_reset: db_tasks.append(clear_plots_db(plots_to_reset))
         if trees_to_update:
             now_iso = datetime.now(timezone.utc).isoformat()
             db_tasks.extend([update_plot(pid, {'growth_stage': 2, 'planted_at': now_iso, 'last_watered_at': now_iso, 'quality': 5}) for pid in trees_to_update.keys()])
         
-        xp_per_crop = get_config("GAME_CONFIG", {}).get("XP_FROM_FARMING", 15)
-        total_xp = sum(harvested.values()) * xp_per_crop
-        if total_xp > 0: db_tasks.append(supabase.rpc('add_xp', {'p_user_id': owner.id, 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute())
+        if total_xp > 0:
+            db_tasks.append(supabase.rpc('add_xp', {'p_user_id': owner.id, 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute())
         
         results = await asyncio.gather(*db_tasks, return_exceptions=True)
         
@@ -389,9 +392,9 @@ class FarmUIView(ui.View):
             followup_message += "\n✨ **大農家**の能力で、収穫量が大幅に増加しました！"
         
         for res in results:
-            if isinstance(res, dict) and 'data' in res and res['data']:
-                if (core_cog := self.cog.bot.get_cog("EconomyCore")):
-                    await core_cog.handle_level_up_event(owner, res['data'][0])
+            if isinstance(res, dict) and 'data' in res and res.data and isinstance(res.data, list) and res.data[0].get('leveled_up'):
+                if (level_cog := self.cog.bot.get_cog("LevelSystem")):
+                    await level_cog.handle_level_up_event(owner, res.data)
                 break
         
         await interaction.followup.send(followup_message, ephemeral=True)
