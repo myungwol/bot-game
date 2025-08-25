@@ -411,7 +411,13 @@ class RPSGame(commands.Cog):
 
     def format_round_result(self, game: Dict, winners: Set[int], losers: Set[int]) -> str:
         lines = []
-        guild = self.bot.get_channel(list(game["players"].values())[0].guild.id).guild
+        
+        # [✅ FIX] 불안정한 채널 검색 대신, 플레이어 객체에서 직접 서버(guild) 정보를 가져옵니다.
+        if not game.get("players"):
+            return "エラー: プレイヤー情報が見つかりません。"
+        first_player = list(game["players"].values())[0]
+        guild = first_player.guild
+
         for pid, choice in game["choices"].items():
             member = guild.get_member(pid)
             if member:
