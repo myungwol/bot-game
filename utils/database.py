@@ -81,6 +81,25 @@ def get_id(key: str) -> Optional[int]: return _channel_id_cache.get(key)
 def get_item_database() -> Dict[str, Dict[str, Any]]: return _item_database_cache
 def get_fishing_loot() -> List[Dict[str, Any]]: return _fishing_loot_cache
 
+# [✅✅✅ 핵심 수정] 실수로 삭제했던 get_string 함수를 다시 추가합니다.
+def get_string(key_path: str, default: Any = None, **kwargs) -> Any:
+    try:
+        keys = key_path.split('.')
+        value = get_config("strings", {})
+        for key in keys:
+            value = value[key]
+        
+        if isinstance(value, str) and kwargs:
+            # .format(**kwargs) 대신 .format_map()을 사용하여 존재하지 않는 키에 대한 오류를 방지합니다.
+            class SafeFormatter(dict):
+                def __missing__(self, key: str) -> str:
+                    return f'{{{key}}}'
+            return value.format_map(SafeFormatter(**kwargs))
+        return value
+    except (KeyError, TypeError):
+        # 키를 찾지 못한 경우, 기본값 또는 키 경로 자체를 반환하여 어떤 텍스트가 누락되었는지 쉽게 알 수 있도록 합니다.
+        return default if default is not None else f"[{key_path}]"
+
 @supabase_retry_handler()
 async def save_config_to_db(key: str, value: Any):
     global _bot_configs_cache
@@ -197,7 +216,6 @@ async def log_activity(
     user_id: int, activity_type: str, amount: int = 1,
     xp_earned: int = 0, coin_earned: int = 0
 ):
-    """모든 활동을 DB의 log_activity 함수를 통해 기록합니다."""
     try:
         await supabase.rpc('log_activity', {
             'p_user_id': user_id,
@@ -211,7 +229,6 @@ async def log_activity(
 
 @supabase_retry_handler()
 async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
-    """모든 기간의 유저 통계를 한 번에 가져옵니다."""
     try:
         response = await supabase.rpc('get_all_user_stats', {'p_user_id': user_id}).single().execute()
         return response.data if response and response.data else {}
