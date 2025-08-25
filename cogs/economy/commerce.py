@@ -120,7 +120,7 @@ class BuyItemView(ShopViewBase):
             for name, data in items_on_page:
                 field_name = f"{data.get('emoji', '📦')} {name}"
                 field_value = (
-                    f"**価格:** `{data.get('price', 0):,}`{self.currency_icon}\n"
+                    f"**価格:** `{data.get('current_price', data.get('price', 0)):,}`{self.currency_icon}\n"
                     f"> {data.get('description', '説明がありません。')}"
                 )
                 embed.add_field(name=field_name, value=field_value, inline=False)
@@ -142,7 +142,7 @@ class BuyItemView(ShopViewBase):
             options = [
                 discord.SelectOption(
                     label=name, value=name,
-                    description=f"価格: {data['price']:,}{self.currency_icon}",
+                    description=f"価格: {data.get('current_price', data.get('price', 0)):,}{self.currency_icon}",
                     emoji=data.get('emoji')
                 ) for name, data in items_on_page
             ]
@@ -192,8 +192,9 @@ class BuyItemView(ShopViewBase):
 
     async def handle_instant_use_item(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         await interaction.response.defer(ephemeral=True)
+        price = item_data.get('current_price', item_data.get('price', 0))
         wallet = await get_wallet(self.user.id)
-        if wallet.get('balance', 0) < item_data['price']:
+        if wallet.get('balance', 0) < price:
             msg = await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
             return
@@ -215,14 +216,14 @@ class BuyItemView(ShopViewBase):
                 asyncio.create_task(delete_after(msg, 5))
                 return
 
-            await update_wallet(self.user, -item_data['price'])
+            await update_wallet(self.user, -price)
             success = await expand_farm_db(farm_id, current_plots)
 
             if success:
                 msg = await interaction.followup.send(f"✅ 農場が1マス拡張されました！ (現在の広さ: {current_plots + 1}/25)", ephemeral=True)
                 asyncio.create_task(delete_after(msg, 10))
             else:
-                await update_wallet(self.user, item_data['price'])
+                await update_wallet(self.user, price)
                 msg = await interaction.followup.send("❌ 農場の拡張中にエラーが発生しました。", ephemeral=True)
                 asyncio.create_task(delete_after(msg, 5))
         else:
@@ -232,7 +233,8 @@ class BuyItemView(ShopViewBase):
     async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
-        max_buyable = balance // item_data['price'] if item_data['price'] > 0 else item_data.get('max_ownable', 999)
+        price = item_data.get('current_price', item_data.get('price', 0))
+        max_buyable = balance // price if price > 0 else item_data.get('max_ownable', 999)
 
         if max_buyable == 0:
             await interaction.response.send_message("❌ 残高が不足しています。", ephemeral=True, delete_after=5)
@@ -248,7 +250,7 @@ class BuyItemView(ShopViewBase):
                 asyncio.create_task(delete_after(msg, 5))
             return
 
-        quantity, total_price = modal.value, item_data['price'] * modal.value
+        quantity, total_price = modal.value, price * modal.value
         wallet_after_modal = await get_wallet(self.user.id)
         if wallet_after_modal.get('balance', 0) < total_price:
             msg = await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
@@ -275,7 +277,7 @@ class BuyItemView(ShopViewBase):
             asyncio.create_task(delete_after(msg, 5))
             return
 
-        total_price = item_data['price']
+        total_price = item_data.get('current_price', item_data.get('price', 0))
         if wallet.get('balance', 0) < total_price:
             msg = await interaction.followup.send("❌ 残高が不足しています。", ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
@@ -370,7 +372,9 @@ class SellFishView(ShopViewBase):
             for fish in aquarium:
                 fish_id = str(fish['id'])
                 loot_info = loot_db.get(fish['name'], {})
-                base_value = loot_info.get('base_value', 0)
+                
+                # [✅ 핵심 수정] 고정 base_value 대신, 변동하는 current_base_value를 사용합니다.
+                base_value = loot_info.get('current_base_value', loot_info.get('base_value', 0))
                 size_multiplier = loot_info.get('size_multiplier', 0)
                 price = int(base_value + (fish['size'] * size_multiplier))
                 self.fish_data_map[fish_id] = {'price': price, 'name': fish['name']}
@@ -461,7 +465,7 @@ class SellCropView(ShopViewBase):
         if crop_items:
             for name, qty in crop_items.items():
                 item_data = item_db.get(name, {})
-                price = int(item_data.get('sell_price', item_data.get('price', 10) * 0.8)) 
+                price = item_data.get('current_price', int(item_data.get('sell_price', item_data.get('price', 10) * 0.8))) 
                 self.crop_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
                 
                 options.append(discord.SelectOption(
@@ -591,7 +595,6 @@ class Commerce(commands.Cog):
             logger.warning(f"DB에서 '{panel_key}' 임베드 데이터를 찾을 수 없어 패널 생성을 건너뜁니다.")
             return
 
-        # [✅✅✅ 핵심 수정] DB에서 가격 변동 정보를 가져와 임베드를 포맷팅합니다.
         market_updates_list = get_config("market_fluctuations", [])
         if market_updates_list:
             market_updates_text = "\n".join(market_updates_list)
