@@ -15,12 +15,10 @@ from utils.database import (
     get_embed_from_db
 )
 from utils.helpers import format_embed_from_db, calculate_xp_for_level
-# [✅ 수정] game_config_defaults 에서 전직 레벨 정보를 가져옵니다.
 from utils.game_config_defaults import JOB_ADVANCEMENT_DATA, GAME_CONFIG
 
 logger = logging.getLogger(__name__)
 
-# --- Helper Functions ---
 def create_xp_bar(current_xp: int, required_xp: int, length: int = 10) -> str:
     if required_xp <= 0: return "▓" * length
     progress = min(current_xp / required_xp, 1.0)
@@ -29,11 +27,10 @@ def create_xp_bar(current_xp: int, required_xp: int, length: int = 10) -> str:
     return f"[{bar}]"
 
 async def build_level_embed(user: discord.Member) -> discord.Embed:
-    """사용자의 레벨 정보를 담은 Embed 객체를 생성합니다."""
     try:
         level_res_task = supabase.table('user_levels').select('*').eq('user_id', user.id).maybe_single().execute()
         job_res_task = supabase.table('user_jobs').select('jobs(*)').eq('user_id', user.id).maybe_single().execute()
-        xp_logs_res_task = supabase.table('xp_logs').select('source, xp_amount').eq('user_id', user.id).execute()
+        xp_logs_res_task = supabase.table('user_activities').select('activity_type, xp_earned').eq('user_id', user.id).gt('xp_earned', 0).execute()
         level_res, job_res, xp_logs_res = await asyncio.gather(level_res_task, job_res_task, xp_logs_res_task)
 
         user_level_data = level_res.data if level_res and level_res.data else {'level': 1, 'xp': 0}
@@ -46,41 +43,31 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
         required_xp_for_this_level = xp_for_next_level - xp_at_level_start if xp_for_next_level > xp_at_level_start else 1
         
         job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
-        job_role_mention = "`なし`"
-        job_role_map = job_system_config.get("JOB_ROLE_MAP", {})
+        job_role_mention = "`なし`"; job_role_map = job_system_config.get("JOB_ROLE_MAP", {})
         if job_res and job_res.data and job_res.data.get('jobs'):
             job_data = job_res.data['jobs']
             if role_key := job_role_map.get(job_data['job_key']):
-                if role_id := get_id(role_key):
-                    job_role_mention = f"<@&{role_id}>"
+                if role_id := get_id(role_key): job_role_mention = f"<@&{role_id}>"
         
         level_tier_roles = job_system_config.get("LEVEL_TIER_ROLES", [])
-        tier_role_mention = "`かけだし住民`"
-        user_roles = {role.id for role in user.roles}
+        tier_role_mention = "`かけだし住民`"; user_roles = {role.id for role in user.roles}
         for tier in sorted(level_tier_roles, key=lambda x: x['level'], reverse=True):
             if role_id := get_id(tier['role_key']):
-                if role_id in user_roles:
-                    tier_role_mention = f"<@&{role_id}>"
-                    break
+                if role_id in user_roles: tier_role_mention = f"<@&{role_id}>"; break
         
-        source_map = {'chat': '💬 チャット', 'voice': '🎙️ VC参加', 'fishing': '🎣 釣り', 'farming': '🌾 農業', 'admin': '⚙️ 管理者'}
+        source_map = {'chat': '💬 チャット', 'voice': '🎙️ VC参加', 'fishing_catch': '🎣 釣り', 'farm_harvest': '🌾 農業', 'admin': '⚙️ 管理者', 'daily_check_in': '✅ 出席'}
         aggregated_xp = {v: 0 for v in source_map.values()}
         if xp_logs_res and xp_logs_res.data:
             for log in xp_logs_res.data:
-                source_name = source_map.get(log['source'], log['source'])
-                if source_name in aggregated_xp:
-                    aggregated_xp[source_name] += log['xp_amount']
+                source_name = source_map.get(log['activity_type'], log['activity_type'])
+                if source_name in aggregated_xp: aggregated_xp[source_name] += log['xp_earned']
         
-        details = []
-        for display_name in source_map.values():
-            amount = aggregated_xp.get(display_name, 0)
-            details.append(f"> {display_name}: `{amount:,} XP`")
+        details = [f"> {display_name}: `{amount:,} XP`" for display_name, amount in aggregated_xp.items() if amount > 0]
         xp_details_text = "\n".join(details)
         
         xp_bar = create_xp_bar(xp_in_current_level, required_xp_for_this_level)
         embed = discord.Embed(color=user.color or discord.Color.blue())
-        if user.display_avatar:
-            embed.set_thumbnail(url=user.display_avatar.url)
+        if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
 
         description_parts = [
             f"## {user.mention}のステータス\n",
@@ -89,16 +76,14 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
             f"**経験値**\n`{xp_in_current_level:,} / {required_xp_for_this_level:,}`",
             f"{xp_bar}\n",
             f"**🏆 総獲得経験値**\n`{total_xp:,} XP`\n",
-            f"**📊 経験値獲得の内訳**\n{xp_details_text}"
+            f"**📊 経験値獲得の内訳**\n{xp_details_text if xp_details_text else '> まだ記録がありません。'}"
         ]
         embed.description = "\n".join(description_parts)
-        
         return embed
     except Exception as e:
         logger.error(f"레벨 임베드 생성 중 오류 (유저: {user.id}): {e}", exc_info=True)
         return discord.Embed(title="エラー", description="ステータス情報の読み込み中にエラーが発生しました。", color=discord.Color.red())
 
-# --- UI Views ---
 class RankingView(ui.View):
     def __init__(self, user: discord.Member, total_users: int):
         super().__init__(timeout=180)
@@ -223,10 +208,10 @@ class LevelSystem(commands.Cog):
     async def load_configs(self):
         pass
     
-    async def handle_level_up_event(self, user: discord.Member, result_data: Dict):
-        if not result_data: return
+    async def handle_level_up_event(self, user: discord.Member, result_data: List[Dict]):
+        if not result_data or not result_data[0].get('leveled_up'): return
         
-        new_level = result_data.get('new_level')
+        new_level = result_data[0].get('new_level')
         logger.info(f"유저 {user.display_name}(ID: {user.id})가 레벨 {new_level}(으)로 레벨업했습니다.")
         
         handler_cog = self.bot.get_cog("JobAndTierHandler")
@@ -244,41 +229,31 @@ class LevelSystem(commands.Cog):
             logger.info(f"유저가 전직 가능 레벨({new_level})에 도달하여 전직 절차를 시작합니다.")
 
     async def update_user_xp_and_level_from_admin(self, user: discord.Member, xp_to_add: int = 0, exact_level: Optional[int] = None):
-        """관리자 요청에 따라 사용자의 XP 또는 레벨을 업데이트하고, 레벨업 이벤트를 처리합니다."""
         try:
+            if xp_to_add > 0:
+                await log_activity(user.id, 'admin', xp_earned=xp_to_add)
+
             res = await supabase.table('user_levels').select('level, xp').eq('user_id', user.id).maybe_single().execute()
+            current_data = res.data if res.data else {'level': 1, 'xp': 0}
             
-            current_data = res.data if res and res.data else {'level': 1, 'xp': 0}
-            current_level, current_xp = current_data['level'], current_data['xp']
-            
-            new_total_xp = current_xp
+            new_total_xp = current_data['xp']
             leveled_up = False
 
             if exact_level is not None:
                 new_level = exact_level
                 new_total_xp = calculate_xp_for_level(new_level)
-                if new_level > current_level:
-                    leveled_up = True
+                if new_level > current_data['level']: leveled_up = True
             else:
                 new_total_xp += xp_to_add
-                if xp_to_add > 0:
-                    await supabase.table('xp_logs').insert({'user_id': user.id, 'source': 'admin', 'xp_amount': xp_to_add}).execute()
-                
-                new_level = current_level
+                new_level = current_data['level']
                 while new_total_xp >= calculate_xp_for_level(new_level + 1):
                     new_level += 1
-                
-                if new_level > current_level:
-                    leveled_up = True
+                if new_level > current_data['level']: leveled_up = True
             
-            await supabase.table('user_levels').upsert({
-                'user_id': user.id,
-                'level': new_level,
-                'xp': new_total_xp
-            }).execute()
+            await supabase.table('user_levels').upsert({'user_id': user.id, 'level': new_level, 'xp': new_total_xp}).execute()
             
             if leveled_up:
-                await self.handle_level_up_event(user, {"leveled_up": True, "new_level": new_level})
+                await self.handle_level_up_event(user, [{"leveled_up": True, "new_level": new_level}])
         
         except Exception as e:
             logger.error(f"관리자 요청으로 레벨/XP 업데이트 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
@@ -297,11 +272,7 @@ class LevelSystem(commands.Cog):
             
             embed_data = await get_embed_from_db("panel_level_check")
             if not embed_data:
-                embed_data = {
-                    "title": "📊 レベル＆ランキング",
-                    "description": "下のボタンでご自身のレベルを確認したり、サーバーのランキングを見ることができます。",
-                    "color": 0x5865F2
-                }
+                embed_data = {"title": "📊 レベル＆ランキング", "description": "下のボタンでご自身のレベルを確認したり、サーバーのランキングを見ることができます。", "color": 0x5865F2}
                 logger.warning(f"DB에서 'panel_level_check' 임베드를 찾을 수 없어 기본값으로 패널을 생성합니다.")
 
             embed = discord.Embed.from_dict(embed_data)
