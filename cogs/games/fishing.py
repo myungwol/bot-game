@@ -7,7 +7,6 @@ import random
 import asyncio
 import logging
 import time
-import json
 from typing import Optional, Set, Dict, List
 
 from utils.database import (
@@ -18,7 +17,7 @@ from utils.database import (
     is_whale_available, set_whale_caught,
     BARE_HANDS, DEFAULT_ROD,
     get_user_abilities,
-    log_user_activity
+    log_activity
 )
 from utils.helpers import format_embed_from_db
 
@@ -29,23 +28,12 @@ INTERMEDIATE_ROD_NAME = "鉄の釣竿"
 class FishingGameView(ui.View):
     def __init__(self, bot: commands.Bot, user: discord.Member, used_rod: str, used_bait: str, remaining_baits: Dict[str, int], cog_instance: 'Fishing', location_type: str, bite_range: List[float]):
         super().__init__(timeout=35)
-        self.bot = bot
-        self.player = user
-        self.message: Optional[discord.WebhookMessage] = None
-        self.game_state = "waiting"
-        self.game_task: Optional[asyncio.Task] = None
-        self.used_rod = used_rod
-        self.used_bait = used_bait
-        self.remaining_baits = remaining_baits
-        self.fishing_cog = cog_instance
-        self.location_type = location_type
-        
-        item_db = get_item_database()
-        self.rod_data = item_db.get(self.used_rod, {})
-        
-        self.bite_range = bite_range
-        game_config = get_config("GAME_CONFIG", {})
-        self.bite_reaction_time = game_config.get("FISHING_BITE_REACTION_TIME", 3.0)
+        self.bot = bot; self.player = user; self.message: Optional[discord.WebhookMessage] = None
+        self.game_state = "waiting"; self.game_task: Optional[asyncio.Task] = None
+        self.used_rod = used_rod; self.used_bait = used_bait; self.remaining_baits = remaining_baits
+        self.fishing_cog = cog_instance; self.location_type = location_type; self.bite_range = bite_range
+        item_db = get_item_database(); self.rod_data = item_db.get(self.used_rod, {})
+        game_config = get_config("GAME_CONFIG", {}); self.bite_reaction_time = game_config.get("FISHING_BITE_REACTION_TIME", 3.0)
         self.big_catch_threshold = game_config.get("FISHING_BIG_CATCH_THRESHOLD", 70.0)
 
     async def start_game(self, interaction: discord.Interaction, embed: discord.Embed):
@@ -58,8 +46,7 @@ class FishingGameView(ui.View):
             if self.is_finished(): return
             self.game_state = "biting"
             if self.children and isinstance(catch_button := self.children[0], ui.Button):
-                catch_button.style = discord.ButtonStyle.success
-                catch_button.label = "釣り上げる！"
+                catch_button.style = discord.ButtonStyle.success; catch_button.label = "釣り上げる！"
             embed = discord.Embed(title="❗ アタリが来た！", description="今だ！ボタンを押して釣り上げよう！", color=discord.Color.red())
             if self.message: await self.message.edit(embed=embed, view=self)
             await asyncio.sleep(self.bite_reaction_time)
@@ -69,75 +56,48 @@ class FishingGameView(ui.View):
                 self.stop()
         except asyncio.CancelledError: pass
         except Exception as e:
-            logger.error(f"{self.player.display_name}の낚시 게임 흐름 중 오류: {e}", exc_info=True)
+            logger.error(f"{self.player.display_name}의낚시 게임 흐름 중 오류: {e}", exc_info=True)
             if not self.is_finished():
                 await self._send_result(discord.Embed(title="❌ エラー発生", description="釣りの処理中に予期せぬエラーが発生しました。", color=discord.Color.red()))
                 self.stop()
 
     async def _handle_catch_logic(self) -> tuple[discord.Embed, bool, bool, bool]:
         all_loot = get_fishing_loot()
-        location_map = {"river": "川", "sea": "海"}
-        current_location_name = location_map.get(self.location_type, "川")
+        location_map = {"river": "川", "sea": "海"}; current_location_name = location_map.get(self.location_type, "川")
         base_loot = [item for item in all_loot if item.get('location_type') == current_location_name or item.get('location_type') is None]
-
-        rod_data = self.rod_data
-        rod_tier = rod_data.get('tier', 0)
-        rod_bonus = rod_data.get('loot_bonus', 0.0)
-        
-        loot_pool = []
-        is_whale_catchable = is_whale_available()
-
+        rod_data = self.rod_data; rod_tier = rod_data.get('tier', 0); rod_bonus = rod_data.get('loot_bonus', 0.0)
+        loot_pool = []; is_whale_catchable = is_whale_available()
         for item in base_loot:
             if item.get('name') == 'クジラ':
-                if rod_tier >= 5 and is_whale_catchable:
-                    loot_pool.append(item)
-            else:
-                loot_pool.append(item)
-
-        if not loot_pool:
-            return (discord.Embed(title="エラー", description="この場所では何も釣れないようです。", color=discord.Color.red()), False, False, False)
+                if rod_tier >= 5 and is_whale_catchable: loot_pool.append(item)
+            else: loot_pool.append(item)
+        if not loot_pool: return (discord.Embed(title="エラー", description="この場所では何も釣れないようです。", color=discord.Color.red()), False, False, False)
         
-        await log_user_activity(self.player.id, 'fishing_catch', 1)
-        
-        # --- [✅✅✅ 핵심 수정 ✅✅✅] ---
-        # 경험치 부여 로직을 여기로 이동하여, 물고기/쓰레기 구분 없이 낚시에 성공하면 무조건 경험치를 얻도록 합니다.
         xp_to_add = get_config("GAME_CONFIG", {}).get("XP_FROM_FISHING", 20)
+        await log_activity(self.player.id, 'fishing_catch', xp_earned=xp_to_add)
         res = await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add, 'p_source': 'fishing'}).execute()
-        if res and res.data:
-            await self.fishing_cog.handle_level_up_event(self.player, res.data[0])
+        if res.data: await self.fishing_cog.handle_level_up_event(self.player, res.data)
 
-        user_abilities = await get_user_abilities(self.player.id)
-        rare_up_bonus = 0.2 if 'fish_rare_up_2' in user_abilities else 0.0
-        size_multiplier = 1.2 if 'fish_size_up_2' in user_abilities else 1.0
-        
-        weights = []
+        user_abilities = await get_user_abilities(self.player.id); rare_up_bonus = 0.2 if 'fish_rare_up_2' in user_abilities else 0.0
+        size_multiplier = 1.2 if 'fish_size_up_2' in user_abilities else 1.0; weights = []
         for item in loot_pool:
-            weight = item['weight']
-            base_value = item.get('base_value')
+            weight = item['weight']; base_value = item.get('base_value'); 
             if base_value is None: base_value = 0
-            if base_value > 100:
-                weight *= (1.0 + rod_bonus + rare_up_bonus)
-            else:
-                weight *= (1.0 + rod_bonus)
+            if base_value > 100: weight *= (1.0 + rod_bonus + rare_up_bonus)
+            else: weight *= (1.0 + rod_bonus)
             weights.append(weight)
-
         catch_proto = random.choices(loot_pool, weights=weights, k=1)[0]
         
-        is_whale_catch = catch_proto.get('name') == 'クジラ'
-        is_big_catch, log_publicly = False, False
+        is_whale_catch = catch_proto.get('name') == 'クジラ'; is_big_catch, log_publicly = False, False
         
         embed = discord.Embed()
         if catch_proto.get("min_size") is not None:
             log_publicly = True
             min_s, max_s = catch_proto["min_size"] * size_multiplier, catch_proto["max_size"] * size_multiplier
             size = round(random.uniform(min_s, max_s), 1)
-
-            if is_whale_catch:
-                await set_whale_caught()
-
-            await add_to_aquarium(str(self.player.id), {"name": catch_proto['name'], "size": size, "emoji": catch_proto.get('emoji', '🐠')})
+            if is_whale_catch: await set_whale_caught()
+            await add_to_aquarium(self.player.id, {"name": catch_proto['name'], "size": size, "emoji": catch_proto.get('emoji', '🐠')})
             is_big_catch = size >= self.big_catch_threshold
-
             title = "🏆 大物を釣り上げた！ 🏆" if is_big_catch else "🎉 釣り成功！ 🎉"
             if is_whale_catch: title = "🐋 今月のヌシ、クジラを釣り上げた！！ 🐋"
             embed.title, embed.description, embed.color = title, f"{self.player.mention}さんが釣りに成功しました！", discord.Color.blue()
@@ -148,9 +108,7 @@ class FishingGameView(ui.View):
             if value != 0: await update_wallet(self.player, value)
             embed.title, embed.description, embed.color = catch_proto['title'], catch_proto['description'].format(user_mention=self.player.mention, value=abs(value)), int(catch_proto['color'], 16) if isinstance(catch_proto['color'], str) else catch_proto['color']
         
-        if image_url := catch_proto.get('image_url'):
-            embed.set_thumbnail(url=image_url)
-            
+        if image_url := catch_proto.get('image_url'): embed.set_thumbnail(url=image_url)
         return embed, log_publicly, is_big_catch, is_whale_catch
 
     @ui.button(label="待機中...", style=discord.ButtonStyle.secondary, custom_id="catch_fish_button")
@@ -164,8 +122,7 @@ class FishingGameView(ui.View):
             await interaction.response.defer(); self.game_state = "finished"
             result_embed, log_publicly, is_big_catch, is_whale = await self._handle_catch_logic()
         if result_embed:
-            if self.player.display_avatar and not result_embed.thumbnail: 
-                result_embed.set_thumbnail(url=self.player.display_avatar.url)
+            if self.player.display_avatar and not result_embed.thumbnail: result_embed.set_thumbnail(url=self.player.display_avatar.url)
             await self._send_result(result_embed, log_publicly, is_big_catch, is_whale)
         self.stop()
 
@@ -174,8 +131,7 @@ class FishingGameView(ui.View):
         footer_private = f"残りのエサ: {' / '.join([f'{b}({self.remaining_baits.get(b, 0)}個)' for b in remaining_baits_config])}"
         footer_public = f"使用した装備: {self.used_rod} / {self.used_bait}"
         if log_publicly:
-            if is_whale:
-                await self.fishing_cog.log_whale_catch(self.player, embed)
+            if is_whale: await self.fishing_cog.log_whale_catch(self.player, embed)
             elif (log_ch_id := self.fishing_cog.fishing_log_channel_id) and (log_ch := self.bot.get_channel(log_ch_id)):
                 public_embed = embed.copy(); public_embed.set_footer(text=footer_public)
                 content = self.player.mention if is_big_catch else None
