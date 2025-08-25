@@ -6,7 +6,7 @@ import random
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time as dt_time
 from typing import Dict, Optional, List, Deque
 from collections import deque
 
@@ -18,7 +18,11 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
+# [✅✅✅ 핵심 수정] 삭제되었던 시간 정의 변수들을 다시 추가합니다.
 JST = timezone(timedelta(hours=9))
+JST_MIDNIGHT_AGGREGATE = dt_time(hour=0, minute=5, tzinfo=JST)
+JST_MONTHLY_RESET = dt_time(hour=0, minute=2, tzinfo=JST)
+
 class EconomyCore(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -184,11 +188,12 @@ class EconomyCore(commands.Cog):
         await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
 
     async def log_coin_activity(self, user: discord.Member, amount: int, reason: str):
-        if not (embed_data := await get_embed_from_db("log_coin_gain")): return
+        embed_data = await get_embed_from_db("log_coin_gain")
+        if not embed_data: return
         embed = format_embed_from_db(embed_data, user_mention=user.mention, amount=f"{amount:,}", currency_icon=self.currency_icon, reason=reason)
         if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
         async with self.log_sender_lock: self.coin_log_queue.append(embed)
-            
+
     @tasks.loop(time=JST_MONTHLY_RESET)
     async def monthly_whale_reset(self):
         now = datetime.now(JST)
@@ -251,7 +256,6 @@ class EconomyCore(commands.Cog):
                 commerce_channel_id = get_id("commerce_panel_channel_id")
                 if commerce_channel_id and (channel := self.bot.get_channel(commerce_channel_id)):
                     await commerce_cog.regenerate_panel(channel)
-                    logger.info("상점 패널(panel_commerce)에 가격 변동 정보 업데이트를 요청했습니다.")
             if announcements and (log_channel_id := get_id("market_log_channel_id")):
                 if log_channel := self.bot.get_channel(log_channel_id):
                     embed = discord.Embed(title="📢 今日の主な相場変動情報", description="\n".join(announcements), color=0xFEE75C)
