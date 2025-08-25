@@ -30,7 +30,6 @@ class EconomyCore(commands.Cog):
         self.coin_log_channel_id: Optional[int] = None
         self.currency_icon = "🪙"
 
-        # 코인 보상만을 위한 3초 쿨타임
         self._coin_reward_cooldown = commands.CooldownMapping.from_cooldown(1, 3.0, commands.BucketType.user)
 
         self.voice_sessions: Dict[int, datetime] = {}
@@ -197,40 +196,47 @@ class EconomyCore(commands.Cog):
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
-        if member.bot: return
+        if member.bot:
+            return
+
+        # [✅✅✅ 핵심 수정] 더 안정적인 상태 판단 로직으로 변경
+        # 나간 채널과 들어온 채널이 다를 경우에만 로직을 실행하여 불필요한 권한 변경 이벤트를 무시합니다.
+        if before.channel == after.channel:
+            return
+
         afk_channel_id = member.guild.afk_channel.id if member.guild.afk_channel else None
-        
-        is_valid = lambda state: state.channel and state.channel.id != afk_channel_id
-        is_active = lambda state: not state.self_deaf and not state.self_mute
 
-        was_active = is_valid(before) and is_active(before)
-        is_now_active = is_valid(after) and is_active(after)
+        # "활동 중" 상태를 더 명확하게 정의합니다. (AFK 채널 X, 음소거 X, 헤드셋 X)
+        def is_active(state: discord.VoiceState):
+            return state.channel is not None and state.channel.id != afk_channel_id and not state.self_deaf and not state.self_mute
 
+        was_active = is_active(before)
+        is_now_active = is_active(after)
+
+        # 활동 시작: 활동 중이 아니었다가 활동 상태로 변경될 때
         if not was_active and is_now_active:
             self.voice_sessions[member.id] = datetime.now(timezone.utc)
+
+        # 활동 종료: 활동 중이었다가 활동이 아닌 상태로 변경될 때 (채널을 나가거나, AFK, 음소거 등)
         elif was_active and not is_now_active:
             if join_time := self.voice_sessions.pop(member.id, None):
                 duration_minutes = (datetime.now(timezone.utc) - join_time).total_seconds() / 60.0
                 
                 if duration_minutes >= 1:
                     rounded_minutes = round(duration_minutes)
-                    # [✅ 핵심 수정] 활동을 기록하고, 경험치를 지급하며, 코인 보상까지 한 번에 처리하는 로직으로 변경
                     try:
-                        # 1. (감사용) 원본 활동 기록은 그대로 저장
+                        # 1. 활동 기록 및 경험치 지급
                         await log_user_activity(member.id, 'voice', rounded_minutes)
-
-                        # 2. 경험치 지급
                         xp_to_add = round(self.xp_from_voice * (duration_minutes / self.voice_time_requirement_minutes))
                         if xp_to_add > 0:
                             xp_res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
                             if xp_res and xp_res.data:
                                 await self.handle_level_up_event(member, xp_res.data[0])
                         
-                        # 3. 오늘의 총 활동 시간을 즉시 업데이트하고, 코인 보상 확인
+                        # 2. 오늘의 총 활동 시간을 즉시 업데이트하고 코인 보상 확인
                         today_start_utc = (datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=9)).isoformat()
                         reward_res = await supabase.table('user_activity_logs').select('id', count='exact').eq('user_id', member.id).eq('activity_type', 'coin_reward_voice').gte('created_at', today_start_utc).execute()
 
-                        # 오늘의 보상을 아직 받지 않았을 경우에만 진행
                         if reward_res.count == 0:
                             upsert_res = await supabase.rpc('upsert_and_increment_activity_log', {
                                 'p_user_id': member.id,
