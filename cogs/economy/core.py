@@ -6,7 +6,7 @@ import random
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time as dt_time
 from typing import Dict, Optional, List, Deque
 from collections import deque
 
@@ -19,6 +19,9 @@ from utils.helpers import format_embed_from_db
 logger = logging.getLogger(__name__)
 
 JST = timezone(timedelta(hours=9))
+JST_MONTHLY_RESET = dt_time(hour=0, minute=2, tzinfo=JST)
+JST_MIDNIGHT_AGGREGATE = dt_time(hour=0, minute=5, tzinfo=JST)
+
 class EconomyCore(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -132,7 +135,6 @@ class EconomyCore(commands.Cog):
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         if member.bot or before.channel == after.channel: return
 
-        # [✅✅✅ 핵심 수정] afk_channel이 없는 경우(None)를 안전하게 처리하고, 올바른 속성(.id)을 사용합니다.
         afk_channel_id = member.guild.afk_channel.id if member.guild.afk_channel else None
 
         def is_active(state: discord.VoiceState):
@@ -193,7 +195,8 @@ class EconomyCore(commands.Cog):
         if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
         async with self.log_sender_lock: self.coin_log_queue.append(embed)
 
-    @tasks.loop(time=timedelta(hours=0, minutes=2))
+    # [✅✅✅ 핵심 수정] 잘못된 time 인자를 올바른 dt_time 객체로 수정합니다.
+    @tasks.loop(time=JST_MONTHLY_RESET)
     async def monthly_whale_reset(self):
         now = datetime.now(JST)
         if now.day != 1: return
@@ -218,7 +221,8 @@ class EconomyCore(commands.Cog):
     async def before_monthly_whale_reset(self):
         await self.bot.wait_until_ready()
 
-    @tasks.loop(time=timedelta(hours=0, minutes=5))
+    # [✅✅✅ 핵심 수정] 잘못된 time 인자를 올바른 dt_time 객체로 수정합니다.
+    @tasks.loop(time=JST_MIDNIGHT_AGGREGATE)
     async def update_market_prices(self):
         logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
         try:
