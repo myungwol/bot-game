@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 from utils.database import (
     get_inventory, get_wallet, supabase, get_id, get_item_database,
-    get_config, get_string,
+    get_config,
     get_aquarium, get_fishing_loot, sell_fish_from_db,
     save_panel_id, get_panel_id, get_embed_from_db,
     update_inventory, update_wallet, get_farm_data, expand_farm_db
@@ -79,7 +79,7 @@ class BuyItemView(ShopViewBase):
         self.category = category
         self.items_in_category = []
         self.page_index = 0
-        self.items_per_page = 20 # [✅ FIX] 페이지당 아이템 수를 20개로 제한하여 디스코드 제한을 피합니다.
+        self.items_per_page = 20
 
     async def _filter_items_for_user(self):
         all_items_in_category = sorted(
@@ -91,17 +91,26 @@ class BuyItemView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
+        
+        all_ui_strings = get_config("strings", {})
+        commerce_strings = all_ui_strings.get("commerce", {})
+        
+        category_display_names = { "アイテム": "雑貨屋", "装備": "武具屋", "エサ": "エサ屋", "農場_種": "種屋" }
+        display_name = category_display_names.get(self.category, self.category)
+        
+        description_template = commerce_strings.get("item_view_desc", "現在の所持金: `{balance}`{currency_icon}\n購入したい商品を選択してください。")
 
         embed = discord.Embed(
-            title=get_string("commerce.item_view_title", category=self.category),
-            description=get_string("commerce.item_view_desc", balance=f"{balance:,}", currency_icon=self.currency_icon),
+            title=f"🏪 Dico森商店 - {display_name}",
+            description=description_template.format(balance=f"{balance:,}", currency_icon=self.currency_icon),
             color=discord.Color.blue()
         )
         
-        await self._filter_items_for_user() # [✅ FIX] Embed를 만들 때마다 최신 아이템 목록을 다시 필터링
+        await self._filter_items_for_user()
 
         if not self.items_in_category:
-            embed.add_field(name="準備中", value=get_string("commerce.wip_category", default="このカテゴリーの商品は現在準備中です。"))
+            wip_message = commerce_strings.get("wip_category", "このカテゴリーの商品は現在準備中です。")
+            embed.add_field(name="準備中", value=wip_message)
         else:
             start_index = self.page_index * self.items_per_page
             end_index = start_index + self.items_per_page
@@ -140,7 +149,6 @@ class BuyItemView(ShopViewBase):
             select.callback = self.select_callback
             self.add_item(select)
         
-        # [✅ FIX] 페이지네이션 버튼 로직 추가
         total_pages = math.ceil(len(self.items_in_category) / self.items_per_page)
         if total_pages > 1:
             prev_button = ui.Button(label="◀ 前へ", custom_id="prev_page", disabled=(self.page_index == 0), row=2)
@@ -151,12 +159,12 @@ class BuyItemView(ShopViewBase):
             next_button.callback = self.pagination_callback
             self.add_item(next_button)
 
-        back_button = ui.Button(label=get_string("commerce.back_button"), style=discord.ButtonStyle.grey, row=3)
+        back_button = ui.Button(label="カテゴリー選択に戻る", style=discord.ButtonStyle.grey, row=3)
         back_button.callback = self.back_callback
         self.add_item(back_button)
 
-    # [✅ FIX] 페이지네이션 콜백 함수 추가
     async def pagination_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         if interaction.data['custom_id'] == 'next_page':
             self.page_index += 1
         else:
@@ -294,7 +302,13 @@ class BuyItemView(ShopViewBase):
 
 class BuyCategoryView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
-        return discord.Embed(title=get_string("commerce.category_view_title"), description=get_string("commerce.category_view_desc"), color=discord.Color.green())
+        all_ui_strings = get_config("strings", {})
+        commerce_strings = all_ui_strings.get("commerce", {})
+        
+        title = commerce_strings.get("category_view_title", "🏪 Dico森商店")
+        description = commerce_strings.get("category_view_desc", "購入したいアイテムのカテゴリーを選択してください。")
+
+        return discord.Embed(title=title, description=description, color=discord.Color.green())
     
     async def build_components(self):
         self.clear_items()
@@ -303,7 +317,7 @@ class BuyCategoryView(ShopViewBase):
         available_categories = set(
             d.get('category', '').strip() for d in item_db.values() if d.get('buyable') and d.get('category')
         )
-        preferred_order = ["アイテム", "釣り", "農場_道具", "農場_種"]
+        preferred_order = ["アイテム", "装備", "エサ", "農場_種", "農場_道具"]
         
         sorted_categories = []
         for category in preferred_order:
@@ -327,7 +341,7 @@ class BuyCategoryView(ShopViewBase):
         item_view = BuyItemView(self.user, category)
         item_view.message = self.message
         await item_view.update_view(interaction)
-        
+
 class SellFishView(ShopViewBase):
     def __init__(self, user: discord.Member):
         super().__init__(user)
