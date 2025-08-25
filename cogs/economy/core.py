@@ -211,27 +211,45 @@ class EconomyCore(commands.Cog):
         elif was_active and not is_now_active:
             if join_time := self.voice_sessions.pop(member.id, None):
                 duration_minutes = (datetime.now(timezone.utc) - join_time).total_seconds() / 60.0
+                
                 if duration_minutes >= 1:
-                    await log_user_activity(member.id, 'voice', round(duration_minutes))
+                    rounded_minutes = round(duration_minutes)
+                    # [✅ 핵심 수정] 활동을 기록하고, 경험치를 지급하며, 코인 보상까지 한 번에 처리하는 로직으로 변경
+                    try:
+                        # 1. (감사용) 원본 활동 기록은 그대로 저장
+                        await log_user_activity(member.id, 'voice', rounded_minutes)
 
-                    xp_to_add = round(self.xp_from_voice * (duration_minutes / self.voice_time_requirement_minutes))
-                    if xp_to_add > 0:
-                        xp_res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
-                        if xp_res and xp_res.data:
-                            await self.handle_level_up_event(member, xp_res.data[0])
+                        # 2. 경험치 지급
+                        xp_to_add = round(self.xp_from_voice * (duration_minutes / self.voice_time_requirement_minutes))
+                        if xp_to_add > 0:
+                            xp_res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
+                            if xp_res and xp_res.data:
+                                await self.handle_level_up_event(member, xp_res.data[0])
+                        
+                        # 3. 오늘의 총 활동 시간을 즉시 업데이트하고, 코인 보상 확인
+                        today_start_utc = (datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=9)).isoformat()
+                        reward_res = await supabase.table('user_activity_logs').select('id', count='exact').eq('user_id', member.id).eq('activity_type', 'coin_reward_voice').gte('created_at', today_start_utc).execute()
 
-                    today_start_utc = (datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=9)).isoformat()
-                    res = await supabase.table('user_activity_logs').select('amount', count='exact').eq('user_id', member.id).eq('activity_type', 'voice').gte('created_at', today_start_utc).execute()
-                    
-                    total_voice_minutes_today = sum(item['amount'] for item in res.data)
-                    
-                    reward_res = await supabase.table('user_activity_logs').select('id', count='exact').eq('user_id', member.id).eq('activity_type', 'coin_reward_voice').gte('created_at', today_start_utc).execute()
+                        # 오늘의 보상을 아직 받지 않았을 경우에만 진행
+                        if reward_res.count == 0:
+                            upsert_res = await supabase.rpc('upsert_and_increment_activity_log', {
+                                'p_user_id': member.id,
+                                'p_activity_type': 'voice_minutes',
+                                'p_amount': rounded_minutes,
+                                'p_record_date_str': datetime.now(JST).strftime('%Y-%m-%d')
+                            }).execute()
+                            
+                            total_voice_minutes_today = upsert_res.data if upsert_res.data else 0
 
-                    if total_voice_minutes_today >= self.voice_time_requirement_minutes and reward_res.count == 0:
-                        reward = random.randint(*self.voice_reward_range)
-                        await update_wallet(member, reward)
-                        await log_user_activity(member.id, 'coin_reward_voice', reward)
-                        await self.log_coin_activity(member, reward, f"ボイスチャンネルに{self.voice_time_requirement_minutes}分参加")
+                            if total_voice_minutes_today >= self.voice_time_requirement_minutes:
+                                reward = random.randint(*self.voice_reward_range)
+                                await update_wallet(member, reward)
+                                await log_user_activity(member.id, 'coin_reward_voice', reward)
+                                await self.log_coin_activity(member, reward, f"ボイスチャンネルに{self.voice_time_requirement_minutes}分参加")
+
+                    except Exception as e:
+                        logger.error(f"음성 채널 활동 보상 처리 중 오류 (유저: {member.id}): {e}", exc_info=True)
+
 
     async def handle_level_up_event(self, user: discord.User, result_data: Dict):
         if not result_data or not result_data.get('leveled_up'):
@@ -289,7 +307,6 @@ class EconomyCore(commands.Cog):
     async def update_market_prices(self):
         logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
         try:
-            # [✅ 핵심 수정] items와 fishing_loots 두 테이블을 모두 조회합니다.
             item_res_task = supabase.table('items').select('*').gt('volatility', 0).execute()
             fish_res_task = supabase.table('fishing_loots').select('*').gt('volatility', 0).execute()
             item_res, fish_res = await asyncio.gather(item_res_task, fish_res_task)
@@ -298,7 +315,6 @@ class EconomyCore(commands.Cog):
             announcements = []
             fluctuation_data = []
 
-            # 1. 일반 아이템 가격 변동
             if item_res.data:
                 item_updates = []
                 for item in item_res.data:
@@ -317,7 +333,6 @@ class EconomyCore(commands.Cog):
                 if item_updates:
                     all_updates.append(supabase.table('items').upsert(item_updates).execute())
             
-            # 2. 물고기 기본 가격 변동
             if fish_res.data:
                 fish_updates = []
                 for fish in fish_res.data:
@@ -356,13 +371,11 @@ class EconomyCore(commands.Cog):
         except Exception as e:
             logger.error(f"[시장] 아이템 가격 업데이트 중 오류: {e}", exc_info=True)
     
-    # [✅ 핵심 수정] 가격 계산 로직을 별도 함수로 분리
     def _calculate_new_price(self, current, volatility, min_p, max_p):
         base_price = current
         change_percent = random.uniform(-volatility, volatility)
         new_price = int(base_price * (1 + change_percent))
         
-        # min/max_p가 None이 아닐 경우에만 비교
         if min_p is not None:
             new_price = max(min_p, new_price)
         if max_p is not None:
@@ -374,6 +387,5 @@ class EconomyCore(commands.Cog):
     async def before_update_market_prices(self):
         await self.bot.wait_until_ready()
 
-
-async def setup(bot: commands.Bot):
+async def setup(bot: commands.Cog):
     await bot.add_cog(EconomyCore(bot))
