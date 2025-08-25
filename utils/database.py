@@ -81,19 +81,6 @@ def get_id(key: str) -> Optional[int]: return _channel_id_cache.get(key)
 def get_item_database() -> Dict[str, Dict[str, Any]]: return _item_database_cache
 def get_fishing_loot() -> List[Dict[str, Any]]: return _fishing_loot_cache
 
-def get_string(key_path: str, default: Any = None, **kwargs) -> Any:
-    try:
-        keys = key_path.split('.')
-        value = _bot_configs_cache.get("strings", {})
-        for key in keys: value = value[key]
-        if isinstance(value, str) and kwargs:
-            class SafeFormatter(dict):
-                def __missing__(self, key: str) -> str: return f'{{{key}}}'
-            return value.format_map(SafeFormatter(**kwargs))
-        return value
-    except (KeyError, TypeError):
-        return default if default is not None else f"[{key_path}]"
-
 @supabase_retry_handler()
 async def save_config_to_db(key: str, value: Any):
     global _bot_configs_cache
@@ -183,8 +170,7 @@ async def sell_fish_from_db(user_id: int, fish_ids: List[int], total_sell_price:
 
 @supabase_retry_handler()
 async def get_user_abilities(user_id: int) -> List[str]:
-    CACHE_TTL = 300
-    now = time.time()
+    CACHE_TTL = 300; now = time.time()
     if user_id in _user_abilities_cache:
         cached_data, timestamp = _user_abilities_cache[user_id]
         if now - timestamp < CACHE_TTL: return cached_data
@@ -207,56 +193,31 @@ async def set_cooldown(user_id: int, cooldown_key: str):
     await supabase.table('cooldowns').upsert({"user_id": user_id, "cooldown_key": cooldown_key, "last_cooldown_timestamp": iso_timestamp}).execute()
 
 @supabase_retry_handler()
-async def get_user_activity_summary(user_id: int) -> Dict[str, Any]:
-    """새로운 DB 함수를 호출하여 사용자의 일간/주간 활동 요약을 가져옵니다."""
+async def log_activity(
+    user_id: int, activity_type: str, amount: int = 1,
+    xp_earned: int = 0, coin_earned: int = 0
+):
+    """모든 활동을 DB의 log_activity 함수를 통해 기록합니다."""
     try:
-        response = await supabase.rpc('get_user_activity_summary', {'p_user_id': user_id}).single().execute()
+        await supabase.rpc('log_activity', {
+            'p_user_id': user_id,
+            'p_activity_type': activity_type,
+            'p_amount': amount,
+            'p_xp_earned': xp_earned,
+            'p_coin_earned': coin_earned
+        }).execute()
+    except Exception as e:
+        logger.error(f"활동 기록 RPC(log_activity) 호출 중 오류: {e}", exc_info=True)
+
+@supabase_retry_handler()
+async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
+    """모든 기간의 유저 통계를 한 번에 가져옵니다."""
+    try:
+        response = await supabase.rpc('get_all_user_stats', {'p_user_id': user_id}).single().execute()
         return response.data if response and response.data else {}
     except Exception as e:
-        logger.error(f"유저 활동 요약 정보(get_user_activity_summary) 조회 중 오류: {e}")
+        logger.error(f"전체 유저 통계(get_all_user_stats) 조회 중 오류: {e}")
         return {}
-
-@supabase_retry_handler()
-async def log_user_activity(user_id: int, activity_type: str, amount: int = 1, metadata: Optional[Dict] = None):
-    """사용자의 활동을 user_activity_logs 테이블에 기록합니다."""
-    try:
-        log_entry = {
-            'user_id': user_id,
-            'activity_type': activity_type,
-            'amount': amount,
-            'metadata': metadata
-        }
-        await supabase.table('user_activity_logs').insert(log_entry).execute()
-    except Exception as e:
-        logger.error(f"사용자 활동 로그 기록 중 오류 발생: {e}", exc_info=True)
-
-@supabase_retry_handler()
-async def batch_log_chat_activity(chat_data: List[Dict[str, Any]]):
-    """여러 사용자의 채팅 활동을 한 번의 요청으로 DB에 기록합니다."""
-    if not chat_data:
-        return
-    try:
-        await supabase.table('user_activity_logs').insert(chat_data).execute()
-    except Exception as e:
-        logger.error(f"채팅 활동 일괄 기록 중 오류: {e}", exc_info=True)
-
-@supabase_retry_handler()
-async def has_checked_in_today(user_id: int) -> bool:
-    today_start_jst = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    response = await supabase.table('user_activity_logs') \
-        .select('id', count='exact') \
-        .eq('user_id', user_id) \
-        .eq('activity_type', 'daily_check_in') \
-        .gte('created_at', today_start_jst.isoformat()) \
-        .limit(1) \
-        .execute()
-        
-    return response.count > 0 if response and hasattr(response, 'count') else False
-
-@supabase_retry_handler()
-async def record_attendance(user_id: int):
-    await log_user_activity(user_id, 'daily_check_in', 1)
 
 @supabase_retry_handler()
 async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
@@ -267,6 +228,17 @@ async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
 async def create_farm(user_id: int) -> Optional[Dict[str, Any]]:
     rpc_response = await supabase.rpc('create_farm_for_user', {'p_user_id': user_id}).execute()
     return await get_farm_data(user_id) if rpc_response and rpc_response.data else None
+
+@supabase_retry_handler()
+async def expand_farm_db(farm_id: int, current_plot_count: int) -> bool:
+    if current_plot_count >= 25: return False
+    try:
+        new_pos_x = current_plot_count % 5; new_pos_y = current_plot_count // 5
+        await supabase.table('farm_plots').insert({'farm_id': farm_id, 'pos_x': new_pos_x, 'pos_y': new_pos_y, 'state': 'default'}).execute()
+        return True
+    except Exception as e:
+        logger.error(f"농장 확장 DB 작업(farm_id: {farm_id}) 중 오류: {e}", exc_info=True)
+        return False
     
 @supabase_retry_handler()
 async def update_plot(plot_id: int, updates: Dict[str, Any]):
@@ -276,28 +248,6 @@ async def update_plot(plot_id: int, updates: Dict[str, Any]):
 async def clear_plots_db(plot_ids: List[int]):
     await supabase.rpc('clear_plots_to_default', {'p_plot_ids': plot_ids}).execute()
 
-# [✅✅✅ 신규 추가] commerce.py에서 사용할 농장 확장 함수
-@supabase_retry_handler()
-async def expand_farm_db(farm_id: int, current_plot_count: int) -> bool:
-    """農場に新しいプロットを1つ追加します。"""
-    if current_plot_count >= 25:
-        return False
-
-    try:
-        new_pos_x = current_plot_count % 5
-        new_pos_y = current_plot_count // 5
-        
-        await supabase.table('farm_plots').insert({
-            'farm_id': farm_id,
-            'pos_x': new_pos_x,
-            'pos_y': new_pos_y,
-            'state': 'default'
-        }).execute()
-        return True
-    except Exception as e:
-        logger.error(f"농장 확장 DB 작업(farm_id: {farm_id}) 중 오류: {e}", exc_info=True)
-        return False
-
 @supabase_retry_handler()
 async def check_farm_permission(farm_id: int, user_id: int, action: str) -> bool:
     permission_column = f"can_{action}"
@@ -306,10 +256,7 @@ async def check_farm_permission(farm_id: int, user_id: int, action: str) -> bool
 
 @supabase_retry_handler()
 async def grant_farm_permission(farm_id: int, user_id: int):
-    await supabase.table('farm_permissions').upsert({
-        'farm_id': farm_id, 'granted_to_user_id': user_id, 'can_till': True, 'can_plant': True,
-        'can_water': True, 'can_harvest': True
-    }, on_conflict='farm_id, granted_to_user_id').execute()
+    await supabase.table('farm_permissions').upsert({'farm_id': farm_id, 'granted_to_user_id': user_id, 'can_till': True, 'can_plant': True, 'can_water': True, 'can_harvest': True}, on_conflict='farm_id, granted_to_user_id').execute()
 
 @supabase_retry_handler()
 async def get_farm_owner_by_thread(thread_id: int) -> Optional[int]:
