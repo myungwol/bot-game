@@ -9,11 +9,10 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 
 from utils.database import (
-    # [✅ 수정] has_checked_in_today는 이제 사용하지 않습니다.
-    get_user_activity_summary, 
+    get_all_user_stats, 
     get_config,
     save_panel_id, get_panel_id, get_embed_from_db,
-    update_wallet, set_cooldown, get_cooldown
+    update_wallet, set_cooldown, get_cooldown, log_activity
 )
 from utils.helpers import format_embed_from_db
 
@@ -50,32 +49,22 @@ class QuestView(ui.View):
         await interaction.edit_original_response(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
-        summary = await get_user_activity_summary(self.user.id)
+        summary = await get_all_user_stats(self.user.id)
         
         embed = discord.Embed(color=0x2ECC71)
         embed.set_author(name=f"{self.user.display_name}さんのクエスト", icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
+        
+        stats_to_show = summary.get('daily' if self.current_tab == 'daily' else 'weekly', {})
         quests_to_show = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
         rewards = QUEST_REWARDS[self.current_tab]
-        
-        # [✅✅✅ 핵심 수정 ✅✅✅]
-        # 모든 퀘스트 진행도를 새로운 DB 함수가 반환하는 'summary'에서 가져오도록 통일합니다.
-        progress_values = {
-            "daily": {
-                "attendance": summary.get('daily_attendance_count', 0), 
-                "voice": summary.get('daily_voice_minutes', 0), 
-                "fishing": summary.get('daily_fish_count', 0)
-            },
-            "weekly": {
-                "attendance": summary.get('weekly_attendance_count', 0), 
-                "voice": summary.get('weekly_voice_minutes', 0), 
-                "fishing": summary.get('weekly_fish_count', 0)
-            }
-        }[self.current_tab]
 
+        progress_key_map = {"attendance": "check_in_count", "voice": "voice_minutes", "fishing": "fishing_count"}
+        
         embed.title = "📅 デイリークエスト" if self.current_tab == "daily" else "🗓️ ウィークリークエスト"
         all_complete = True
         for key, quest in quests_to_show.items():
-            current = progress_values.get(key, 0)
+            db_key = progress_key_map[key]
+            current = stats_to_show.get(db_key, 0)
             goal = quest["goal"]
             reward = rewards.get(key, 0)
             is_complete = current >= goal
@@ -84,6 +73,7 @@ class QuestView(ui.View):
             field_name = f"{emoji} {quest['name']}"
             field_value = f"> ` {min(current, goal)} / {goal} `\n> **報酬:** `{reward:,}` {self.cog.currency_icon}"
             embed.add_field(name=field_name, value=field_value, inline=False)
+        
         if all_complete:
             embed.set_footer(text=f"🎉 すべてのクエスト完了！追加報酬: {rewards['all_complete']:,}コイン")
         else:
@@ -109,26 +99,14 @@ class QuestView(ui.View):
     @ui.button(label="完了したクエストの報酬を受け取る", style=discord.ButtonStyle.success, emoji="💰", row=1)
     async def claim_rewards_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
-        summary = await get_user_activity_summary(self.user.id)
+        summary = await get_all_user_stats(self.user.id)
         
-        total_reward = 0
-        reward_details = []
+        total_reward = 0; reward_details = []
+        stats_to_check = summary.get('daily' if self.current_tab == 'daily' else 'weekly', {})
         quests_to_check = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
         rewards = QUEST_REWARDS[self.current_tab]
         
-        # [✅ 수정] 여기도 동일하게 summary 값을 사용합니다.
-        progress_values = {
-            "daily": {
-                "attendance": summary.get('daily_attendance_count', 0),
-                "voice": summary.get('daily_voice_minutes', 0), 
-                "fishing": summary.get('daily_fish_count', 0)
-            },
-            "weekly": {
-                "attendance": summary.get('weekly_attendance_count', 0), 
-                "voice": summary.get('weekly_voice_minutes', 0), 
-                "fishing": summary.get('weekly_fish_count', 0)
-            }
-        }[self.current_tab]
+        progress_key_map = {"attendance": "check_in_count", "voice": "voice_minutes", "fishing": "fishing_count"}
         
         all_quests_complete = True
         today_str = datetime.now(JST).strftime('%Y-%m-%d')
@@ -136,14 +114,14 @@ class QuestView(ui.View):
         period_str = today_str if self.current_tab == "daily" else week_start_str
 
         for key, quest in quests_to_check.items():
-            is_complete = progress_values.get(key, 0) >= quest["goal"]
+            db_key = progress_key_map[key]
+            is_complete = stats_to_check.get(db_key, 0) >= quest["goal"]
             if not is_complete:
-                all_quests_complete = False
-                continue
+                all_quests_complete = False; continue
             
             cooldown_key = f"quest_claimed_{self.current_tab}_{key}_{period_str}"
-            last_claimed_timestamp = await get_cooldown(self.user.id, cooldown_key)
-            if last_claimed_timestamp > 0: continue
+            last_claimed = await get_cooldown(self.user.id, cooldown_key)
+            if last_claimed > 0: continue
             
             reward = rewards.get(key, 0)
             total_reward += reward
@@ -152,8 +130,8 @@ class QuestView(ui.View):
         
         if all_quests_complete:
             cooldown_key = f"quest_claimed_{self.current_tab}_all_{period_str}"
-            last_claimed_timestamp = await get_cooldown(self.user.id, cooldown_key)
-            if last_claimed_timestamp == 0:
+            last_claimed = await get_cooldown(self.user.id, cooldown_key)
+            if last_claimed == 0:
                 reward = rewards.get("all_complete", 0)
                 total_reward += reward
                 reward_details.append(f"・全クエスト完了ボーナス: `{reward:,}`")
@@ -161,6 +139,7 @@ class QuestView(ui.View):
         
         if total_reward > 0:
             await update_wallet(self.user, total_reward)
+            await log_activity(self.user.id, f"quest_claim_{self.current_tab}", coin_earned=total_reward)
             details_text = "\n".join(reward_details)
             await interaction.followup.send(f"🎉 **以下の報酬を受け取りました！**\n{details_text}\n\n**合計:** `{total_reward:,}` {self.cog.currency_icon}", ephemeral=True)
         else:
