@@ -58,13 +58,22 @@ class ProfileView(ui.View):
         )
         self.cached_data = {"wallet": wallet_data, "inventory": inventory, "aquarium": aquarium, "gear": gear}
 
+    # [✅ 핵심 수정] 딕셔너리 대신 리스트에서 현재 탭 정보를 찾도록 수정
+    def _get_current_tab_config(self) -> Dict:
+        tabs_config = get_string("profile_view.tabs", [])
+        return next((tab for tab in tabs_config if tab["key"] == self.current_page), {})
+
     async def build_embed(self) -> discord.Embed:
         inventory = self.cached_data.get("inventory", {})
         gear = self.cached_data.get("gear", {})
         balance = self.cached_data.get("wallet", {}).get('balance', 0)
         item_db = get_item_database()
         base_title = get_string("profile_view.base_title", user_name=self.user.display_name)
-        title_suffix = get_string(f"profile_view.tabs.{self.current_page}.title_suffix", default="")
+        
+        # [✅ 수정] 새로운 방식에 맞춰 title_suffix를 가져옵니다.
+        current_tab_config = self._get_current_tab_config()
+        title_suffix = current_tab_config.get("title_suffix", "")
+
         embed = discord.Embed(title=f"{base_title}{title_suffix}", color=self.user.color or discord.Color.blue())
         if self.user.display_avatar:
             embed.set_thumbnail(url=self.user.display_avatar.url)
@@ -98,9 +107,6 @@ class ProfileView(ui.View):
                 if not role_key: continue
                 
                 if (rank_role_id := get_id(role_key)) and rank_role_id in user_role_ids:
-                    # [✅ 수정] guild.get_role은 캐시에 의존하므로, 없을 경우를 대비해 봇의 모든 서버를 순회합니다.
-                    # 더 확실한 방법은 interaction 객체에서 guild를 가져오는 것입니다.
-                    # 이 View는 interaction 기반으로 동작하므로 self.user.guild를 사용하는 것이 안전합니다.
                     if rank_role := self.user.guild.get_role(rank_role_id):
                         user_rank_mention = rank_role.mention
                         break
@@ -156,9 +162,11 @@ class ProfileView(ui.View):
 
     def build_components(self):
         self.clear_items()
-        tabs_config = get_string("profile_view.tabs", {})
+        # [✅ 핵심 수정] 딕셔너리가 아닌 리스트를 순회하며 순서대로 버튼을 생성합니다.
+        tabs_config = get_string("profile_view.tabs", [])
         row_counter, tab_buttons_in_row = 0, 0
-        for key, config in tabs_config.items():
+        for config in tabs_config:
+            key = config["key"]
             if tab_buttons_in_row >= 5:
                 row_counter += 1
                 tab_buttons_in_row = 0
