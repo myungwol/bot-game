@@ -110,17 +110,24 @@ class BuyItemView(ShopViewBase):
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
         
+        # [✅✅✅ 핵심 수정] get_config를 사용하여 전체 UI 텍스트 딕셔너리를 한번에 가져옵니다.
+        all_ui_strings = get_config("strings", {})
+        commerce_strings = all_ui_strings.get("commerce", {})
+        
         category_display_names = { "アイテム": "雑貨屋", "装備": "武具屋", "エサ": "エサ屋", "農場_種": "種屋" }
         display_name = category_display_names.get(self.category, self.category)
+        
+        description_template = commerce_strings.get("item_view_desc", "現在の所持金: `{balance}`{currency_icon}\n購入したい商品を選択してください。")
 
         embed = discord.Embed(
             title=f"🏪 Dico森商店 - {display_name}",
-            description=get_string("commerce.item_view_desc", balance=f"{balance:,}", currency_icon=self.currency_icon),
+            description=description_template.format(balance=f"{balance:,}", currency_icon=self.currency_icon),
             color=discord.Color.blue()
         )
 
         if not self.items_in_category:
-            embed.add_field(name="準備中", value=get_string("commerce.wip_category", default="このカテゴリーの商品は現在準備中です。"))
+            wip_message = commerce_strings.get("wip_category", "このカテゴリーの商品は現在準備中です。")
+            embed.add_field(name="準備中", value=wip_message)
         else:
             start_index, end_index = self.page_index * self.items_per_page, (self.page_index + 1) * self.items_per_page
             items_on_page = self.items_in_category[start_index:end_index]
@@ -460,7 +467,6 @@ class CommercePanelView(ui.View):
 
     async def open_shop(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        # [✅ 핵심 수정] 상점 UI를 열기 전에 최신 아이템 데이터를 불러옵니다.
         await load_game_data_from_db()
         view = BuyCategoryView(interaction.user)
         embed = await view.build_embed()
@@ -470,7 +476,6 @@ class CommercePanelView(ui.View):
 
     async def open_market(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        # [✅ 핵심 수정] 판매 UI를 열기 전에 최신 아이템 데이터를 불러옵니다.
         await load_game_data_from_db()
         view = SellCategoryView(interaction.user)
         embed = await view.build_embed()
