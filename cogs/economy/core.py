@@ -10,9 +10,10 @@ from datetime import datetime, timezone, timedelta, time as dt_time
 from typing import Dict, Optional, List, Deque
 from collections import deque
 
+# [✅ 핵심 수정] 새로운 시스템에 맞게 필요한 함수만 가져옵니다.
 from utils.database import (
     get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
-    save_config_to_db, log_activity, get_all_user_stats
+    save_config_to_db, get_all_user_stats
 )
 from utils.helpers import format_embed_from_db
 
@@ -94,18 +95,19 @@ class EconomyCore(commands.Cog):
             self.chat_cache.clear()
 
         try:
+            # [✅ 핵심 수정] RPC 대신 직접 INSERT
+            await supabase.table('user_activities').insert(logs_to_process).execute()
+            
             user_chat_counts = {}
             for log in logs_to_process:
                 user_id = log['user_id']
-                user_chat_counts[user_id] = user_chat_counts.get(user_id, 0) + 1
+                user_chat_counts[user_id] = user_chat_counts.get(user_id, 0) + log['amount']
 
             for user_id, count in user_chat_counts.items():
                 user = self.bot.get_user(user_id)
                 if not user: continue
                 
                 xp_to_add = self.xp_from_chat * count
-                await log_activity(user_id, 'chat', count, xp_to_add, 0)
-                
                 if xp_to_add > 0:
                     xp_res = await supabase.rpc('add_xp', {'p_user_id': user_id, 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
                     if xp_res.data: await self.handle_level_up_event(user, xp_res.data)
@@ -117,7 +119,7 @@ class EconomyCore(commands.Cog):
                     if reward_res.count == 0:
                         reward = random.randint(*self.chat_reward_range)
                         await update_wallet(user, reward)
-                        await log_activity(user_id, 'reward_chat', coin_earned=reward)
+                        await supabase.table('user_activities').insert({'user_id': user_id, 'activity_type': 'reward_chat', 'coin_earned': reward}).execute()
                         await self.log_coin_activity(user, reward, f"チャット{self.chat_message_requirement}回達成")
 
         except Exception as e:
@@ -129,7 +131,9 @@ class EconomyCore(commands.Cog):
         if message.author.bot or message.guild is None or not message.content or message.content.startswith('/'): return
         bucket = self._coin_reward_cooldown.get_bucket(message)
         if not bucket.update_rate_limit():
-            async with self._cache_lock: self.chat_cache.append({'user_id': message.author.id})
+            xp_to_add = self.xp_from_chat
+            async with self._cache_lock:
+                self.chat_cache.append({'user_id': message.author.id, 'activity_type': 'chat', 'amount': 1, 'xp_earned': xp_to_add})
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
@@ -153,12 +157,18 @@ class EconomyCore(commands.Cog):
                 if duration_minutes >= 1:
                     rounded_minutes = round(duration_minutes)
                     try:
+                        # 1. 활동 기록 및 경험치 지급
                         xp_to_add = self.xp_from_voice * rounded_minutes
-                        await log_activity(member.id, 'voice', amount=rounded_minutes, xp_earned=xp_to_add)
+                        await supabase.table('user_activities').insert({
+                            'user_id': member.id, 'activity_type': 'voice', 
+                            'amount': rounded_minutes, 'xp_earned': xp_to_add
+                        }).execute()
+
                         if xp_to_add > 0:
                             xp_res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
                             if xp_res.data: await self.handle_level_up_event(member, xp_res.data)
 
+                        # 2. 코인 보상 확인
                         stats = await get_all_user_stats(member.id)
                         daily_stats = stats.get('daily', {})
                         total_voice_minutes_today = daily_stats.get('voice_minutes', 0)
@@ -171,7 +181,7 @@ class EconomyCore(commands.Cog):
                         if unrewarded_minutes >= self.voice_time_requirement_minutes:
                             reward = random.randint(*self.voice_reward_range)
                             await update_wallet(member, reward)
-                            await log_activity(member.id, 'reward_voice', coin_earned=reward)
+                            await supabase.table('user_activities').insert({'user_id': member.id, 'activity_type': 'reward_voice', 'coin_earned': reward}).execute()
                             await self.log_coin_activity(member, reward, f"ボイスチャンネルで{self.voice_time_requirement_minutes}分間活動")
                     
                     except Exception as e:
@@ -195,7 +205,6 @@ class EconomyCore(commands.Cog):
         if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
         async with self.log_sender_lock: self.coin_log_queue.append(embed)
 
-    # [✅✅✅ 핵심 수정] 잘못된 time 인자를 올바른 dt_time 객체로 수정합니다.
     @tasks.loop(time=JST_MONTHLY_RESET)
     async def monthly_whale_reset(self):
         now = datetime.now(JST)
@@ -221,7 +230,6 @@ class EconomyCore(commands.Cog):
     async def before_monthly_whale_reset(self):
         await self.bot.wait_until_ready()
 
-    # [✅✅✅ 핵심 수정] 잘못된 time 인자를 올바른 dt_time 객체로 수정합니다.
     @tasks.loop(time=JST_MIDNIGHT_AGGREGATE)
     async def update_market_prices(self):
         logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
