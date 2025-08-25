@@ -6,6 +6,7 @@ from discord import ui
 import logging
 import asyncio
 import math
+import time
 from typing import Optional, Dict, List, Any
 
 logger = logging.getLogger(__name__)
@@ -341,7 +342,7 @@ class BuyCategoryView(ShopViewBase):
         item_view = BuyItemView(self.user, category)
         item_view.message = self.message
         await item_view.update_view(interaction)
-
+        
 class SellFishView(ShopViewBase):
     def __init__(self, user: discord.Member):
         super().__init__(user)
@@ -576,22 +577,32 @@ class Commerce(commands.Cog):
     async def register_persistent_views(self):
         self.bot.add_view(CommercePanelView(self))
         
-    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "commerce"):
-        embed_key = "panel_commerce"
-        if (panel_info := get_panel_id(panel_key)):
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_commerce"):
+        panel_name = panel_key.replace("panel_", "")
+        
+        if (panel_info := get_panel_id(panel_name)):
             if (old_channel_id := panel_info.get("channel_id")) and (old_channel := self.bot.get_channel(old_channel_id)):
                 try:
                     old_message = await old_channel.fetch_message(panel_info["message_id"])
                     await old_message.delete()
                 except (discord.NotFound, discord.Forbidden): pass
         
-        if not (embed_data := await get_embed_from_db(embed_key)): return
+        if not (embed_data := await get_embed_from_db(panel_key)):
+            logger.warning(f"DB에서 '{panel_key}' 임베드 데이터를 찾을 수 없어 패널 생성을 건너뜁니다.")
+            return
 
-        embed = discord.Embed.from_dict(embed_data)
+        # [✅✅✅ 핵심 수정] DB에서 가격 변동 정보를 가져와 임베드를 포맷팅합니다.
+        market_updates_list = get_config("market_fluctuations", [])
+        if market_updates_list:
+            market_updates_text = "\n".join(market_updates_list)
+        else:
+            market_updates_text = "今日は大きな価格変動がありませんでした。"
+        
+        embed = format_embed_from_db(embed_data, market_updates=market_updates_text)
         view = CommercePanelView(self)
         
         new_message = await channel.send(embed=embed, view=view)
-        await save_panel_id(panel_key, new_message.id, channel.id)
+        await save_panel_id(panel_name, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} パネルを正常に生成しました。 (チャンネル: #{channel.name})")
 
 async def setup(bot: commands.Cog):
