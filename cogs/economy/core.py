@@ -6,7 +6,7 @@ import random
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone, timedelta, time as dt_time
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Optional, List, Deque
 from collections import deque
 
@@ -18,11 +18,7 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# [✅✅✅ 핵심 수정] 삭제되었던 시간 정의 변수들을 다시 추가합니다.
 JST = timezone(timedelta(hours=9))
-JST_MIDNIGHT_AGGREGATE = dt_time(hour=0, minute=5, tzinfo=JST)
-JST_MONTHLY_RESET = dt_time(hour=0, minute=2, tzinfo=JST)
-
 class EconomyCore(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -136,8 +132,11 @@ class EconomyCore(commands.Cog):
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         if member.bot or before.channel == after.channel: return
 
+        # [✅✅✅ 핵심 수정] afk_channel이 없는 경우(None)를 안전하게 처리하고, 올바른 속성(.id)을 사용합니다.
+        afk_channel_id = member.guild.afk_channel.id if member.guild.afk_channel else None
+
         def is_active(state: discord.VoiceState):
-            if not state.channel or state.channel.id == member.guild.afk_channel_id: return False
+            if not state.channel or state.channel.id == afk_channel_id: return False
             return not state.self_deaf and not state.self_mute
 
         was_active = is_active(before)
@@ -194,7 +193,7 @@ class EconomyCore(commands.Cog):
         if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
         async with self.log_sender_lock: self.coin_log_queue.append(embed)
 
-    @tasks.loop(time=JST_MONTHLY_RESET)
+    @tasks.loop(time=timedelta(hours=0, minutes=2))
     async def monthly_whale_reset(self):
         now = datetime.now(JST)
         if now.day != 1: return
@@ -219,7 +218,7 @@ class EconomyCore(commands.Cog):
     async def before_monthly_whale_reset(self):
         await self.bot.wait_until_ready()
 
-    @tasks.loop(time=JST_MIDNIGHT_AGGREGATE)
+    @tasks.loop(time=timedelta(hours=0, minutes=5))
     async def update_market_prices(self):
         logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
         try:
