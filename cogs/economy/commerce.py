@@ -50,7 +50,6 @@ class ShopViewBase(ui.View):
 
     async def update_view(self, interaction: discord.Interaction):
         embed = await self.build_embed()
-        # [수정] build_components는 이제 비동기 함수가 될 수 있습니다.
         await self.build_components()
         await interaction.edit_original_response(embed=embed, view=self)
 
@@ -72,11 +71,10 @@ class BuyItemView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str):
         super().__init__(user)
         self.category = category
-        self.items_in_category = [] # [수정] 초기화는 비동기로 처리
+        self.items_in_category = []
         self.page_index = 0
         self.items_per_page = 20
 
-    # [✅✅✅ 핵심 수정] 상점 아이템 목록을 비동기적으로 필터링하는 함수
     async def _filter_items_for_user(self):
         """사용자 상태에 따라 상점 아이템 목록을 필터링합니다."""
         all_items_in_category = sorted(
@@ -84,7 +82,6 @@ class BuyItemView(ShopViewBase):
             key=lambda item: item[1].get('current_price', item[1].get('price', 0))
         )
         
-        # 농장 확장권의 경우, 농장 크기를 확인해야 합니다.
         farm_expansion_item_exists = any(item[1].get('effect_type') == 'expand_farm' for item in all_items_in_category)
         
         if not farm_expansion_item_exists:
@@ -99,7 +96,6 @@ class BuyItemView(ShopViewBase):
         
         is_farm_max_size = current_plots >= 25
         
-        # 최종 아이템 목록 필터링
         filtered_items = []
         for name, data in all_items_in_category:
             if data.get('effect_type') == 'expand_farm':
@@ -143,8 +139,6 @@ class BuyItemView(ShopViewBase):
 
     async def build_components(self):
         self.clear_items()
-        
-        # [수정] 컴포넌트를 빌드하기 전에 아이템 목록을 필터링합니다.
         await self._filter_items_for_user()
 
         start_index, end_index = self.page_index * self.items_per_page, (self.page_index + 1) * self.items_per_page
@@ -235,7 +229,6 @@ class BuyItemView(ShopViewBase):
         await self.update_view(interaction)
 
     async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
-        # ... (이전과 동일)
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
         price = item_data.get('current_price', item_data.get('price', 0))
@@ -261,7 +254,6 @@ class BuyItemView(ShopViewBase):
         await self.update_view(interaction)
 
     async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
-        # ... (이전과 동일)
         await interaction.response.defer(ephemeral=True)
         user = interaction.user
         price = item_data.get('current_price', item_data.get('price', 0))
@@ -300,8 +292,6 @@ class BuyCategoryView(ShopViewBase):
                 self.add_item(button)
     async def category_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        # [✅ 추가] 상점 열 때 최신 아이템 정보를 반영하기 위해 캐시 갱신
-        await load_game_data_from_db()
         category_db_name = interaction.data['custom_id'].split('buy_category_')[-1]
         item_view = BuyItemView(self.user, category_db_name)
         item_view.message = self.message
@@ -330,7 +320,6 @@ class SellFishView(ShopViewBase):
             for fish in aquarium:
                 fish_id_str = str(fish['id'])
                 loot_info = loot_db.get(fish['name'], {})
-                # [✅ 수정] 고정 가격 대신 아이템 DB의 현재 시세를 가져옴
                 item_data = get_item_database().get(fish['name'], {})
                 price = item_data.get('current_price', int(loot_info.get('base_value', 0) + (fish['size'] * loot_info.get('size_multiplier', 0))))
                 self.fish_data_map[fish_id_str] = {'price': price, 'name': fish['name']}
@@ -400,7 +389,6 @@ class SellCropView(ShopViewBase):
                 options = []
                 for name, qty in crop_items.items():
                     item_data = item_db.get(name, {})
-                    # [✅ 수정] sell_price 대신 current_price 사용
                     price = item_data.get('current_price', item_data.get('sell_price', 0))
                     self.crop_data_map[name] = {'price': price, 'max_qty': qty}
                     options.append(discord.SelectOption(label=f"{name} (所持: {qty}個)", value=name, description=f"単価: {price}{self.currency_icon}", emoji=item_data.get('emoji')))
@@ -450,7 +438,6 @@ class SellCategoryView(ShopViewBase):
             if isinstance(child, ui.Button): child.callback = self.on_button_click
     async def on_button_click(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        # [✅ 추가] 판매 시 최신 시세 반영
         await load_game_data_from_db()
         category = interaction.data['custom_id'].split('_')[-1]
         view = None
@@ -473,6 +460,8 @@ class CommercePanelView(ui.View):
 
     async def open_shop(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        # [✅ 핵심 수정] 상점 UI를 열기 전에 최신 아이템 데이터를 불러옵니다.
+        await load_game_data_from_db()
         view = BuyCategoryView(interaction.user)
         embed = await view.build_embed()
         await view.build_components()
@@ -481,6 +470,8 @@ class CommercePanelView(ui.View):
 
     async def open_market(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        # [✅ 핵심 수정] 판매 UI를 열기 전에 최신 아이템 데이터를 불러옵니다.
+        await load_game_data_from_db()
         view = SellCategoryView(interaction.user)
         embed = await view.build_embed()
         await view.build_components()
