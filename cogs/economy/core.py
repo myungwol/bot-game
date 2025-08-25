@@ -196,46 +196,54 @@ class EconomyCore(commands.Cog):
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+        logger.info(f"[음성 채널 디버그] 이벤트 감지: {member.display_name}") # [✅ 디버깅 로그]
         if member.bot:
+            logger.info("[음성 채널 디버그] 봇 활동이므로 무시.") # [✅ 디버깅 로그]
             return
 
-        # [✅✅✅ 핵심 수정] 더 안정적인 상태 판단 로직으로 변경
-        # 나간 채널과 들어온 채널이 다를 경우에만 로직을 실행하여 불필요한 권한 변경 이벤트를 무시합니다.
         if before.channel == after.channel:
+            logger.info("[음성 채널 디버그] 채널 이동이 아니므로 무시 (음소거/헤드셋 등 상태 변경).") # [✅ 디버깅 로그]
             return
 
         afk_channel_id = member.guild.afk_channel.id if member.guild.afk_channel else None
 
-        # "활동 중" 상태를 더 명확하게 정의합니다. (AFK 채널 X, 음소거 X, 헤드셋 X)
         def is_active(state: discord.VoiceState):
-            return state.channel is not None and state.channel.id != afk_channel_id and not state.self_deaf and not state.self_mute
+            is_valid_channel = state.channel is not None and state.channel.id != afk_channel_id
+            is_not_muted = not state.self_deaf and not state.self_mute
+            return is_valid_channel and is_not_muted
 
         was_active = is_active(before)
         is_now_active = is_active(after)
+        
+        logger.info(f"[음성 채널 디버그] {member.display_name} 상태: 이전 활성={was_active}, 현재 활성={is_now_active}") # [✅ 디버깅 로그]
 
-        # 활동 시작: 활동 중이 아니었다가 활동 상태로 변경될 때
         if not was_active and is_now_active:
+            logger.info(f"[음성 채널 디버그] '활동 시작'으로 판단. {member.display_name}의 세션 시작 시간을 기록합니다.") # [✅ 디버깅 로그]
             self.voice_sessions[member.id] = datetime.now(timezone.utc)
 
-        # 활동 종료: 활동 중이었다가 활동이 아닌 상태로 변경될 때 (채널을 나가거나, AFK, 음소거 등)
         elif was_active and not is_now_active:
+            logger.info(f"[음성 채널 디버그] '활동 종료'로 판단. {member.display_name}의 활동 시간 계산을 시작합니다.") # [✅ 디버깅 로그]
             if join_time := self.voice_sessions.pop(member.id, None):
                 duration_minutes = (datetime.now(timezone.utc) - join_time).total_seconds() / 60.0
+                logger.info(f"[음성 채널 디버그] 계산된 활동 시간: {duration_minutes:.2f}분") # [✅ 디버깅 로그]
                 
                 if duration_minutes >= 1:
                     rounded_minutes = round(duration_minutes)
+                    logger.info(f"[음성 채널 디버그] 1분 이상 활동으로 DB 저장 및 보상 절차를 시작합니다 (기록 시간: {rounded_minutes}분).") # [✅ 디버깅 로그]
                     try:
-                        # 1. 활동 기록 및 경험치 지급
                         await log_user_activity(member.id, 'voice', rounded_minutes)
+                        logger.info(f"[음성 채널 디버그] DB에 'voice' 활동으로 {rounded_minutes}분 기록 완료.") # [✅ 디버깅 로그]
+
                         xp_to_add = round(self.xp_from_voice * (duration_minutes / self.voice_time_requirement_minutes))
                         if xp_to_add > 0:
+                            logger.info(f"[음성 채널 디버그] 경험치 지급 시도: {xp_to_add} XP") # [✅ 디버깅 로그]
                             xp_res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
                             if xp_res and xp_res.data:
                                 await self.handle_level_up_event(member, xp_res.data[0])
                         
-                        # 2. 오늘의 총 활동 시간을 즉시 업데이트하고 코인 보상 확인
                         today_start_utc = (datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=9)).isoformat()
                         reward_res = await supabase.table('user_activity_logs').select('id', count='exact').eq('user_id', member.id).eq('activity_type', 'coin_reward_voice').gte('created_at', today_start_utc).execute()
+                        logger.info(f"[음성 채널 디버그] 오늘 받은 음성 보상 횟수: {reward_res.count}회") # [✅ 디버깅 로그]
 
                         if reward_res.count == 0:
                             upsert_res = await supabase.rpc('upsert_and_increment_activity_log', {
@@ -246,15 +254,19 @@ class EconomyCore(commands.Cog):
                             }).execute()
                             
                             total_voice_minutes_today = upsert_res.data if upsert_res.data else 0
+                            logger.info(f"[음성 채널 디버그] 오늘의 누적 음성 활동 시간: {total_voice_minutes_today}분 (보상 기준: {self.voice_time_requirement_minutes}분)") # [✅ 디버깅 로그]
 
                             if total_voice_minutes_today >= self.voice_time_requirement_minutes:
                                 reward = random.randint(*self.voice_reward_range)
                                 await update_wallet(member, reward)
                                 await log_user_activity(member.id, 'coin_reward_voice', reward)
                                 await self.log_coin_activity(member, reward, f"ボイスチャンネルに{self.voice_time_requirement_minutes}分参加")
+                                logger.info(f"[음성 채널 디버그] 코인 보상 {reward}코인 지급 완료!") # [✅ 디버깅 로그]
 
                     except Exception as e:
-                        logger.error(f"음성 채널 활동 보상 처리 중 오류 (유저: {member.id}): {e}", exc_info=True)
+                        logger.error(f"[음성 채널 디버그] 보상 처리 중 오류 발생 (유저: {member.id}): {e}", exc_info=True) # [✅ 디버깅 로그]
+            else:
+                logger.warning(f"[음성 채널 디버그] 활동 종료를 감지했으나, {member.display_name}의 세션 시작 기록이 없습니다.") # [✅ 디버깅 로그]
 
 
     async def handle_level_up_event(self, user: discord.User, result_data: Dict):
