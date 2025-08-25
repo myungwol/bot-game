@@ -10,10 +10,10 @@ from datetime import datetime, timezone, timedelta, time as dt_time
 from typing import Dict, Optional, List, Deque
 from collections import deque
 
-# [✅ 핵심 수정] 새로운 시스템에 맞게 필요한 함수만 가져옵니다.
+# [✅ 수정] 활동 기록을 위한 log_activity 함수를 가져옵니다.
 from utils.database import (
     get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
-    save_config_to_db, get_all_user_stats
+    save_config_to_db, get_all_user_stats, log_activity
 )
 from utils.helpers import format_embed_from_db
 
@@ -95,7 +95,6 @@ class EconomyCore(commands.Cog):
             self.chat_cache.clear()
 
         try:
-            # [✅ 핵심 수정] RPC 대신 직접 INSERT
             await supabase.table('user_activities').insert(logs_to_process).execute()
             
             user_chat_counts = {}
@@ -157,12 +156,18 @@ class EconomyCore(commands.Cog):
                 if duration_minutes >= 1:
                     rounded_minutes = round(duration_minutes)
                     try:
+                        # [✅✅✅ 핵심 수정 ✅✅✅]
+                        # 직접 DB에 데이터를 삽입하는 대신, 표준화된 log_activity 함수를 사용합니다.
+                        # 이렇게 하면 모든 활동 기록이 일관된 방식으로 처리되어 데이터 누락을 방지합니다.
+                        
                         # 1. 활동 기록 및 경험치 지급
                         xp_to_add = self.xp_from_voice * rounded_minutes
-                        await supabase.table('user_activities').insert({
-                            'user_id': member.id, 'activity_type': 'voice', 
-                            'amount': rounded_minutes, 'xp_earned': xp_to_add
-                        }).execute()
+                        await log_activity(
+                            user_id=member.id,
+                            activity_type='voice',
+                            amount=rounded_minutes,
+                            xp_earned=xp_to_add
+                        )
 
                         if xp_to_add > 0:
                             xp_res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
