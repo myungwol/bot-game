@@ -8,7 +8,6 @@ from typing import Optional, Dict, List, Any
 import asyncio
 import time
 import math
-# [✅✅✅ 핵심 수정] 빠져있던 'time as dt_time'을 다시 import합니다.
 from datetime import datetime, timezone, timedelta, time as dt_time
 
 from utils.database import (
@@ -28,7 +27,8 @@ logger = logging.getLogger(__name__)
 CROP_EMOJI_MAP = { 'seed': {0: '🌱', 1: '🌿', 2: '🌾', 3: '🌾'}, 'sapling': {0: '🌱', 1: '🌳', 2: '🌳', 3: '🌳'} }
 WEATHER_TYPES = { "sunny": {"emoji": "☀️", "name": "晴れ", "water_effect": False}, "cloudy": {"emoji": "☁️", "name": "曇り", "water_effect": False}, "rainy": {"emoji": "🌧️", "name": "雨", "water_effect": True}, "stormy": {"emoji": "⛈️", "name": "嵐", "water_effect": True}, }
 JST = timezone(timedelta(hours=9))
-JST_MIDNIGHT_UPDATE = dt_time(hour=0, minute=1, tzinfo=JST)
+# [✅ 수정] 자정 직후 물주기 문제를 해결하기 위해 업데이트 시간을 0시 5분으로 늦춥니다.
+JST_MIDNIGHT_UPDATE = dt_time(hour=0, minute=5, tzinfo=JST)
 
 async def preload_farmable_info(farm_data: Dict) -> Dict[str, Dict]:
     item_names = {p['planted_item_name'] for p in farm_data.get('farm_plots', []) if p.get('planted_item_name')}
@@ -61,7 +61,12 @@ class FarmNameModal(ui.Modal, title="農場名の変更"):
             except Exception as e: logger.error(f"농장 스레드 이름 변경 실패: {e}")
         await supabase.table('farms').update({'name': new_name}).eq('id', self.farm_data['id']).execute()
         
-        await self.cog.request_farm_ui_update(self.farm_data['user_id'])
+        # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+        updated_farm_data = await get_farm_data(self.farm_data['user_id'])
+        owner = self.cog.bot.get_user(self.farm_data['user_id'])
+        if updated_farm_data and owner and thread:
+             await self.cog.update_farm_ui(thread, owner, updated_farm_data)
+
         await interaction.followup.send("✅ 農場の名前を変更しました。", ephemeral=True)
 
 class FarmActionView(ui.View):
@@ -159,7 +164,11 @@ class FarmActionView(ui.View):
 
         await asyncio.gather(*db_tasks)
         
-        await self.cog.request_farm_ui_update(self.farm_owner_id)
+        # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+        updated_farm_data = await get_farm_data(self.farm_owner_id)
+        owner = self.cog.bot.get_user(self.farm_owner_id)
+        if updated_farm_data and owner:
+            await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
         followup_message = f"✅ 「{self.selected_item}」を植えました。"
         if seed_saved: followup_message += "\n✨ 能力効果で種を消費しませんでした！"
@@ -193,7 +202,13 @@ class FarmActionView(ui.View):
         await view.wait()
         if view.value:
             await clear_plots_db(plot_ids)
-            await self.cog.request_farm_ui_update(self.farm_owner_id)
+            
+            # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+            updated_farm_data = await get_farm_data(self.farm_owner_id)
+            owner = self.cog.bot.get_user(self.farm_owner_id)
+            if updated_farm_data and owner:
+                await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
+
             await interaction.edit_original_response(content="✅ 作物を撤去しました。", view=None)
         else:
             await interaction.edit_original_response(content="キャンセルしました。", view=None)
@@ -262,7 +277,11 @@ class FarmUIView(ui.View):
         
     async def on_farm_regenerate_click(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        await self.cog.request_farm_ui_update(self.farm_owner_id, force_new=True)
+        # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+        updated_farm_data = await get_farm_data(self.farm_owner_id)
+        owner = self.cog.bot.get_user(self.farm_owner_id)
+        if updated_farm_data and owner:
+            await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data, force_new=True)
 
     async def on_farm_till_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -285,7 +304,12 @@ class FarmUIView(ui.View):
 
         await supabase.table('farm_plots').update({'state': 'tilled'}).in_('id', plots_to_update_db).execute()
         
-        await self.cog.request_farm_ui_update(self.farm_owner_id)
+        # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+        updated_farm_data = await get_farm_data(self.farm_owner_id)
+        owner = self.cog.bot.get_user(self.farm_owner_id)
+        if updated_farm_data and owner:
+            await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
+
         await interaction.followup.send(f"✅ **{hoe}** を使って、畑を**{tilled}マス**耕しました。", ephemeral=True)
     
     async def on_farm_plant_click(self, i: discord.Interaction): 
@@ -332,7 +356,12 @@ class FarmUIView(ui.View):
         ]
         await asyncio.gather(*tasks)
 
-        await self.cog.request_farm_ui_update(self.farm_owner_id)
+        # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+        updated_farm_data = await get_farm_data(self.farm_owner_id)
+        owner = self.cog.bot.get_user(self.farm_owner_id)
+        if updated_farm_data and owner:
+            await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
+
         await interaction.followup.send(f"✅ **{can}** を使って、**{watered_count}マス**に水をやりました。", ephemeral=True)
         
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
@@ -387,7 +416,10 @@ class FarmUIView(ui.View):
         
         results = await asyncio.gather(*db_tasks, return_exceptions=True)
         
-        await self.cog.request_farm_ui_update(self.farm_owner_id)
+        # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+        updated_farm_data = await get_farm_data(self.farm_owner_id)
+        if updated_farm_data:
+            await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
         followup_message = f"🎉 **{', '.join([f'{n} {q}個' for n, q in harvested.items()])}**を収穫しました！"
         if yield_bonus > 0.0:
@@ -682,7 +714,11 @@ class Farm(commands.Cog):
             
             await supabase.table('farms').update({'thread_id': thread.id, 'name': farm_name}).eq('user_id', user.id).execute()
             
-            await self.request_farm_ui_update(user.id, force_new=True)
+            # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+            updated_farm_data = await get_farm_data(user.id)
+            if updated_farm_data:
+                await self.update_farm_ui(thread, user, updated_farm_data, force_new=True)
+
             await interaction.followup.send(f"✅ あなただけの農場を作成しました！ {thread.mention} を確認してください。", ephemeral=True)
         except Exception as e:
             logger.error(f"농장 생성 중 오류 발생: {e}", exc_info=True)
