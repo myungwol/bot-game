@@ -10,7 +10,6 @@ from datetime import datetime, timezone, timedelta, time as dt_time
 from typing import Dict, Optional, List, Deque
 from collections import deque
 
-# [✅ 수정] 활동 기록을 위한 log_activity 함수를 가져옵니다.
 from utils.database import (
     get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
     save_config_to_db, get_all_user_stats, log_activity
@@ -134,9 +133,16 @@ class EconomyCore(commands.Cog):
             async with self._cache_lock:
                 self.chat_cache.append({'user_id': message.author.id, 'activity_type': 'chat', 'amount': 1, 'xp_earned': xp_to_add})
 
+    # [✅✅✅ 핵심 수정: 상세 로깅 추가 ✅✅✅]
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
-        if member.bot or before.channel == after.channel: return
+        # [✅ 로깅 추가] 1. 함수가 호출되었는지 확인
+        logger.info(f"[VOICE] on_voice_state_update triggered for {member.display_name} (ID: {member.id})")
+        
+        if member.bot or before.channel == after.channel:
+            # [✅ 로깅 추가] 2. 조기 종료 조건을 확인
+            logger.info(f"[VOICE] Event for bot or same channel. Exiting.")
+            return
 
         afk_channel_id = member.guild.afk_channel.id if member.guild.afk_channel else None
 
@@ -147,21 +153,34 @@ class EconomyCore(commands.Cog):
         was_active = is_active(before)
         is_now_active = is_active(after)
 
+        # [✅ 로깅 추가] 3. 채널 입장/퇴장 및 상태 변화 확인
+        logger.info(f"[VOICE] {member.display_name}: was_active={was_active}, is_now_active={is_now_active}")
+
         if not was_active and is_now_active:
             self.voice_sessions[member.id] = datetime.now(timezone.utc)
+            # [✅ 로깅 추가] 4. 음성 채널 활동 시작을 기록
+            logger.info(f"[VOICE] {member.display_name} joined an active channel. Starting voice session at {self.voice_sessions[member.id]}.")
         
         elif was_active and not is_now_active:
             if join_time := self.voice_sessions.pop(member.id, None):
+                # [✅ 로깅 추가] 5. 음성 채널 활동 종료를 기록
+                logger.info(f"[VOICE] {member.display_name} left an active channel. Ending voice session.")
+                
                 duration_minutes = (datetime.now(timezone.utc) - join_time).total_seconds() / 60.0
+                # [✅ 로깅 추가] 6. 계산된 활동 시간을 확인
+                logger.info(f"[VOICE] Calculated duration for {member.display_name}: {duration_minutes:.2f} minutes.")
+                
                 if duration_minutes >= 1:
+                    # [✅ 로깅 추가] 7. 기록 조건(1분 이상)을 통과했는지 확인
+                    logger.info(f"[VOICE] Duration is >= 1 minute. Proceeding to log activity.")
+                    
                     rounded_minutes = round(duration_minutes)
                     try:
-                        # [✅✅✅ 핵심 수정 ✅✅✅]
-                        # 직접 DB에 데이터를 삽입하는 대신, 표준화된 log_activity 함수를 사용합니다.
-                        # 이렇게 하면 모든 활동 기록이 일관된 방식으로 처리되어 데이터 누락을 방지합니다.
-                        
-                        # 1. 활동 기록 및 경험치 지급
                         xp_to_add = self.xp_from_voice * rounded_minutes
+                        
+                        # [✅ 로깅 추가] 8. 최종적으로 DB에 저장할 데이터 확인
+                        logger.info(f"[VOICE] Calling log_activity for {member.display_name} with: amount={rounded_minutes}, xp_earned={xp_to_add}")
+                        
                         await log_activity(
                             user_id=member.id,
                             activity_type='voice',
@@ -173,7 +192,6 @@ class EconomyCore(commands.Cog):
                             xp_res = await supabase.rpc('add_xp', {'p_user_id': member.id, 'p_xp_to_add': xp_to_add, 'p_source': 'voice'}).execute()
                             if xp_res.data: await self.handle_level_up_event(member, xp_res.data)
 
-                        # 2. 코인 보상 확인
                         stats = await get_all_user_stats(member.id)
                         daily_stats = stats.get('daily', {})
                         total_voice_minutes_today = daily_stats.get('voice_minutes', 0)
@@ -190,7 +208,11 @@ class EconomyCore(commands.Cog):
                             await self.log_coin_activity(member, reward, f"ボイスチャンネルで{self.voice_time_requirement_minutes}分間活動")
                     
                     except Exception as e:
-                        logger.error(f"음성 채널 활동 보상 처리 중 오류: {e}", exc_info=True)
+                        # [✅ 로깅 추가] 9. 만약 오류가 발생하면, 어떤 유저에게서 발생했는지 기록
+                        logger.error(f"[VOICE] Error processing voice activity for {member.display_name}: {e}", exc_info=True)
+                else:
+                    # [✅ 로깅 추가] 10. 활동 시간이 너무 짧아 기록되지 않았음을 명시
+                    logger.info(f"[VOICE] Duration for {member.display_name} is < 1 minute. Not logging activity.")
 
 
     async def handle_level_up_event(self, user: discord.User, result_data: List[Dict]):
