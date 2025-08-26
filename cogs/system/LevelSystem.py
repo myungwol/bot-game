@@ -26,25 +26,33 @@ def create_xp_bar(current_xp: int, required_xp: int, length: int = 10) -> str:
     bar = '▓' * filled_length + '░' * (length - filled_length)
     return f"[{bar}]"
 
+# [✅✅✅ 핵심 수정 ✅✅✅]
+# 레벨 확인 창을 만드는 로직을 전면 수정합니다.
 async def build_level_embed(user: discord.Member) -> discord.Embed:
     try:
+        # 1. 필요한 모든 정보를 데이터베이스에서 동시에 가져옵니다.
         level_res_task = supabase.table('user_levels').select('*').eq('user_id', user.id).maybe_single().execute()
         job_res_task = supabase.table('user_jobs').select('jobs(*)').eq('user_id', user.id).maybe_single().execute()
+        # 'user_activities'에서 경험치 획득 기록만 가져옵니다.
         xp_logs_res_task = supabase.table('user_activities').select('activity_type, xp_earned').eq('user_id', user.id).gt('xp_earned', 0).execute()
+        
         level_res, job_res, xp_logs_res = await asyncio.gather(level_res_task, job_res_task, xp_logs_res_task)
 
-        user_level_data = level_res.data if level_res and level_res.data else {'level': 1, 'xp': 0}
+        # 2. 유저의 기본 레벨/경험치 정보를 설정합니다.
+        user_level_data = level_res.data if level_res and hasattr(level_res, 'data') and level_res.data else {'level': 1, 'xp': 0}
         current_level, total_xp = user_level_data['level'], user_level_data['xp']
 
+        # 3. 다음 레벨까지 필요한 경험치를 계산합니다.
         xp_for_next_level = calculate_xp_for_level(current_level + 1)
         xp_at_level_start = calculate_xp_for_level(current_level)
         
         xp_in_current_level = total_xp - xp_at_level_start
         required_xp_for_this_level = xp_for_next_level - xp_at_level_start if xp_for_next_level > xp_at_level_start else 1
         
+        # 4. 유저의 직업과 등급 역할을 확인합니다.
         job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
         job_role_mention = "`なし`"; job_role_map = job_system_config.get("JOB_ROLE_MAP", {})
-        if job_res and job_res.data and job_res.data.get('jobs'):
+        if job_res and hasattr(job_res, 'data') and job_res.data and job_res.data.get('jobs'):
             job_data = job_res.data['jobs']
             if role_key := job_role_map.get(job_data['job_key']):
                 if role_id := get_id(role_key): job_role_mention = f"<@&{role_id}>"
@@ -55,16 +63,35 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
             if role_id := get_id(tier['role_key']):
                 if role_id in user_roles: tier_role_mention = f"<@&{role_id}>"; break
         
-        source_map = {'chat': '💬 チャット', 'voice': '🎙️ VC参加', 'fishing_catch': '🎣 釣り', 'farm_harvest': '🌾 農業', 'admin': '⚙️ 管理者', 'daily_check_in': '✅ 出席'}
-        aggregated_xp = {v: 0 for v in source_map.values()}
-        if xp_logs_res and xp_logs_res.data:
-            for log in xp_logs_res.data:
-                source_name = source_map.get(log['activity_type'], log['activity_type'])
-                if source_name in aggregated_xp: aggregated_xp[source_name] += log['xp_earned']
+        # 5. 모든 경험치 획득 경로를 정의하고, DB 기록을 바탕으로 합산합니다.
+        #    'quest'와 'farming'을 추가하고, daily_check_in -> daily_check로 변경합니다.
+        source_map = {
+            'chat': '💬 チャット', 
+            'voice': '🎙️ VC参加', 
+            'fishing_catch': '🎣 釣り', 
+            'farm_harvest': '🌾 農業', 
+            'quest': '📜 クエスト',
+            'daily_check_in': '✅ 出席',
+            'admin': '⚙️ 管理者'
+        }
         
-        details = [f"> {display_name}: `{amount:,} XP`" for display_name, amount in aggregated_xp.items() if amount > 0]
+        # 모든 경로의 기본값을 0으로 설정합니다.
+        aggregated_xp = {v: 0 for v in source_map.values()}
+        
+        if xp_logs_res and hasattr(xp_logs_res, 'data') and xp_logs_res.data:
+            for log in xp_logs_res.data:
+                # 'quest_claim_daily_all' 같은 기록도 'quest'로 처리되도록 starts_with를 사용합니다.
+                source_key = next((key for key in source_map.keys() if log['activity_type'].startswith(key)), None)
+                if source_key:
+                    display_name = source_map[source_key]
+                    aggregated_xp[display_name] += log['xp_earned']
+        
+        # 6. 합산된 결과를 바탕으로 표시할 텍스트를 만듭니다.
+        #    획득량이 0이더라도 모든 경로가 표시됩니다.
+        details = [f"> {display_name}: `{amount:,} XP`" for display_name, amount in aggregated_xp.items()]
         xp_details_text = "\n".join(details)
         
+        # 7. 최종 임베드를 조립합니다.
         xp_bar = create_xp_bar(xp_in_current_level, required_xp_for_this_level)
         embed = discord.Embed(color=user.color or discord.Color.blue())
         if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
@@ -76,7 +103,7 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
             f"**経験値**\n`{xp_in_current_level:,} / {required_xp_for_this_level:,}`",
             f"{xp_bar}\n",
             f"**🏆 総獲得経験値**\n`{total_xp:,} XP`\n",
-            f"**📊 経験値獲得の内訳**\n{xp_details_text if xp_details_text else '> まだ記録がありません。'}"
+            f"**📊 経験値獲得の内訳**\n{xp_details_text}"
         ]
         embed.description = "\n".join(description_parts)
         return embed
