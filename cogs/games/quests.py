@@ -12,7 +12,8 @@ from utils.database import (
     get_all_user_stats, 
     get_config,
     save_panel_id, get_panel_id, get_embed_from_db,
-    update_wallet, set_cooldown, get_cooldown, log_activity
+    update_wallet, set_cooldown, get_cooldown, log_activity,
+    supabase # 레벨업 연동을 위해 supabase 직접 호출이 필요합니다.
 )
 from utils.helpers import format_embed_from_db
 
@@ -20,9 +21,21 @@ logger = logging.getLogger(__name__)
 
 JST = timezone(timedelta(hours=9))
 
+# [✅✅✅ 핵심 수정 ✅✅✅]
+# 각 퀘스트 보상에 'xp' 항목을 추가합니다.
 QUEST_REWARDS = {
-    "daily": {"attendance": 10, "voice": 55, "fishing": 35, "all_complete": 100},
-    "weekly": {"attendance": 100, "voice": 550, "fishing": 350, "all_complete": 1000}
+    "daily": {
+        "attendance": {"coin": 10, "xp": 5},
+        "voice": {"coin": 55, "xp": 20},
+        "fishing": {"coin": 35, "xp": 15},
+        "all_complete": {"coin": 100, "xp": 50}
+    },
+    "weekly": {
+        "attendance": {"coin": 100, "xp": 50},
+        "voice": {"coin": 550, "xp": 200},
+        "fishing": {"coin": 350, "xp": 150},
+        "all_complete": {"coin": 1000, "xp": 500}
+    }
 }
 DAILY_QUESTS = {
     "attendance": {"name": "出席チェックをする", "goal": 1},
@@ -45,7 +58,7 @@ class QuestView(ui.View):
     async def update_view(self, interaction: discord.Interaction):
         await interaction.response.defer()
         embed = await self.build_embed()
-        self.update_components()
+        await self.update_components()
         await interaction.edit_original_response(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
@@ -54,7 +67,7 @@ class QuestView(ui.View):
         embed = discord.Embed(color=0x2ECC71)
         embed.set_author(name=f"{self.user.display_name}さんのクエスト", icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
         
-        stats_to_show = summary.get('daily' if self.current_tab == 'daily' else 'weekly', {})
+        stats_to_show = summary.get(self.current_tab, {})
         quests_to_show = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
         rewards = QUEST_REWARDS[self.current_tab]
 
@@ -66,25 +79,65 @@ class QuestView(ui.View):
             db_key = progress_key_map[key]
             current = stats_to_show.get(db_key, 0)
             goal = quest["goal"]
-            reward = rewards.get(key, 0)
+            reward_coin = rewards.get(key, {}).get("coin", 0)
+            reward_xp = rewards.get(key, {}).get("xp", 0)
             is_complete = current >= goal
             if not is_complete: all_complete = False
             emoji = "✅" if is_complete else "❌"
             field_name = f"{emoji} {quest['name']}"
-            field_value = f"> ` {min(current, goal)} / {goal} `\n> **報酬:** `{reward:,}` {self.cog.currency_icon}"
+            # [✅ 수정] 보상 표시에 XP도 추가합니다.
+            field_value = f"> ` {min(current, goal)} / {goal} `\n> **報酬:** `{reward_coin:,}`{self.cog.currency_icon} + `{reward_xp:,}` XP"
             embed.add_field(name=field_name, value=field_value, inline=False)
         
         if all_complete:
-            embed.set_footer(text=f"🎉 すべてのクエスト完了！追加報酬: {rewards['all_complete']:,}コイン")
+            all_in_reward_coin = rewards['all_complete'].get("coin", 0)
+            all_in_reward_xp = rewards['all_complete'].get("xp", 0)
+            embed.set_footer(text=f"🎉 すべてのクエスト完了！追加報酬: {all_in_reward_coin:,}{self.cog.currency_icon} + {all_in_reward_xp:,} XP")
         else:
             embed.set_footer(text="クエストを完了して報酬を獲得しましょう！")
         return embed
 
-    def update_components(self):
+    async def update_components(self):
         for item in self.children:
             if isinstance(item, ui.Button) and item.custom_id.startswith("tab_"):
                 item.style = discord.ButtonStyle.primary if item.custom_id == f"tab_{self.current_tab}" else discord.ButtonStyle.secondary
                 item.disabled = item.custom_id == f"tab_{self.current_tab}"
+
+        claim_button = next((child for child in self.children if isinstance(child, ui.Button) and child.custom_id == "claim_rewards_button"), None)
+        if not claim_button:
+            return
+
+        quests_to_check = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
+        summary = await get_all_user_stats(self.user.id)
+        stats_to_check = summary.get(self.current_tab, {})
+        
+        progress_key_map = {"attendance": "check_in_count", "voice": "voice_minutes", "fishing": "fishing_count"}
+
+        all_quests_complete = True
+        for key, quest in quests_to_check.items():
+            db_key = progress_key_map[key]
+            if stats_to_check.get(db_key, 0) < quest["goal"]:
+                all_quests_complete = False
+                break
+        
+        today_str = datetime.now(JST).strftime('%Y-%m-%d')
+        week_start_str = (datetime.now(JST) - timedelta(days=datetime.now(JST).weekday())).strftime('%Y-%m-%d')
+        period_str = today_str if self.current_tab == "daily" else week_start_str
+        cooldown_key = f"quest_claimed_{self.current_tab}_all_{period_str}"
+        already_claimed = await get_cooldown(self.user.id, cooldown_key) > 0
+
+        if already_claimed:
+            claim_button.label = "今日の報酬を受け取りました"
+            claim_button.style = discord.ButtonStyle.secondary
+            claim_button.disabled = True
+        elif all_quests_complete:
+            claim_button.label = "完了したクエストの報酬を受け取る"
+            claim_button.style = discord.ButtonStyle.success
+            claim_button.disabled = False
+        else:
+            claim_button.label = "すべてのクエストを完了してください"
+            claim_button.style = discord.ButtonStyle.secondary
+            claim_button.disabled = True
     
     @ui.button(label="デイリー", style=discord.ButtonStyle.primary, custom_id="tab_daily", disabled=True)
     async def daily_tab_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -95,59 +148,69 @@ class QuestView(ui.View):
     async def weekly_tab_button(self, interaction: discord.Interaction, button: ui.Button):
         self.current_tab = "weekly"
         await self.update_view(interaction)
-
-    @ui.button(label="完了したクエストの報酬を受け取る", style=discord.ButtonStyle.success, emoji="💰", row=1)
+    
+    @ui.button(label="報酬を受け取る", style=discord.ButtonStyle.success, emoji="💰", custom_id="claim_rewards_button", row=1)
     async def claim_rewards_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
-        summary = await get_all_user_stats(self.user.id)
-        
-        total_reward = 0; reward_details = []
-        stats_to_check = summary.get('daily' if self.current_tab == 'daily' else 'weekly', {})
+
         quests_to_check = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
         rewards = QUEST_REWARDS[self.current_tab]
         
-        progress_key_map = {"attendance": "check_in_count", "voice": "voice_minutes", "fishing": "fishing_count"}
+        # [✅✅✅ 핵심 수정 ✅✅✅]
+        # 코인과 경험치를 각각 합산합니다.
+        total_coin_reward = 0
+        total_xp_reward = 0
+        reward_details = []
+
+        for key, quest in quests_to_check.items():
+            reward_info = rewards.get(key, {})
+            coin = reward_info.get("coin", 0)
+            xp = reward_info.get("xp", 0)
+            total_coin_reward += coin
+            total_xp_reward += xp
+            reward_details.append(f"・{quest['name']}: `{coin:,}`{self.cog.currency_icon} + `{xp:,}` XP")
         
-        all_quests_complete = True
+        all_complete_reward = rewards.get("all_complete", {})
+        all_coin = all_complete_reward.get("coin", 0)
+        all_xp = all_complete_reward.get("xp", 0)
+        total_coin_reward += all_coin
+        total_xp_reward += all_xp
+        reward_details.append(f"・全クエスト完了ボーナス: `{all_coin:,}`{self.cog.currency_icon} + `{all_xp:,}` XP")
+        
         today_str = datetime.now(JST).strftime('%Y-%m-%d')
         week_start_str = (datetime.now(JST) - timedelta(days=datetime.now(JST).weekday())).strftime('%Y-%m-%d')
         period_str = today_str if self.current_tab == "daily" else week_start_str
+        cooldown_key = f"quest_claimed_{self.current_tab}_all_{period_str}"
 
-        for key, quest in quests_to_check.items():
-            db_key = progress_key_map[key]
-            is_complete = stats_to_check.get(db_key, 0) >= quest["goal"]
-            if not is_complete:
-                all_quests_complete = False; continue
+        if total_coin_reward > 0 or total_xp_reward > 0:
+            # 1. DB에 코인/경험치 보상 활동을 한 번에 기록
+            await log_activity(self.user.id, f"quest_claim_{self.current_tab}_all", coin_earned=total_coin_reward, xp_earned=total_xp_reward)
             
-            cooldown_key = f"quest_claimed_{self.current_tab}_{key}_{period_str}"
-            last_claimed = await get_cooldown(self.user.id, cooldown_key)
-            if last_claimed > 0: continue
-            
-            reward = rewards.get(key, 0)
-            total_reward += reward
-            reward_details.append(f"・{quest['name']}: `{reward:,}`")
+            # 2. 코인 지급
+            if total_coin_reward > 0:
+                await update_wallet(self.user, total_coin_reward)
+
+            # 3. 경험치 지급 및 레벨업 확인
+            if total_xp_reward > 0:
+                xp_res = await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': total_xp_reward, 'p_source': 'quest'}).execute()
+                if xp_res.data:
+                    if (level_cog := self.cog.bot.get_cog("LevelSystem")):
+                        await level_cog.handle_level_up_event(self.user, xp_res.data)
+
+            # 4. 중복 방지 쿨다운 설정
             await set_cooldown(self.user.id, cooldown_key)
-        
-        if all_quests_complete:
-            cooldown_key = f"quest_claimed_{self.current_tab}_all_{period_str}"
-            last_claimed = await get_cooldown(self.user.id, cooldown_key)
-            if last_claimed == 0:
-                reward = rewards.get("all_complete", 0)
-                total_reward += reward
-                reward_details.append(f"・全クエスト完了ボーナス: `{reward:,}`")
-                await set_cooldown(self.user.id, cooldown_key)
-        
-        if total_reward > 0:
-            await update_wallet(self.user, total_reward)
-            await log_activity(self.user.id, f"quest_claim_{self.current_tab}", coin_earned=total_reward)
+            
             details_text = "\n".join(reward_details)
-            await interaction.followup.send(f"🎉 **以下の報酬を受け取りました！**\n{details_text}\n\n**合計:** `{total_reward:,}` {self.cog.currency_icon}", ephemeral=True)
+            await interaction.followup.send(
+                f"🎉 **すべての{self.current_tab}クエスト報酬を受け取りました！**\n"
+                f"{details_text}\n\n"
+                f"**合計:** `{total_coin_reward:,}`{self.cog.currency_icon} と `{total_xp_reward:,}` XP",
+                ephemeral=True
+            )
         else:
             await interaction.followup.send("❌ 受け取れる報酬がありません。", ephemeral=True)
         
-        embed = await self.build_embed()
-        self.update_components()
-        await interaction.edit_original_response(embed=embed, view=self)
+        await self.update_view(interaction)
 
 class QuestPanelView(ui.View):
     def __init__(self, cog_instance: 'Quests'):
@@ -161,6 +224,7 @@ class QuestPanelView(ui.View):
         await interaction.response.defer(ephemeral=True)
         view = QuestView(interaction.user, self.cog)
         embed = await view.build_embed()
+        await view.update_components()
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 class Quests(commands.Cog):
