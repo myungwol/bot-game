@@ -23,6 +23,9 @@ root_logger.addHandler(log_handler)
 logging.getLogger('discord').setLevel(logging.WARNING)
 logging.getLogger('discord.http').setLevel(logging.WARNING)
 logging.getLogger('websockets').setLevel(logging.WARNING)
+# [✅✅✅ 핵심 수정 ✅✅✅] Supabase 및 httpx 라이브러리의 정보성 로그를 숨깁니다.
+logging.getLogger('supabase').setLevel(logging.WARNING)
+logging.getLogger('httpx').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # --- 환경 변수 및 인텐트 설정 ---
@@ -50,8 +53,6 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         await self.load_all_extensions()
         
-        # [✅✅✅ 핵심 수정]
-        # JobAndTierHandler를 영구 View 목록에서 제거합니다.
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
             "DiceGame", "SlotMachine", "RPSGame",
@@ -80,7 +81,6 @@ class MyBot(commands.Bot):
 
         loaded_count = 0
         failed_count = 0
-        # [수정] os.walk 대신 glob을 사용하여 더 명확하게 탐색합니다.
         from glob import glob
         for path in glob(f'{cogs_dir}/**/*.py', recursive=True):
             if '__init__' in path:
