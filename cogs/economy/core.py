@@ -167,7 +167,34 @@ class EconomyCore(commands.Cog):
         logger.info(f"[VOICE TRACKER] Running for {len(active_users_copy)} active users.")
 
         try:
-            # 1. 활동 기록 및 경험치 지급 (일괄 처리)
+            # [✅✅✅ 핵심 수정: 로직 순서 변경 ✅✅✅]
+            for user_id in active_users_copy:
+                user = self.bot.get_user(user_id)
+                if not user:
+                    continue
+
+                # 1. 먼저 현재 DB 상태를 읽어옵니다.
+                stats = await get_all_user_stats(user_id)
+                old_total_voice_minutes_today = stats.get('daily', {}).get('voice_minutes', 0)
+                
+                # 2. 읽어온 값을 기준으로 '곧 추가될 1분'을 스스로 계산합니다.
+                new_total_voice_minutes_today = old_total_voice_minutes_today + 1
+
+                # 3. 계산된 새 값을 기준으로 보상 지급 여부를 판단합니다.
+                if new_total_voice_minutes_today > 0 and new_total_voice_minutes_today % self.voice_time_requirement_minutes == 0:
+                    today_str = datetime.now(JST).strftime('%Y-%m-%d')
+                    cooldown_key = f"voice_reward_{today_str}_{new_total_voice_minutes_today}m"
+                    last_claimed = await get_cooldown(user_id, cooldown_key)
+
+                    if last_claimed == 0:
+                        logger.info(f"[VOICE TRACKER] User {user.display_name} reached {new_total_voice_minutes_today} minutes. Granting reward.")
+                        reward = random.randint(*self.voice_reward_range)
+                        await update_wallet(user, reward)
+                        await log_activity(user_id, 'reward_voice', coin_earned=reward)
+                        await self.log_coin_activity(user, reward, f"ボイスチャンネルで{new_total_voice_minutes_today}分間活動")
+                        await set_cooldown(user_id, cooldown_key)
+
+            # 4. 모든 보상 로직이 끝난 후, 마지막에 1분의 활동 기록과 경험치를 일괄적으로 DB에 씁니다.
             xp_per_minute = self.xp_from_voice
             logs_to_insert = [
                 {'user_id': user_id, 'activity_type': 'voice', 'amount': 1, 'xp_earned': xp_per_minute}
@@ -178,8 +205,6 @@ class EconomyCore(commands.Cog):
                 await supabase.table('user_activities').insert(logs_to_insert).execute()
                 logger.info(f"[VOICE TRACKER] Logged 1 minute of activity for {len(logs_to_insert)} users.")
 
-                # [✅✅✅ 핵심 수정 ✅✅✅]
-                # .execute()를 추가하여 실제 비동기 작업을 생성합니다.
                 xp_update_tasks = [
                     supabase.rpc('add_xp', {'p_user_id': user_id, 'p_xp_to_add': xp_per_minute, 'p_source': 'voice'}).execute()
                     for user_id in active_users_copy
@@ -187,33 +212,10 @@ class EconomyCore(commands.Cog):
                 xp_results = await asyncio.gather(*xp_update_tasks, return_exceptions=True)
                 
                 for i, result in enumerate(xp_results):
-                    # 오류가 아니고, 레벨업 등 데이터가 반환되었을 경우
                     if not isinstance(result, Exception) and hasattr(result, 'data') and result.data:
                         user = self.bot.get_user(list(active_users_copy)[i])
                         if user:
                             await self.handle_level_up_event(user, result.data)
-
-            # 2. 10분 단위 코인 보상 확인 (개별 처리)
-            for user_id in active_users_copy:
-                user = self.bot.get_user(user_id)
-                if not user:
-                    continue
-                
-                stats = await get_all_user_stats(user_id)
-                total_voice_minutes_today = stats.get('daily', {}).get('voice_minutes', 0)
-                
-                if total_voice_minutes_today > 0 and total_voice_minutes_today % self.voice_time_requirement_minutes == 0:
-                    today_str = datetime.now(JST).strftime('%Y-%m-%d')
-                    cooldown_key = f"voice_reward_{today_str}_{total_voice_minutes_today}m"
-                    last_claimed = await get_cooldown(user_id, cooldown_key)
-
-                    if last_claimed == 0:
-                        logger.info(f"[VOICE TRACKER] User {user.display_name} reached {total_voice_minutes_today} minutes. Granting reward.")
-                        reward = random.randint(*self.voice_reward_range)
-                        await update_wallet(user, reward)
-                        await log_activity(user_id, 'reward_voice', coin_earned=reward)
-                        await self.log_coin_activity(user, reward, f"ボイスチャンネルで{total_voice_minutes_today}分間活動")
-                        await set_cooldown(user_id, cooldown_key)
 
         except Exception as e:
             logger.error(f"[VOICE TRACKER] Error in voice activity tracking loop: {e}", exc_info=True)
