@@ -112,6 +112,9 @@ class RankingView(ui.View):
         self.current_category = "level"
         self.current_period = "total"
 
+        # [✅ 수정] 내 순위 강조를 위한 변수 추가
+        self.highlight_user_id: Optional[int] = None
+
         self.category_map = {
             "level": {"column": "xp", "name": "レベル", "unit": "XP"},
             "voice": {"column": "voice_minutes", "name": "ボイス", "unit": "分"},
@@ -192,6 +195,11 @@ class RankingView(ui.View):
         self.add_item(prev_button)
         self.add_item(next_button)
 
+        # [✅ 수정] "내 순위" 버튼 추가
+        my_rank_button = ui.Button(label="自分の順位", style=discord.ButtonStyle.success, emoji="📍", custom_id="my_rank_button")
+        my_rank_button.callback = self.on_my_rank_click
+        self.add_item(my_rank_button)
+
     async def on_select_change(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
         selected_value = interaction.data['values'][0]
@@ -212,7 +220,32 @@ class RankingView(ui.View):
         else:
             self.current_page -= 1
         await self.update_display(interaction)
+    
+    # [✅ 수정] "내 순위" 버튼 콜백 함수 추가
+    async def on_my_rank_click(self, interaction: discord.Interaction, button: ui.Button):
+        category_info = self.category_map[self.current_category]
+        column_name = category_info["column"]
+        table_name = 'user_levels' if self.current_category == 'level' else f"{self.current_period}_stats"
         
+        try:
+            res = await supabase.rpc('get_user_rank', {
+                'p_user_id': self.user.id,
+                'p_table_name': table_name,
+                'p_column_name': column_name
+            }).execute()
+
+            if res.data:
+                rank = res.data
+                self.current_page = (rank - 1) // self.users_per_page
+                self.highlight_user_id = self.user.id
+                await self.update_display(interaction)
+            else:
+                await interaction.response.send_message("まだランキングに登録されていません。", ephemeral=True, delete_after=5)
+
+        except Exception as e:
+            logger.error(f"내 순위 조회 중 오류: {e}", exc_info=True)
+            await interaction.response.send_message("❌ 順位の取得中にエラーが発生しました。", ephemeral=True, delete_after=5)
+
     async def build_embed(self) -> discord.Embed:
         offset = self.current_page * self.users_per_page
         
@@ -220,10 +253,7 @@ class RankingView(ui.View):
         column_name = category_info["column"]
         unit = category_info["unit"]
 
-        if self.current_category == 'level':
-            table_name = 'user_levels'
-        else:
-            table_name = f"{self.current_period}_stats"
+        table_name = 'user_levels' if self.current_category == 'level' else f"{self.current_period}_stats"
 
         query = supabase.table(table_name).select('user_id', column_name, count='exact').order(column_name, desc=True).range(offset, offset + self.users_per_page - 1)
         res = await query.execute()
@@ -242,12 +272,20 @@ class RankingView(ui.View):
                 member = self.user.guild.get_member(user_id_int)
                 name = member.display_name if member else f"ID: {user_id_int}"
                 value = user_data.get(column_name, 0)
-                rank_list.append(f"`{rank}.` {name} - **`{value:,}`** {unit}")
+                
+                # [✅ 수정] 내 순위 강조 로직 추가
+                line = f"`{rank}.` {name} - **`{value:,}`** {unit}"
+                if self.highlight_user_id == user_id_int:
+                    line = f"➡️ **{line}** ⬅️"
+                
+                rank_list.append(line)
+
+        # [✅ 수정] 페이지 이동 후 강조 효과 초기화
+        self.highlight_user_id = None
 
         embed.description = "\n".join(rank_list) if rank_list else "まだランキング情報がありません。"
         embed.set_footer(text=f"ページ {self.current_page + 1} / {self.total_pages}")
         return embed
-
 
 class LevelPanelView(ui.View):
     def __init__(self, cog_instance: 'LevelSystem'):
