@@ -218,8 +218,8 @@ class RankingView(ui.View):
             self.current_page -= 1
         await self.update_display(interaction)
     
-    # [✅ 수정] 콜백 함수 정의에 'button: ui.Button' 인자 추가
-    async def on_my_rank_click(self, interaction: discord.Interaction, button: ui.Button):
+    # [✅ 최종 수정] 에러의 원인이었던 불필요한 'button' 인자를 제거합니다.
+    async def on_my_rank_click(self, interaction: discord.Interaction):
         category_info = self.category_map[self.current_category]
         column_name = category_info["column"]
         table_name = 'user_levels' if self.current_category == 'level' else f"{self.current_period}_stats"
@@ -281,7 +281,7 @@ class RankingView(ui.View):
         embed.description = "\n".join(rank_list) if rank_list else "まだランキング情報がありません。"
         embed.set_footer(text=f"ページ {self.current_page + 1} / {self.total_pages}")
         return embed
-
+        
 class LevelPanelView(ui.View):
     def __init__(self, cog_instance: 'LevelSystem'):
         super().__init__(timeout=None)
