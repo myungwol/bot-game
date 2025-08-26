@@ -26,7 +26,7 @@ except Exception as e:
 _bot_configs_cache: Dict[str, Any] = {}
 _channel_id_cache: Dict[str, int] = {}
 _item_database_cache: Dict[str, Dict[str, Any]] = {}
-_fishing_loot_cache: List[Dict[str, Any]] = {}
+_fishing_loot_cache: List[Dict[str, Any]] = []
 _user_abilities_cache: Dict[int, tuple[List[str], float]] = {}
 JST = timezone(timedelta(hours=9))
 BARE_HANDS = "素手"
@@ -75,6 +75,19 @@ async def load_game_data_from_db():
     loot_response = await supabase.table('fishing_loots').select('*').execute()
     if loot_response and loot_response.data:
         _fishing_loot_cache = loot_response.data
+    logger.info(f"✅ 게임 데이터를 DB에서 로드했습니다. (아이템: {len(_item_database_cache)}개, 낚시: {len(_fishing_loot_cache)}개)")
+
+# [✅ 신규 추가] 게임 데이터만 다시 불러오는 함수
+@supabase_retry_handler()
+async def reload_game_data_from_db():
+    """아이템, 낚시 등 게임 관련 데이터만 DB에서 다시 불러와 캐시를 갱신합니다."""
+    global _item_database_cache, _fishing_loot_cache
+    try:
+        await load_game_data_from_db()
+        return True
+    except Exception as e:
+        logger.error(f"게임 데이터 리로드 중 오류 발생: {e}", exc_info=True)
+        return False
 
 def get_config(key: str, default: Any = None) -> Any: return _bot_configs_cache.get(key, default)
 def get_id(key: str) -> Optional[int]: return _channel_id_cache.get(key)
