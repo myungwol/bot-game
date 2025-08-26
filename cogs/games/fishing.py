@@ -298,14 +298,24 @@ class Fishing(commands.Cog):
         self.bot.add_view(FishingPanelView(self.bot, self, "panel_fishing_river"))
         self.bot.add_view(FishingPanelView(self.bot, self, "panel_fishing_sea"))
         
-    async def handle_level_up_event(self, user: discord.User, result_data: Dict):
-        if not result_data or not result_data.get('leveled_up'): return
-        new_level = result_data.get('new_level')
-        await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
-        job_advancement_levels = get_config("GAME_CONFIG", {}).get("JOB_ADVANCEMENT_LEVELS", [])
-        if new_level in job_advancement_levels:
-            await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": time.time()})
-            logger.info(f"유저 {user.display_name}가 전직 가능 레벨({new_level})에 도달하여 DB에 요청을 기록했습니다.")
+    # [✅✅✅ 핵심 수정 ✅✅✅]
+    # result_data는 List[Dict] 형태이므로, 첫 번째 요소를 꺼내서 확인해야 합니다.
+    async def handle_level_up_event(self, user: discord.Member, result_data: List[Dict]):
+        # 1. 데이터가 비어있는지 먼저 확인
+        if not result_data:
+            return
+        # 2. 첫 번째 요소를 꺼내서 'leveled_up' 키가 있는지 확인
+        if not result_data[0].get('leveled_up'):
+            return
+            
+        new_level = result_data[0].get('new_level')
+        
+        # LevelSystem Cog를 찾아서 직접 함수를 호출하는 것이 더 안정적입니다.
+        if level_cog := self.bot.get_cog("LevelSystem"):
+            await level_cog.handle_level_up_event(user, result_data)
+        else:
+            logger.error("LevelSystem Cog를 찾을 수 없어 레벨업 이벤트를 처리할 수 없습니다.")
+
 
     async def log_whale_catch(self, user: discord.Member, result_embed: discord.Embed):
         announcement_msg_id = get_config("whale_announcement_message_id")
