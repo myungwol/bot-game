@@ -8,12 +8,14 @@ import time
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 
+# [✅✅✅ 핵심 수정 ✅✅✅]
+# get_id 함수를 사용할 수 있도록 database.py에서 가져옵니다.
 from utils.database import (
     get_all_user_stats, 
     get_config,
     save_panel_id, get_panel_id, get_embed_from_db,
     update_wallet, set_cooldown, get_cooldown, log_activity,
-    supabase
+    supabase, get_id
 )
 from utils.helpers import format_embed_from_db
 
@@ -46,14 +48,11 @@ WEEKLY_QUESTS = {
     "fishing": {"name": "魚を10匹釣る", "goal": 10},
 }
 
-# [✅✅✅ 핵심 수정 ✅✅✅]
-# 퀘스트 확인과 출석 체크 버튼을 모두 담는 새로운 View를 생성합니다.
 class TaskBoardView(ui.View):
     def __init__(self, cog_instance: 'Quests'):
         super().__init__(timeout=None)
         self.cog = cog_instance
 
-        # 1. 출석체크 버튼 (가장 왼쪽에 배치)
         check_in_button = ui.Button(
             label="出席チェック",
             style=discord.ButtonStyle.success,
@@ -63,7 +62,6 @@ class TaskBoardView(ui.View):
         check_in_button.callback = self.check_in_callback
         self.add_item(check_in_button)
 
-        # 2. 퀘스트 확인 버튼
         quest_button = ui.Button(
             label="クエスト確認",
             style=discord.ButtonStyle.primary,
@@ -85,7 +83,6 @@ class TaskBoardView(ui.View):
         reward_str = get_config("DAILY_CHECK_REWARD", "100").strip('"')
         attendance_reward = int(reward_str)
         
-        # [✅ 수정] 출석체크에서는 코인만 기록하고 XP는 0으로 설정합니다.
         await log_activity(user.id, 'daily_check_in', coin_earned=attendance_reward, xp_earned=0)
         await update_wallet(user, attendance_reward)
         
@@ -291,11 +288,9 @@ class Quests(commands.Cog):
         self.log_channel_id = get_id("log_daily_check_channel_id")
 
     async def register_persistent_views(self):
-        # [✅ 수정] 새로운 TaskBoardView를 등록합니다.
         self.bot.add_view(TaskBoardView(self))
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_tasks", **kwargs):
-        # [✅ 수정] 새로운 패널 키 'panel_tasks'를 사용합니다.
         if panel_info := get_panel_id(panel_key):
             if (old_channel := self.bot.get_channel(panel_info['channel_id'])) and (old_message_id := panel_info.get('message_id')):
                 try: await (await old_channel.fetch_message(old_message_id)).delete()
