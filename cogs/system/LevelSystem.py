@@ -8,6 +8,7 @@ import asyncio
 import time
 import math
 from typing import Optional, Dict, List, Any
+from datetime import time as dt_time, timezone, timedelta
 
 from utils.database import (
     supabase, get_panel_id, save_panel_id, get_id, get_config, 
@@ -18,6 +19,12 @@ from utils.helpers import format_embed_from_db, calculate_xp_for_level
 from utils.game_config_defaults import JOB_ADVANCEMENT_DATA, GAME_CONFIG
 
 logger = logging.getLogger(__name__)
+
+# [✅✅✅ 핵심 추가 ✅✅✅]
+# JST(일본 표준시)와 월요일 자정을 정의합니다.
+JST = timezone(timedelta(hours=9))
+JST_MONDAY_MIDNIGHT = dt_time(hour=0, minute=0, tzinfo=JST)
+
 
 def create_xp_bar(current_xp: int, required_xp: int, length: int = 10) -> str:
     if required_xp <= 0: return "▓" * length
@@ -96,8 +103,6 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
         logger.error(f"레벨 임베드 생성 중 오류 (유저: {user.id}): {e}", exc_info=True)
         return discord.Embed(title="エラー", description="ステータス情報の読み込み中にエラーが発生しました。", color=discord.Color.red())
 
-# [✅✅✅ 핵심 수정 ✅✅✅]
-# 기존의 RankingView를 완전히 새로운, 더 강력한 버전으로 교체합니다.
 class RankingView(ui.View):
     def __init__(self, user: discord.Member):
         super().__init__(timeout=300)
@@ -106,17 +111,15 @@ class RankingView(ui.View):
         self.users_per_page = 10
         self.total_pages = 1
         
-        # 랭킹의 기준이 되는 '카테고리'와 '기간'을 상태로 저장합니다.
-        self.current_category = "level"  # level, voice, chat, fishing, harvest
-        self.current_period = "total"   # daily, weekly, monthly, total
+        self.current_category = "level"
+        self.current_period = "total"
 
-        # 각 카테고리에 대한 정보 (DB 컬럼명, 표시 이름, 단위)
         self.category_map = {
             "level": {"column": "xp", "name": "レベル", "unit": "XP"},
             "voice": {"column": "voice_minutes", "name": "ボイス", "unit": "分"},
             "chat": {"column": "chat_count", "name": "チャット", "unit": "回"},
             "fishing": {"column": "fishing_count", "name": "釣り", "unit": "匹"},
-            "harvest": {"column": "harvest_count", "name": "収穫", "unit": "回收"},
+            "harvest": {"column": "harvest_count", "name": "収穫", "unit": "回収"},
         }
         
         self.period_map = {
@@ -127,24 +130,20 @@ class RankingView(ui.View):
         }
 
     async def start(self, interaction: discord.Interaction):
-        """View를 시작하고 첫 메시지를 보냅니다."""
         await interaction.response.defer(ephemeral=True)
         embed = await self.build_embed()
         self.build_components()
         await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     async def update_display(self, interaction: discord.Interaction):
-        """인터랙션에 대한 응답으로 View를 업데이트합니다."""
         await interaction.response.defer()
         embed = await self.build_embed()
         self.build_components()
         await interaction.edit_original_response(embed=embed, view=self)
 
     def build_components(self):
-        """현재 상태에 맞게 드롭다운 메뉴와 버튼을 구성합니다."""
         self.clear_items()
 
-        # 1. 카테고리 선택 드롭다운
         category_options = [
             discord.SelectOption(label=info["name"], value=key, emoji=e)
             for key, info, e in [
@@ -160,14 +159,12 @@ class RankingView(ui.View):
             options=category_options,
             custom_id="ranking_category_select"
         )
-        # 현재 선택된 값을 기본값으로 설정
         for option in category_options:
             if option.value == self.current_category:
                 option.default = True
         category_select.callback = self.on_select_change
         self.add_item(category_select)
         
-        # 2. 기간 선택 드롭다운
         period_options = [
             discord.SelectOption(label=name, value=key, emoji=e)
             for key, name, e in [
@@ -181,7 +178,6 @@ class RankingView(ui.View):
             placeholder="ランキングの期間を選択...",
             options=period_options,
             custom_id="ranking_period_select",
-            # '레벨' 랭킹은 '종합'만 가능하므로, 이 경우 비활성화합니다.
             disabled=(self.current_category == "level")
         )
         for option in period_options:
@@ -190,7 +186,6 @@ class RankingView(ui.View):
         period_select.callback = self.on_select_change
         self.add_item(period_select)
 
-        # 3. 페이지네이션 버튼
         prev_button = ui.Button(label="◀", style=discord.ButtonStyle.secondary, custom_id="prev_page", disabled=(self.current_page == 0))
         next_button = ui.Button(label="▶", style=discord.ButtonStyle.secondary, custom_id="next_page", disabled=(self.current_page >= self.total_pages - 1))
         
@@ -200,25 +195,20 @@ class RankingView(ui.View):
         self.add_item(next_button)
 
     async def on_select_change(self, interaction: discord.Interaction):
-        """드롭다운 메뉴의 값이 변경되었을 때 호출됩니다."""
-        # 어떤 메뉴가 변경되었는지 확인하고 상태를 업데이트합니다.
         custom_id = interaction.data['custom_id']
         selected_value = interaction.data['values'][0]
 
         if custom_id == "ranking_category_select":
             self.current_category = selected_value
-            # 카테고리가 '레벨'로 바뀌면 기간을 '종합'으로 강제합니다.
             if self.current_category == "level":
                 self.current_period = "total"
         elif custom_id == "ranking_period_select":
             self.current_period = selected_value
         
-        # 페이지를 처음으로 리셋하고 화면을 다시 그립니다.
         self.current_page = 0
         await self.update_display(interaction)
 
     async def on_pagination_click(self, interaction: discord.Interaction):
-        """페이지네이션 버튼이 클릭되었을 때 호출됩니다."""
         if interaction.data['custom_id'] == "next_page":
             self.current_page += 1
         else:
@@ -226,10 +216,8 @@ class RankingView(ui.View):
         await self.update_display(interaction)
         
     async def build_embed(self) -> discord.Embed:
-        """현재 상태에 맞는 랭킹 데이터를 DB에서 가져와 임베드를 만듭니다."""
         offset = self.current_page * self.users_per_page
         
-        # 선택된 카테고리와 기간에 따라 쿼리할 테이블과 컬럼을 결정합니다.
         category_info = self.category_map[self.current_category]
         column_name = category_info["column"]
         unit = category_info["unit"]
@@ -239,19 +227,15 @@ class RankingView(ui.View):
         else:
             table_name = f"{self.current_period}_stats"
 
-        # 데이터베이스에서 랭킹 데이터를 가져옵니다.
         query = supabase.table(table_name).select('user_id', column_name, count='exact').order(column_name, desc=True).range(offset, offset + self.users_per_page - 1)
         res = await query.execute()
 
-        # 총 페이지 수를 계산합니다.
         total_users = res.count if res and res.count is not None else 0
         self.total_pages = math.ceil(total_users / self.users_per_page)
         
-        # 임베드 제목을 설정합니다.
         title = f"👑 {self.period_map[self.current_period]} {category_info['name']} ランキング"
         embed = discord.Embed(title=title, color=0xFFD700)
 
-        # 랭킹 목록을 만듭니다.
         rank_list = []
         if res and hasattr(res, 'data') and res.data:
             for i, user_data in enumerate(res.data):
@@ -259,14 +243,8 @@ class RankingView(ui.View):
                 user_id_int = int(user_data['user_id'])
                 member = self.user.guild.get_member(user_id_int)
                 name = member.display_name if member else f"ID: {user_id_int}"
-                
                 value = user_data.get(column_name, 0)
-                
-                # 레벨 랭킹일 경우, XP를 레벨로 변환하여 표시 (선택적, 현재는 XP로 표시)
-                if self.current_category == 'level':
-                    rank_list.append(f"`{rank}.` {name} - **`{value:,}`** {unit}")
-                else:
-                    rank_list.append(f"`{rank}.` {name} - **`{value:,}`** {unit}")
+                rank_list.append(f"`{rank}.` {name} - **`{value:,}`** {unit}")
 
         embed.description = "\n".join(rank_list) if rank_list else "まだランキング情報がありません。"
         embed.set_footer(text=f"ページ {self.current_page + 1} / {self.total_pages}")
@@ -280,34 +258,26 @@ class LevelPanelView(ui.View):
 
     @ui.button(label="ステータス確認", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
     async def check_level_button(self, interaction: discord.Interaction, button: ui.Button):
-        user = interaction.user
+        # [✅ 수정] 버튼을 누르면, 패널을 '주간 챔피언'에서 '일반 패널'로 되돌립니다.
+        await interaction.response.defer()
+        await self.cog.regenerate_panel(interaction.channel)
         
+        # 이후 원래 로직을 실행합니다.
+        user = interaction.user
         cooldown_key = f"level_check_public_{user.id}"
-        cooldown_seconds = 60
+        cooldown_seconds = 5 # 공개 메시지이므로 쿨타임을 짧게 설정
 
         last_used = await get_cooldown(user.id, cooldown_key)
         if time.time() - last_used < cooldown_seconds:
             can_use_time = int(last_used + cooldown_seconds)
-            await interaction.response.send_message(f"⏳ このボタンは <t:{can_use_time}:R> に再度使用できます。", ephemeral=True)
+            await interaction.followup.send(f"⏳ このボタンは <t:{can_use_time}:R> に再度使用できます。", ephemeral=True, delete_after=5)
             return
             
-        await interaction.response.defer(ephemeral=True)
-        
-        try:
-            await set_cooldown(user.id, cooldown_key)
-            
-            public_embed = await build_level_embed(user)
-            await interaction.channel.send(embed=public_embed)
+        await set_cooldown(user.id, cooldown_key)
+        public_embed = await build_level_embed(user)
+        await interaction.followup.send(embed=public_embed)
 
-            await self.cog.regenerate_panel(interaction.channel, "panel_level_check")
 
-            await interaction.followup.send("✅ レベル情報を表示しました。", ephemeral=True)
-
-        except Exception as e:
-            logger.error(f"공개 레벨 확인 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
-            await interaction.followup.send("❌ ステータス情報の表示中にエラーが発生しました。", ephemeral=True)
-
-    # [✅ 수정] '랭킹 확인' 버튼을 누르면 새로운 RankingView를 시작하도록 변경합니다.
     @ui.button(label="ランキング確認", style=discord.ButtonStyle.secondary, emoji="👑", custom_id="show_ranking_button")
     async def show_ranking_button(self, interaction: discord.Interaction, button: ui.Button):
         view = RankingView(interaction.user)
@@ -316,8 +286,97 @@ class LevelPanelView(ui.View):
 class LevelSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.panel_key = "panel_level_check"
+        self.channel_id_key = "level_check_panel_channel_id"
         logger.info("LevelSystem Cog (게임봇)가 성공적으로 초기화되었습니다.")
     
+    # [✅✅✅ 핵심 추가 ✅✅✅]
+    # Cog가 로드될 때, 매주 월요일 자정에 실행될 루프를 시작합니다.
+    async def cog_load(self):
+        self.update_to_weekly_champions.start()
+        
+    def cog_unload(self):
+        self.update_to_weekly_champions.cancel()
+        
+    # [✅✅✅ 핵심 기능 ✅✅✅]
+    # 매주 월요일 자정에 실행되어, 레벨 확인 패널을 '주간 챔피언'으로 업데이트합니다.
+    @tasks.loop(time=JST_MONDAY_MIDNIGHT)
+    async def update_to_weekly_champions(self):
+        logger.info("[LevelSystem] 주간 챔피언 패널 업데이트를 시작합니다.")
+        try:
+            channel_id = get_id(self.channel_id_key)
+            panel_info = get_panel_id(self.panel_key)
+            if not (channel_id and panel_info and panel_info.get('message_id')):
+                logger.info("[LevelSystem] 레벨 확인 패널이 설정되지 않아, 주간 챔피언 업데이트를 건너뜁니다.")
+                return
+
+            channel = self.bot.get_channel(channel_id)
+            if not channel: return
+            
+            message = await channel.fetch_message(panel_info['message_id'])
+            if not message: return
+            
+            # 주간 챔피언 정보를 담은 새로운 임베드를 생성합니다.
+            champion_embed = await self._build_weekly_champion_embed()
+            # 기존 패널의 버튼(View)은 그대로 유지하면서, 내용(Embed)만 변경합니다.
+            await message.edit(embed=champion_embed, view=LevelPanelView(self))
+            logger.info("[LevelSystem] 레벨 확인 패널을 주간 챔피언으로 성공적으로 업데이트했습니다.")
+        except Exception as e:
+            logger.error(f"주간 챔피언 패널 업데이트 중 오류: {e}", exc_info=True)
+
+    @update_to_weekly_champions.before_loop
+    async def before_weekly_update(self):
+        await self.bot.wait_until_ready()
+
+    async def _build_weekly_champion_embed(self) -> discord.Embed:
+        """지난주 랭킹 1위 정보를 가져와 임베드를 생성합니다."""
+        
+        # '지난주'의 시작 날짜를 계산합니다. (오늘이 월요일이면, 7일 전)
+        last_week_start_date = (discord.utils.utcnow().astimezone(JST).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=7)).strftime('%Y-%m-%d')
+        
+        categories = {
+            "level": {"column": "xp", "name": "総合レベル", "unit": "XP", "table": "user_levels"},
+            "voice": {"column": "voice_minutes", "name": "ボイスチャット", "unit": "分", "table": "weekly_stats"},
+            "chat": {"column": "chat_count", "name": "チャット", "unit": "回", "table": "weekly_stats"},
+            "fishing": {"column": "fishing_count", "name": "釣り", "unit": "匹", "table": "weekly_stats"},
+            "harvest": {"column": "harvest_count", "name": "収穫", "unit": "回収", "table": "weekly_stats"},
+        }
+        
+        tasks = []
+        for key, info in categories.items():
+            query = supabase.table(info["table"]).select('user_id', info["column"])
+            # '주간' 기록은 week_start_date를 기준으로 필터링해야 합니다.
+            if info["table"] == "weekly_stats":
+                query = query.eq('week_start_date', last_week_start_date)
+            
+            tasks.append(query.order(info["column"], desc=True).limit(1).maybe_single().execute())
+        
+        results = await asyncio.gather(*tasks)
+
+        champion_data = {}
+        category_keys = list(categories.keys())
+        guild = self.bot.get_guild(int(get_config("SERVER_ID")))
+
+        for i, res in enumerate(results):
+            key = category_keys[i]
+            info = categories[key]
+            
+            if res and hasattr(res, 'data') and res.data and res.data.get(info["column"], 0) > 0:
+                user_id = int(res.data['user_id'])
+                value = res.data[info["column"]]
+                member = guild.get_member(user_id) if guild else None
+                name = member.mention if member else f"ID: {user_id}"
+                champion_data[f"{key}_champion"] = f"🏆 **{name}** (`{value:,}` {info['unit']})"
+            else:
+                champion_data[f"{key}_champion"] = "まだ記録がありません。"
+
+        embed_template = await get_embed_from_db("embed_weekly_champions")
+        if not embed_template:
+            return discord.Embed(title="エラー", description="주간 챔피언 임베드 템플릿을 찾을 수 없습니다.")
+
+        return format_embed_from_db(embed_template, **champion_data)
+
+
     async def register_persistent_views(self):
         self.bot.add_view(LevelPanelView(self))
         logger.info("✅ 레벨 시스템의 영구 View가 성공적으로 등록되었습니다。")
