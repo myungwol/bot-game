@@ -28,8 +28,6 @@ class EconomyCore(commands.Cog):
         self.currency_icon = "🪙"
         self._coin_reward_cooldown = commands.CooldownMapping.from_cooldown(1, 3.0, commands.BucketType.user)
         
-        # [✅✅✅ 핵심 수정 ✅✅✅]
-        # 퇴장 시 계산하는 방식 대신, 현재 활성 유저를 실시간으로 추적하는 Set을 사용합니다.
         self.active_voice_users: Set[int] = set()
         
         self.chat_cache: Deque[Dict] = deque()
@@ -47,7 +45,6 @@ class EconomyCore(commands.Cog):
         self.log_sender_lock = asyncio.Lock()
 
         self.activity_log_loop.start()
-        # [✅✅✅ 핵심 수정 ✅✅✅] 1분마다 음성 활동을 기록하는 새로운 루프를 시작합니다.
         self.voice_activity_tracker.start()
         self.update_market_prices.start()
         self.monthly_whale_reset.start()
@@ -71,7 +68,6 @@ class EconomyCore(commands.Cog):
         
     def cog_unload(self):
         self.activity_log_loop.cancel()
-        # [✅✅✅ 핵심 수정 ✅✅✅] Cog가 언로드될 때 새로운 루프도 함께 중지합니다.
         self.voice_activity_tracker.cancel()
         self.update_market_prices.cancel()
         self.monthly_whale_reset.cancel()
@@ -140,9 +136,6 @@ class EconomyCore(commands.Cog):
             async with self._cache_lock:
                 self.chat_cache.append({'user_id': message.author.id, 'activity_type': 'chat', 'amount': 1, 'xp_earned': xp_to_add})
 
-    # [✅✅✅ 핵심 수정 ✅✅✅]
-    # 이 함수의 역할은 이제 '현재 누가 활성 상태인지'만 추적합니다.
-    # 실제 시간 기록과 보상 지급은 1분 루프가 담당합니다.
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         if member.bot or before.channel == after.channel:
@@ -165,8 +158,6 @@ class EconomyCore(commands.Cog):
             self.active_voice_users.discard(member.id)
             logger.info(f"[VOICE] {member.display_name} is now INACTIVE. Removed from tracking set.")
 
-    # [✅✅✅ 핵심 기능: 신규 추가 ✅✅✅]
-    # 1분마다 실행되며, 현재 활성 상태인 유저들에게 1분의 활동 시간을 기록하고 보상을 확인합니다.
     @tasks.loop(minutes=1)
     async def voice_activity_tracker(self):
         if not self.active_voice_users:
@@ -187,14 +178,17 @@ class EconomyCore(commands.Cog):
                 await supabase.table('user_activities').insert(logs_to_insert).execute()
                 logger.info(f"[VOICE TRACKER] Logged 1 minute of activity for {len(logs_to_insert)} users.")
 
+                # [✅✅✅ 핵심 수정 ✅✅✅]
+                # .execute()를 추가하여 실제 비동기 작업을 생성합니다.
                 xp_update_tasks = [
-                    supabase.rpc('add_xp', {'p_user_id': user_id, 'p_xp_to_add': xp_per_minute, 'p_source': 'voice'})
+                    supabase.rpc('add_xp', {'p_user_id': user_id, 'p_xp_to_add': xp_per_minute, 'p_source': 'voice'}).execute()
                     for user_id in active_users_copy
                 ]
                 xp_results = await asyncio.gather(*xp_update_tasks, return_exceptions=True)
                 
                 for i, result in enumerate(xp_results):
-                    if not isinstance(result, Exception) and result.data:
+                    # 오류가 아니고, 레벨업 등 데이터가 반환되었을 경우
+                    if not isinstance(result, Exception) and hasattr(result, 'data') and result.data:
                         user = self.bot.get_user(list(active_users_copy)[i])
                         if user:
                             await self.handle_level_up_event(user, result.data)
@@ -208,10 +202,8 @@ class EconomyCore(commands.Cog):
                 stats = await get_all_user_stats(user_id)
                 total_voice_minutes_today = stats.get('daily', {}).get('voice_minutes', 0)
                 
-                # 10분 단위가 되었고, 0분이 아닐 때 보상 확인
                 if total_voice_minutes_today > 0 and total_voice_minutes_today % self.voice_time_requirement_minutes == 0:
                     today_str = datetime.now(JST).strftime('%Y-%m-%d')
-                    # 동일한 시간대(예: 10분, 20분)에 중복 보상을 받지 않도록 확인
                     cooldown_key = f"voice_reward_{today_str}_{total_voice_minutes_today}m"
                     last_claimed = await get_cooldown(user_id, cooldown_key)
 
@@ -219,10 +211,8 @@ class EconomyCore(commands.Cog):
                         logger.info(f"[VOICE TRACKER] User {user.display_name} reached {total_voice_minutes_today} minutes. Granting reward.")
                         reward = random.randint(*self.voice_reward_range)
                         await update_wallet(user, reward)
-                        # 코인 보상에 대한 별도 활동 기록
                         await log_activity(user_id, 'reward_voice', coin_earned=reward)
                         await self.log_coin_activity(user, reward, f"ボイスチャンネルで{total_voice_minutes_today}分間活動")
-                        # 중복 지급 방지를 위해 쿨다운 설정
                         await set_cooldown(user_id, cooldown_key)
 
         except Exception as e:
