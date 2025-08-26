@@ -254,24 +254,46 @@ class LevelPanelView(ui.View):
         super().__init__(timeout=None)
         self.cog = cog_instance
 
+    # [✅✅✅ 핵심 수정 ✅✅✅]
+    # 쿨타임, 패널 재생성, 메시지 전송 로직을 모두 수정합니다.
     @ui.button(label="ステータス確認", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
     async def check_level_button(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer()
-        await self.cog.regenerate_panel(interaction.channel)
-        
         user = interaction.user
         cooldown_key = f"level_check_public_{user.id}"
-        cooldown_seconds = 5
+        cooldown_seconds = 60 # 쿨타임을 1분으로 재설정
 
+        # 1. 쿨타임을 먼저 확인합니다.
         last_used = await get_cooldown(user.id, cooldown_key)
         if time.time() - last_used < cooldown_seconds:
-            await interaction.followup.send(f"⏳ このボタンは <t:{int(last_used + cooldown_seconds)}:R> に再度使用できます。", ephemeral=True, delete_after=5)
+            # 쿨타임에 걸렸을 경우, defer() 없이 바로 응답하고 종료합니다.
+            can_use_time = int(last_used + cooldown_seconds)
+            await interaction.response.send_message(f"⏳ このボタンは <t:{can_use_time}:R> に再度使用できます。", ephemeral=True, delete_after=10)
             return
-            
-        await set_cooldown(user.id, cooldown_key)
-        public_embed = await build_level_embed(user)
-        await interaction.followup.send(embed=public_embed)
 
+        # 2. defer()를 호출하여 "생각 중..." 상태로 만듭니다.
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            # 3. 버튼을 누르면 패널이 '주간 챔피언'이었다면 '일반 패널'로 되돌립니다.
+            #    이때, 버튼을 누른 유저에게만 임시 메시지로 알려줍니다.
+            is_reset = await self.cog.reset_panel_to_default(interaction.channel)
+            if is_reset:
+                await interaction.followup.send("パネルを更新しました。", ephemeral=True, delete_after=5)
+
+            # 4. 쿨타임을 설정하고, 공개 메시지를 보냅니다.
+            await set_cooldown(user.id, cooldown_key)
+            public_embed = await build_level_embed(user)
+            await interaction.channel.send(embed=public_embed)
+            
+            # 5. 모든 작업이 끝났음을 유저에게 개인적으로 알립니다. (선택사항, 없어도 됨)
+            # await interaction.followup.send("✅ レベル情報を表示しました。", ephemeral=True, delete_after=5)
+
+        except Exception as e:
+            logger.error(f"공개 레벨 확인 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ ステータス情報の表示中にエラーが発生しました。", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ ステータス情報の表示中にエラーが発生しました。", ephemeral=True)
 
     @ui.button(label="ランキング確認", style=discord.ButtonStyle.secondary, emoji="👑", custom_id="show_ranking_button")
     async def show_ranking_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -283,6 +305,8 @@ class LevelSystem(commands.Cog):
         self.bot = bot
         self.panel_key = "panel_level_check"
         self.channel_id_key = "level_check_panel_channel_id"
+        # [✅ 추가] 현재 패널이 챔피언 모드인지 추적하는 상태 변수
+        self.is_champion_mode = False
         logger.info("LevelSystem Cog (게임봇)가 성공적으로 초기화되었습니다.")
     
     async def cog_load(self):
@@ -309,6 +333,7 @@ class LevelSystem(commands.Cog):
             
             champion_embed = await self._build_champion_embed()
             await message.edit(embed=champion_embed, view=LevelPanelView(self))
+            self.is_champion_mode = True # 챔피언 모드로 상태 변경
             logger.info("[LevelSystem] 레벨 확인 패널을 종합 챔피언으로 성공적으로 업데이트했습니다.")
         except Exception as e:
             logger.error(f"종합 챔피언 패널 업데이트 중 오류: {e}", exc_info=True)
@@ -317,11 +342,7 @@ class LevelSystem(commands.Cog):
     async def before_champion_update(self):
         await self.bot.wait_until_ready()
 
-    # [✅✅✅ 핵심 수정 ✅✅✅]
-    # '주간'이 아닌 '종합(Total)' 랭킹 1위를 조회하도록 로직을 변경합니다.
     async def _build_champion_embed(self) -> discord.Embed:
-        """종합 랭킹 1위 정보를 가져와 임베드를 생성합니다."""
-        
         categories = {
             "level": {"column": "xp", "name": "総合レベル", "unit": "XP", "table": "user_levels"},
             "voice": {"column": "voice_minutes", "name": "ボイスチャット", "unit": "分", "table": "total_stats"},
@@ -332,6 +353,7 @@ class LevelSystem(commands.Cog):
         
         tasks = []
         for key, info in categories.items():
+            # [✅ 수정] total_stats에서도 user_id를 함께 조회해야 합니다.
             query = supabase.table(info["table"]).select('user_id', info["column"])
             tasks.append(query.order(info["column"], desc=True).limit(1).maybe_single().execute())
         
@@ -354,7 +376,7 @@ class LevelSystem(commands.Cog):
             else:
                 champion_data[f"{key}_champion"] = "まだ記録がありません。"
 
-        embed_template = await get_embed_from_db("embed_weekly_champions")
+        embed_template = await get_embed_from_db("embed_weekly_champions") # DB 키 이름은 그대로 사용
         if not embed_template:
             return discord.Embed(title="エラー", description="챔피언 임베드 템플릿을 찾을 수 없습니다.")
 
@@ -368,6 +390,33 @@ class LevelSystem(commands.Cog):
     async def load_configs(self):
         pass
     
+    # [✅✅✅ 핵심 추가 ✅✅✅]
+    # 패널을 기본 상태('레벨&랭킹')로 되돌리는 함수입니다.
+    async def reset_panel_to_default(self, channel: discord.TextChannel) -> bool:
+        """패널을 기본 상태로 되돌립니다. 이미 기본 상태라면 아무것도 하지 않습니다."""
+        # 현재 챔피언 모드가 아니라면, 굳이 되돌릴 필요가 없습니다.
+        if not self.is_champion_mode:
+            return False
+
+        logger.info("[LevelSystem] 패널을 기본 상태로 되돌립니다.")
+        panel_info = get_panel_id(self.panel_key)
+        if not panel_info or not panel_info.get('message_id'):
+            return False
+
+        try:
+            message = await channel.fetch_message(panel_info['message_id'])
+            embed_data = await get_embed_from_db("panel_level_check")
+            if not embed_data: return False
+            
+            default_embed = discord.Embed.from_dict(embed_data)
+            await message.edit(embed=default_embed, view=LevelPanelView(self))
+            self.is_champion_mode = False # 상태를 다시 일반 모드로 변경
+            return True
+        except Exception as e:
+            logger.error(f"패널을 기본 상태로 되돌리는 중 오류: {e}")
+            return False
+
+
     async def handle_level_up_event(self, user: discord.Member, result_data: List[Dict]):
         if not result_data or not result_data[0].get('leveled_up'): return
         
@@ -422,23 +471,22 @@ class LevelSystem(commands.Cog):
         try:
             panel_info = get_panel_id(panel_key)
             if panel_info and panel_info.get('channel_id') and panel_info.get('message_id'):
-                target_channel_id = panel_info['channel_id']
-                if isinstance(channel, discord.TextChannel) and channel.id == target_channel_id:
+                if isinstance(channel, discord.TextChannel) and channel.id == panel_info['channel_id']:
                     try: 
                         msg = await channel.fetch_message(panel_info['message_id'])
                         await msg.delete()
                     except (discord.NotFound, discord.Forbidden):
-                        logger.warning(f"이전 레벨 패널(ID: {panel_info['message_id']})을 찾지 못했지만, 계속 진행합니다.")
+                        pass
             
             embed_data = await get_embed_from_db("panel_level_check")
             if not embed_data:
                 embed_data = {"title": "📊 レベル＆ランキング", "description": "下のボタンでご自身のレベルを確認したり、サーバーのランキングを見ることができます。", "color": 0x5865F2}
-                logger.warning(f"DB에서 'panel_level_check' 임베드를 찾을 수 없어 기본값으로 패널을 생성합니다.")
-
+            
             embed = discord.Embed.from_dict(embed_data)
             
             message = await channel.send(embed=embed, view=LevelPanelView(self))
             await save_panel_id(panel_key, message.id, channel.id)
+            self.is_champion_mode = False # 패널을 새로 만들면 항상 일반 모드입니다.
             
             logger.info(f"✅ 「{panel_key}」パネルを #{channel.name} に再設置しました。")
             return True
