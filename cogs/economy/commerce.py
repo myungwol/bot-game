@@ -1,4 +1,4 @@
-# bot-game/cogs/economy/commerce.py
+# cogs/economy/commerce.py
 
 import discord
 from discord.ext import commands
@@ -178,7 +178,6 @@ class BuyItemView(ShopViewBase):
         if not item_data: return
 
         try:
-            # [✅ 수정] instant_use 속성이 있는지 확인하는 로직 추가
             if item_data.get('instant_use'):
                 await self.handle_instant_use_item(interaction, item_name, item_data)
             elif item_data.get('max_ownable', 1) > 1:
@@ -186,13 +185,12 @@ class BuyItemView(ShopViewBase):
             else:
                 await self.handle_single_purchase(interaction, item_name, item_data)
             
-            # [✅ 수정] 구매 후 상점 UI가 바로 새로고침되도록 변경
             await self.update_view(interaction)
 
         except Exception as e:
             await self.handle_error(interaction, e, str(e))
 
-    # [✅ 신규 추가] 즉시 사용 아이템을 처리하는 핸들러
+    # [✅✅✅ 핵심 수정 ✅✅✅] 밭 확장 구매 시 UI 즉시 업데이트 로직
     async def handle_instant_use_item(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         await interaction.response.defer(ephemeral=True)
         price = item_data.get('current_price', item_data.get('price', 0))
@@ -202,18 +200,16 @@ class BuyItemView(ShopViewBase):
             asyncio.create_task(delete_after(msg, 5))
             return
 
-        # '밭 확장권' 효과 처리
         if item_data.get('effect_type') == 'expand_farm':
-            farm_res = await supabase.table('farms').select('id, farm_plots(count)').eq('user_id', self.user.id).maybe_single().execute()
+            farm_data = await get_farm_data(self.user.id)
             
-            if not (farm_res and farm_res.data):
+            if not farm_data:
                 msg = await interaction.followup.send("❌ 農場をまず作成してください。", ephemeral=True)
                 asyncio.create_task(delete_after(msg, 5))
                 return
 
-            farm_data = farm_res.data
             farm_id = farm_data['id']
-            current_plots = farm_data['farm_plots'][0]['count'] if farm_data.get('farm_plots') else 0
+            current_plots = len(farm_data.get('farm_plots', []))
 
             if current_plots >= 25:
                 msg = await interaction.followup.send("❌ 農場はすでに最大サイズ(25マス)です。", ephemeral=True)
@@ -224,20 +220,23 @@ class BuyItemView(ShopViewBase):
             success = await expand_farm_db(farm_id, current_plots)
 
             if success:
-                # 농장 UI 업데이트를 요청
+                # Farm Cog를 가져와서 UI 업데이트 함수를 직접 호출
                 farm_cog = self.user.bot.get_cog("Farm")
                 if farm_cog:
-                    await farm_cog.request_farm_ui_update(self.user.id)
+                    thread_id = farm_data.get('thread_id')
+                    if thread_id and (thread := self.user.bot.get_channel(thread_id)):
+                        # DB에서 최신 농장 데이터를 다시 가져옴
+                        updated_farm_data = await get_farm_data(self.user.id)
+                        if updated_farm_data:
+                            await farm_cog.update_farm_ui(thread, self.user, updated_farm_data)
                 
                 msg = await interaction.followup.send(f"✅ 農場が1マス拡張されました！ (現在の広さ: {current_plots + 1}/25)", ephemeral=True)
                 asyncio.create_task(delete_after(msg, 10))
             else:
-                # 실패 시 돈을 되돌려줌
                 await update_wallet(self.user, price)
                 msg = await interaction.followup.send("❌ 農場の拡張中にエラーが発生しました。", ephemeral=True)
                 asyncio.create_task(delete_after(msg, 5))
         else:
-            # 다른 종류의 즉시 사용 아이템이 추가될 경우를 대비
             msg = await interaction.followup.send("❓ 未知の即時使用アイテムです。", ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
 
