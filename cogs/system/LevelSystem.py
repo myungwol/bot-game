@@ -12,7 +12,7 @@ from typing import Optional, Dict, List, Any
 from utils.database import (
     supabase, get_panel_id, save_panel_id, get_id, get_config, 
     get_cooldown, set_cooldown, save_config_to_db,
-    get_embed_from_db
+    get_embed_from_db, log_activity
 )
 from utils.helpers import format_embed_from_db, calculate_xp_for_level
 from utils.game_config_defaults import JOB_ADVANCEMENT_DATA, GAME_CONFIG
@@ -56,8 +56,6 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
             if role_id := get_id(tier['role_key']):
                 if role_id in user_roles: tier_role_mention = f"<@&{role_id}>"; break
         
-        # [✅✅✅ 핵심 수정 ✅✅✅]
-        # 경험치 획득 경로 목록에서 '출석'을 제거합니다.
         source_map = {
             'chat': '💬 チャット', 
             'voice': '🎙️ VC参加', 
@@ -98,64 +96,182 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
         logger.error(f"레벨 임베드 생성 중 오류 (유저: {user.id}): {e}", exc_info=True)
         return discord.Embed(title="エラー", description="ステータス情報の読み込み中にエラーが発生しました。", color=discord.Color.red())
 
+# [✅✅✅ 핵심 수정 ✅✅✅]
+# 기존의 RankingView를 완전히 새로운, 더 강력한 버전으로 교체합니다.
 class RankingView(ui.View):
-    def __init__(self, user: discord.Member, total_users: int):
-        super().__init__(timeout=180)
+    def __init__(self, user: discord.Member):
+        super().__init__(timeout=300)
         self.user = user
         self.current_page = 0
         self.users_per_page = 10
-        self.total_pages = math.ceil(total_users / self.users_per_page)
+        self.total_pages = 1
+        
+        # 랭킹의 기준이 되는 '카테고리'와 '기간'을 상태로 저장합니다.
+        self.current_category = "level"  # level, voice, chat, fishing, harvest
+        self.current_period = "total"   # daily, weekly, monthly, total
 
-    async def update_view(self, interaction: discord.Interaction):
+        # 각 카테고리에 대한 정보 (DB 컬럼명, 표시 이름, 단위)
+        self.category_map = {
+            "level": {"column": "xp", "name": "レベル", "unit": "XP"},
+            "voice": {"column": "voice_minutes", "name": "ボイス", "unit": "分"},
+            "chat": {"column": "chat_count", "name": "チャット", "unit": "回"},
+            "fishing": {"column": "fishing_count", "name": "釣り", "unit": "匹"},
+            "harvest": {"column": "harvest_count", "name": "収穫", "unit": "回收"},
+        }
+        
+        self.period_map = {
+            "daily": "今日",
+            "weekly": "今週",
+            "monthly": "今月",
+            "total": "総合",
+        }
+
+    async def start(self, interaction: discord.Interaction):
+        """View를 시작하고 첫 메시지를 보냅니다."""
+        await interaction.response.defer(ephemeral=True)
+        embed = await self.build_embed()
+        self.build_components()
+        await interaction.followup.send(embed=embed, view=self, ephemeral=True)
+
+    async def update_display(self, interaction: discord.Interaction):
+        """인터랙션에 대한 응답으로 View를 업데이트합니다."""
         await interaction.response.defer()
         embed = await self.build_embed()
-        self.update_buttons()
+        self.build_components()
         await interaction.edit_original_response(embed=embed, view=self)
-        
-    def update_buttons(self):
-        prev_button = next((child for child in self.children if isinstance(child, ui.Button) and child.custom_id == "prev_page"), None)
-        next_button = next((child for child in self.children if isinstance(child, ui.Button) and child.custom_id == "next_page"), None)
-        
-        if prev_button: prev_button.disabled = self.current_page == 0
-        if next_button: next_button.disabled = self.current_page >= self.total_pages - 1
 
+    def build_components(self):
+        """현재 상태에 맞게 드롭다운 메뉴와 버튼을 구성합니다."""
+        self.clear_items()
+
+        # 1. 카테고리 선택 드롭다운
+        category_options = [
+            discord.SelectOption(label=info["name"], value=key, emoji=e)
+            for key, info, e in [
+                ("level", self.category_map["level"], "👑"),
+                ("voice", self.category_map["voice"], "🎙️"),
+                ("chat", self.category_map["chat"], "💬"),
+                ("fishing", self.category_map["fishing"], "🎣"),
+                ("harvest", self.category_map["harvest"], "🌾"),
+            ]
+        ]
+        category_select = ui.Select(
+            placeholder="ランキングのカテゴリーを選択...",
+            options=category_options,
+            custom_id="ranking_category_select"
+        )
+        # 현재 선택된 값을 기본값으로 설정
+        for option in category_options:
+            if option.value == self.current_category:
+                option.default = True
+        category_select.callback = self.on_select_change
+        self.add_item(category_select)
+        
+        # 2. 기간 선택 드롭다운
+        period_options = [
+            discord.SelectOption(label=name, value=key, emoji=e)
+            for key, name, e in [
+                ("daily", self.period_map["daily"], "📅"),
+                ("weekly", self.period_map["weekly"], "🗓️"),
+                ("monthly", self.period_map["monthly"], "🈷️"),
+                ("total", self.period_map["total"], "🏆"),
+            ]
+        ]
+        period_select = ui.Select(
+            placeholder="ランキングの期間を選択...",
+            options=period_options,
+            custom_id="ranking_period_select",
+            # '레벨' 랭킹은 '종합'만 가능하므로, 이 경우 비활성화합니다.
+            disabled=(self.current_category == "level")
+        )
+        for option in period_options:
+            if option.value == self.current_period:
+                option.default = True
+        period_select.callback = self.on_select_change
+        self.add_item(period_select)
+
+        # 3. 페이지네이션 버튼
+        prev_button = ui.Button(label="◀", style=discord.ButtonStyle.secondary, custom_id="prev_page", disabled=(self.current_page == 0))
+        next_button = ui.Button(label="▶", style=discord.ButtonStyle.secondary, custom_id="next_page", disabled=(self.current_page >= self.total_pages - 1))
+        
+        prev_button.callback = self.on_pagination_click
+        next_button.callback = self.on_pagination_click
+        self.add_item(prev_button)
+        self.add_item(next_button)
+
+    async def on_select_change(self, interaction: discord.Interaction):
+        """드롭다운 메뉴의 값이 변경되었을 때 호출됩니다."""
+        # 어떤 메뉴가 변경되었는지 확인하고 상태를 업데이트합니다.
+        custom_id = interaction.data['custom_id']
+        selected_value = interaction.data['values'][0]
+
+        if custom_id == "ranking_category_select":
+            self.current_category = selected_value
+            # 카테고리가 '레벨'로 바뀌면 기간을 '종합'으로 강제합니다.
+            if self.current_category == "level":
+                self.current_period = "total"
+        elif custom_id == "ranking_period_select":
+            self.current_period = selected_value
+        
+        # 페이지를 처음으로 리셋하고 화면을 다시 그립니다.
+        self.current_page = 0
+        await self.update_display(interaction)
+
+    async def on_pagination_click(self, interaction: discord.Interaction):
+        """페이지네이션 버튼이 클릭되었을 때 호출됩니다."""
+        if interaction.data['custom_id'] == "next_page":
+            self.current_page += 1
+        else:
+            self.current_page -= 1
+        await self.update_display(interaction)
+        
     async def build_embed(self) -> discord.Embed:
+        """현재 상태에 맞는 랭킹 데이터를 DB에서 가져와 임베드를 만듭니다."""
         offset = self.current_page * self.users_per_page
-        res = await supabase.table('user_levels').select('user_id, level, xp', count='exact').order('xp', desc=True).range(offset, offset + self.users_per_page - 1).execute()
-
-        embed = discord.Embed(title="👑 サーバーランキング", color=0xFFD700)
         
+        # 선택된 카테고리와 기간에 따라 쿼리할 테이블과 컬럼을 결정합니다.
+        category_info = self.category_map[self.current_category]
+        column_name = category_info["column"]
+        unit = category_info["unit"]
+
+        if self.current_category == 'level':
+            table_name = 'user_levels'
+        else:
+            table_name = f"{self.current_period}_stats"
+
+        # 데이터베이스에서 랭킹 데이터를 가져옵니다.
+        query = supabase.table(table_name).select('user_id', column_name, count='exact').order(column_name, desc=True).range(offset, offset + self.users_per_page - 1)
+        res = await query.execute()
+
+        # 총 페이지 수를 계산합니다.
+        total_users = res.count if res and res.count is not None else 0
+        self.total_pages = math.ceil(total_users / self.users_per_page)
+        
+        # 임베드 제목을 설정합니다.
+        title = f"👑 {self.period_map[self.current_period]} {category_info['name']} ランキング"
+        embed = discord.Embed(title=title, color=0xFFD700)
+
+        # 랭킹 목록을 만듭니다.
         rank_list = []
-        if res and res.data:
+        if res and hasattr(res, 'data') and res.data:
             for i, user_data in enumerate(res.data):
                 rank = offset + i + 1
-                member = self.user.guild.get_member(int(user_data['user_id']))
-                name = member.display_name if member else f"ID: {user_data['user_id']}"
-                rank_list.append(f"`{rank}.` {name} - **Lv.{user_data['level']}** (`{user_data['xp']:,} XP`)")
-        
+                user_id_int = int(user_data['user_id'])
+                member = self.user.guild.get_member(user_id_int)
+                name = member.display_name if member else f"ID: {user_id_int}"
+                
+                value = user_data.get(column_name, 0)
+                
+                # 레벨 랭킹일 경우, XP를 레벨로 변환하여 표시 (선택적, 현재는 XP로 표시)
+                if self.current_category == 'level':
+                    rank_list.append(f"`{rank}.` {name} - **`{value:,}`** {unit}")
+                else:
+                    rank_list.append(f"`{rank}.` {name} - **`{value:,}`** {unit}")
+
         embed.description = "\n".join(rank_list) if rank_list else "まだランキング情報がありません。"
         embed.set_footer(text=f"ページ {self.current_page + 1} / {self.total_pages}")
         return embed
 
-    @ui.button(label="◀", style=discord.ButtonStyle.secondary, custom_id="prev_page", disabled=True)
-    async def prev_page(self, interaction: discord.Interaction, button: ui.Button):
-        if self.current_page > 0: self.current_page -= 1
-        await self.update_view(interaction)
-
-    @ui.button(label="▶", style=discord.ButtonStyle.secondary, custom_id="next_page")
-    async def next_page(self, interaction: discord.Interaction, button: ui.Button):
-        if self.current_page < self.total_pages - 1: self.current_page += 1
-        await self.update_view(interaction)
-
-    @ui.button(label="自分の順位へ", style=discord.ButtonStyle.primary, emoji="👤", custom_id="my_rank")
-    async def go_to_my_rank(self, interaction: discord.Interaction, button: ui.Button):
-        my_rank_res = await supabase.rpc('get_user_rank', {'p_user_id': self.user.id}).execute()
-        if my_rank_res and my_rank_res.data:
-            my_rank = my_rank_res.data
-            self.current_page = (my_rank - 1) // self.users_per_page
-            await self.update_view(interaction)
-        else:
-            await interaction.response.send_message("❌ 自分の順位情報を取得できませんでした。", ephemeral=True)
 
 class LevelPanelView(ui.View):
     def __init__(self, cog_instance: 'LevelSystem'):
@@ -191,24 +307,11 @@ class LevelPanelView(ui.View):
             logger.error(f"공개 레벨 확인 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
             await interaction.followup.send("❌ ステータス情報の表示中にエラーが発生しました。", ephemeral=True)
 
+    # [✅ 수정] '랭킹 확인' 버튼을 누르면 새로운 RankingView를 시작하도록 변경합니다.
     @ui.button(label="ランキング確認", style=discord.ButtonStyle.secondary, emoji="👑", custom_id="show_ranking_button")
     async def show_ranking_button(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        try:
-            count_res = await supabase.table('user_levels').select('user_id', count='exact').execute()
-            total_users = count_res.count if count_res and count_res.count is not None else 0
-
-            if total_users == 0:
-                await interaction.followup.send("まだランキング情報がありません。", ephemeral=True)
-                return
-            
-            view = RankingView(interaction.user, total_users)
-            embed = await view.build_embed()
-            view.update_buttons()
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-        except Exception as e:
-            logger.error(f"랭킹 표시 중 오류: {e}", exc_info=True)
-            await interaction.followup.send("❌ ランキング情報の読み込み中にエラーが発生しました。", ephemeral=True)
+        view = RankingView(interaction.user)
+        await view.start(interaction)
 
 class LevelSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
