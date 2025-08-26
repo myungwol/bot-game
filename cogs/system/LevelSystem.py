@@ -23,7 +23,82 @@ logger = logging.getLogger(__name__)
 JST = timezone(timedelta(hours=9))
 JST_MONDAY_MIDNIGHT = dt_time(hour=0, minute=1, tzinfo=JST)
 
-# ... (create_xp_bar, build_level_embed 함수는 그대로 유지) ...
+def create_xp_bar(current_xp: int, required_xp: int, length: int = 10) -> str:
+    if required_xp <= 0: return "▓" * length
+    progress = min(current_xp / required_xp, 1.0)
+    filled_length = int(length * progress)
+    bar = '▓' * filled_length + '░' * (length - filled_length)
+    return f"[{bar}]"
+
+async def build_level_embed(user: discord.Member) -> discord.Embed:
+    try:
+        level_res_task = supabase.table('user_levels').select('*').eq('user_id', user.id).maybe_single().execute()
+        job_res_task = supabase.table('user_jobs').select('jobs(*)').eq('user_id', user.id).maybe_single().execute()
+        xp_logs_res_task = supabase.table('user_activities').select('activity_type, xp_earned').eq('user_id', user.id).gt('xp_earned', 0).execute()
+        
+        level_res, job_res, xp_logs_res = await asyncio.gather(level_res_task, job_res_task, xp_logs_res_task)
+
+        user_level_data = level_res.data if level_res and hasattr(level_res, 'data') and level_res.data else {'level': 1, 'xp': 0}
+        current_level, total_xp = user_level_data['level'], user_level_data['xp']
+
+        xp_for_next_level = calculate_xp_for_level(current_level + 1)
+        xp_at_level_start = calculate_xp_for_level(current_level)
+        
+        xp_in_current_level = total_xp - xp_at_level_start
+        required_xp_for_this_level = xp_for_next_level - xp_at_level_start if xp_for_next_level > xp_at_level_start else 1
+        
+        job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
+        job_role_mention = "`なし`"; job_role_map = job_system_config.get("JOB_ROLE_MAP", {})
+        if job_res and hasattr(job_res, 'data') and job_res.data and job_res.data.get('jobs'):
+            job_data = job_res.data['jobs']
+            if role_key := job_role_map.get(job_data['job_key']):
+                if role_id := get_id(role_key): job_role_mention = f"<@&{role_id}>"
+        
+        level_tier_roles = job_system_config.get("LEVEL_TIER_ROLES", [])
+        tier_role_mention = "`かけだし住民`"; user_roles = {role.id for role in user.roles}
+        for tier in sorted(level_tier_roles, key=lambda x: x['level'], reverse=True):
+            if role_id := get_id(tier['role_key']):
+                if role_id in user_roles: tier_role_mention = f"<@&{role_id}>"; break
+        
+        source_map = {
+            'chat': '💬 チャット', 
+            'voice': '🎙️ VC参加', 
+            'fishing_catch': '🎣 釣り', 
+            'farm_harvest': '🌾 農業', 
+            'quest': '📜 クエスト',
+            'admin': '⚙️ 管理者'
+        }
+        
+        aggregated_xp = {v: 0 for v in source_map.values()}
+        
+        if xp_logs_res and hasattr(xp_logs_res, 'data') and xp_logs_res.data:
+            for log in xp_logs_res.data:
+                source_key = next((key for key in source_map.keys() if log['activity_type'].startswith(key)), None)
+                if source_key:
+                    display_name = source_map[source_key]
+                    aggregated_xp[display_name] += log['xp_earned']
+        
+        details = [f"> {display_name}: `{amount:,} XP`" for display_name, amount in aggregated_xp.items()]
+        xp_details_text = "\n".join(details)
+        
+        xp_bar = create_xp_bar(xp_in_current_level, required_xp_for_this_level)
+        embed = discord.Embed(color=user.color or discord.Color.blue())
+        if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
+
+        description_parts = [
+            f"## {user.mention}のステータス\n",
+            f"**レベル**: **Lv. {current_level}**",
+            f"**等級**: {tier_role_mention}\n**職業**: {job_role_mention}\n",
+            f"**経験値**\n`{xp_in_current_level:,} / {required_xp_for_this_level:,}`",
+            f"{xp_bar}\n",
+            f"**🏆 総獲得経験値**\n`{total_xp:,} XP`\n",
+            f"**📊 経験値獲得の内訳**\n{xp_details_text}"
+        ]
+        embed.description = "\n".join(description_parts)
+        return embed
+    except Exception as e:
+        logger.error(f"레벨 임베드 생성 중 오류 (유저: {user.id}): {e}", exc_info=True)
+        return discord.Embed(title="エラー", description="ステータス情報の読み込み中にエラーが発生しました。", color=discord.Color.red())
 
 class RankingView(ui.View):
     def __init__(self, user: discord.Member):
