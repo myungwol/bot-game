@@ -254,47 +254,41 @@ class LevelPanelView(ui.View):
         super().__init__(timeout=None)
         self.cog = cog_instance
 
-    # [✅✅✅ 핵심 수정 ✅✅✅]
-    # 원하시는 순서와 기능으로 완벽하게 재구성합니다.
     @ui.button(label="ステータス確認", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
     async def check_level_button(self, interaction: discord.Interaction, button: ui.Button):
         user = interaction.user
         cooldown_key = f"level_check_public_{user.id}"
         cooldown_seconds = 60
 
-        # 1. 쿨타임 확인
         last_used = await get_cooldown(user.id, cooldown_key)
         if time.time() - last_used < cooldown_seconds:
             can_use_time = int(last_used + cooldown_seconds)
-            # 쿨타임 시, 개인 메시지로만 안내
             await interaction.response.send_message(f"⏳ このボタンは <t:{can_use_time}:R> に再度使用できます。", ephemeral=True)
             return
 
-        # 2. defer()를 호출하여 3초 제한을 피하고, 봇이 작업 중임을 알립니다.
-        await interaction.response.defer()
-        
+        # defer는 더 이상 사용하지 않고, 바로 응답을 시도합니다.
         try:
-            # 3. 기존 패널을 먼저 삭제합니다.
-            # interaction.message는 버튼이 속한 메시지(즉, 패널)를 가리킵니다.
+            # [✅✅✅ 핵심 수정 ✅✅✅]
+            # 1. 기존 패널을 먼저 삭제합니다.
             if interaction.message:
                 await interaction.message.delete()
-
-            # 4. 스테이터스 메시지를 채널에 공개적으로 보냅니다.
-            public_embed = await build_level_embed(user)
-            await interaction.channel.send(embed=public_embed)
-
-            # 5. 그 다음에 새로운 패널을 채널 맨 아래에 다시 생성합니다.
-            await self.cog.regenerate_panel(interaction.channel, skip_delete=True)
             
-            # 6. 마지막으로 쿨타임을 설정합니다.
+            # 2. 스테이터스 메시지를 채널에 공개적으로 보냅니다.
+            await interaction.response.send_message(embed=await build_level_embed(user))
+
+            # 3. 그 다음에 새로운 패널을 채널 맨 아래에 다시 생성합니다.
+            await self.cog.regenerate_panel(interaction.channel)
+            
+            # 4. 마지막으로 쿨타임을 설정합니다.
             await set_cooldown(user.id, cooldown_key)
-            
+
         except discord.Forbidden:
-            # 혹시라도 권한이 없을 경우를 대비한 예외 처리
-            await interaction.followup.send("❌ チャンネルにメッセージを送信/削除する権限がありません。", ephemeral=True)
+            # 권한이 없을 경우, 개인 메시지로 대신 보냅니다. (이 경우 패널 재생성은 일어나지 않습니다)
+            await interaction.response.send_message("❌ チャンネルにメッセージを送信/削除する権限がありません。", ephemeral=True)
         except Exception as e:
             logger.error(f"공개 레벨 확인 및 패널 재생성 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
-            await interaction.followup.send("❌ 処理中にエラーが発生しました。", ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ 処理中にエラーが発生しました。", ephemeral=True)
 
 
     @ui.button(label="ランキング確認", style=discord.ButtonStyle.secondary, emoji="👑", custom_id="show_ranking_button")
@@ -305,7 +299,7 @@ class LevelPanelView(ui.View):
 class LevelSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.panel_key = "panel_level_check"
+        self.panel_key = "panel_champion_board"
         self.channel_id_key = "level_check_panel_channel_id"
         logger.info("LevelSystem Cog (게임봇)가 성공적으로 초기화되었습니다.")
     
@@ -317,26 +311,19 @@ class LevelSystem(commands.Cog):
         
     @tasks.loop(time=JST_MONDAY_MIDNIGHT)
     async def update_champion_panel(self):
-        logger.info("[LevelSystem] 종합 챔피언 패널 업데이트를 시작합니다.")
+        logger.info("[LevelSystem] 챔피언 보드 패널 새로고침을 시작합니다.")
         try:
             channel_id = get_id(self.channel_id_key)
-            panel_info = get_panel_id(self.panel_key)
-            if not (channel_id and panel_info and panel_info.get('message_id')):
+            if not channel_id:
                 return
 
             channel = self.bot.get_channel(channel_id)
             if not channel: return
             
-            message = await channel.fetch_message(panel_info['message_id'])
-            if not message: return
-            
-            champion_embed = await self._build_champion_embed()
-            await message.edit(embed=champion_embed, view=LevelPanelView(self))
-            logger.info("[LevelSystem] 레벨 확인 패널을 종합 챔피언으로 성공적으로 업데이트했습니다.")
-        except discord.NotFound:
-            logger.warning("[LevelSystem] 챔피언 패널 메시지를 찾을 수 없어 업데이트를 건너뜁니다.")
+            await self.regenerate_panel(channel)
+            logger.info("[LevelSystem] 챔피언 보드 패널을 성공적으로 새로고침했습니다.")
         except Exception as e:
-            logger.error(f"종합 챔피언 패널 업데이트 중 오류: {e}", exc_info=True)
+            logger.error(f"챔피언 패널 업데이트 중 오류: {e}", exc_info=True)
 
     @update_champion_panel.before_loop
     async def before_champion_update(self):
@@ -375,9 +362,9 @@ class LevelSystem(commands.Cog):
             else:
                 champion_data[f"{key}_champion"] = "まだ記録がありません。"
 
-        embed_template = await get_embed_from_db("embed_weekly_champions")
+        embed_template = await get_embed_from_db("panel_champion_board")
         if not embed_template:
-            return discord.Embed(title="エラー", description="챔피언 임베드 템플릿을 찾을 수 없습니다.")
+            return discord.Embed(title="エラー", description="챔피언 보드 템플릿을 찾을 수 없습니다.")
 
         return format_embed_from_db(embed_template, **champion_data)
 
@@ -439,26 +426,17 @@ class LevelSystem(commands.Cog):
         except Exception as e:
             logger.error(f"관리자 요청으로 레벨/XP 업데이트 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
 
-    # [✅✅✅ 핵심 수정 ✅✅✅]
-    # 패널 재생성 함수를 수정하여, 버튼 콜백에서 호출될 때를 대비한 옵션을 추가합니다.
-    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_level_check", skip_delete: bool = False) -> bool:
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_champion_board") -> bool:
         try:
-            # skip_delete가 False일 때만 기존 패널을 찾아서 삭제합니다.
-            if not skip_delete:
-                panel_info = get_panel_id(panel_key)
-                if panel_info and panel_info.get('channel_id') and panel_info.get('message_id'):
-                    if isinstance(channel, discord.TextChannel) and channel.id == panel_info['channel_id']:
-                        try: 
-                            msg = await channel.fetch_message(panel_info['message_id'])
-                            await msg.delete()
-                        except (discord.NotFound, discord.Forbidden):
-                            pass
+            panel_info = get_panel_id(panel_key)
+            if panel_info and panel_info.get('message_id'):
+                try: 
+                    msg = await channel.fetch_message(panel_info['message_id'])
+                    await msg.delete()
+                except (discord.NotFound, discord.Forbidden):
+                    pass
             
-            embed_data = await get_embed_from_db("panel_level_check")
-            if not embed_data:
-                embed_data = {"title": "📊 レベル＆ランキング", "description": "下のボタンでご自身のレベルを確認したり、サーバーのランキングを見ることができます。", "color": 0x5865F2}
-            
-            embed = discord.Embed.from_dict(embed_data)
+            embed = await self._build_champion_embed()
             
             message = await channel.send(embed=embed, view=LevelPanelView(self))
             await save_panel_id(panel_key, message.id, channel.id)
