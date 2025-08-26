@@ -13,7 +13,7 @@ from utils.database import (
     get_config,
     save_panel_id, get_panel_id, get_embed_from_db,
     update_wallet, set_cooldown, get_cooldown, log_activity,
-    supabase # 레벨업 연동을 위해 supabase 직접 호출이 필요합니다.
+    supabase
 )
 from utils.helpers import format_embed_from_db
 
@@ -21,8 +21,6 @@ logger = logging.getLogger(__name__)
 
 JST = timezone(timedelta(hours=9))
 
-# [✅✅✅ 핵심 수정 ✅✅✅]
-# 각 퀘스트 보상에 'xp' 항목을 추가합니다.
 QUEST_REWARDS = {
     "daily": {
         "attendance": {"coin": 10, "xp": 5},
@@ -47,6 +45,79 @@ WEEKLY_QUESTS = {
     "voice": {"name": "ボイスチャンネルに1時間参加する", "goal": 60},
     "fishing": {"name": "魚を10匹釣る", "goal": 10},
 }
+
+# [✅✅✅ 핵심 수정 ✅✅✅]
+# 퀘스트 확인과 출석 체크 버튼을 모두 담는 새로운 View를 생성합니다.
+class TaskBoardView(ui.View):
+    def __init__(self, cog_instance: 'Quests'):
+        super().__init__(timeout=None)
+        self.cog = cog_instance
+
+        # 1. 출석체크 버튼 (가장 왼쪽에 배치)
+        check_in_button = ui.Button(
+            label="出席チェック",
+            style=discord.ButtonStyle.success,
+            emoji="✅",
+            custom_id="task_board_daily_check"
+        )
+        check_in_button.callback = self.check_in_callback
+        self.add_item(check_in_button)
+
+        # 2. 퀘스트 확인 버튼
+        quest_button = ui.Button(
+            label="クエスト確認",
+            style=discord.ButtonStyle.primary,
+            emoji="📜",
+            custom_id="task_board_open_quests"
+        )
+        quest_button.callback = self.open_quest_view
+        self.add_item(quest_button)
+
+    async def check_in_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        user = interaction.user
+        
+        stats = await get_all_user_stats(user.id)
+        if stats.get('daily', {}).get('check_in_count', 0) > 0:
+            await interaction.followup.send("❌ 本日は既に出席チェックが完了しています。", ephemeral=True)
+            return
+
+        reward_str = get_config("DAILY_CHECK_REWARD", "100").strip('"')
+        attendance_reward = int(reward_str)
+        
+        # [✅ 수정] 출석체크에서는 코인만 기록하고 XP는 0으로 설정합니다.
+        await log_activity(user.id, 'daily_check_in', coin_earned=attendance_reward, xp_earned=0)
+        await update_wallet(user, attendance_reward)
+        
+        await interaction.followup.send(f"✅ 出席チェックが完了しました！ **`{attendance_reward}`**{self.cog.currency_icon}を獲得しました。", ephemeral=True)
+
+        log_embed = None
+        if embed_data := await get_embed_from_db("log_daily_check"):
+            log_embed = format_embed_from_db(
+                embed_data, user_mention=user.mention, 
+                reward=attendance_reward, currency_icon=self.cog.currency_icon
+            )
+        
+        if log_embed:
+            if self.cog.log_channel_id:
+                if log_channel := self.cog.bot.get_channel(self.cog.log_channel_id):
+                    try:
+                        await log_channel.send(embed=log_embed)
+                    except Exception as e:
+                        logger.error(f"별도 출석체크 로그 채널로 전송 실패: {e}")
+            else:
+                try:
+                    await interaction.channel.send(embed=log_embed)
+                except Exception as e:
+                    logger.error(f"출석체크 공개 로그 메시지 전송 실패 (채널: {interaction.channel.id}): {e}")
+
+    async def open_quest_view(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        view = QuestView(interaction.user, self.cog)
+        embed = await view.build_embed()
+        await view.update_components()
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
 
 class QuestView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'Quests'):
@@ -85,7 +156,6 @@ class QuestView(ui.View):
             if not is_complete: all_complete = False
             emoji = "✅" if is_complete else "❌"
             field_name = f"{emoji} {quest['name']}"
-            # [✅ 수정] 보상 표시에 XP도 추가합니다.
             field_value = f"> ` {min(current, goal)} / {goal} `\n> **報酬:** `{reward_coin:,}`{self.cog.currency_icon} + `{reward_xp:,}` XP"
             embed.add_field(name=field_name, value=field_value, inline=False)
         
@@ -156,8 +226,6 @@ class QuestView(ui.View):
         quests_to_check = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
         rewards = QUEST_REWARDS[self.current_tab]
         
-        # [✅✅✅ 핵심 수정 ✅✅✅]
-        # 코인과 경험치를 각각 합산합니다.
         total_coin_reward = 0
         total_xp_reward = 0
         reward_details = []
@@ -183,21 +251,17 @@ class QuestView(ui.View):
         cooldown_key = f"quest_claimed_{self.current_tab}_all_{period_str}"
 
         if total_coin_reward > 0 or total_xp_reward > 0:
-            # 1. DB에 코인/경험치 보상 활동을 한 번에 기록
             await log_activity(self.user.id, f"quest_claim_{self.current_tab}_all", coin_earned=total_coin_reward, xp_earned=total_xp_reward)
             
-            # 2. 코인 지급
             if total_coin_reward > 0:
                 await update_wallet(self.user, total_coin_reward)
 
-            # 3. 경험치 지급 및 레벨업 확인
             if total_xp_reward > 0:
                 xp_res = await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': total_xp_reward, 'p_source': 'quest'}).execute()
                 if xp_res.data:
                     if (level_cog := self.cog.bot.get_cog("LevelSystem")):
                         await level_cog.handle_level_up_event(self.user, xp_res.data)
 
-            # 4. 중복 방지 쿨다운 설정
             await set_cooldown(self.user.id, cooldown_key)
             
             details_text = "\n".join(reward_details)
@@ -212,43 +276,38 @@ class QuestView(ui.View):
         
         await self.update_view(interaction)
 
-class QuestPanelView(ui.View):
-    def __init__(self, cog_instance: 'Quests'):
-        super().__init__(timeout=None)
-        self.cog = cog_instance
-        quest_button = ui.Button(label="クエスト確認", style=discord.ButtonStyle.blurple, emoji="📜", custom_id="quests_open_button")
-        quest_button.callback = self.open_quest_view
-        self.add_item(quest_button)
-
-    async def open_quest_view(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        view = QuestView(interaction.user, self.cog)
-        embed = await view.build_embed()
-        await view.update_components()
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-
 class Quests(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.currency_icon = "🪙"
-    
+        self.log_channel_id: Optional[int] = None
+
     async def cog_load(self):
-        self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙")
+        await self.load_configs()
+
+    async def load_configs(self):
+        game_config = get_config("GAME_CONFIG", {})
+        self.currency_icon = game_config.get("CURRENCY_ICON", "🪙")
+        self.log_channel_id = get_id("log_daily_check_channel_id")
 
     async def register_persistent_views(self):
-        self.bot.add_view(QuestPanelView(self))
+        # [✅ 수정] 새로운 TaskBoardView를 등록합니다.
+        self.bot.add_view(TaskBoardView(self))
 
-    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_quests", **kwargs):
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_tasks", **kwargs):
+        # [✅ 수정] 새로운 패널 키 'panel_tasks'를 사용합니다.
         if panel_info := get_panel_id(panel_key):
             if (old_channel := self.bot.get_channel(panel_info['channel_id'])) and (old_message_id := panel_info.get('message_id')):
                 try: await (await old_channel.fetch_message(old_message_id)).delete()
                 except (discord.NotFound, discord.Forbidden): pass
         
         embed_data = await get_embed_from_db(panel_key)
-        if not embed_data: return
+        if not embed_data: 
+            logger.error(f"DB에서 '{panel_key}' 임베드를 찾을 수 없어 패널을 생성할 수 없습니다.")
+            return
 
         embed = discord.Embed.from_dict(embed_data)
-        view = QuestPanelView(self)
+        view = TaskBoardView(self)
         
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
