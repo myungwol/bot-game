@@ -208,8 +208,6 @@ async def set_cooldown(user_id: int, cooldown_key: str):
     iso_timestamp = datetime.now(timezone.utc).isoformat()
     await supabase.table('cooldowns').upsert({"user_id": user_id, "cooldown_key": cooldown_key, "last_cooldown_timestamp": iso_timestamp}).execute()
 
-# [✅✅✅ 핵심 수정 ✅✅✅]
-# 오래된 RPC 호출 방식 대신, 안정적인 직접 INSERT 방식으로 변경합니다.
 @supabase_retry_handler()
 async def log_activity(
     user_id: int, activity_type: str, amount: int = 1,
@@ -238,11 +236,15 @@ async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
             daily_task, weekly_task, monthly_task, total_task
         )
         
+        # [✅✅✅ 핵심 수정 ✅✅✅]
+        # DB로부터 응답이 오지 않았을 경우(None)를 대비하여 안전장치를 추가합니다.
+        # 응답 객체(res)가 존재하고, 그 안에 data가 있을 때만 값을 사용하고,
+        # 그렇지 않으면 빈 딕셔너리 {}를 사용합니다.
         stats = {
-            "daily": daily_res.data if daily_res.data else {},
-            "weekly": weekly_res.data if weekly_res.data else {},
-            "monthly": monthly_res.data if monthly_res.data else {},
-            "total": total_res.data if total_res.data else {}
+            "daily": daily_res.data if daily_res and hasattr(daily_res, 'data') and daily_res.data else {},
+            "weekly": weekly_res.data if weekly_res.data and hasattr(weekly_res, 'data') and weekly_res.data else {},
+            "monthly": monthly_res.data if monthly_res.data and hasattr(monthly_res, 'data') and monthly_res.data else {},
+            "total": total_res.data if total_res.data and hasattr(total_res, 'data') and total_res.data else {}
         }
         return stats
     except Exception as e:
