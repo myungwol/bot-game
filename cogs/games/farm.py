@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 CROP_EMOJI_MAP = { 'seed': {0: '🌱', 1: '🌿', 2: '🌾', 3: '🌾'}, 'sapling': {0: '🌱', 1: '🌳', 2: '🌳', 3: '🌳'} }
 WEATHER_TYPES = { "sunny": {"emoji": "☀️", "name": "晴れ", "water_effect": False}, "cloudy": {"emoji": "☁️", "name": "曇り", "water_effect": False}, "rainy": {"emoji": "🌧️", "name": "雨", "water_effect": True}, "stormy": {"emoji": "⛈️", "name": "嵐", "water_effect": True}, }
 JST = timezone(timedelta(hours=9))
-# [✅ 수정] 자정 직후 물주기 문제를 해결하기 위해 업데이트 시간을 0시 5분으로 늦춥니다.
 JST_MIDNIGHT_UPDATE = dt_time(hour=0, minute=5, tzinfo=JST)
 
 async def preload_farmable_info(farm_data: Dict) -> Dict[str, Dict]:
@@ -61,7 +60,7 @@ class FarmNameModal(ui.Modal, title="農場名の変更"):
             except Exception as e: logger.error(f"농장 스레드 이름 변경 실패: {e}")
         await supabase.table('farms').update({'name': new_name}).eq('id', self.farm_data['id']).execute()
         
-        # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+        # [✅ 수정] DB 요청을 기다리는 대신, 직접 UI를 즉시 업데이트하도록 변경합니다.
         updated_farm_data = await get_farm_data(self.farm_data['user_id'])
         owner = self.cog.bot.get_user(self.farm_data['user_id'])
         if updated_farm_data and owner and thread:
@@ -164,7 +163,7 @@ class FarmActionView(ui.View):
 
         await asyncio.gather(*db_tasks)
         
-        # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+        # [✅ 수정] DB 요청을 기다리는 대신, 직접 UI를 즉시 업데이트하도록 변경합니다.
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
@@ -203,7 +202,7 @@ class FarmActionView(ui.View):
         if view.value:
             await clear_plots_db(plot_ids)
             
-            # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+            # [✅ 수정] DB 요청을 기다리는 대신, 직접 UI를 즉시 업데이트하도록 변경합니다.
             updated_farm_data = await get_farm_data(self.farm_owner_id)
             owner = self.cog.bot.get_user(self.farm_owner_id)
             if updated_farm_data and owner:
@@ -277,7 +276,7 @@ class FarmUIView(ui.View):
         
     async def on_farm_regenerate_click(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+        # [✅ 수정] DB 요청을 기다리는 대신, 강제로 새 메시지를 보내도록 직접 UI 업데이트를 호출
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
@@ -304,7 +303,7 @@ class FarmUIView(ui.View):
 
         await supabase.table('farm_plots').update({'state': 'tilled'}).in_('id', plots_to_update_db).execute()
         
-        # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+        # [✅ 수정] DB 요청을 기다리는 대신, 직접 UI를 즉시 업데이트하도록 변경합니다.
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
@@ -356,7 +355,7 @@ class FarmUIView(ui.View):
         ]
         await asyncio.gather(*tasks)
 
-        # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+        # [✅ 수정] DB 요청을 기다리는 대신, 직접 UI를 즉시 업데이트하도록 변경합니다.
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
@@ -416,7 +415,7 @@ class FarmUIView(ui.View):
         
         results = await asyncio.gather(*db_tasks, return_exceptions=True)
         
-        # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+        # [✅ 수정] DB 요청을 기다리는 대신, 직접 UI를 즉시 업데이트하도록 변경합니다.
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         if updated_farm_data:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
@@ -584,7 +583,8 @@ class Farm(commands.Cog):
         
         plot_count = len(farm_data.get('farm_plots', []))
         
-        sx, sy = 5, math.ceil(plot_count / 5) if plot_count > 0 else 1
+        # [✅ 수정] 그리드 크기를 5x5로 고정
+        sx, sy = 5, 5
         
         plots = {(p['pos_x'], p['pos_y']): p for p in farm_data.get('farm_plots', [])}
         grid, infos, processed = [['' for _ in range(sx)] for _ in range(sy)], [], set()
@@ -594,12 +594,13 @@ class Farm(commands.Cog):
             for x in range(sx):
                 if (x, y) in processed: continue
                 
+                # [✅ 수정] 현재 칸이 소유한 밭인지 확인하는 로직
                 is_owned_plot = (y * sx + x) < plot_count
-                emoji = '⬛'
+                emoji = '⬛' # 소유하지 않은 밭은 검은 사각형으로 표시
                 
                 if is_owned_plot:
                     plot = plots.get((x, y))
-                    emoji = '🟤'
+                    emoji = '🟤' # 기본 땅 이모지
                     if plot:
                         state = plot['state']
                         if state == 'tilled': emoji = '🟫'
@@ -714,7 +715,7 @@ class Farm(commands.Cog):
             
             await supabase.table('farms').update({'thread_id': thread.id, 'name': farm_name}).eq('user_id', user.id).execute()
             
-            # [✅ 수정] 느린 요청 방식 대신, 직접 UI를 업데이트하도록 변경합니다.
+            # [✅ 수정] DB 요청을 기다리는 대신, 직접 UI를 즉시 업데이트하도록 변경합니다.
             updated_farm_data = await get_farm_data(user.id)
             if updated_farm_data:
                 await self.update_farm_ui(thread, user, updated_farm_data, force_new=True)
