@@ -69,8 +69,6 @@ class TaskBoardView(ui.View):
         quest_button.callback = self.open_quest_view
         self.add_item(quest_button)
 
-    # [✅✅✅ 핵심 수정 ✅✅✅]
-    # 출석체크 로직을 공개 메시지 전송 및 패널 자동 재생성 기능으로 복원합니다.
     async def check_in_callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user = interaction.user
@@ -86,10 +84,8 @@ class TaskBoardView(ui.View):
         await log_activity(user.id, 'daily_check_in', coin_earned=attendance_reward, xp_earned=0)
         await update_wallet(user, attendance_reward)
         
-        # 1. 클릭한 유저에게는 개인적으로 완료 메시지를 보냅니다.
         await interaction.followup.send(f"✅ 出席チェックが完了しました！ **`{attendance_reward}`**{self.cog.currency_icon}を獲得しました。", ephemeral=True)
 
-        # 2. 채널에는 모두가 볼 수 있는 공개 로그 메시지를 보냅니다.
         log_embed = None
         if embed_data := await get_embed_from_db("log_daily_check"):
             log_embed = format_embed_from_db(
@@ -99,12 +95,10 @@ class TaskBoardView(ui.View):
         
         if log_embed:
             try:
-                # 공개 메시지 전송
                 await interaction.channel.send(embed=log_embed)
             except Exception as e:
                 logger.error(f"출석체크 공개 로그 메시지 전송 실패 (채널: {interaction.channel.id}): {e}")
 
-            # 별도의 로그 채널이 설정되어 있다면, 그곳에도 보냅니다.
             if self.cog.log_channel_id and self.cog.log_channel_id != interaction.channel.id:
                 if log_channel := self.cog.bot.get_channel(self.cog.log_channel_id):
                     try:
@@ -112,7 +106,6 @@ class TaskBoardView(ui.View):
                     except Exception as e:
                         logger.error(f"별도 출석체크 로그 채널로 전송 실패: {e}")
         
-        # 3. 마지막으로 패널을 자동으로 다시 생성합니다.
         await self.cog.regenerate_panel(interaction.channel)
 
 
@@ -132,7 +125,9 @@ class QuestView(ui.View):
         self.current_tab = "daily"
 
     async def update_view(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        # [✅ 수정] 인터랙션이 이미 응답되었는지 확인하는 로직 추가
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         embed = await self.build_embed()
         await self.update_components()
         await interaction.edit_original_response(embed=embed, view=self)
@@ -305,7 +300,6 @@ class Quests(commands.Cog):
                     msg = await channel.fetch_message(old_message_id)
                     await msg.delete()
                 except (discord.NotFound, discord.Forbidden):
-                    # 메시지를 찾을 수 없어도 괜찮습니다. 그냥 지나갑니다.
                     pass
         
         embed_data = await get_embed_from_db(panel_key)
