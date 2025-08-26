@@ -20,8 +20,6 @@ from utils.game_config_defaults import JOB_ADVANCEMENT_DATA, GAME_CONFIG
 
 logger = logging.getLogger(__name__)
 
-# [✅✅✅ 핵심 추가 ✅✅✅]
-# JST(일본 표준시)와 월요일 자정을 정의합니다.
 JST = timezone(timedelta(hours=9))
 JST_MONDAY_MIDNIGHT = dt_time(hour=0, minute=0, tzinfo=JST)
 
@@ -258,19 +256,16 @@ class LevelPanelView(ui.View):
 
     @ui.button(label="ステータス確認", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
     async def check_level_button(self, interaction: discord.Interaction, button: ui.Button):
-        # [✅ 수정] 버튼을 누르면, 패널을 '주간 챔피언'에서 '일반 패널'로 되돌립니다.
         await interaction.response.defer()
         await self.cog.regenerate_panel(interaction.channel)
         
-        # 이후 원래 로직을 실행합니다.
         user = interaction.user
         cooldown_key = f"level_check_public_{user.id}"
-        cooldown_seconds = 5 # 공개 메시지이므로 쿨타임을 짧게 설정
+        cooldown_seconds = 5
 
         last_used = await get_cooldown(user.id, cooldown_key)
         if time.time() - last_used < cooldown_seconds:
-            can_use_time = int(last_used + cooldown_seconds)
-            await interaction.followup.send(f"⏳ このボタンは <t:{can_use_time}:R> に再度使用できます。", ephemeral=True, delete_after=5)
+            await interaction.followup.send(f"⏳ このボタンは <t:{int(last_used + cooldown_seconds)}:R> に再度使用できます。", ephemeral=True, delete_after=5)
             return
             
         await set_cooldown(user.id, cooldown_key)
@@ -290,24 +285,20 @@ class LevelSystem(commands.Cog):
         self.channel_id_key = "level_check_panel_channel_id"
         logger.info("LevelSystem Cog (게임봇)가 성공적으로 초기화되었습니다.")
     
-    # [✅✅✅ 핵심 추가 ✅✅✅]
-    # Cog가 로드될 때, 매주 월요일 자정에 실행될 루프를 시작합니다.
     async def cog_load(self):
-        self.update_to_weekly_champions.start()
+        self.update_champion_panel.start()
         
     def cog_unload(self):
-        self.update_to_weekly_champions.cancel()
+        self.update_champion_panel.cancel()
         
-    # [✅✅✅ 핵심 기능 ✅✅✅]
-    # 매주 월요일 자정에 실행되어, 레벨 확인 패널을 '주간 챔피언'으로 업데이트합니다.
     @tasks.loop(time=JST_MONDAY_MIDNIGHT)
-    async def update_to_weekly_champions(self):
-        logger.info("[LevelSystem] 주간 챔피언 패널 업데이트를 시작합니다.")
+    async def update_champion_panel(self):
+        logger.info("[LevelSystem] 종합 챔피언 패널 업데이트를 시작합니다.")
         try:
             channel_id = get_id(self.channel_id_key)
             panel_info = get_panel_id(self.panel_key)
             if not (channel_id and panel_info and panel_info.get('message_id')):
-                logger.info("[LevelSystem] 레벨 확인 패널이 설정되지 않아, 주간 챔피언 업데이트를 건너뜁니다.")
+                logger.info("[LevelSystem] 레벨 확인 패널이 설정되지 않아, 챔피언 업데이트를 건너뜁니다.")
                 return
 
             channel = self.bot.get_channel(channel_id)
@@ -316,39 +307,32 @@ class LevelSystem(commands.Cog):
             message = await channel.fetch_message(panel_info['message_id'])
             if not message: return
             
-            # 주간 챔피언 정보를 담은 새로운 임베드를 생성합니다.
-            champion_embed = await self._build_weekly_champion_embed()
-            # 기존 패널의 버튼(View)은 그대로 유지하면서, 내용(Embed)만 변경합니다.
+            champion_embed = await self._build_champion_embed()
             await message.edit(embed=champion_embed, view=LevelPanelView(self))
-            logger.info("[LevelSystem] 레벨 확인 패널을 주간 챔피언으로 성공적으로 업데이트했습니다.")
+            logger.info("[LevelSystem] 레벨 확인 패널을 종합 챔피언으로 성공적으로 업데이트했습니다.")
         except Exception as e:
-            logger.error(f"주간 챔피언 패널 업데이트 중 오류: {e}", exc_info=True)
+            logger.error(f"종합 챔피언 패널 업데이트 중 오류: {e}", exc_info=True)
 
-    @update_to_weekly_champions.before_loop
-    async def before_weekly_update(self):
+    @update_champion_panel.before_loop
+    async def before_champion_update(self):
         await self.bot.wait_until_ready()
 
-    async def _build_weekly_champion_embed(self) -> discord.Embed:
-        """지난주 랭킹 1위 정보를 가져와 임베드를 생성합니다."""
-        
-        # '지난주'의 시작 날짜를 계산합니다. (오늘이 월요일이면, 7일 전)
-        last_week_start_date = (discord.utils.utcnow().astimezone(JST).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=7)).strftime('%Y-%m-%d')
+    # [✅✅✅ 핵심 수정 ✅✅✅]
+    # '주간'이 아닌 '종합(Total)' 랭킹 1위를 조회하도록 로직을 변경합니다.
+    async def _build_champion_embed(self) -> discord.Embed:
+        """종합 랭킹 1위 정보를 가져와 임베드를 생성합니다."""
         
         categories = {
             "level": {"column": "xp", "name": "総合レベル", "unit": "XP", "table": "user_levels"},
-            "voice": {"column": "voice_minutes", "name": "ボイスチャット", "unit": "分", "table": "weekly_stats"},
-            "chat": {"column": "chat_count", "name": "チャット", "unit": "回", "table": "weekly_stats"},
-            "fishing": {"column": "fishing_count", "name": "釣り", "unit": "匹", "table": "weekly_stats"},
-            "harvest": {"column": "harvest_count", "name": "収穫", "unit": "回収", "table": "weekly_stats"},
+            "voice": {"column": "voice_minutes", "name": "ボイスチャット", "unit": "分", "table": "total_stats"},
+            "chat": {"column": "chat_count", "name": "チャット", "unit": "回", "table": "total_stats"},
+            "fishing": {"column": "fishing_count", "name": "釣り", "unit": "匹", "table": "total_stats"},
+            "harvest": {"column": "harvest_count", "name": "収穫", "unit": "回収", "table": "total_stats"},
         }
         
         tasks = []
         for key, info in categories.items():
             query = supabase.table(info["table"]).select('user_id', info["column"])
-            # '주간' 기록은 week_start_date를 기준으로 필터링해야 합니다.
-            if info["table"] == "weekly_stats":
-                query = query.eq('week_start_date', last_week_start_date)
-            
             tasks.append(query.order(info["column"], desc=True).limit(1).maybe_single().execute())
         
         results = await asyncio.gather(*tasks)
@@ -372,7 +356,7 @@ class LevelSystem(commands.Cog):
 
         embed_template = await get_embed_from_db("embed_weekly_champions")
         if not embed_template:
-            return discord.Embed(title="エラー", description="주간 챔피언 임베드 템플릿을 찾을 수 없습니다.")
+            return discord.Embed(title="エラー", description="챔피언 임베드 템플릿을 찾을 수 없습니다.")
 
         return format_embed_from_db(embed_template, **champion_data)
 
