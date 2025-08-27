@@ -566,7 +566,6 @@ class Farm(commands.Cog):
         config_value = {"timestamp": time.time(), "force_new": force_new}
         await save_config_to_db(config_key, config_value)
         
-    # [✅✅✅ 핵심 수정] 디버깅을 위한 로그 추가
     async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         info_map = await preload_farmable_info(farm_data)
         
@@ -625,17 +624,11 @@ class Farm(commands.Cog):
         if infos:
             embed.description += "\n" + "\n".join(sorted(infos))
         
-        # --- [✅ 신규 추가] 디버깅 로그 ---
-        # 로그 1: 유저가 실제로 어떤 능력을 가지고 있는지 DB에서 가져온 결과
         owner_abilities = await get_user_abilities(user.id)
-        logger.info(f"[農場能力デバッグ] ユーザー '{user.name}' ({user.id}) の保有能力: {owner_abilities}")
-
-        all_farm_abilities_map = {}
-        # 로그 2: DB의 bot_configs 테이블에서 JOB_ADVANCEMENT_DATA를 제대로 가져왔는지 확인
-        job_advancement_data = get_config("JOB_ADVANCEMENT_DATA", {})
-        logger.info(f"[農場能力デバッグ] DBから取得したJOB_ADVANCEMENT_DATAが存在するか: {'はい' if job_advancement_data else 'いいえ'} (タイプ: {type(job_advancement_data)})")
         
-        # DB에서 가져온 데이터는 문자열 키를 가질 수 있으므로 .items()로 안전하게 순회
+        all_farm_abilities_map = {}
+        job_advancement_data = get_config("JOB_ADVANCEMENT_DATA", {})
+        
         if isinstance(job_advancement_data, dict):
             for level, level_data in job_advancement_data.items():
                 for job in level_data:
@@ -643,9 +636,6 @@ class Farm(commands.Cog):
                         for ability in job.get('abilities', []):
                             all_farm_abilities_map[ability['ability_key']] = {'name': ability['ability_name'], 'description': ability['description']}
         
-        # 로그 3: 가져온 전직 데이터를 처리한 후, 농사 능력 맵이 어떻게 만들어졌는지 확인
-        logger.info(f"[農場能力デバッグ] 処理後の農業能力マップ (all_farm_abilities_map): {all_farm_abilities_map}")
-
         active_effects = []
         EMOJI_MAP = {'seed': '🌱', 'water': '💧', 'yield': '🧺', 'growth': '⏱️'}
         
@@ -655,10 +645,6 @@ class Farm(commands.Cog):
                 emoji = next((e for key, e in EMOJI_MAP.items() if key in ability_key), '✨')
                 active_effects.append(f"> {emoji} **{ability_info['name']}**: {ability_info['description']}")
         
-        # 로그 4: 최종적으로 임베드에 추가될 능력 텍스트가 무엇인지 확인
-        logger.info(f"[農場能力デバッグ] 最終的に表示される能力効果 (active_effects): {active_effects}")
-        # --- 디버깅 로그 끝 ---
-
         if active_effects:
             embed.description += "\n\n**--- 農場のパッシブ効果 ---**\n" + "\n".join(active_effects)
 
