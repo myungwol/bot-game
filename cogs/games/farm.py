@@ -140,7 +140,6 @@ class FarmActionView(ui.View):
                     valid_starts.append(plots[(x, y)])
         return valid_starts
 
-    # [✅✅✅ 핵심 수정] 능력 발동 시 피드백 메시지 추가
     async def on_location_select(self, interaction: discord.Interaction):
         await interaction.response.defer()
         x, y = map(int, interaction.data['values'][0].split(','))
@@ -149,13 +148,16 @@ class FarmActionView(ui.View):
         plots_to_update = [p for p in self.farm_data['farm_plots'] if x <= p['pos_x'] < x + sx and y <= p['pos_y'] < y + sy]
         
         now = datetime.now(timezone.utc)
-        weather_key = get_config("current_weather", "sunny")
-        is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
         
+        # [✅✅✅ 핵심 수정] 작물을 심을 때 항상 물을 준 상태로 시작하도록 변경
         updates = {
-            'state': 'planted', 'planted_item_name': self.selected_item, 'planted_at': now.isoformat(), 
-            'growth_stage': 0, 'quality': 5, 'last_watered_at': now.isoformat() if is_raining else None,
-            'water_count': 1 if is_raining else 0
+            'state': 'planted',
+            'planted_item_name': self.selected_item,
+            'planted_at': now.isoformat(), 
+            'growth_stage': 0,
+            'quality': 5,
+            'last_watered_at': now.isoformat(), # 항상 현재 시간으로 설정
+            'water_count': 1 # 물 준 횟수도 1로 시작
         }
         
         db_tasks = [update_plot(p['id'], updates) for p in plots_to_update]
@@ -177,11 +179,8 @@ class FarmActionView(ui.View):
         followup_message = f"✅ 「{self.selected_item}」を植えました。"
         if seed_saved:
             followup_message += "\n✨ 能力効果で種を消費しませんでした！"
-        if is_raining:
-            followup_message += "\n🌧️ 雨が降っていて、自動で水がまかれました！"
         
-        # 메시지를 보낼 필요가 있을 때만 보냄
-        if seed_saved or is_raining:
+        if seed_saved:
             msg = await interaction.followup.send(followup_message, ephemeral=True)
             await asyncio.sleep(5)
             try:
@@ -376,7 +375,6 @@ class FarmUIView(ui.View):
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
         
-    # [✅✅✅ 핵심 수정] 능력 발동 시 피드백 메시지 추가
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
@@ -433,7 +431,6 @@ class FarmUIView(ui.View):
         if updated_farm_data:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
         
-        # 피드백 메시지 생성 및 전송
         followup_message = f"🎉 **{', '.join([f'{n} {q}個' for n, q in harvested.items()])}**を収穫しました！"
         if yield_bonus > 0.0:
             followup_message += "\n✨ **大農家**の能力で、収穫量が大幅に増加しました！"
@@ -521,7 +518,6 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 農場関連の永続Viewが正常に登録されました。")
         
-    # [✅✅✅ 핵심 수정] 패시브 능력 적용 대상 로그 추가
     @tasks.loop(time=JST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("일일 작물 상태 업데이트 시작...")
@@ -539,7 +535,6 @@ class Farm(commands.Cog):
                 if 'farm_growth_speed_up_2' in abilities: growth_boost_users.append(user_id)
                 if 'farm_water_retention_1' in abilities: water_retention_users.append(user_id)
 
-            # 로그 추가
             if growth_boost_users:
                 logger.info(f"[農場能力デバッグ] 成長速度UP対象者: {growth_boost_users}")
             if water_retention_users:
@@ -635,10 +630,15 @@ class Farm(commands.Cog):
                                 max_stage = info.get('max_growth_stage', 3)
                                 emoji = info.get('item_emoji') if stage >= max_stage else CROP_EMOJI_MAP.get(info.get('item_type', 'seed'), {}).get(stage, '🌱')
                                 item_sx, item_sy = info['space_required_x'], info['space_required_y']
+                                
+                                # [✅✅✅ 핵심 수정] 나무 이모티콘을 하나로 표시하는 로직
+                                grid[y][x] = emoji
+                                processed.add((x, y))
                                 for dy in range(item_sy):
                                     for dx in range(item_sx):
+                                        if dx == 0 and dy == 0: continue
                                         if y + dy < sy and x + dx < sx:
-                                            grid[y+dy][x+dx] = emoji
+                                            grid[y+dy][x+dx] = '🟫'
                                             processed.add((x + dx, y + dy))
                                 
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
