@@ -140,6 +140,7 @@ class FarmActionView(ui.View):
                     valid_starts.append(plots[(x, y)])
         return valid_starts
 
+    # [✅✅✅ 핵심 수정] 능력 발동 시 피드백 메시지 추가
     async def on_location_select(self, interaction: discord.Interaction):
         await interaction.response.defer()
         x, y = map(int, interaction.data['values'][0].split(','))
@@ -172,6 +173,21 @@ class FarmActionView(ui.View):
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
+        
+        followup_message = f"✅ 「{self.selected_item}」を植えました。"
+        if seed_saved:
+            followup_message += "\n✨ 能力効果で種を消費しませんでした！"
+        if is_raining:
+            followup_message += "\n🌧️ 雨が降っていて、自動で水がまかれました！"
+        
+        # 메시지를 보낼 필요가 있을 때만 보냄
+        if seed_saved or is_raining:
+            msg = await interaction.followup.send(followup_message, ephemeral=True)
+            await asyncio.sleep(5)
+            try:
+                await msg.delete()
+            except (discord.NotFound, discord.Forbidden):
+                pass
         
         await interaction.delete_original_response()
         
@@ -360,6 +376,7 @@ class FarmUIView(ui.View):
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
         
+    # [✅✅✅ 핵심 수정] 능력 발동 시 피드백 메시지 추가
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
@@ -416,6 +433,18 @@ class FarmUIView(ui.View):
         if updated_farm_data:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
         
+        # 피드백 메시지 생성 및 전송
+        followup_message = f"🎉 **{', '.join([f'{n} {q}個' for n, q in harvested.items()])}**を収穫しました！"
+        if yield_bonus > 0.0:
+            followup_message += "\n✨ **大農家**の能力で、収穫量が大幅に増加しました！"
+        
+        msg = await interaction.followup.send(followup_message, ephemeral=True)
+        await asyncio.sleep(5)
+        try:
+            await msg.delete()
+        except (discord.NotFound, discord.Forbidden):
+            pass
+
         for res in results:
             if isinstance(res, dict) and 'data' in res and res.data and isinstance(res.data, list) and res.data[0].get('leveled_up'):
                 if (level_cog := self.cog.bot.get_cog("LevelSystem")):
@@ -492,6 +521,7 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 農場関連の永続Viewが正常に登録されました。")
         
+    # [✅✅✅ 핵심 수정] 패시브 능력 적용 대상 로그 추가
     @tasks.loop(time=JST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("일일 작물 상태 업데이트 시작...")
@@ -508,6 +538,12 @@ class Farm(commands.Cog):
                 abilities = [ua['abilities']['ability_key'] for ua in record.get('user_abilities', []) if ua.get('abilities')]
                 if 'farm_growth_speed_up_2' in abilities: growth_boost_users.append(user_id)
                 if 'farm_water_retention_1' in abilities: water_retention_users.append(user_id)
+
+            # 로그 추가
+            if growth_boost_users:
+                logger.info(f"[農場能力デバッグ] 成長速度UP対象者: {growth_boost_users}")
+            if water_retention_users:
+                logger.info(f"[農場能力デバッグ] 水分保持力UP対象者: {water_retention_users}")
 
             response = await supabase.rpc('process_daily_farm_update_with_abilities', {
                 'p_is_raining': is_raining,
