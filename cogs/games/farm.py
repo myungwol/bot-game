@@ -109,11 +109,12 @@ class FarmActionView(ui.View):
         select = ui.Select(placeholder="植える場所を選択...", options=options, custom_id="location_select")
         select.callback = self.on_location_select
         self.add_item(select)
-    
+        
     # [✅✅✅ 핵심 수정] 묘목 심기 조건 검사 로직 강화
     async def _find_available_space(self, required_x: int, required_y: int) -> List[Dict]:
         plot_count = len(self.farm_data.get('farm_plots', []))
         size_x = 5
+        # 실제 소유한 밭의 세로 크기를 계산
         size_y = math.ceil(plot_count / size_x) if plot_count > 0 else 0
         
         # 밭이 아예 없거나, 필요한 공간보다 밭의 세로 길이가 짧으면 빈 리스트 반환
@@ -632,10 +633,8 @@ class Farm(commands.Cog):
         
         owner_abilities = await get_user_abilities(user.id)
         
-        # [✅✅✅ 핵심 수정] get_config를 통해 DB에서 전직 데이터를 가져오도록 수정
         all_farm_abilities_map = {}
         job_advancement_data = get_config("JOB_ADVANCEMENT_DATA", {})
-        # DB에서 가져온 데이터는 문자열 키를 가질 수 있으므로 .items()로 안전하게 순회
         for level, level_data in job_advancement_data.items():
             for job in level_data:
                 if 'farmer' in job.get('job_key', ''):
