@@ -8,7 +8,7 @@ from typing import Optional, Dict, List, Any
 import asyncio
 import time
 import math
-import random # [✅✅✅ 핵심 수정] 빠져있던 random 모듈을 import합니다.
+import random
 from datetime import datetime, timezone, timedelta, time as dt_time
 
 from utils.database import (
@@ -417,7 +417,10 @@ class FarmUIView(ui.View):
             harvested[harvest_name] = harvested.get(harvest_name, 0) + final_yield
             if not info.get('is_tree'): plots_to_reset.extend(plot_ids)
             else:
-                for pid in plot_ids: trees_to_update[pid] = info.get('regrowth_hours', 24)
+                for pid in plot_ids:
+                    # [✅✅✅ 핵심 수정] regrowth_days를 사용하도록 변경 (regrowth_hours 삭제)
+                    # planted_at을 현재 시간으로 초기화하여 재성장 타이머 시작
+                    trees_to_update[pid] = info.get('regrowth_days', 3) 
         
         if not harvested:
             await interaction.followup.send("ℹ️ 収穫できる作物がありません。", ephemeral=True); return
@@ -539,6 +542,7 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 農場関連の永続Viewが正常に登録されました。")
         
+    # [✅✅✅ 핵심 수정] 관계 조회 오류를 해결하기 위해 쿼리 방식 변경
     @tasks.loop(time=JST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("일일 작물 상태 업데이트 시작...")
@@ -546,13 +550,24 @@ class Farm(commands.Cog):
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
             
-            all_farms_res = await supabase.table('farms').select('user_id, user_abilities(abilities(ability_key))').execute()
-            if not all_farms_res.data: return
+            # 1. 모든 농장주 ID를 가져옵니다.
+            farms_res = await supabase.table('farms').select('user_id').execute()
+            if not farms_res.data: return
+
+            farm_owner_ids = [farm['user_id'] for farm in farms_res.data]
             
+            # 2. 모든 농장주의 능력 정보를 한 번에 가져옵니다.
+            abilities_res = await supabase.table('user_abilities').select('user_id, abilities(ability_key)').in_('user_id', farm_owner_ids).execute()
+            
+            # 3. user_id를 키로 하는 능력 맵을 만듭니다.
+            user_abilities_map = {
+                ua['user_id']: [a['abilities']['ability_key'] for a in ua.get('abilities', []) if a.get('abilities')]
+                for ua in abilities_res.data
+            }
+
             growth_boost_users, water_retention_users = [], []
-            for record in all_farms_res.data:
-                user_id = record['user_id']
-                abilities = [ua['abilities']['ability_key'] for ua in record.get('user_abilities', []) if ua.get('abilities')]
+            for user_id in farm_owner_ids:
+                abilities = user_abilities_map.get(user_id, [])
                 if 'farm_growth_speed_up_2' in abilities: growth_boost_users.append(user_id)
                 if 'farm_water_retention_1' in abilities: water_retention_users.append(user_id)
 
@@ -569,7 +584,6 @@ class Farm(commands.Cog):
             
             if response.data and response.data > 0:
                 logger.info(f"일일 작물 업데이트 완료. {response.data}개의 밭이 영향을 받았습니다. UI 업데이트를 요청합니다.")
-                farms_res = await supabase.table('farms').select('user_id').execute()
                 if farms_res.data:
                     for farm in farms_res.data:
                         await self.request_farm_ui_update(farm['user_id'])
@@ -649,7 +663,6 @@ class Farm(commands.Cog):
                             if info:
                                 stage = plot['growth_stage']
                                 max_stage = info.get('max_growth_stage', 3)
-                                # [✅✅✅ 핵심 수정] 최종 성장 시 작물 고유 이모티콘 사용
                                 emoji = info.get('item_emoji', '❓') if stage >= max_stage else CROP_EMOJI_MAP.get(info.get('item_type', 'seed'), {}).get(stage, '🌱')
                                 
                                 item_sx, item_sy = info['space_required_x'], info['space_required_y']
