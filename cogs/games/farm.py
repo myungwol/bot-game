@@ -418,8 +418,6 @@ class FarmUIView(ui.View):
             if not info.get('is_tree'): plots_to_reset.extend(plot_ids)
             else:
                 for pid in plot_ids:
-                    # [✅✅✅ 핵심 수정] regrowth_days를 사용하도록 변경 (regrowth_hours 삭제)
-                    # planted_at을 현재 시간으로 초기화하여 재성장 타이머 시작
                     trees_to_update[pid] = info.get('regrowth_days', 3) 
         
         if not harvested:
@@ -542,7 +540,6 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 農場関連の永続Viewが正常に登録されました。")
         
-    # [✅✅✅ 핵심 수정] 관계 조회 오류를 해결하기 위해 쿼리 방식 변경
     @tasks.loop(time=JST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("일일 작물 상태 업데이트 시작...")
@@ -550,20 +547,19 @@ class Farm(commands.Cog):
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
             
-            # 1. 모든 농장주 ID를 가져옵니다.
             farms_res = await supabase.table('farms').select('user_id').execute()
-            if not farms_res.data: return
+            if not (farms_res and farms_res.data): return
 
             farm_owner_ids = [farm['user_id'] for farm in farms_res.data]
             
-            # 2. 모든 농장주의 능력 정보를 한 번에 가져옵니다.
             abilities_res = await supabase.table('user_abilities').select('user_id, abilities(ability_key)').in_('user_id', farm_owner_ids).execute()
             
-            # 3. user_id를 키로 하는 능력 맵을 만듭니다.
-            user_abilities_map = {
-                ua['user_id']: [a['abilities']['ability_key'] for a in ua.get('abilities', []) if a.get('abilities')]
-                for ua in abilities_res.data
-            }
+            user_abilities_map = {}
+            if abilities_res and abilities_res.data:
+                user_abilities_map = {
+                    ua['user_id']: [a['abilities']['ability_key'] for a in ua.get('abilities', []) if a.get('abilities')]
+                    for ua in abilities_res.data
+                }
 
             growth_boost_users, water_retention_users = [], []
             for user_id in farm_owner_ids:
@@ -582,11 +578,10 @@ class Farm(commands.Cog):
                 'p_water_retention_user_ids': water_retention_users
             }).execute()
             
-            if response.data and response.data > 0:
+            if response and response.data and response.data > 0:
                 logger.info(f"일일 작물 업데이트 완료. {response.data}개의 밭이 영향을 받았습니다. UI 업데이트를 요청합니다.")
-                if farms_res.data:
-                    for farm in farms_res.data:
-                        await self.request_farm_ui_update(farm['user_id'])
+                for farm in farms_res.data:
+                    await self.request_farm_ui_update(farm['user_id'])
             else: 
                 logger.info("업데이트할 작물이 없습니다.")
         except Exception as e:
@@ -596,24 +591,30 @@ class Farm(commands.Cog):
     async def before_daily_crop_update(self):
         await self.bot.wait_until_ready()
 
+    # [✅✅✅ 핵심 수정] 네트워크 오류 발생 시에도 루프가 멈추지 않도록 예외 처리 추가
     @tasks.loop(seconds=5.0)
     async def farm_ui_updater_task(self):
         try:
             response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', 'farm_ui_update_request_%').execute()
-            if not response.data: return
+            
+            if not response or not response.data: 
+                return
             
             keys_to_delete = [req['config_key'] for req in response.data]
             
             tasks = []
             for req in response.data:
-                user_id = int(req['config_key'].split('_')[-1])
-                user = self.bot.get_user(user_id)
-                farm_data = await get_farm_data(user_id)
-                if user and farm_data and farm_data.get('thread_id'):
-                    if thread := self.bot.get_channel(farm_data['thread_id']):
-                        force_new = req.get('config_value', {}).get('force_new', False)
-                        tasks.append(self.update_farm_ui(thread, user, farm_data, force_new))
-            
+                try:
+                    user_id = int(req['config_key'].split('_')[-1])
+                    user = self.bot.get_user(user_id)
+                    farm_data = await get_farm_data(user_id)
+                    if user and farm_data and farm_data.get('thread_id'):
+                        if thread := self.bot.get_channel(farm_data['thread_id']):
+                            force_new = req.get('config_value', {}).get('force_new', False)
+                            tasks.append(self.update_farm_ui(thread, user, farm_data, force_new))
+                except (ValueError, IndexError):
+                    logger.warning(f"잘못된 형식의 농장 UI 업데이트 요청 키 발견: {req.get('config_key')}")
+
             if tasks:
                 await asyncio.gather(*tasks)
 
@@ -621,7 +622,8 @@ class Farm(commands.Cog):
                 await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
 
         except Exception as e:
-            logger.error(f"농장 UI 업데이트 루프 중 오류: {e}", exc_info=True)
+            # 네트워크 오류 등 DB 통신 관련 에러가 발생해도, 로그만 남기고 다음 루프에서 재시도
+            logger.error(f"농장 UI 업데이트 루프 중 오류 (다음 루프에서 재시도합니다): {e}", exc_info=True)
 
     @farm_ui_updater_task.before_loop
     async def before_farm_ui_updater_task(self):
