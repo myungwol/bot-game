@@ -8,6 +8,7 @@ from typing import Optional, Dict, List, Any
 import asyncio
 import time
 import math
+import random # [✅✅✅ 핵심 수정] 빠져있던 random 모듈을 import합니다.
 from datetime import datetime, timezone, timedelta, time as dt_time
 
 from utils.database import (
@@ -617,7 +618,6 @@ class Farm(commands.Cog):
         config_value = {"timestamp": time.time(), "force_new": force_new}
         await save_config_to_db(config_key, config_value)
         
-    # [✅✅✅ 핵심 수정] 성장 단계 대신 '남은 일수'를 표시하도록 로직 변경
     async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         info_map = await preload_farmable_info(farm_data)
         
@@ -649,8 +649,8 @@ class Farm(commands.Cog):
                             if info:
                                 stage = plot['growth_stage']
                                 max_stage = info.get('max_growth_stage', 3)
-                                # 최종 성장 단계이면 작물 자체 이모티콘, 아니면 성장 단계별 이모티콘
-                                emoji = info.get('item_emoji') if stage >= max_stage else CROP_EMOJI_MAP.get(info.get('item_type', 'seed'), {}).get(stage, '🌱')
+                                # [✅✅✅ 핵심 수정] 최종 성장 시 작물 고유 이모티콘 사용
+                                emoji = info.get('item_emoji', '❓') if stage >= max_stage else CROP_EMOJI_MAP.get(info.get('item_type', 'seed'), {}).get(stage, '🌱')
                                 
                                 item_sx, item_sy = info['space_required_x'], info['space_required_y']
                                 for dy in range(item_sy):
@@ -663,7 +663,6 @@ class Farm(commands.Cog):
                                 last_watered_jst = last_watered_dt.astimezone(JST)
                                 water_emoji = '💧' if last_watered_jst >= today_jst_midnight else '➖'
                                 
-                                # 남은 성장일 계산 로직
                                 growth_status_text = ""
                                 if stage >= max_stage:
                                     growth_status_text = "収穫可能！ 🧺"
@@ -672,7 +671,7 @@ class Farm(commands.Cog):
                                     days_passed = (datetime.now(JST) - planted_at_dt).days
                                     
                                     growth_days_to_use = info.get('total_growth_days', 99)
-                                    if info.get('is_tree') and stage == 2: # 나무이고 재성장 단계라면
+                                    if info.get('is_tree') and stage == 2:
                                         growth_days_to_use = info.get('regrowth_days', 99)
 
                                     days_remaining = max(0, growth_days_to_use - days_passed)
