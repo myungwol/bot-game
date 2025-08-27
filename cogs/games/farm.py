@@ -110,33 +110,26 @@ class FarmActionView(ui.View):
         select.callback = self.on_location_select
         self.add_item(select)
         
-    # [✅✅✅ 핵심 수정] 묘목 심기 조건 검사 로직 강화
     async def _find_available_space(self, required_x: int, required_y: int) -> List[Dict]:
         plot_count = len(self.farm_data.get('farm_plots', []))
         size_x = 5
-        # 실제 소유한 밭의 세로 크기를 계산
         size_y = math.ceil(plot_count / size_x) if plot_count > 0 else 0
         
-        # 밭이 아예 없거나, 필요한 공간보다 밭의 세로 길이가 짧으면 빈 리스트 반환
         if size_y == 0 or size_y < required_y:
             return []
             
         plots = {(p['pos_x'], p['pos_y']): p for p in self.farm_data['farm_plots']}
         valid_starts = []
         
-        # y와 x의 범위를 밭의 실제 크기 내에서만 순회하도록 수정
         for y in range(size_y - required_y + 1):
             for x in range(size_x - required_x + 1):
                 is_valid = True
-                # 필요한 공간(required_x, required_y)만큼 순회하며 모든 칸이 조건을 만족하는지 확인
                 for dy in range(required_y):
                     for dx in range(required_x):
                         plot_x, plot_y = x + dx, y + dy
-                        # 현재 확인하는 칸이 실제 소유한 밭의 범위를 벗어나는지 확인
                         if (plot_y * size_x + plot_x) >= plot_count:
                             is_valid = False
                             break
-                        # 해당 칸이 경작된(tilled) 상태가 아니면 유효하지 않음
                         if plots.get((plot_x, plot_y), {}).get('state') != 'tilled':
                             is_valid = False
                             break
@@ -573,6 +566,7 @@ class Farm(commands.Cog):
         config_value = {"timestamp": time.time(), "force_new": force_new}
         await save_config_to_db(config_key, config_value)
         
+    # [✅✅✅ 핵심 수정] 디버깅을 위한 로그 추가
     async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         info_map = await preload_farmable_info(farm_data)
         
@@ -631,16 +625,27 @@ class Farm(commands.Cog):
         if infos:
             embed.description += "\n" + "\n".join(sorted(infos))
         
+        # --- [✅ 신규 추가] 디버깅 로그 ---
+        # 로그 1: 유저가 실제로 어떤 능력을 가지고 있는지 DB에서 가져온 결과
         owner_abilities = await get_user_abilities(user.id)
-        
+        logger.info(f"[農場能力デバッグ] ユーザー '{user.name}' ({user.id}) の保有能力: {owner_abilities}")
+
         all_farm_abilities_map = {}
+        # 로그 2: DB의 bot_configs 테이블에서 JOB_ADVANCEMENT_DATA를 제대로 가져왔는지 확인
         job_advancement_data = get_config("JOB_ADVANCEMENT_DATA", {})
-        for level, level_data in job_advancement_data.items():
-            for job in level_data:
-                if 'farmer' in job.get('job_key', ''):
-                    for ability in job.get('abilities', []):
-                        all_farm_abilities_map[ability['ability_key']] = {'name': ability['ability_name'], 'description': ability['description']}
+        logger.info(f"[農場能力デバッグ] DBから取得したJOB_ADVANCEMENT_DATAが存在するか: {'はい' if job_advancement_data else 'いいえ'} (タイプ: {type(job_advancement_data)})")
         
+        # DB에서 가져온 데이터는 문자열 키를 가질 수 있으므로 .items()로 안전하게 순회
+        if isinstance(job_advancement_data, dict):
+            for level, level_data in job_advancement_data.items():
+                for job in level_data:
+                    if 'farmer' in job.get('job_key', ''):
+                        for ability in job.get('abilities', []):
+                            all_farm_abilities_map[ability['ability_key']] = {'name': ability['ability_name'], 'description': ability['description']}
+        
+        # 로그 3: 가져온 전직 데이터를 처리한 후, 농사 능력 맵이 어떻게 만들어졌는지 확인
+        logger.info(f"[農場能力デバッグ] 処理後の農業能力マップ (all_farm_abilities_map): {all_farm_abilities_map}")
+
         active_effects = []
         EMOJI_MAP = {'seed': '🌱', 'water': '💧', 'yield': '🧺', 'growth': '⏱️'}
         
@@ -650,6 +655,10 @@ class Farm(commands.Cog):
                 emoji = next((e for key, e in EMOJI_MAP.items() if key in ability_key), '✨')
                 active_effects.append(f"> {emoji} **{ability_info['name']}**: {ability_info['description']}")
         
+        # 로그 4: 최종적으로 임베드에 추가될 능력 텍스트가 무엇인지 확인
+        logger.info(f"[農場能力デバッグ] 最終的に表示される能力効果 (active_effects): {active_effects}")
+        # --- 디버깅 로그 끝 ---
+
         if active_effects:
             embed.description += "\n\n**--- 農場のパッシブ効果 ---**\n" + "\n".join(active_effects)
 
