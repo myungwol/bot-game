@@ -65,9 +65,6 @@ class FarmNameModal(ui.Modal, title="農場名の変更"):
         if updated_farm_data and owner and thread:
              await self.cog.update_farm_ui(thread, owner, updated_farm_data)
 
-        # [✅ 수정] 성공 메시지를 제거하여 UX 개선
-        # await interaction.followup.send("✅ 農場の名前を変更しました。", ephemeral=True)
-
 class FarmActionView(ui.View):
     def __init__(self, parent_cog: 'Farm', farm_data: Dict, user: discord.User, action_type: str, farm_owner_id: int):
         super().__init__(timeout=180)
@@ -167,13 +164,6 @@ class FarmActionView(ui.View):
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
-
-        # [✅ 수정] 성공 메시지를 제거하여 UX 개선
-        # followup_message = f"✅ 「{self.selected_item}」を植えました。"
-        # if seed_saved: followup_message += "\n✨ 能力効果で種を消費しませんでした！"
-        # if is_raining: followup_message += "\n🌧️ 雨が降っていて、自動で水がまかれました！"
-        # else: followup_message += "\n💧 忘れずに水をあげてください！"
-        # await interaction.followup.send(followup_message, ephemeral=True)
         
         await interaction.delete_original_response()
         
@@ -207,8 +197,7 @@ class FarmActionView(ui.View):
             if updated_farm_data and owner:
                 await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
-            # [✅ 수정] 성공 메시지를 제거하여 UX 개선
-            await interaction.edit_original_response(content=None, view=None) # 메시지 자체를 지움
+            await interaction.edit_original_response(content=None, view=None)
         else:
             await interaction.edit_original_response(content="キャンセルしました。", view=None)
     async def cancel_action(self, interaction: discord.Interaction):
@@ -273,24 +262,19 @@ class FarmUIView(ui.View):
         msg = "❌ 処理中に予期せぬエラーが発生しました。"
         if i.response.is_done(): await i.followup.send(msg, ephemeral=True)
         else: await i.response.send_message(msg, ephemeral=True)
-
-    # [✅✅✅ 핵심 수정] 새로고침 버튼 로직 수정
+        
     async def on_farm_regenerate_click(self, interaction: discord.Interaction):
-        # defer()를 호출하여 "Thinking..." 상태로 만듭니다.
         await interaction.response.defer()
         
-        # 1. 기존 패널 메시지를 즉시 삭제합니다.
         try:
             await interaction.message.delete()
         except (discord.NotFound, discord.Forbidden) as e:
             logger.warning(f"재설치 시 이전 패널(ID: {interaction.message.id}) 삭제 실패: {e}")
 
-        # 2. 새로운 패널을 생성하도록 update_farm_ui를 호출합니다.
-        # farm_message_id를 None으로 설정하여 새 메시지를 만들도록 유도합니다.
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
-            updated_farm_data['farm_message_id'] = None # 새 메시지를 강제로 생성하도록 설정
+            updated_farm_data['farm_message_id'] = None
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
     async def on_farm_till_click(self, interaction: discord.Interaction):
@@ -318,9 +302,6 @@ class FarmUIView(ui.View):
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
-
-        # [✅ 수정] 성공 메시지를 제거하여 UX 개선
-        # await interaction.followup.send(f"✅ **{hoe}** を使って、畑を**{tilled}マス**耕しました。", ephemeral=True)
     
     async def on_farm_plant_click(self, i: discord.Interaction): 
         farm_data = await get_farm_data(self.farm_owner_id)
@@ -370,9 +351,6 @@ class FarmUIView(ui.View):
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
-
-        # [✅ 수정] 성공 메시지를 제거하여 UX 개선
-        # await interaction.followup.send(f"✅ **{can}** を使って、**{watered_count}マス**に水をやりました。", ephemeral=True)
         
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -429,19 +407,12 @@ class FarmUIView(ui.View):
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         if updated_farm_data:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
-
-        # [✅ 수정] 성공 메시지를 제거하여 UX 개선
-        # followup_message = f"🎉 **{', '.join([f'{n} {q}個' for n, q in harvested.items()])}**を収穫しました！"
-        # if yield_bonus > 0.0:
-        #     followup_message += "\n✨ **大農家**の能力で、収穫量が大幅に増加しました！"
         
         for res in results:
             if isinstance(res, dict) and 'data' in res and res.data and isinstance(res.data, list) and res.data[0].get('leveled_up'):
                 if (level_cog := self.cog.bot.get_cog("LevelSystem")):
                     await level_cog.handle_level_up_event(owner, res.data)
                 break
-        
-        # await interaction.followup.send(followup_message, ephemeral=True)
     
     async def on_farm_invite_click(self, i: discord.Interaction):
         view = ui.View(timeout=180)
@@ -451,8 +422,6 @@ class FarmUIView(ui.View):
             for user in select.values:
                 try: await i.channel.add_user(user)
                 except: pass
-                # [✅ 수정] 성공 메시지를 제거하여 UX 개선
-                # await si.followup.send(f"✅ {user.mention}さんを農場に招待しました。", ephemeral=True)
             await i.edit_original_response(content=None, view=None)
         select.callback = cb
         view.add_item(select)
@@ -468,8 +437,6 @@ class FarmUIView(ui.View):
 
             for user in select.values:
                 await grant_farm_permission(farm_data['id'], user.id)
-                # [✅ 수정] 성공 메시지를 제거하여 UX 개선
-                # await si.followup.send(f"✅ {user.mention}さんに農場の編集権限を付与しました。", ephemeral=True)
             await i.edit_original_response(content=None, view=None)
         select.callback = cb
         view.add_item(select)
@@ -591,6 +558,7 @@ class Farm(commands.Cog):
         config_value = {"timestamp": time.time(), "force_new": force_new}
         await save_config_to_db(config_key, config_value)
         
+    # [✅✅✅ 핵심 수정] 나무 크기 및 능력 표시 기능 추가
     async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         info_map = await preload_farmable_info(farm_data)
         
@@ -623,11 +591,13 @@ class Farm(commands.Cog):
                                 stage = plot['growth_stage']
                                 max_stage = info.get('max_growth_stage', 3)
                                 emoji = info.get('item_emoji') if stage >= max_stage else CROP_EMOJI_MAP.get(info.get('item_type', 'seed'), {}).get(stage, '🌱')
+                                # 작물 크기만큼 그리드에 그리고, 처리된 것으로 표시
                                 item_sx, item_sy = info['space_required_x'], info['space_required_y']
                                 for dy in range(item_sy):
                                     for dx in range(item_sx):
                                         if y + dy < sy and x + dx < sx:
-                                            grid[y+dy][x+dx] = emoji; processed.add((x + dx, y + dy))
+                                            grid[y+dy][x+dx] = emoji
+                                            processed.add((x + dx, y + dy))
                                 
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
                                 last_watered_jst = last_watered_dt.astimezone(JST)
@@ -648,6 +618,7 @@ class Farm(commands.Cog):
         if infos:
             embed.description += "\n" + "\n".join(sorted(infos))
         
+        # [✅ 신규 추가] 유저의 농사 관련 능력을 가져와서 표시하는 로직
         owner_abilities = await get_user_abilities(user.id)
         
         all_farm_abilities_map = {}
@@ -681,11 +652,9 @@ class Farm(commands.Cog):
             if not (user and farm_data): return
 
             try:
-                # [✅✅✅ 핵심 수정] 시스템 메시지 삭제 오류 방지
                 if force_new:
                     try:
                         async for message in thread.history(limit=50):
-                            # 봇이 보낸 일반 메시지만 삭제하도록 message.type을 확인
                             if message.author.id == self.bot.user.id and message.type == discord.MessageType.default:
                                 await message.delete()
                     except (discord.Forbidden, discord.HTTPException) as e:
@@ -705,7 +674,6 @@ class Farm(commands.Cog):
                     except (discord.NotFound, discord.Forbidden):
                         logger.warning(f"농장 메시지(ID: {message_id})를 찾지 못하여 새로 생성합니다.")
 
-                # farm_thread_welcome 메시지는 force_new일 때만 보내도록 수정
                 if force_new:
                     if embed_data := await get_embed_from_db("farm_thread_welcome"):
                         await thread.send(embed=format_embed_from_db(embed_data, user_name=farm_data.get('name') or user.display_name))
