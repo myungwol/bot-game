@@ -109,25 +109,39 @@ class FarmActionView(ui.View):
         select = ui.Select(placeholder="植える場所を選択...", options=options, custom_id="location_select")
         select.callback = self.on_location_select
         self.add_item(select)
+    
+    # [✅✅✅ 핵심 수정] 묘목 심기 조건 검사 로직 강화
     async def _find_available_space(self, required_x: int, required_y: int) -> List[Dict]:
-        plot_count_res = await supabase.table('farm_plots').select('id', count='exact').eq('farm_id', self.farm_data['id']).execute()
-        current_plot_count = plot_count_res.count if plot_count_res else 0
+        plot_count = len(self.farm_data.get('farm_plots', []))
         size_x = 5
-        size_y = math.ceil(current_plot_count / size_x) if current_plot_count > 0 else 1
+        size_y = math.ceil(plot_count / size_x) if plot_count > 0 else 0
         
+        # 밭이 아예 없거나, 필요한 공간보다 밭의 세로 길이가 짧으면 빈 리스트 반환
+        if size_y == 0 or size_y < required_y:
+            return []
+            
         plots = {(p['pos_x'], p['pos_y']): p for p in self.farm_data['farm_plots']}
         valid_starts = []
+        
+        # y와 x의 범위를 밭의 실제 크기 내에서만 순회하도록 수정
         for y in range(size_y - required_y + 1):
             for x in range(size_x - required_x + 1):
                 is_valid = True
+                # 필요한 공간(required_x, required_y)만큼 순회하며 모든 칸이 조건을 만족하는지 확인
                 for dy in range(required_y):
                     for dx in range(required_x):
                         plot_x, plot_y = x + dx, y + dy
-                        if (plot_y * size_x + plot_x) >= current_plot_count:
-                            is_valid = False; break
+                        # 현재 확인하는 칸이 실제 소유한 밭의 범위를 벗어나는지 확인
+                        if (plot_y * size_x + plot_x) >= plot_count:
+                            is_valid = False
+                            break
+                        # 해당 칸이 경작된(tilled) 상태가 아니면 유효하지 않음
                         if plots.get((plot_x, plot_y), {}).get('state') != 'tilled':
-                            is_valid = False; break
-                    if not is_valid: break
+                            is_valid = False
+                            break
+                    if not is_valid:
+                        break
+                
                 if is_valid:
                     valid_starts.append(plots[(x, y)])
         return valid_starts
@@ -558,7 +572,6 @@ class Farm(commands.Cog):
         config_value = {"timestamp": time.time(), "force_new": force_new}
         await save_config_to_db(config_key, config_value)
         
-    # [✅✅✅ 핵심 수정] 나무 크기 및 능력 표시 기능 추가
     async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         info_map = await preload_farmable_info(farm_data)
         
@@ -591,7 +604,6 @@ class Farm(commands.Cog):
                                 stage = plot['growth_stage']
                                 max_stage = info.get('max_growth_stage', 3)
                                 emoji = info.get('item_emoji') if stage >= max_stage else CROP_EMOJI_MAP.get(info.get('item_type', 'seed'), {}).get(stage, '🌱')
-                                # 작물 크기만큼 그리드에 그리고, 처리된 것으로 표시
                                 item_sx, item_sy = info['space_required_x'], info['space_required_y']
                                 for dy in range(item_sy):
                                     for dx in range(item_sx):
@@ -618,12 +630,13 @@ class Farm(commands.Cog):
         if infos:
             embed.description += "\n" + "\n".join(sorted(infos))
         
-        # [✅ 신규 추가] 유저의 농사 관련 능력을 가져와서 표시하는 로직
         owner_abilities = await get_user_abilities(user.id)
         
+        # [✅✅✅ 핵심 수정] get_config를 통해 DB에서 전직 데이터를 가져오도록 수정
         all_farm_abilities_map = {}
         job_advancement_data = get_config("JOB_ADVANCEMENT_DATA", {})
-        for level_data in job_advancement_data.values():
+        # DB에서 가져온 데이터는 문자열 키를 가질 수 있으므로 .items()로 안전하게 순회
+        for level, level_data in job_advancement_data.items():
             for job in level_data:
                 if 'farmer' in job.get('job_key', ''):
                     for ability in job.get('abilities', []):
