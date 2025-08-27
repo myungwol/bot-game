@@ -274,7 +274,6 @@ class EconomyCore(commands.Cog):
     async def before_monthly_whale_reset(self):
         await self.bot.wait_until_ready()
 
-    # [✅✅✅ 핵심 수정] 'id' 대신 'name'을 사용하여 아이템을 업데이트하도록 수정
     @tasks.loop(time=JST_MIDNIGHT_AGGREGATE)
     async def update_market_prices(self):
         logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
@@ -283,23 +282,23 @@ class EconomyCore(commands.Cog):
             fish_res_task = supabase.table('fishing_loots').select('*').gt('volatility', 0).execute()
             item_res, fish_res = await asyncio.gather(item_res_task, fish_res_task)
             all_updates = []; announcements = []; fluctuation_data = []
-            if item_res.data:
+            if item_res and item_res.data:
                 item_updates = []
                 for item in item_res.data:
                     current_price = item.get('current_price', item.get('price', 0))
                     new_price = self._calculate_new_price(current_price, item.get('volatility', 0), item.get('min_price'), item.get('max_price'))
-                    item_updates.append({'name': item['name'], 'current_price': new_price}) # 'id' -> 'name'
+                    item_updates.append({'name': item['name'], 'current_price': new_price})
                     if abs((new_price - current_price) / (current_price or 1)) > 0.3:
                         status = "暴騰 📈" if new_price > current_price else "暴落 📉"
                         announcement_text = f" - {item.get('name', 'N/A')}: `{current_price}` → `{new_price}`{self.currency_icon} ({status})"
                         announcements.append(announcement_text); fluctuation_data.append(announcement_text)
                 if item_updates: all_updates.append(supabase.table('items').upsert(item_updates).execute())
-            if fish_res.data:
+            if fish_res and fish_res.data:
                 fish_updates = []
                 for fish in fish_res.data:
                     current_price = fish.get('current_base_value', fish.get('base_value', 0))
                     new_price = self._calculate_new_price(current_price, fish.get('volatility', 0), fish.get('min_base_value'), fish.get('max_base_value'))
-                    fish_updates.append({'name': fish['name'], 'current_base_value': new_price}) # 'id' -> 'name'
+                    fish_updates.append({'name': fish['name'], 'current_base_value': new_price})
                     if abs((new_price - current_price) / (current_price or 1)) > 0.3:
                         status = "豊漁 📈" if new_price > current_price else "不漁 📉"
                         announcement_text = f" - {fish.get('name', 'N/A')} (基本価値): `{current_price}` → `{new_price}`{self.currency_icon} ({status})"
