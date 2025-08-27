@@ -24,7 +24,10 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-CROP_EMOJI_MAP = { 'seed': {0: '🌱', 1: '🌿', 2: '🌾', 3: '🌾'}, 'sapling': {0: '🌱', 1: '🌳', 2: '🌳', 3: '🌳'} }
+CROP_EMOJI_MAP = {
+    'seed':    {0: '🫘', 1: '🌱', 2: '🌿'},
+    'sapling': {0: '🪴', 1: '🌿', 2: '🌳'}
+}
 WEATHER_TYPES = { "sunny": {"emoji": "☀️", "name": "晴れ", "water_effect": False}, "cloudy": {"emoji": "☁️", "name": "曇り", "water_effect": False}, "rainy": {"emoji": "🌧️", "name": "雨", "water_effect": True}, "stormy": {"emoji": "⛈️", "name": "嵐", "water_effect": True}, }
 JST = timezone(timedelta(hours=9))
 JST_MIDNIGHT_UPDATE = dt_time(hour=0, minute=5, tzinfo=JST)
@@ -148,16 +151,13 @@ class FarmActionView(ui.View):
         plots_to_update = [p for p in self.farm_data['farm_plots'] if x <= p['pos_x'] < x + sx and y <= p['pos_y'] < y + sy]
         
         now = datetime.now(timezone.utc)
+        weather_key = get_config("current_weather", "sunny")
+        is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
         
-        # [✅✅✅ 핵심 수정] 작물을 심을 때 항상 물을 준 상태로 시작하도록 변경
         updates = {
-            'state': 'planted',
-            'planted_item_name': self.selected_item,
-            'planted_at': now.isoformat(), 
-            'growth_stage': 0,
-            'quality': 5,
-            'last_watered_at': now.isoformat(), # 항상 현재 시간으로 설정
-            'water_count': 1 # 물 준 횟수도 1로 시작
+            'state': 'planted', 'planted_item_name': self.selected_item, 'planted_at': now.isoformat(), 
+            'growth_stage': 0, 'quality': 5, 'last_watered_at': now.isoformat() if is_raining else None,
+            'water_count': 1 if is_raining else 0
         }
         
         db_tasks = [update_plot(p['id'], updates) for p in plots_to_update]
@@ -179,8 +179,10 @@ class FarmActionView(ui.View):
         followup_message = f"✅ 「{self.selected_item}」を植えました。"
         if seed_saved:
             followup_message += "\n✨ 能力効果で種を消費しませんでした！"
+        if is_raining:
+            followup_message += "\n🌧️ 雨が降っていて、自動で水がまかれました！"
         
-        if seed_saved:
+        if seed_saved or is_raining:
             msg = await interaction.followup.send(followup_message, ephemeral=True)
             await asyncio.sleep(5)
             try:
@@ -351,13 +353,26 @@ class FarmUIView(ui.View):
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
 
-        watered_count, plots_to_update_db = 0, set()
-        for p in farm_data['farm_plots']:
-            last_watered_dt = datetime.fromisoformat(p['last_watered_at']) if p['last_watered_at'] else datetime.fromtimestamp(0, tz=JST)
-            last_watered_jst = last_watered_dt.astimezone(JST)
+        watered_origins = set()
+        plots_to_update_db = set()
+        watered_count = 0
+        info_map = await preload_farmable_info(farm_data)
 
-            if p['state'] == 'planted' and last_watered_jst < today_jst_midnight and watered_count < power:
-                plots_to_update_db.add(p['id'])
+        for p in sorted(farm_data['farm_plots'], key=lambda x: (x['pos_y'], x['pos_x'])):
+            if watered_count >= power:
+                break
+            
+            if p['state'] == 'planted' and (datetime.fromisoformat(p['last_watered_at']) if p['last_watered_at'] else datetime.fromtimestamp(0, tz=JST)).astimezone(JST) < today_jst_midnight and (p['pos_x'], p['pos_y']) not in watered_origins:
+                
+                info = info_map.get(p['planted_item_name'])
+                if not info: continue
+                
+                sx, sy = info['space_required_x'], info['space_required_y']
+                
+                related_plot_ids = [plot['id'] for plot in farm_data['farm_plots'] if p['pos_x'] <= plot['pos_x'] < p['pos_x'] + sx and p['pos_y'] <= plot['pos_y'] < p['pos_y'] + sy]
+                
+                plots_to_update_db.update(related_plot_ids)
+                watered_origins.add((p['pos_x'], p['pos_y']))
                 watered_count += 1
         
         if not plots_to_update_db:
@@ -416,12 +431,17 @@ class FarmUIView(ui.View):
         if total_harvested_amount > 0:
             await log_activity(owner.id, 'farm_harvest', amount=total_harvested_amount, xp_earned=total_xp)
 
-        db_tasks = [update_inventory(owner.id, n, q) for n, q in harvested.items()]
-        if plots_to_reset: db_tasks.append(clear_plots_db(plots_to_reset))
+        db_tasks = []
+        for name, quantity in harvested.items():
+            db_tasks.append(update_inventory(owner.id, name, quantity))
+        
+        if plots_to_reset:
+            db_tasks.append(clear_plots_db(plots_to_reset))
         if trees_to_update:
             now_iso = datetime.now(timezone.utc).isoformat()
-            db_tasks.extend([update_plot(pid, {'growth_stage': 2, 'planted_at': now_iso, 'last_watered_at': now_iso, 'quality': 5}) for pid in trees_to_update.keys()])
-        
+            for pid in trees_to_update:
+                db_tasks.append(update_plot(pid, {'growth_stage': 2, 'planted_at': now_iso, 'last_watered_at': now_iso, 'quality': 5}))
+
         if total_xp > 0:
             db_tasks.append(supabase.rpc('add_xp', {'p_user_id': owner.id, 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute())
         
@@ -597,6 +617,7 @@ class Farm(commands.Cog):
         config_value = {"timestamp": time.time(), "force_new": force_new}
         await save_config_to_db(config_key, config_value)
         
+    # [✅✅✅ 핵심 수정] 성장 단계 대신 '남은 일수'를 표시하도록 로직 변경
     async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         info_map = await preload_farmable_info(farm_data)
         
@@ -618,7 +639,7 @@ class Farm(commands.Cog):
                 if is_owned_plot:
                     plot = plots.get((x, y))
                     emoji = '🟤'
-                    if plot:
+                    if plot and plot['state'] != 'default':
                         state = plot['state']
                         if state == 'tilled': emoji = '🟫'
                         elif state == 'withered': emoji = '🥀'
@@ -628,27 +649,36 @@ class Farm(commands.Cog):
                             if info:
                                 stage = plot['growth_stage']
                                 max_stage = info.get('max_growth_stage', 3)
+                                # 최종 성장 단계이면 작물 자체 이모티콘, 아니면 성장 단계별 이모티콘
                                 emoji = info.get('item_emoji') if stage >= max_stage else CROP_EMOJI_MAP.get(info.get('item_type', 'seed'), {}).get(stage, '🌱')
-                                item_sx, item_sy = info['space_required_x'], info['space_required_y']
                                 
-                                # [✅✅✅ 핵심 수정] 나무 이모티콘을 하나로 표시하는 로직
-                                grid[y][x] = emoji
-                                processed.add((x, y))
+                                item_sx, item_sy = info['space_required_x'], info['space_required_y']
                                 for dy in range(item_sy):
                                     for dx in range(item_sx):
-                                        if dx == 0 and dy == 0: continue
                                         if y + dy < sy and x + dx < sx:
-                                            grid[y+dy][x+dx] = '🟫'
+                                            grid[y+dy][x+dx] = emoji
                                             processed.add((x + dx, y + dy))
                                 
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
                                 last_watered_jst = last_watered_dt.astimezone(JST)
-
                                 water_emoji = '💧' if last_watered_jst >= today_jst_midnight else '➖'
                                 
-                                info_text = f"{emoji} **{name}** (水: {water_emoji}): "
-                                if stage >= max_stage: info_text += "収穫可能！ 🧺"
-                                else: info_text += f"成長 {stage+1}/{max_stage+1}段階目"
+                                # 남은 성장일 계산 로직
+                                growth_status_text = ""
+                                if stage >= max_stage:
+                                    growth_status_text = "収穫可能！ 🧺"
+                                else:
+                                    planted_at_dt = datetime.fromisoformat(plot['planted_at']).astimezone(JST)
+                                    days_passed = (datetime.now(JST) - planted_at_dt).days
+                                    
+                                    growth_days_to_use = info.get('total_growth_days', 99)
+                                    if info.get('is_tree') and stage == 2: # 나무이고 재성장 단계라면
+                                        growth_days_to_use = info.get('regrowth_days', 99)
+
+                                    days_remaining = max(0, growth_days_to_use - days_passed)
+                                    growth_status_text = f"残り {days_remaining}日"
+
+                                info_text = f"{emoji} **{name}** (水: {water_emoji}): {growth_status_text}"
                                 infos.append(info_text)
 
                 if not (x,y) in processed: grid[y][x] = emoji
