@@ -190,7 +190,6 @@ class BuyItemView(ShopViewBase):
         except Exception as e:
             await self.handle_error(interaction, e, str(e))
 
-    # [✅✅✅ 핵심 수정 ✅✅✅] 밭 확장 구매 시 UI 즉시 업데이트 로직
     async def handle_instant_use_item(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         await interaction.response.defer(ephemeral=True)
         price = item_data.get('current_price', item_data.get('price', 0))
@@ -220,12 +219,11 @@ class BuyItemView(ShopViewBase):
             success = await expand_farm_db(farm_id, current_plots)
 
             if success:
-                # Farm Cog를 가져와서 UI 업데이트 함수를 직접 호출
-                farm_cog = self.user.bot.get_cog("Farm")
+                # [✅✅✅ 핵심 수정] self.user.bot 대신 interaction.client 사용
+                farm_cog = interaction.client.get_cog("Farm")
                 if farm_cog:
                     thread_id = farm_data.get('thread_id')
-                    if thread_id and (thread := self.user.bot.get_channel(thread_id)):
-                        # DB에서 최신 농장 데이터를 다시 가져옴
+                    if thread_id and (thread := interaction.client.get_channel(thread_id)):
                         updated_farm_data = await get_farm_data(self.user.id)
                         if updated_farm_data:
                             await farm_cog.update_farm_ui(thread, self.user, updated_farm_data)
