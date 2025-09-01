@@ -28,7 +28,7 @@ class JobAdvancementView(ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("自分専用のメニューです。", ephemeral=True)
+            await interaction.response.send_message("이 메뉴는 본인만 사용할 수 있습니다.", ephemeral=True)
             return False
         return True
 
@@ -42,9 +42,9 @@ class JobAdvancementView(ui.View):
                 for job in self.jobs_data.values()
             ]
         else:
-            job_options.append(discord.SelectOption(label="選択できる職業がありません。", value="no_jobs_available", default=True))
+            job_options.append(discord.SelectOption(label="선택할 수 있는 직업이 없습니다.", value="no_jobs_available", default=True))
         
-        job_select = ui.Select(placeholder="① まずは職業を選択してください...", options=job_options, custom_id="job_adv_job_select", disabled=(not self.jobs_data))
+        job_select = ui.Select(placeholder="① 먼저 직업을 선택해주세요...", options=job_options, custom_id="job_adv_job_select", disabled=(not self.jobs_data))
         if self.selected_job_key:
             job_select.placeholder = self.jobs_data[self.selected_job_key]['job_name']
         job_select.callback = self.on_job_select
@@ -52,10 +52,10 @@ class JobAdvancementView(ui.View):
 
         ability_options = []
         is_ability_disabled = True
-        ability_placeholder = "先に職業を選択してください。"
+        ability_placeholder = "먼저 직업을 선택해주세요."
         if self.selected_job_key and self.selected_job_key in self.jobs_data:
             is_ability_disabled = False
-            ability_placeholder = "② 次に能力を選択してください..."
+            ability_placeholder = "② 다음으로 능력을 선택해주세요..."
             selected_job = self.jobs_data[self.selected_job_key]
             for ability in selected_job.get('abilities', []):
                 ability_options.append(discord.SelectOption(label=ability['ability_name'], value=ability['ability_key'], description=ability['description'][:100]))
@@ -66,13 +66,13 @@ class JobAdvancementView(ui.View):
         ability_select = ui.Select(placeholder=ability_placeholder, options=ability_options, disabled=is_ability_disabled, custom_id="job_adv_ability_select")
         if self.selected_ability_key:
             selected_job = self.jobs_data[self.selected_job_key]
-            ability_name = next((a['ability_name'] for a in selected_job['abilities'] if a['ability_key'] == self.selected_ability_key), "能力を選択")
+            ability_name = next((a['ability_name'] for a in selected_job['abilities'] if a['ability_key'] == self.selected_ability_key), "능력 선택")
             ability_select.placeholder = ability_name
         ability_select.callback = self.on_ability_select
         self.add_item(ability_select)
 
         is_confirm_disabled = not (self.selected_job_key and self.selected_ability_key)
-        confirm_button = ui.Button(label="確定する", style=discord.ButtonStyle.success, disabled=is_confirm_disabled, custom_id="job_adv_confirm")
+        confirm_button = ui.Button(label="결정하기", style=discord.ButtonStyle.success, disabled=is_confirm_disabled, custom_id="job_adv_confirm")
         confirm_button.callback = self.on_confirm
         self.add_item(confirm_button)
 
@@ -97,11 +97,11 @@ class JobAdvancementView(ui.View):
         await interaction.response.defer()
 
         if not (self.selected_job_key and self.selected_ability_key):
-            await interaction.followup.send("職業と能力の両方を選択してください。", ephemeral=True)
+            await interaction.followup.send("직업과 능력을 모두 선택해주세요.", ephemeral=True)
             return
 
         for item in self.children: item.disabled = True
-        await interaction.edit_original_response(content="しばらくお待ちください...", embed=None, view=self)
+        await interaction.edit_original_response(content="잠시만 기다려주세요...", embed=None, view=self)
         self.stop()
 
         try:
@@ -137,12 +137,12 @@ class JobAdvancementView(ui.View):
                         if user.display_avatar: log_embed.set_thumbnail(url=user.display_avatar.url)
                         await log_channel.send(embed=log_embed)
 
-            await interaction.edit_original_response(content=f"🎉 **転職完了！**\nおめでとうございます！あなたは **{selected_job_data['job_name']}** になりました。", view=None)
+            await interaction.edit_original_response(content=f"🎉 **전직 완료!**\n축하합니다! 당신은 **{selected_job_data['job_name']}**(으)로 전직했습니다.", view=None)
             await asyncio.sleep(15)
             if isinstance(interaction.channel, discord.Thread): await interaction.channel.delete()
         except Exception as e:
             logger.error(f"전직 처리 중 오류 발생 (유저: {self.user_id}): {e}", exc_info=True)
-            await interaction.edit_original_response(content="❌ 転職処理中にエラーが発生しました。管理者にお問い合わせください。", view=None)
+            await interaction.edit_original_response(content="❌ 전직 처리 중 오류가 발생했습니다. 관리자에게 문의해주세요.", view=None)
 
 class StartAdvancementView(ui.View):
     def __init__(self, bot: commands.Bot, user_id: int, jobs: List[Dict[str, Any]], level: int):
@@ -153,13 +153,13 @@ class StartAdvancementView(ui.View):
         self.level = level
         self.start_button.custom_id = f"start_advancement_{self.user_id}_{self.level}"
 
-    @ui.button(label="転職を開始する", style=discord.ButtonStyle.primary, emoji="✨")
+    @ui.button(label="전직 시작하기", style=discord.ButtonStyle.primary, emoji="✨")
     async def start_button(self, interaction: discord.Interaction, button: ui.Button):
         self.stop()
         
         embed = discord.Embed(
-            title=f"職業・能力選択 (レベル{self.level})",
-            description="転職したい職業とその能力を一つずつ選択し、下の「確定する」ボタンを押してください。",
+            title=f"직업·능력 선택 (레벨 {self.level})",
+            description="전직하고 싶은 직업과 그 능력을 하나씩 선택하고, 아래 '결정하기' 버튼을 눌러주세요.",
             color=0xFFD700
         )
         for job in self.jobs_data:
@@ -195,7 +195,7 @@ class JobAndTierHandler(commands.Cog):
 
         for thread in active_threads:
             try:
-                if not thread.name.startswith("転職｜"): continue
+                if not thread.name.startswith("전직｜"): continue
                 
                 owner_id = thread.owner_id
                 if not owner_id: continue
@@ -226,7 +226,7 @@ class JobAndTierHandler(commands.Cog):
                 logger.error(f"전직소 채널(job_advancement_channel_id)이 설정되지 않았거나 찾을 수 없습니다.")
                 return
 
-            if any(thread.name == f"転職｜{member.name}" for thread in channel.threads):
+            if any(thread.name == f"전직｜{member.name}" for thread in channel.threads):
                 logger.warning(f"{member.name}님의 전직 스레드가 이미 존재하여 생성을 건너뜁니다.")
                 return
 
@@ -239,15 +239,15 @@ class JobAndTierHandler(commands.Cog):
             if not filtered_jobs:
                 if level >= 100 and not current_job_key:
                     logger.warning(f"{member.name}님은 1차 전직을 하지 않아 2차 전직을 진행할 수 없습니다.")
-                    try: await member.send(f"レベル{level}転職のご案内\n2次転職のためには、まずレベル50の転職を完了する必要があります。")
+                    try: await member.send(f"레벨 {level} 전직 안내\n2차 전직을 위해서는 먼저 레벨 50 전직을 완료해야 합니다.")
                     except discord.Forbidden: pass
                 else: logger.warning(f"{member.name} (현재 직업: {current_job_key}) 님을 위한 레벨 {level} 상위 직업을 찾을 수 없습니다.")
                 return
 
-            thread = await channel.create_thread(name=f"転職｜{member.name}", type=discord.ChannelType.private_thread, invitable=False)
+            thread = await channel.create_thread(name=f"전직｜{member.name}", type=discord.ChannelType.private_thread, invitable=False)
             await thread.add_user(member)
             
-            embed = discord.Embed(title=f"🎉 レベル{level}達成！転職の時間です！", description=f"{member.mention}さん、新たな道へ進む時が来ました。\n\n下のボタンを押して、転職手続きを開始してください。", color=0xFFD700)
+            embed = discord.Embed(title=f"🎉 레벨 {level} 달성! 전직의 시간입니다!", description=f"{member.mention}님, 새로운 길로 나아갈 때가 왔습니다.\n\n아래 버튼을 눌러 전직 절차를 시작해주세요.", color=0xFFD700)
             
             view = StartAdvancementView(self.bot, member.id, filtered_jobs, level)
             await thread.send(embed=embed, view=view)
@@ -287,3 +287,101 @@ class JobAndTierHandler(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(JobAndTierHandler(bot))
+```---
+#### `cogs/systems/AdminBridge.py`
+```python
+# bot-game/cogs/systems/AdminBridge.py
+
+import discord
+from discord.ext import commands, tasks
+import logging
+import asyncio
+
+from utils.database import supabase, get_config
+
+logger = logging.getLogger(__name__)
+
+class AdminBridge(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.check_for_admin_requests.start()
+        logger.info("AdminBridge Cog (관리봇-게임봇 연동)가 성공적으로 초기화되었습니다.")
+
+    def cog_unload(self):
+        self.check_for_admin_requests.cancel()
+
+    @tasks.loop(seconds=10.0)
+    async def check_for_admin_requests(self):
+        try:
+            # [✅ 수정] SERVER_ID가 설정되어 있는지 먼저 확인하고, 없으면 에러 로그를 남기고 대기합니다.
+            server_id_str = get_config("SERVER_ID")
+            if not server_id_str:
+                logger.error("DB에 'SERVER_ID'가 설정되지 않았습니다. 관리자 봇에서 `/admin set_server_id` 명령어를 실행해주세요.")
+                await asyncio.sleep(60) # 60초 대기 후 다시 시도
+                return
+
+            try:
+                server_id = int(server_id_str)
+            except (ValueError, TypeError):
+                logger.error(f"DB에 저장된 'SERVER_ID'({server_id_str})가 올바른 숫자 형식이 아닙니다.")
+                await asyncio.sleep(60)
+                return
+
+            guild = self.bot.get_guild(server_id)
+            if not guild:
+                logger.error(f"설정된 SERVER_ID({server_id})에 해당하는 서버를 찾을 수 없습니다. 봇이 해당 서버에 참여해있는지 확인해주세요.")
+                await asyncio.sleep(60)
+                return
+
+            # XP 및 레벨 업데이트 요청 확인
+            response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', 'xp_admin_update_request_%').execute()
+            
+            if not response or not response.data:
+                return
+
+            requests_to_process = response.data
+            keys_to_delete = [req['config_key'] for req in requests_to_process]
+            
+            level_cog = self.bot.get_cog("LevelSystem")
+            if not level_cog:
+                logger.error("LevelSystem Cog를 찾을 수 없어 관리자 요청을 처리할 수 없습니다.")
+                return
+
+            tasks = []
+            for req in requests_to_process:
+                try:
+                    user_id = int(req['config_key'].split('_')[-1])
+                    user = guild.get_member(user_id)
+                    if not user:
+                        logger.warning(f"관리자 요청 처리 중 유저(ID: {user_id})를 찾을 수 없습니다.")
+                        continue
+                    
+                    payload = req.get('config_value', {})
+                    xp_to_add = payload.get('xp_to_add')
+                    exact_level = payload.get('exact_level')
+
+                    if xp_to_add:
+                        tasks.append(level_cog.update_user_xp_and_level_from_admin(user, xp_to_add=xp_to_add))
+                    elif exact_level:
+                        tasks.append(level_cog.update_user_xp_and_level_from_admin(user, exact_level=exact_level))
+
+                except (ValueError, IndexError) as e:
+                    logger.error(f"잘못된 형식의 관리자 요청 키를 발견했습니다: {req['config_key']} - {e}")
+            
+            if tasks:
+                await asyncio.gather(*tasks)
+
+            if keys_to_delete:
+                await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
+                logger.info(f"DB에서 처리 완료된 관리자 요청 키 {len(keys_to_delete)}개를 삭제했습니다.")
+
+        except Exception as e:
+            logger.error(f"관리자 요청 확인 중 DB 오류 발생: {e}", exc_info=True)
+
+    @check_for_admin_requests.before_loop
+    async def before_check_loop(self):
+        await self.bot.wait_until_ready()
+        await asyncio.sleep(5)
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(AdminBridge(bot))
