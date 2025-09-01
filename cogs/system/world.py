@@ -14,29 +14,29 @@ logger = logging.getLogger(__name__)
 
 WEATHER_TYPES = {
     "sunny": {
-        "emoji": "☀️", "name": "晴れ", "water_effect": False, "color": 0xFFAC33,
-        "description": "空は一点の曇りもなく、暖かな日差しが村を照らしています。",
-        "tip": "農作物にとっては最高の成長日和かもしれません！"
+        "emoji": "☀️", "name": "맑음", "water_effect": False, "color": 0xFFAC33,
+        "description": "하늘은 한 점의 구름도 없이, 따스한 햇살이 마을을 비추고 있습니다.",
+        "tip": "농작물에게는 최고의 성장일지도 모릅니다!"
     },
     "cloudy": {
-        "emoji": "☁️", "name": "曇り", "water_effect": False, "color": 0x95A5A6,
-        "description": "過ごしやすい曇り空です。時々太陽が顔を出すかもしれません。",
-        "tip": "のんびり釣りをするには最適な一日です。"
+        "emoji": "☁️", "name": "흐림", "water_effect": False, "color": 0x95A5A6,
+        "description": "지내기 좋은 흐린 하늘입니다. 때때로 해가 얼굴을 내밀지도 모릅니다.",
+        "tip": "느긋하게 낚시를 하기에 최적의 하루입니다."
     },
     "rainy": {
-        "emoji": "🌧️", "name": "雨", "water_effect": True, "color": 0x3498DB,
-        "description": "しとしとと雨が降り続いています。傘を忘れずに！",
-        "tip": "農場に自動で水がまかれます！水やりの手間が省けますね。"
+        "emoji": "🌧️", "name": "비", "water_effect": True, "color": 0x3498DB,
+        "description": "부슬부슬 비가 계속 내리고 있습니다. 우산을 잊지 마세요!",
+        "tip": "농장에 자동으로 물이 뿌려집니다! 물을 주는 수고를 덜 수 있겠네요."
     },
     "stormy": {
-        "emoji": "⛈️", "name": "嵐", "water_effect": True, "color": 0x2C3E50,
-        "description": "激しい雨と雷が鳴り響いています。外出の際はご注意ください。",
-        "tip": "海が荒れている日は、珍しい魚が釣れるという噂も…？"
+        "emoji": "⛈️", "name": "폭풍", "water_effect": True, "color": 0x2C3E50,
+        "description": "거센 비와 천둥이 울려 퍼지고 있습니다. 외출 시 주의하세요.",
+        "tip": "바다가 거친 날에는 희귀한 물고기가 잡힌다는 소문도...?"
     },
 }
 
-JST = timezone(timedelta(hours=9))
-JST_MIDNIGHT = dt_time(hour=0, minute=0, tzinfo=JST)
+KST = timezone(timedelta(hours=9))
+KST_MIDNIGHT = dt_time(hour=0, minute=0, tzinfo=KST)
 
 class WorldSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -47,7 +47,7 @@ class WorldSystem(commands.Cog):
     def cog_unload(self):
         self.update_weather.cancel()
 
-    @tasks.loop(time=JST_MIDNIGHT)
+    @tasks.loop(time=KST_MIDNIGHT)
     async def update_weather(self):
         # [✅ 핵심 수정] 랜덤 선택 로직을 더 명확하게 변경
         weather_keys = list(WEATHER_TYPES.keys())
@@ -56,7 +56,7 @@ class WorldSystem(commands.Cog):
         
         await save_config_to_db("current_weather", chosen_key)
         weather_info = WEATHER_TYPES[chosen_key]
-        logger.info(f"今日の天気が '{weather_info['name']}' に変わりました。")
+        logger.info(f"오늘의 날씨가 '{weather_info['name']}'(으)로 바뀌었습니다.")
         
         announcement_channel_id = get_id("weather_channel_id")
         if announcement_channel_id and (channel := self.bot.get_channel(announcement_channel_id)):
@@ -66,10 +66,10 @@ class WorldSystem(commands.Cog):
                 if not embed_data:
                     logger.warning("DB에서 'embed_weather_forecast' 템플릿을 찾을 수 없어 기본 템플릿으로 전송합니다.")
                     embed_data = {
-                        "title": "{emoji} Dico森の今日の天気予報",
-                        "description": "今日の天気は「**{weather_name}**」です！\n\n> {description}",
-                        "fields": [{"name": "💡 今日のヒント", "value": "> {tip}", "inline": False}],
-                        "footer": {"text": "天気は毎日午前0時に変わります。"}
+                        "title": "{emoji} 오늘의 날씨 예보",
+                        "description": "오늘의 날씨는 「**{weather_name}**」입니다!\n\n> {description}",
+                        "fields": [{"name": "💡 오늘의 팁", "value": "> {tip}", "inline": False}],
+                        "footer": {"text": "날씨는 매일 자정에 바뀝니다."}
                     }
 
                 # [✅ 핵심 수정] embed_data가 None일 경우를 대비하여 로직 안정화
@@ -86,7 +86,7 @@ class WorldSystem(commands.Cog):
                 
                 await channel.send(embed=embed)
             except Exception as e:
-                logger.error(f"天気予報の送信に失敗しました: {e}", exc_info=True)
+                logger.error(f"날씨 예보 전송에 실패했습니다: {e}", exc_info=True)
         else:
             # [✅ 핵심 수정] 채널이 설정되지 않았을 때, 명확한 에러 로그를 남깁니다.
             logger.error("날씨 예보를 전송할 채널이 설정되지 않았습니다. 관리자 명령어 `/admin setup`을 통해 [알림] 날씨 예보 채널을 설정해주세요.")
@@ -98,8 +98,7 @@ class WorldSystem(commands.Cog):
         await asyncio.sleep(5)
         
         if get_config("current_weather") is None:
-            logger.info("現在の天気が設定されていないため、初回設定を実行します。")
-            # 루프가 즉시 실행되도록 수정 (기존에는 update_weather()를 직접 호출했으나, loop.start()가 더 안정적)
+            logger.info("현재 날씨가 설정되어 있지 않아, 최초 설정을 실행합니다.")
             if not self.update_weather.is_running():
                 self.update_weather.start()
 
