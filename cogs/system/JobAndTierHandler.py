@@ -61,7 +61,7 @@ class JobAdvancementView(ui.View):
                 ability_options.append(discord.SelectOption(label=ability['ability_name'], value=ability['ability_key'], description=ability['description'][:100]))
         
         if not ability_options:
-            ability_options.append(discord.SelectOption(label="...", value="no_abilities_placeholder", default=True))
+            ability_options.append(discord.SelectOption(label="선택 가능한 능력이 없습니다.", value="no_abilities_placeholder", default=True))
 
         ability_select = ui.Select(placeholder=ability_placeholder, options=ability_options, disabled=is_ability_disabled, custom_id="job_adv_ability_select")
         if self.selected_ability_key:
@@ -101,7 +101,7 @@ class JobAdvancementView(ui.View):
             return
 
         for item in self.children: item.disabled = True
-        await interaction.edit_original_response(content="잠시만 기다려주세요...", embed=None, view=self)
+        await interaction.edit_original_response(content="잠시만 기다려주세요... 전직 절차를 진행 중입니다.", embed=None, view=self)
         self.stop()
 
         try:
@@ -136,12 +136,14 @@ class JobAdvancementView(ui.View):
                         log_embed = format_embed_from_db(embed_data, user_mention=user.mention, job_name=selected_job_data['job_name'], ability_name=selected_ability_data['ability_name'])
                         if user.display_avatar: log_embed.set_thumbnail(url=user.display_avatar.url)
                         await log_channel.send(embed=log_embed)
-
-            await interaction.edit_original_response(content=f"🎉 **전직 완료!**\n축하합니다! 당신은 **{selected_job_data['job_name']}**(으)로 전직했습니다.", view=None)
+            
+            job_name = selected_job_data['job_name']
+            success_message = f"🎉 **전직 완료!**\n축하합니다! 이제부터 당신은 **{job_name}** 입니다."
+            await interaction.edit_original_response(content=success_message, view=None)
             await asyncio.sleep(15)
             if isinstance(interaction.channel, discord.Thread): await interaction.channel.delete()
         except Exception as e:
-            logger.error(f"전직 처리 중 오류 발생 (유저: {self.user_id}): {e}", exc_info=True)
+            logger.error(f"전직 처리 중 오류가 발생했습니다 (유저: {self.user_id}): {e}", exc_info=True)
             await interaction.edit_original_response(content="❌ 전직 처리 중 오류가 발생했습니다. 관리자에게 문의해주세요.", view=None)
 
 class StartAdvancementView(ui.View):
@@ -159,12 +161,12 @@ class StartAdvancementView(ui.View):
         
         embed = discord.Embed(
             title=f"직업·능력 선택 (레벨 {self.level})",
-            description="전직하고 싶은 직업과 그 능력을 하나씩 선택하고, 아래 '결정하기' 버튼을 눌러주세요.",
+            description="전직할 직업과 습득할 능력을 하나씩 선택한 후, '결정하기' 버튼을 눌러주세요.",
             color=0xFFD700
         )
         for job in self.jobs_data:
             ability_texts = [f"> **{ability['ability_name']}**: {ability['description']}" for ability in job.get('abilities', [])]
-            embed.add_field(name=f"【{job['job_name']}】", value=f"```{job['description']}```\n" + "\n".join(ability_texts), inline=False)
+            embed.add_field(name=f"【 {job['job_name']} 】", value=f"```{job['description']}```\n" + "\n".join(ability_texts), inline=False)
         
         view = JobAdvancementView(self.bot, interaction.user.id, self.jobs_data, self.level)
         await interaction.response.edit_message(embed=embed, view=view)
@@ -179,10 +181,10 @@ class JobAndTierHandler(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         if self.active_views_loaded: return
-        logger.info("이전에 활성화된 전직 View들을 다시 로드합니다...")
+        logger.info("이전에 활성화된 전직 View를 다시 로드합니다...")
         channel_id = get_id("job_advancement_channel_id")
         if not (channel_id and (channel := self.bot.get_channel(channel_id))):
-            logger.warning("전직소 채널을 찾을 수 없어 활성 View를 로드할 수 없습니다.")
+            logger.warning("'전직소' 채널을 찾을 수 없어 활성 View를 로드할 수 없습니다.")
             self.active_views_loaded = True
             return
 
@@ -191,7 +193,7 @@ class JobAndTierHandler(commands.Cog):
             archived_threads = [t async for t in channel.archived_threads(limit=None)]
             active_threads.extend(archived_threads)
         except Exception as e:
-            logger.error(f"아카이브된 스레드를 가져오는 중 오류: {e}")
+            logger.error(f"아카이브된 스레드를 가져오는 중 오류가 발생했습니다: {e}")
 
         for thread in active_threads:
             try:
@@ -214,7 +216,7 @@ class JobAndTierHandler(commands.Cog):
                             pass
                         break
             except Exception as e:
-                logger.error(f"스레드 '{thread.name}'의 View를 다시 로드하는 중 오류 발생: {e}", exc_info=True)
+                logger.error(f"스레드 '{thread.name}'의 View를 다시 로드하는 중 오류가 발생했습니다: {e}", exc_info=True)
         
         self.active_views_loaded = True
         logger.info("활성 전직 View 로드가 완료되었습니다.")
@@ -223,7 +225,7 @@ class JobAndTierHandler(commands.Cog):
         try:
             channel_id = get_id("job_advancement_channel_id")
             if not (channel_id and (channel := self.bot.get_channel(channel_id))):
-                logger.error(f"전직소 채널(job_advancement_channel_id)이 설정되지 않았거나 찾을 수 없습니다.")
+                logger.error(f"'전직소' 채널(job_advancement_channel_id)이 설정되지 않았거나 찾을 수 없습니다.")
                 return
 
             if any(thread.name == f"전직｜{member.name}" for thread in channel.threads):
@@ -239,7 +241,7 @@ class JobAndTierHandler(commands.Cog):
             if not filtered_jobs:
                 if level >= 100 and not current_job_key:
                     logger.warning(f"{member.name}님은 1차 전직을 하지 않아 2차 전직을 진행할 수 없습니다.")
-                    try: await member.send(f"레벨 {level} 전직 안내\n2차 전직을 위해서는 먼저 레벨 50 전직을 완료해야 합니다.")
+                    try: await member.send(f"**레벨 {level} 전직 안내**\n2차 전직을 위해서는 먼저 레벨 50 전직을 완료해야 합니다.")
                     except discord.Forbidden: pass
                 else: logger.warning(f"{member.name} (현재 직업: {current_job_key}) 님을 위한 레벨 {level} 상위 직업을 찾을 수 없습니다.")
                 return
@@ -247,7 +249,7 @@ class JobAndTierHandler(commands.Cog):
             thread = await channel.create_thread(name=f"전직｜{member.name}", type=discord.ChannelType.private_thread, invitable=False)
             await thread.add_user(member)
             
-            embed = discord.Embed(title=f"🎉 레벨 {level} 달성! 전직의 시간입니다!", description=f"{member.mention}님, 새로운 길로 나아갈 때가 왔습니다.\n\n아래 버튼을 눌러 전직 절차를 시작해주세요.", color=0xFFD700)
+            embed = discord.Embed(title=f"🎉 레벨 {level} 달성! 새로운 길을 개척할 시간입니다!", description=f"{member.mention}님, 새로운 능력을 얻을 때가 왔습니다.\n\n아래 버튼을 눌러 전직 절차를 시작해주세요.", color=0xFFD700)
             
             view = StartAdvancementView(self.bot, member.id, filtered_jobs, level)
             await thread.send(embed=embed, view=view)
@@ -255,7 +257,7 @@ class JobAndTierHandler(commands.Cog):
             self.bot.add_view(view)
             logger.info(f"{member.name}님의 레벨 {level} 전직 스레드를 성공적으로 생성하고 View를 등록했습니다.")
         except Exception as e:
-            logger.error(f"{member.name}님의 전직 절차 시작 중 오류 발생: {e}", exc_info=True)
+            logger.error(f"{member.name}님의 전직 절차 시작 중 오류가 발생했습니다: {e}", exc_info=True)
 
     async def update_tier_role(self, member: discord.Member, level: int):
         try:
@@ -279,109 +281,11 @@ class JobAndTierHandler(commands.Cog):
                 if role.id in all_tier_role_ids and role.id != target_role_id:
                     roles_to_remove.append(role)
             
-            if roles_to_add: await member.add_roles(*roles_to_add, reason="레벨 달성 등급 역할 부여")
-            if roles_to_remove: await member.remove_roles(*roles_to_remove, reason="레벨 변경 등급 역할 제거")
+            if roles_to_add: await member.add_roles(*roles_to_add, reason=f"레벨 {level} 달성, 등급 역할 부여")
+            if roles_to_remove: await member.remove_roles(*roles_to_remove, reason="레벨 변경으로 인한 등급 역할 조정")
 
         except Exception as e:
-            logger.error(f"{member.name}님의 등급 역할 업데이트 처리 중 오류: {e}", exc_info=True)
+            logger.error(f"{member.name}님의 등급 역할 업데이트 처리 중 오류가 발생했습니다: {e}", exc_info=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(JobAndTierHandler(bot))
-```---
-#### `cogs/systems/AdminBridge.py`
-```python
-# bot-game/cogs/systems/AdminBridge.py
-
-import discord
-from discord.ext import commands, tasks
-import logging
-import asyncio
-
-from utils.database import supabase, get_config
-
-logger = logging.getLogger(__name__)
-
-class AdminBridge(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self.check_for_admin_requests.start()
-        logger.info("AdminBridge Cog (관리봇-게임봇 연동)가 성공적으로 초기화되었습니다.")
-
-    def cog_unload(self):
-        self.check_for_admin_requests.cancel()
-
-    @tasks.loop(seconds=10.0)
-    async def check_for_admin_requests(self):
-        try:
-            # [✅ 수정] SERVER_ID가 설정되어 있는지 먼저 확인하고, 없으면 에러 로그를 남기고 대기합니다.
-            server_id_str = get_config("SERVER_ID")
-            if not server_id_str:
-                logger.error("DB에 'SERVER_ID'가 설정되지 않았습니다. 관리자 봇에서 `/admin set_server_id` 명령어를 실행해주세요.")
-                await asyncio.sleep(60) # 60초 대기 후 다시 시도
-                return
-
-            try:
-                server_id = int(server_id_str)
-            except (ValueError, TypeError):
-                logger.error(f"DB에 저장된 'SERVER_ID'({server_id_str})가 올바른 숫자 형식이 아닙니다.")
-                await asyncio.sleep(60)
-                return
-
-            guild = self.bot.get_guild(server_id)
-            if not guild:
-                logger.error(f"설정된 SERVER_ID({server_id})에 해당하는 서버를 찾을 수 없습니다. 봇이 해당 서버에 참여해있는지 확인해주세요.")
-                await asyncio.sleep(60)
-                return
-
-            # XP 및 레벨 업데이트 요청 확인
-            response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', 'xp_admin_update_request_%').execute()
-            
-            if not response or not response.data:
-                return
-
-            requests_to_process = response.data
-            keys_to_delete = [req['config_key'] for req in requests_to_process]
-            
-            level_cog = self.bot.get_cog("LevelSystem")
-            if not level_cog:
-                logger.error("LevelSystem Cog를 찾을 수 없어 관리자 요청을 처리할 수 없습니다.")
-                return
-
-            tasks = []
-            for req in requests_to_process:
-                try:
-                    user_id = int(req['config_key'].split('_')[-1])
-                    user = guild.get_member(user_id)
-                    if not user:
-                        logger.warning(f"관리자 요청 처리 중 유저(ID: {user_id})를 찾을 수 없습니다.")
-                        continue
-                    
-                    payload = req.get('config_value', {})
-                    xp_to_add = payload.get('xp_to_add')
-                    exact_level = payload.get('exact_level')
-
-                    if xp_to_add:
-                        tasks.append(level_cog.update_user_xp_and_level_from_admin(user, xp_to_add=xp_to_add))
-                    elif exact_level:
-                        tasks.append(level_cog.update_user_xp_and_level_from_admin(user, exact_level=exact_level))
-
-                except (ValueError, IndexError) as e:
-                    logger.error(f"잘못된 형식의 관리자 요청 키를 발견했습니다: {req['config_key']} - {e}")
-            
-            if tasks:
-                await asyncio.gather(*tasks)
-
-            if keys_to_delete:
-                await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
-                logger.info(f"DB에서 처리 완료된 관리자 요청 키 {len(keys_to_delete)}개를 삭제했습니다.")
-
-        except Exception as e:
-            logger.error(f"관리자 요청 확인 중 DB 오류 발생: {e}", exc_info=True)
-
-    @check_for_admin_requests.before_loop
-    async def before_check_loop(self):
-        await self.bot.wait_until_ready()
-        await asyncio.sleep(5)
-
-async def setup(bot: commands.Bot):
-    await bot.add_cog(AdminBridge(bot))
