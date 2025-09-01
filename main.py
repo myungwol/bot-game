@@ -23,7 +23,7 @@ root_logger.addHandler(log_handler)
 logging.getLogger('discord').setLevel(logging.WARNING)
 logging.getLogger('discord.http').setLevel(logging.WARNING)
 logging.getLogger('websockets').setLevel(logging.WARNING)
-# [✅✅✅ 핵심 수정 ✅✅✅] Supabase 및 httpx 라이브러리의 정보성 로그를 숨깁니다.
+# Supabase 및 httpx 라이브러리의 정보성 로그는 출력하지 않습니다.
 logging.getLogger('supabase').setLevel(logging.WARNING)
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ TEST_GUILD_ID: Optional[int] = None
 if RAW_TEST_GUILD_ID:
     try:
         TEST_GUILD_ID = int(RAW_TEST_GUILD_ID)
-        logger.info(f"테스트 서버 ID가 {TEST_GUILD_ID}로 설정되었습니다.")
+        logger.info(f"테스트 서버 ID가 '{TEST_GUILD_ID}'(으)로 설정되었습니다.")
     except ValueError:
         logger.error(f"❌ TEST_GUILD_ID 환경 변수가 유효한 숫자가 아닙니다: '{RAW_TEST_GUILD_ID}'")
 
@@ -76,7 +76,7 @@ class MyBot(commands.Bot):
         logger.info("------ [ Cog 로드 시작 ] ------")
         cogs_dir = 'cogs'
         if not os.path.isdir(cogs_dir):
-            logger.critical(f"❌ Cogs 디렉토리를 찾을 수 없습니다: {cogs_dir}.")
+            logger.critical(f"❌ Cogs 디렉토리를 찾을 수 없습니다: {cogs_dir}")
             return
 
         loaded_count = 0
@@ -141,6 +141,6 @@ if __name__ == "__main__":
         try:
             asyncio.run(main())
         except discord.errors.LoginFailure: 
-            logger.critical("❌ 봇 토큰이 유효하지 않습니다.")
+            logger.critical("❌ 봇 토큰이 유효하지 않습니다. 토큰을 다시 확인해주세요.")
         except Exception as e: 
             logger.critical(f"🚨 봇 실행 중 치명적인 오류 발생: {e}", exc_info=True)
