@@ -13,7 +13,7 @@ class AdminBridge(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.check_for_admin_requests.start()
-        logger.info("AdminBridge Cog (관리봇-게임봇 연동)가 성공적으로 초기화되었습니다.")
+        logger.info("AdminBridge Cog (관리-게임 봇 연동)가 성공적으로 초기화되었습니다.")
 
     def cog_unload(self):
         self.check_for_admin_requests.cancel()
@@ -21,7 +21,7 @@ class AdminBridge(commands.Cog):
     @tasks.loop(seconds=10.0)
     async def check_for_admin_requests(self):
         try:
-            # [✅ 수정] SERVER_ID가 설정되어 있는지 먼저 확인하고, 없으면 에러 로그를 남기고 대기합니다.
+            # SERVER_ID가 DB에 설정되어 있는지 확인하고, 없으면 에러 로그를 남기고 대기합니다.
             server_id_str = get_config("SERVER_ID")
             if not server_id_str:
                 logger.error("DB에 'SERVER_ID'가 설정되지 않았습니다. 관리자 봇에서 `/admin set_server_id` 명령어를 실행해주세요.")
@@ -37,11 +37,11 @@ class AdminBridge(commands.Cog):
 
             guild = self.bot.get_guild(server_id)
             if not guild:
-                logger.error(f"설정된 SERVER_ID({server_id})에 해당하는 서버를 찾을 수 없습니다. 봇이 해당 서버에 참여해있는지 확인해주세요.")
+                logger.error(f"설정된 SERVER_ID({server_id})에 해당하는 서버를 찾을 수 없습니다. 봇이 해당 서버에 참여해 있는지 확인해주세요.")
                 await asyncio.sleep(60)
                 return
 
-            # XP 및 레벨 업데이트 요청 확인
+            # XP 및 레벨 업데이트 요청을 확인합니다.
             response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', 'xp_admin_update_request_%').execute()
             
             if not response or not response.data:
@@ -61,7 +61,7 @@ class AdminBridge(commands.Cog):
                     user_id = int(req['config_key'].split('_')[-1])
                     user = guild.get_member(user_id)
                     if not user:
-                        logger.warning(f"관리자 요청 처리 중 유저(ID: {user_id})를 찾을 수 없습니다.")
+                        logger.warning(f"관리자 요청 처리 중 유저(ID: {user_id})를 서버에서 찾을 수 없습니다.")
                         continue
                     
                     payload = req.get('config_value', {})
@@ -84,7 +84,7 @@ class AdminBridge(commands.Cog):
                 logger.info(f"DB에서 처리 완료된 관리자 요청 키 {len(keys_to_delete)}개를 삭제했습니다.")
 
         except Exception as e:
-            logger.error(f"관리자 요청 확인 중 DB 오류 발생: {e}", exc_info=True)
+            logger.error(f"관리자 요청 확인 중 DB 오류가 발생했습니다: {e}", exc_info=True)
 
     @check_for_admin_requests.before_loop
     async def before_check_loop(self):
