@@ -31,37 +31,37 @@ JOB_ADVANCEMENT_DATA = {
     50: [
         {
             "job_key": "fisherman",
-            "job_name": "釣り人",
+            "job_name": "낚시꾼",
             "role_key": "role_job_fisherman",
-            "description": "魚を釣ることに特化した専門家です。",
+            "description": "물고기를 낚는 데 특화된 전문가입니다.",
             "abilities": [
                 {
                     "ability_key": "fish_bait_saver_1",
-                    "ability_name": "エサ消費なし (確率)",
-                    "description": "釣りの際、一定の確率でエサを消費しません。"
+                    "ability_name": "미끼 절약 (확률)",
+                    "description": "낚시할 때 일정 확률로 미끼를 소모하지 않습니다."
                 },
                 {
                     "ability_key": "fish_bite_time_down_1",
-                    "ability_name": "アタリ時間短縮",
-                    "description": "魚が食いつくまでの時間が全体的に2秒短縮されます。"
+                    "ability_name": "입질 시간 단축",
+                    "description": "물고기가 미끼를 무는 데 걸리는 시간이 전체적으로 2초 단축됩니다."
                 }
             ]
         },
         {
             "job_key": "farmer",
-            "job_name": "農家",
+            "job_name": "농부",
             "role_key": "role_job_farmer",
-            "description": "作物を育て、収穫することに特化した専門家です。",
+            "description": "작물을 키우고 수확하는 데 특화된 전문가입니다.",
             "abilities": [
                 {
                     "ability_key": "farm_seed_saver_1",
-                    "ability_name": "種消費なし (確率)",
-                    "description": "種を植える際、一定の確率で種を消費しません。"
+                    "ability_name": "씨앗 절약 (확률)",
+                    "description": "씨앗을 심을 때 일정 확률로 씨앗을 소모하지 않습니다."
                 },
                 {
                     "ability_key": "farm_water_retention_1",
-                    "ability_name": "水分保持力UP",
-                    "description": "作物が水分を保ちやすくなり、水やりの間隔が長くなります。"
+                    "ability_name": "수분 유지력 UP",
+                    "description": "작물이 수분을 더 오래 머금어 물을 주는 간격이 길어집니다."
                 }
             ]
         }
@@ -70,39 +70,39 @@ JOB_ADVANCEMENT_DATA = {
     100: [
         {
             "job_key": "master_angler",
-            "job_name": "太公望",
+            "job_name": "강태공",
             "role_key": "role_job_master_angler",
-            "description": "釣りの道を極め、伝説の魚を追い求める者。釣り人の上位職です。",
-            "prerequisite_job": "fisherman", # [✅✅✅ 핵심 수정] '낚시꾼'이 필요하다고 명시
+            "description": "낚시의 길을 통달하여 전설의 물고기를 쫓는 자. 낚시꾼의 상위 직업입니다.",
+            "prerequisite_job": "fisherman", # '낚시꾼'이 필요하다고 명시
             "abilities": [
                 {
                     "ability_key": "fish_rare_up_2",
-                    "ability_name": "レア魚確率UP (大)",
-                    "description": "珍しい魚を釣る確率が上昇します。"
+                    "ability_name": "희귀어 확률 UP (대)",
+                    "description": "희귀한 물고기를 낚을 확률이 상승합니다."
                 },
                 {
                     "ability_key": "fish_size_up_2",
-                    "ability_name": "魚のサイズUP (大)",
-                    "description": "釣り上げる魚の平均サイズが大きくなります。"
+                    "ability_name": "물고기 크기 UP (대)",
+                    "description": "낚는 물고기의 평균 크기가 커집니다."
                 }
             ]
         },
         {
             "job_key": "master_farmer",
-            "job_name": "大農家",
+            "job_name": "대농",
             "role_key": "role_job_master_farmer",
-            "description": "農業の神髄を悟り、大地から最大の恵みを得る者。農家の上位職です。",
-            "prerequisite_job": "farmer", # [✅✅✅ 핵심 수정] '농가'가 필요하다고 명시
+            "description": "농업의 정수를 깨달아 대지로부터 최대의 은혜를 얻는 자. 농부의 상위 직업입니다.",
+            "prerequisite_job": "farmer", # '농부'가 필요하다고 명시
             "abilities": [
                 {
                     "ability_key": "farm_yield_up_2",
-                    "ability_name": "収穫量UP (大)",
-                    "description": "作物を収穫する際の収穫量が大幅に増加します。"
+                    "ability_name": "수확량 UP (대)",
+                    "description": "작물을 수확할 때의 수확량이 대폭 증가합니다."
                 },
                 {
                     "ability_key": "farm_growth_speed_up_2",
-                    "ability_name": "成長速度UP (大)",
-                    "description": "作物の成長に必要な時間が短縮されます。"
+                    "ability_name": "성장 속도 UP (대)",
+                    "description": "작물의 성장 시간이 단축됩니다."
                 }
             ]
         }
