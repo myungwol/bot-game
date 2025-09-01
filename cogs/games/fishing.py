@@ -56,7 +56,7 @@ class FishingGameView(ui.View):
                 self.stop()
         except asyncio.CancelledError: pass
         except Exception as e:
-            logger.error(f"{self.player.display_name}의 낚시 게임 흐름 중 오류: {e}", exc_info=True)
+            logger.error(f"{self.player.display_name}의낚시 게임 흐름 중 오류: {e}", exc_info=True)
             if not self.is_finished():
                 await self._send_result(discord.Embed(title="❌ 오류 발생", description="낚시 처리 중 예기치 않은 오류가 발생했습니다.", color=discord.Color.red()))
                 self.stop()
