@@ -20,8 +20,8 @@ from utils.game_config_defaults import JOB_ADVANCEMENT_DATA, GAME_CONFIG
 
 logger = logging.getLogger(__name__)
 
-JST = timezone(timedelta(hours=9))
-JST_MONDAY_MIDNIGHT = dt_time(hour=0, minute=1, tzinfo=JST)
+KST = timezone(timedelta(hours=9))
+KST_MONDAY_MIDNIGHT = dt_time(hour=0, minute=1, tzinfo=KST)
 
 def create_xp_bar(current_xp: int, required_xp: int, length: int = 10) -> str:
     if required_xp <= 0: return "▓" * length
@@ -48,25 +48,25 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
         required_xp_for_this_level = xp_for_next_level - xp_at_level_start if xp_for_next_level > xp_at_level_start else 1
         
         job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
-        job_role_mention = "`なし`"; job_role_map = job_system_config.get("JOB_ROLE_MAP", {})
+        job_role_mention = "`없음`"; job_role_map = job_system_config.get("JOB_ROLE_MAP", {})
         if job_res and hasattr(job_res, 'data') and job_res.data and job_res.data.get('jobs'):
             job_data = job_res.data['jobs']
             if role_key := job_role_map.get(job_data['job_key']):
                 if role_id := get_id(role_key): job_role_mention = f"<@&{role_id}>"
         
         level_tier_roles = job_system_config.get("LEVEL_TIER_ROLES", [])
-        tier_role_mention = "`かけだし住民`"; user_roles = {role.id for role in user.roles}
+        tier_role_mention = "`새내기 주민`"; user_roles = {role.id for role in user.roles}
         for tier in sorted(level_tier_roles, key=lambda x: x['level'], reverse=True):
             if role_id := get_id(tier['role_key']):
                 if role_id in user_roles: tier_role_mention = f"<@&{role_id}>"; break
         
         source_map = {
-            'chat': '💬 チャット', 
-            'voice': '🎙️ VC参加', 
-            'fishing_catch': '🎣 釣り', 
-            'farm_harvest': '🌾 農業', 
-            'quest': '📜 クエスト',
-            'admin': '⚙️ 管理者'
+            'chat': '💬 채팅', 
+            'voice': '🎙️ 음성채팅', 
+            'fishing_catch': '🎣 낚시', 
+            'farm_harvest': '🌾 농사', 
+            'quest': '📜 퀘스트',
+            'admin': '⚙️ 관리자'
         }
         
         aggregated_xp = {v: 0 for v in source_map.values()}
@@ -86,19 +86,19 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
         if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
 
         description_parts = [
-            f"## {user.mention}のステータス\n",
-            f"**レベル**: **Lv. {current_level}**",
-            f"**等級**: {tier_role_mention}\n**職業**: {job_role_mention}\n",
-            f"**経験値**\n`{xp_in_current_level:,} / {required_xp_for_this_level:,}`",
+            f"## {user.mention}의 상태\n",
+            f"**레벨**: **Lv. {current_level}**",
+            f"**등급**: {tier_role_mention}\n**직업**: {job_role_mention}\n",
+            f"**경험치**\n`{xp_in_current_level:,} / {required_xp_for_this_level:,}`",
             f"{xp_bar}\n",
-            f"**🏆 総獲得経験値**\n`{total_xp:,} XP`\n",
-            f"**📊 経験値獲得の内訳**\n{xp_details_text}"
+            f"**🏆 총 획득 경험치**\n`{total_xp:,} XP`\n",
+            f"**📊 경험치 획득 내역**\n{xp_details_text}"
         ]
         embed.description = "\n".join(description_parts)
         return embed
     except Exception as e:
         logger.error(f"레벨 임베드 생성 중 오류 (유저: {user.id}): {e}", exc_info=True)
-        return discord.Embed(title="エラー", description="ステータス情報の読み込み中にエラーが発生しました。", color=discord.Color.red())
+        return discord.Embed(title="오류", description="상태 정보를 불러오는 중 오류가 발생했습니다.", color=discord.Color.red())
 
 class RankingView(ui.View):
     def __init__(self, user: discord.Member):
@@ -114,18 +114,18 @@ class RankingView(ui.View):
         self.highlight_user_id: Optional[int] = None
 
         self.category_map = {
-            "level": {"column": "xp", "name": "レベル", "unit": "XP"},
-            "voice": {"column": "voice_minutes", "name": "ボイス", "unit": "分"},
-            "chat": {"column": "chat_count", "name": "チャット", "unit": "回"},
-            "fishing": {"column": "fishing_count", "name": "釣り", "unit": "匹"},
-            "harvest": {"column": "harvest_count", "name": "収穫", "unit": "回収"},
+            "level": {"column": "xp", "name": "레벨", "unit": "XP"},
+            "voice": {"column": "voice_minutes", "name": "음성채팅", "unit": "분"},
+            "chat": {"column": "chat_count", "name": "채팅", "unit": "회"},
+            "fishing": {"column": "fishing_count", "name": "낚시", "unit": "마리"},
+            "harvest": {"column": "harvest_count", "name": "수확", "unit": "회"},
         }
         
         self.period_map = {
-            "daily": "今日",
-            "weekly": "今週",
-            "monthly": "今月",
-            "total": "総合",
+            "daily": "오늘",
+            "weekly": "이번 주",
+            "monthly": "이번 달",
+            "total": "종합",
         }
 
     async def start(self, interaction: discord.Interaction):
@@ -154,7 +154,7 @@ class RankingView(ui.View):
             ]
         ]
         category_select = ui.Select(
-            placeholder="ランキングのカテゴリーを選択...",
+            placeholder="랭킹 카테고리를 선택하세요...",
             options=category_options,
             custom_id="ranking_category_select"
         )
@@ -174,7 +174,7 @@ class RankingView(ui.View):
             ]
         ]
         period_select = ui.Select(
-            placeholder="ランキングの期間を選択...",
+            placeholder="랭킹 기간을 선택하세요...",
             options=period_options,
             custom_id="ranking_period_select",
             disabled=(self.current_category == "level")
@@ -193,7 +193,7 @@ class RankingView(ui.View):
         self.add_item(prev_button)
         self.add_item(next_button)
 
-        my_rank_button = ui.Button(label="自分の順位", style=discord.ButtonStyle.success, emoji="📍", custom_id="my_rank_button")
+        my_rank_button = ui.Button(label="내 순위", style=discord.ButtonStyle.success, emoji="📍", custom_id="my_rank_button")
         my_rank_button.callback = self.on_my_rank_click
         self.add_item(my_rank_button)
 
@@ -218,7 +218,6 @@ class RankingView(ui.View):
             self.current_page -= 1
         await self.update_display(interaction)
     
-    # [✅ 최종 수정] 에러의 원인이었던 불필요한 'button' 인자를 제거합니다.
     async def on_my_rank_click(self, interaction: discord.Interaction):
         category_info = self.category_map[self.current_category]
         column_name = category_info["column"]
@@ -237,11 +236,11 @@ class RankingView(ui.View):
                 self.highlight_user_id = self.user.id
                 await self.update_display(interaction)
             else:
-                await interaction.response.send_message("まだランキングに登録されていません。", ephemeral=True, delete_after=5)
+                await interaction.response.send_message("아직 랭킹에 등록되지 않았습니다.", ephemeral=True, delete_after=5)
 
         except Exception as e:
             logger.error(f"내 순위 조회 중 오류: {e}", exc_info=True)
-            await interaction.response.send_message("❌ 順位の取得中にエラーが発生しました。", ephemeral=True, delete_after=5)
+            await interaction.response.send_message("❌ 순위를 가져오는 중 오류가 발생했습니다.", ephemeral=True, delete_after=5)
 
     async def build_embed(self) -> discord.Embed:
         offset = self.current_page * self.users_per_page
@@ -258,7 +257,7 @@ class RankingView(ui.View):
         total_users = res.count if res and res.count is not None else 0
         self.total_pages = math.ceil(total_users / self.users_per_page)
         
-        title = f"👑 {self.period_map[self.current_period]} {category_info['name']} ランキング"
+        title = f"👑 {self.period_map[self.current_period]} {category_info['name']} 랭킹"
         embed = discord.Embed(title=title, color=0xFFD700)
 
         rank_list = []
@@ -278,8 +277,8 @@ class RankingView(ui.View):
 
         self.highlight_user_id = None
 
-        embed.description = "\n".join(rank_list) if rank_list else "まだランキング情報がありません。"
-        embed.set_footer(text=f"ページ {self.current_page + 1} / {self.total_pages}")
+        embed.description = "\n".join(rank_list) if rank_list else "아직 랭킹 정보가 없습니다."
+        embed.set_footer(text=f"페이지 {self.current_page + 1} / {self.total_pages}")
         return embed
         
 class LevelPanelView(ui.View):
@@ -287,7 +286,7 @@ class LevelPanelView(ui.View):
         super().__init__(timeout=None)
         self.cog = cog_instance
 
-    @ui.button(label="ステータス確認", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
+    @ui.button(label="상태 확인", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
     async def check_level_button(self, interaction: discord.Interaction, button: ui.Button):
         user = interaction.user
         cooldown_key = f"level_check_public_{user.id}"
@@ -296,35 +295,28 @@ class LevelPanelView(ui.View):
         last_used = await get_cooldown(user.id, cooldown_key)
         if time.time() - last_used < cooldown_seconds:
             can_use_time = int(last_used + cooldown_seconds)
-            await interaction.response.send_message(f"⏳ このボタンは <t:{can_use_time}:R> に再度使用できます。", ephemeral=True)
+            await interaction.response.send_message(f"⏳ 이 버튼은 <t:{can_use_time}:R>에 다시 사용할 수 있습니다.", ephemeral=True)
             return
 
-        # defer는 더 이상 사용하지 않고, 바로 응답을 시도합니다.
         try:
-            # [✅✅✅ 핵심 수정 ✅✅✅]
-            # 1. 기존 패널을 먼저 삭제합니다.
             if interaction.message:
                 await interaction.message.delete()
             
-            # 2. 스테이터스 메시지를 채널에 공개적으로 보냅니다.
             await interaction.response.send_message(embed=await build_level_embed(user))
 
-            # 3. 그 다음에 새로운 패널을 채널 맨 아래에 다시 생성합니다.
             await self.cog.regenerate_panel(interaction.channel)
             
-            # 4. 마지막으로 쿨타임을 설정합니다.
             await set_cooldown(user.id, cooldown_key)
 
         except discord.Forbidden:
-            # 권한이 없을 경우, 개인 메시지로 대신 보냅니다. (이 경우 패널 재생성은 일어나지 않습니다)
-            await interaction.response.send_message("❌ チャンネルにメッセージを送信/削除する権限がありません。", ephemeral=True)
+            await interaction.response.send_message("❌ 채널에 메시지를 보내거나 삭제할 권한이 없습니다.", ephemeral=True)
         except Exception as e:
             logger.error(f"공개 레벨 확인 및 패널 재생성 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
             if not interaction.response.is_done():
-                await interaction.response.send_message("❌ 処理中にエラーが発生しました。", ephemeral=True)
+                await interaction.response.send_message("❌ 처리 중 오류가 발생했습니다.", ephemeral=True)
 
 
-    @ui.button(label="ランキング確認", style=discord.ButtonStyle.secondary, emoji="👑", custom_id="show_ranking_button")
+    @ui.button(label="랭킹 확인", style=discord.ButtonStyle.secondary, emoji="👑", custom_id="show_ranking_button")
     async def show_ranking_button(self, interaction: discord.Interaction, button: ui.Button):
         view = RankingView(interaction.user)
         await view.start(interaction)
@@ -342,7 +334,7 @@ class LevelSystem(commands.Cog):
     def cog_unload(self):
         self.update_champion_panel.cancel()
         
-    @tasks.loop(time=JST_MONDAY_MIDNIGHT)
+    @tasks.loop(time=KST_MONDAY_MIDNIGHT)
     async def update_champion_panel(self):
         logger.info("[LevelSystem] 챔피언 보드 패널 새로고침을 시작합니다.")
         try:
@@ -364,11 +356,11 @@ class LevelSystem(commands.Cog):
 
     async def _build_champion_embed(self) -> discord.Embed:
         categories = {
-            "level": {"column": "xp", "name": "総合レベル", "unit": "XP", "table": "user_levels"},
-            "voice": {"column": "voice_minutes", "name": "ボイスチャット", "unit": "分", "table": "total_stats"},
-            "chat": {"column": "chat_count", "name": "チャット", "unit": "回", "table": "total_stats"},
-            "fishing": {"column": "fishing_count", "name": "釣り", "unit": "匹", "table": "total_stats"},
-            "harvest": {"column": "harvest_count", "name": "収穫", "unit": "回収", "table": "total_stats"},
+            "level": {"column": "xp", "name": "종합 레벨", "unit": "XP", "table": "user_levels"},
+            "voice": {"column": "voice_minutes", "name": "음성채팅", "unit": "분", "table": "total_stats"},
+            "chat": {"column": "chat_count", "name": "채팅", "unit": "회", "table": "total_stats"},
+            "fishing": {"column": "fishing_count", "name": "낚시", "unit": "마리", "table": "total_stats"},
+            "harvest": {"column": "harvest_count", "name": "수확", "unit": "회", "table": "total_stats"},
         }
         
         tasks = []
@@ -393,18 +385,18 @@ class LevelSystem(commands.Cog):
                 name = member.mention if member else f"ID: {user_id}"
                 champion_data[f"{key}_champion"] = f"🏆 **{name}** (`{value:,}` {info['unit']})"
             else:
-                champion_data[f"{key}_champion"] = "まだ記録がありません。"
+                champion_data[f"{key}_champion"] = "아직 기록이 없습니다."
 
         embed_template = await get_embed_from_db("panel_champion_board")
         if not embed_template:
-            return discord.Embed(title="エラー", description="챔피언 보드 템플릿을 찾을 수 없습니다.")
+            return discord.Embed(title="오류", description="챔피언 보드 템플릿을 찾을 수 없습니다.")
 
         return format_embed_from_db(embed_template, **champion_data)
 
 
     async def register_persistent_views(self):
         self.bot.add_view(LevelPanelView(self))
-        logger.info("✅ 레벨 시스템의 영구 View가 성공적으로 등록되었습니다。")
+        logger.info("✅ 레벨 시스템의 영구 View가 성공적으로 등록되었습니다.")
         
     async def load_configs(self):
         pass
@@ -474,10 +466,10 @@ class LevelSystem(commands.Cog):
             message = await channel.send(embed=embed, view=LevelPanelView(self))
             await save_panel_id(panel_key, message.id, channel.id)
             
-            logger.info(f"✅ 「{panel_key}」パネルを #{channel.name} に再設置しました。")
+            logger.info(f"✅ '{panel_key}' 패널을 #{channel.name} 에 재설치했습니다.")
             return True
         except Exception as e:
-            logger.error(f"「{panel_key}」パネルの再設置中にエラー: {e}", exc_info=True)
+            logger.error(f"'{panel_key}' 패널 재설치 중 오류: {e}", exc_info=True)
             return False
 
 async def setup(bot: commands.Bot):
