@@ -152,7 +152,7 @@ class DiceGamePanelView(ui.View):
     async def start_game_callback(self, interaction: discord.Interaction):
         if interaction.user.id in self.cog.active_sessions:
             await interaction.response.send_message(
-                "❌ 이미 게임을 플레이 중입니다.",
+                "❌ 이미 게임을 플레이 중입니다.", 
                 ephemeral=True
             )
             return
