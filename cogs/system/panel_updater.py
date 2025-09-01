@@ -60,7 +60,7 @@ class PanelUpdater(commands.Cog):
             db_key = f"panel_regenerate_request_{panel_key}"
             
             if db_key in db_requests:
-                logger.info(f"DB에서 `{panel_key}` 패널에 대한 재설치 요청을 발견했습니다。")
+                logger.info(f"DB에서 `{panel_key}` 패널에 대한 재설치 요청을 발견했습니다.")
                 
                 cog = self.bot.get_cog(info["cog_name"])
                 # 이제 이 get_id는 방금 새로고침된 최신 정보를 사용합니다.
