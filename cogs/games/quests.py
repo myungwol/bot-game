@@ -19,7 +19,7 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-JST = timezone(timedelta(hours=9))
+KST = timezone(timedelta(hours=9))
 
 QUEST_REWARDS = {
     "daily": {
@@ -36,14 +36,14 @@ QUEST_REWARDS = {
     }
 }
 DAILY_QUESTS = {
-    "attendance": {"name": "出席チェックをする", "goal": 1},
-    "voice": {"name": "ボイスチャンネルに10分間参加する", "goal": 10},
-    "fishing": {"name": "魚を3匹釣る", "goal": 3},
+    "attendance": {"name": "출석 체크하기", "goal": 1},
+    "voice": {"name": "음성 채널에 10분 참가하기", "goal": 10},
+    "fishing": {"name": "물고기 3마리 낚기", "goal": 3},
 }
 WEEKLY_QUESTS = {
-    "attendance": {"name": "出席チェックを5回する", "goal": 5},
-    "voice": {"name": "ボイスチャンネルに1時間参加する", "goal": 60},
-    "fishing": {"name": "魚を10匹釣る", "goal": 10},
+    "attendance": {"name": "출석 체크 5회 하기", "goal": 5},
+    "voice": {"name": "음성 채널에 1시간 참가하기", "goal": 60},
+    "fishing": {"name": "물고기 10마리 낚기", "goal": 10},
 }
 
 class TaskBoardView(ui.View):
@@ -52,7 +52,7 @@ class TaskBoardView(ui.View):
         self.cog = cog_instance
 
         check_in_button = ui.Button(
-            label="出席チェック",
+            label="출석 체크",
             style=discord.ButtonStyle.success,
             emoji="✅",
             custom_id="task_board_daily_check"
@@ -61,7 +61,7 @@ class TaskBoardView(ui.View):
         self.add_item(check_in_button)
 
         quest_button = ui.Button(
-            label="クエスト確認",
+            label="퀘스트 확인",
             style=discord.ButtonStyle.primary,
             emoji="📜",
             custom_id="task_board_open_quests"
@@ -75,7 +75,7 @@ class TaskBoardView(ui.View):
         
         stats = await get_all_user_stats(user.id)
         if stats.get('daily', {}).get('check_in_count', 0) > 0:
-            await interaction.followup.send("❌ 本日は既に出席チェックが完了しています。", ephemeral=True)
+            await interaction.followup.send("❌ 오늘은 이미 출석 체크를 완료했습니다.", ephemeral=True)
             return
 
         reward_str = get_config("DAILY_CHECK_REWARD", "100").strip('"')
@@ -84,7 +84,7 @@ class TaskBoardView(ui.View):
         await log_activity(user.id, 'daily_check_in', coin_earned=attendance_reward, xp_earned=0)
         await update_wallet(user, attendance_reward)
         
-        await interaction.followup.send(f"✅ 出席チェックが完了しました！ **`{attendance_reward}`**{self.cog.currency_icon}を獲得しました。", ephemeral=True)
+        await interaction.followup.send(f"✅ 출석 체크 완료! **`{attendance_reward}`**{self.cog.currency_icon}을(를) 획득했습니다.", ephemeral=True)
 
         log_embed = None
         if embed_data := await get_embed_from_db("log_daily_check"):
@@ -125,7 +125,6 @@ class QuestView(ui.View):
         self.current_tab = "daily"
 
     async def update_view(self, interaction: discord.Interaction):
-        # [✅ 수정] 인터랙션이 이미 응답되었는지 확인하는 로직 추가
         if not interaction.response.is_done():
             await interaction.response.defer()
         embed = await self.build_embed()
@@ -136,7 +135,7 @@ class QuestView(ui.View):
         summary = await get_all_user_stats(self.user.id)
         
         embed = discord.Embed(color=0x2ECC71)
-        embed.set_author(name=f"{self.user.display_name}さんのクエスト", icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
+        embed.set_author(name=f"{self.user.display_name}님의 퀘스트", icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
         
         stats_to_show = summary.get(self.current_tab, {})
         quests_to_show = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
@@ -144,7 +143,7 @@ class QuestView(ui.View):
 
         progress_key_map = {"attendance": "check_in_count", "voice": "voice_minutes", "fishing": "fishing_count"}
         
-        embed.title = "📅 デイリークエスト" if self.current_tab == "daily" else "🗓️ ウィークリークエスト"
+        embed.title = "📅 일일 퀘스트" if self.current_tab == "daily" else "🗓️ 주간 퀘스트"
         all_complete = True
         for key, quest in quests_to_show.items():
             db_key = progress_key_map[key]
@@ -156,15 +155,15 @@ class QuestView(ui.View):
             if not is_complete: all_complete = False
             emoji = "✅" if is_complete else "❌"
             field_name = f"{emoji} {quest['name']}"
-            field_value = f"> ` {min(current, goal)} / {goal} `\n> **報酬:** `{reward_coin:,}`{self.cog.currency_icon} + `{reward_xp:,}` XP"
+            field_value = f"> ` {min(current, goal)} / {goal} `\n> **보상:** `{reward_coin:,}`{self.cog.currency_icon} + `{reward_xp:,}` XP"
             embed.add_field(name=field_name, value=field_value, inline=False)
         
         if all_complete:
             all_in_reward_coin = rewards['all_complete'].get("coin", 0)
             all_in_reward_xp = rewards['all_complete'].get("xp", 0)
-            embed.set_footer(text=f"🎉 すべてのクエスト完了！追加報酬: {all_in_reward_coin:,}{self.cog.currency_icon} + {all_in_reward_xp:,} XP")
+            embed.set_footer(text=f"🎉 모든 퀘스트 완료! 추가 보상: {all_in_reward_coin:,}{self.cog.currency_icon} + {all_in_reward_xp:,} XP")
         else:
-            embed.set_footer(text="クエストを完了して報酬を獲得しましょう！")
+            embed.set_footer(text="퀘스트를 완료하고 보상을 받으세요!")
         return embed
 
     async def update_components(self):
@@ -190,36 +189,36 @@ class QuestView(ui.View):
                 all_quests_complete = False
                 break
         
-        today_str = datetime.now(JST).strftime('%Y-%m-%d')
-        week_start_str = (datetime.now(JST) - timedelta(days=datetime.now(JST).weekday())).strftime('%Y-%m-%d')
+        today_str = datetime.now(KST).strftime('%Y-%m-%d')
+        week_start_str = (datetime.now(KST) - timedelta(days=datetime.now(KST).weekday())).strftime('%Y-%m-%d')
         period_str = today_str if self.current_tab == "daily" else week_start_str
         cooldown_key = f"quest_claimed_{self.current_tab}_all_{period_str}"
         already_claimed = await get_cooldown(self.user.id, cooldown_key) > 0
 
         if already_claimed:
-            claim_button.label = "今日の報酬を受け取りました"
+            claim_button.label = "오늘의 보상을 받았습니다"
             claim_button.style = discord.ButtonStyle.secondary
             claim_button.disabled = True
         elif all_quests_complete:
-            claim_button.label = "完了したクエストの報酬を受け取る"
+            claim_button.label = "완료한 퀘스트 보상 받기"
             claim_button.style = discord.ButtonStyle.success
             claim_button.disabled = False
         else:
-            claim_button.label = "すべてのクエストを完了してください"
+            claim_button.label = "모든 퀘스트를 완료해주세요"
             claim_button.style = discord.ButtonStyle.secondary
             claim_button.disabled = True
     
-    @ui.button(label="デイリー", style=discord.ButtonStyle.primary, custom_id="tab_daily", disabled=True)
+    @ui.button(label="일일", style=discord.ButtonStyle.primary, custom_id="tab_daily", disabled=True)
     async def daily_tab_button(self, interaction: discord.Interaction, button: ui.Button):
         self.current_tab = "daily"
         await self.update_view(interaction)
 
-    @ui.button(label="ウィークリー", style=discord.ButtonStyle.secondary, custom_id="tab_weekly")
+    @ui.button(label="주간", style=discord.ButtonStyle.secondary, custom_id="tab_weekly")
     async def weekly_tab_button(self, interaction: discord.Interaction, button: ui.Button):
         self.current_tab = "weekly"
         await self.update_view(interaction)
     
-    @ui.button(label="報酬を受け取る", style=discord.ButtonStyle.success, emoji="💰", custom_id="claim_rewards_button", row=1)
+    @ui.button(label="보상 받기", style=discord.ButtonStyle.success, emoji="💰", custom_id="claim_rewards_button", row=1)
     async def claim_rewards_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
 
@@ -243,10 +242,10 @@ class QuestView(ui.View):
         all_xp = all_complete_reward.get("xp", 0)
         total_coin_reward += all_coin
         total_xp_reward += all_xp
-        reward_details.append(f"・全クエスト完了ボーナス: `{all_coin:,}`{self.cog.currency_icon} + `{all_xp:,}` XP")
+        reward_details.append(f"・모든 퀘스트 완료 보너스: `{all_coin:,}`{self.cog.currency_icon} + `{all_xp:,}` XP")
         
-        today_str = datetime.now(JST).strftime('%Y-%m-%d')
-        week_start_str = (datetime.now(JST) - timedelta(days=datetime.now(JST).weekday())).strftime('%Y-%m-%d')
+        today_str = datetime.now(KST).strftime('%Y-%m-%d')
+        week_start_str = (datetime.now(KST) - timedelta(days=datetime.now(KST).weekday())).strftime('%Y-%m-%d')
         period_str = today_str if self.current_tab == "daily" else week_start_str
         cooldown_key = f"quest_claimed_{self.current_tab}_all_{period_str}"
 
@@ -266,13 +265,13 @@ class QuestView(ui.View):
             
             details_text = "\n".join(reward_details)
             await interaction.followup.send(
-                f"🎉 **すべての{self.current_tab}クエスト報酬を受け取りました！**\n"
+                f"🎉 **모든 {self.current_tab} 퀘스트 보상을 받았습니다!**\n"
                 f"{details_text}\n\n"
-                f"**合計:** `{total_coin_reward:,}`{self.cog.currency_icon} と `{total_xp_reward:,}` XP",
+                f"**합계:** `{total_coin_reward:,}`{self.cog.currency_icon} 와 `{total_xp_reward:,}` XP",
                 ephemeral=True
             )
         else:
-            await interaction.followup.send("❌ 受け取れる報酬がありません。", ephemeral=True)
+            await interaction.followup.send("❌ 받을 수 있는 보상이 없습니다.", ephemeral=True)
         
         await self.update_view(interaction)
 
@@ -312,7 +311,7 @@ class Quests(commands.Cog):
         
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
-        logger.info(f"✅ {panel_key} パネルを正常に生成しました。(チャンネル: #{channel.name})")
+        logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Quests(bot))
