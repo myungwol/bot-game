@@ -18,9 +18,9 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-JST = timezone(timedelta(hours=9))
-JST_MONTHLY_RESET = dt_time(hour=0, minute=2, tzinfo=JST)
-JST_MIDNIGHT_AGGREGATE = dt_time(hour=0, minute=5, tzinfo=JST)
+KST = timezone(timedelta(hours=9))
+KST_MONTHLY_RESET = dt_time(hour=0, minute=2, tzinfo=KST)
+KST_MIDNIGHT_AGGREGATE = dt_time(hour=0, minute=5, tzinfo=KST)
 
 class EconomyCore(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -116,12 +116,12 @@ class EconomyCore(commands.Cog):
                 stats = await get_all_user_stats(user_id)
                 daily_stats = stats.get('daily', {})
                 if daily_stats.get('chat_count', 0) >= self.chat_message_requirement:
-                    reward_res = await supabase.table('user_activities').select('id', count='exact').eq('user_id', user_id).eq('activity_type', 'reward_chat').gte('created_at', datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat()).execute()
+                    reward_res = await supabase.table('user_activities').select('id', count='exact').eq('user_id', user_id).eq('activity_type', 'reward_chat').gte('created_at', datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat()).execute()
                     if reward_res.count == 0:
                         reward = random.randint(*self.chat_reward_range)
                         await update_wallet(user, reward)
                         await supabase.table('user_activities').insert({'user_id': user_id, 'activity_type': 'reward_chat', 'coin_earned': reward}).execute()
-                        await self.log_coin_activity(user, reward, f"チャット{self.chat_message_requirement}回達成")
+                        await self.log_coin_activity(user, reward, f"채팅 {self.chat_message_requirement}회 달성")
 
         except Exception as e:
             logger.error(f"활동 로그 루프 중 DB 오류: {e}", exc_info=True)
@@ -142,16 +142,16 @@ class EconomyCore(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def voice_activity_tracker(self):
-        logger.info("[VOICE TRACKER] 1분 순찰을 시작합니다...")
+        logger.info("[음성 활동 추적] 1분 순찰을 시작합니다...")
         
         server_id_str = get_config("SERVER_ID")
         if not server_id_str:
-            logger.warning("[VOICE TRACKER] SERVER_ID가 설정되지 않아 순찰을 건너뜁니다.")
+            logger.warning("[음성 활동 추적] SERVER_ID가 설정되지 않아 순찰을 건너뜁니다.")
             return
             
         guild = self.bot.get_guild(int(server_id_str))
         if not guild:
-            logger.warning(f"[VOICE TRACKER] 서버(ID: {server_id_str})를 찾을 수 없어 순찰을 건너뜁니다.")
+            logger.warning(f"[음성 활동 추적] 서버(ID: {server_id_str})를 찾을 수 없어 순찰을 건너뜁니다.")
             return
 
         currently_active_users: Set[int] = set()
@@ -165,14 +165,14 @@ class EconomyCore(commands.Cog):
                     continue
                 currently_active_users.add(member.id)
         
-        logger.info(f"[VOICE TRACKER] 현재 활성 유저 {len(currently_active_users)}명을 발견했습니다.")
+        logger.info(f"[음성 활동 추적] 현재 활동 중인 유저 {len(currently_active_users)}명을 발견했습니다.")
 
         users_to_reward = currently_active_users.intersection(self.users_in_vc_last_minute)
-        logger.info(f"[VOICE TRACKER] 지난 1분간 활동이 확인된 유저는 {len(users_to_reward)}명입니다.")
+        logger.info(f"[음성 활동 추적] 지난 1분간 활동이 확인된 유저는 {len(users_to_reward)}명입니다.")
 
         if not users_to_reward:
             self.users_in_vc_last_minute = currently_active_users
-            logger.info("[VOICE TRACKER] 보상 대상 유저가 없으므로 순찰을 마칩니다.")
+            logger.info("[음성 활동 추적] 보상 대상 유저가 없으므로 순찰을 마칩니다.")
             return
 
         try:
@@ -181,7 +181,7 @@ class EconomyCore(commands.Cog):
                 user = self.bot.get_user(user_id)
                 if not user: continue
 
-                logger.info(f"[VOICE TRACKER] {user.display_name}님의 보상 처리를 시작합니다.")
+                logger.info(f"[음성 활동 추적] {user.display_name}님의 보상 처리를 시작합니다.")
                 
                 stats = await get_all_user_stats(user_id)
                 old_total_voice_minutes_today = stats.get('daily', {}).get('voice_minutes', 0)
@@ -189,16 +189,16 @@ class EconomyCore(commands.Cog):
                 new_total_voice_minutes_today = old_total_voice_minutes_today + 1
 
                 if new_total_voice_minutes_today > 0 and new_total_voice_minutes_today % self.voice_time_requirement_minutes == 0:
-                    today_str = datetime.now(JST).strftime('%Y-%m-%d')
+                    today_str = datetime.now(KST).strftime('%Y-%m-%d')
                     cooldown_key = f"voice_reward_{today_str}_{new_total_voice_minutes_today}m"
                     last_claimed = await get_cooldown(user_id, cooldown_key)
 
                     if last_claimed == 0:
-                        logger.info(f"[VOICE TRACKER] {user.display_name}님이 {new_total_voice_minutes_today}분에 도달하여 코인 보상을 지급합니다.")
+                        logger.info(f"[음성 활동 추적] {user.display_name}님이 {new_total_voice_minutes_today}분에 도달하여 코인 보상을 지급합니다.")
                         reward = random.randint(*self.voice_reward_range)
                         await update_wallet(user, reward)
                         await log_activity(user_id, 'reward_voice', coin_earned=reward)
-                        await self.log_coin_activity(user, reward, f"ボイスチャンネルで{new_total_voice_minutes_today}分間活動")
+                        await self.log_coin_activity(user, reward, f"음성 채널에서 {new_total_voice_minutes_today}분 활동")
                         await set_cooldown(user_id, cooldown_key)
 
             logs_to_insert = [
@@ -208,7 +208,7 @@ class EconomyCore(commands.Cog):
             
             if logs_to_insert:
                 await supabase.table('user_activities').insert(logs_to_insert).execute()
-                logger.info(f"[VOICE TRACKER] {len(logs_to_insert)}명의 유저에게 1분 활동을 DB에 기록했습니다.")
+                logger.info(f"[음성 활동 추적] {len(logs_to_insert)}명의 유저에게 1분 활동을 DB에 기록했습니다.")
 
                 xp_update_tasks = [
                     supabase.rpc('add_xp', {'p_user_id': user_id, 'p_xp_to_add': xp_per_minute, 'p_source': 'voice'}).execute()
@@ -222,11 +222,11 @@ class EconomyCore(commands.Cog):
                         if user: await self.handle_level_up_event(user, result.data)
         
         except Exception as e:
-            logger.error(f"[VOICE TRACKER] 순찰 중 오류 발생: {e}", exc_info=True)
+            logger.error(f"[음성 활동 추적] 순찰 중 오류 발생: {e}", exc_info=True)
         
         finally:
             self.users_in_vc_last_minute = currently_active_users
-            logger.info("[VOICE TRACKER] 순찰을 완료하고 다음 순찰을 위해 현재 명단을 저장했습니다.")
+            logger.info("[음성 활동 추적] 순찰을 완료하고 다음 순찰을 위해 현재 명단을 저장했습니다.")
 
     @voice_activity_tracker.before_loop
     async def before_voice_activity_tracker(self):
@@ -249,9 +249,9 @@ class EconomyCore(commands.Cog):
         if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
         async with self.log_sender_lock: self.coin_log_queue.append(embed)
 
-    @tasks.loop(time=JST_MONTHLY_RESET)
+    @tasks.loop(time=KST_MONTHLY_RESET)
     async def monthly_whale_reset(self):
-        now = datetime.now(JST)
+        now = datetime.now(KST)
         if now.day != 1: return
         logger.info("[월간 리셋] 고래 출현 공지 및 패널 재설치를 시작합니다.")
         try:
@@ -274,7 +274,7 @@ class EconomyCore(commands.Cog):
     async def before_monthly_whale_reset(self):
         await self.bot.wait_until_ready()
 
-    @tasks.loop(time=JST_MIDNIGHT_AGGREGATE)
+    @tasks.loop(time=KST_MIDNIGHT_AGGREGATE)
     async def update_market_prices(self):
         logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
         try:
@@ -289,7 +289,7 @@ class EconomyCore(commands.Cog):
                     new_price = self._calculate_new_price(current_price, item.get('volatility', 0), item.get('min_price'), item.get('max_price'))
                     item_updates.append({'name': item['name'], 'current_price': new_price})
                     if abs((new_price - current_price) / (current_price or 1)) > 0.3:
-                        status = "暴騰 📈" if new_price > current_price else "暴落 📉"
+                        status = "폭등 📈" if new_price > current_price else "폭락 📉"
                         announcement_text = f" - {item.get('name', 'N/A')}: `{current_price}` → `{new_price}`{self.currency_icon} ({status})"
                         announcements.append(announcement_text); fluctuation_data.append(announcement_text)
                 if item_updates: all_updates.append(supabase.table('items').upsert(item_updates).execute())
@@ -300,8 +300,8 @@ class EconomyCore(commands.Cog):
                     new_price = self._calculate_new_price(current_price, fish.get('volatility', 0), fish.get('min_base_value'), fish.get('max_base_value'))
                     fish_updates.append({'name': fish['name'], 'current_base_value': new_price})
                     if abs((new_price - current_price) / (current_price or 1)) > 0.3:
-                        status = "豊漁 📈" if new_price > current_price else "不漁 📉"
-                        announcement_text = f" - {fish.get('name', 'N/A')} (基本価値): `{current_price}` → `{new_price}`{self.currency_icon} ({status})"
+                        status = "풍어 📈" if new_price > current_price else "흉어 📉"
+                        announcement_text = f" - {fish.get('name', 'N/A')} (기본 가치): `{current_price}` → `{new_price}`{self.currency_icon} ({status})"
                         announcements.append(announcement_text); fluctuation_data.append(announcement_text)
                 if fish_updates: all_updates.append(supabase.table('fishing_loots').upsert(fish_updates).execute())
             if all_updates: await asyncio.gather(*all_updates)
@@ -313,7 +313,7 @@ class EconomyCore(commands.Cog):
                     await commerce_cog.regenerate_panel(channel)
             if announcements and (log_channel_id := get_id("market_log_channel_id")):
                 if log_channel := self.bot.get_channel(log_channel_id):
-                    embed = discord.Embed(title="📢 今日の主な相場変動情報", description="\n".join(announcements), color=0xFEE75C)
+                    embed = discord.Embed(title="📢 오늘의 주요 시세 변동 정보", description="\n".join(announcements), color=0xFEE75C)
                     await log_channel.send(embed=embed)
         except Exception as e:
             logger.error(f"[시장] 아이템 가격 업데이트 중 오류: {e}", exc_info=True)
