@@ -28,9 +28,9 @@ _channel_id_cache: Dict[str, int] = {}
 _item_database_cache: Dict[str, Dict[str, Any]] = {}
 _fishing_loot_cache: List[Dict[str, Any]] = []
 _user_abilities_cache: Dict[int, tuple[List[str], float]] = {}
-JST = timezone(timedelta(hours=9))
-BARE_HANDS = "素手"
-DEFAULT_ROD = "普通の釣竿"
+KST = timezone(timedelta(hours=9))
+BARE_HANDS = "맨손"
+DEFAULT_ROD = "평범한 낚싯대"
 
 def supabase_retry_handler(retries: int = 3, delay: int = 2):
     def decorator(func: Callable) -> Callable:
@@ -176,7 +176,7 @@ async def update_inventory(user_id: int, item_name: str, quantity: int):
 
 @supabase_retry_handler()
 async def get_user_gear(user: discord.User) -> dict:
-    return await get_or_create_user('gear_setups', user.id, {"rod": "素手", "bait": "エサなし", "hoe": "素手", "watering_can": "素手"})
+    return await get_or_create_user('gear_setups', user.id, {"rod": "맨손", "bait": "미끼 없음", "hoe": "맨손", "watering_can": "맨손"})
 
 @supabase_retry_handler()
 async def set_user_gear(user_id: int, **kwargs):
