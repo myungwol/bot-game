@@ -35,7 +35,7 @@ TEST_GUILD_ID: Optional[int] = None
 if RAW_TEST_GUILD_ID:
     try:
         TEST_GUILD_ID = int(RAW_TEST_GUILD_ID)
-        logger.info(f"TEST_GUILD_ID가 {TEST_GUILD_ID}로 설정되었습니다.")
+        logger.info(f"테스트 서버 ID가 {TEST_GUILD_ID}로 설정되었습니다.")
     except ValueError:
         logger.error(f"❌ TEST_GUILD_ID 환경 변수가 유효한 숫자가 아닙니다: '{RAW_TEST_GUILD_ID}'")
 
@@ -43,7 +43,7 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 intents.voice_states = True
-BOT_VERSION = "v2.3-game-stable" # 게임 봇 안정화 버전
+BOT_VERSION = "v2.3-game-stable-ko" # 게임 봇 안정화 버전 (한국어)
 
 # --- 커스텀 봇 클래스 ---
 class MyBot(commands.Bot):
