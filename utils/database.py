@@ -21,7 +21,7 @@ try:
     supabase = AsyncClient(supabase_url=url, supabase_key=key)
     logger.info("✅ Supabase 비동기 클라이언트가 성공적으로 생성되었습니다.")
 except Exception as e:
-    logger.critical(f"❌ Supabase 클라이언트 생성 실패: {e}", exc_info=True)
+    logger.critical(f"❌ Supabase 클라이언트 생성에 실패했습니다: {e}", exc_info=True)
 
 _bot_configs_cache: Dict[str, Any] = {}
 _channel_id_cache: Dict[str, int] = {}
@@ -77,7 +77,6 @@ async def load_game_data_from_db():
         _fishing_loot_cache = loot_response.data
     logger.info(f"✅ 게임 데이터를 DB에서 로드했습니다. (아이템: {len(_item_database_cache)}개, 낚시: {len(_fishing_loot_cache)}개)")
 
-# [✅ 신규 추가] 게임 데이터만 다시 불러오는 함수
 @supabase_retry_handler()
 async def reload_game_data_from_db():
     """아이템, 낚시 등 게임 관련 데이터만 DB에서 다시 불러와 캐시를 갱신합니다."""
@@ -86,7 +85,7 @@ async def reload_game_data_from_db():
         await load_game_data_from_db()
         return True
     except Exception as e:
-        logger.error(f"게임 데이터 리로드 중 오류 발생: {e}", exc_info=True)
+        logger.error(f"게임 데이터 리로드 중 오류가 발생했습니다: {e}", exc_info=True)
         return False
 
 def get_config(key: str, default: Any = None) -> Any: return _bot_configs_cache.get(key, default)
@@ -235,7 +234,7 @@ async def log_activity(
             'coin_earned': coin_earned
         }).execute()
     except Exception as e:
-        logger.error(f"활동 기록(log_activity) 중 오류: {e}", exc_info=True)
+        logger.error(f"활동 기록(log_activity) 중 오류가 발생했습니다: {e}", exc_info=True)
 
 @supabase_retry_handler()
 async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
@@ -249,7 +248,6 @@ async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
             daily_task, weekly_task, monthly_task, total_task
         )
         
-        # [✅✅✅ 핵심 수정 ✅✅✅]
         # DB로부터 응답이 오지 않았을 경우(None)를 대비하여 안전장치를 추가합니다.
         # 응답 객체(res)가 존재하고, 그 안에 data가 있을 때만 값을 사용하고,
         # 그렇지 않으면 빈 딕셔너리 {}를 사용합니다.
@@ -261,7 +259,7 @@ async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
         }
         return stats
     except Exception as e:
-        logger.error(f"전체 유저 통계 VIEW 조회 중 오류: {e}")
+        logger.error(f"전체 유저 통계 VIEW 조회 중 오류가 발생했습니다: {e}")
         return {}
 
 @supabase_retry_handler()
