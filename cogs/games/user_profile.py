@@ -18,10 +18,9 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# [핵심 수정] 아이템 카테고리를 상수로 정의하여 관리 용이성 증대
 GEAR_CATEGORY = "장비"
 BAIT_CATEGORY = "미끼"
-FARM_TOOL_CATEGORY = "농장_도구" # DB에 농기구 아이템의 카테고리가 '농장_도구'로 되어있다고 가정합니다. 만약 다르다면 이 값을 수정해주세요.
+FARM_TOOL_CATEGORY = "장비"
 
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
@@ -123,7 +122,6 @@ class ProfileView(ui.View):
             embed.description = description
         
         elif self.current_page == "item":
-            # [핵심 수정] 제외할 카테고리 목록을 상수로 정의된 리스트로 변경
             excluded_categories = [GEAR_CATEGORY, FARM_TOOL_CATEGORY, "농장_씨앗", "농장_작물", BAIT_CATEGORY]
             general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
             item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`개" for n, c in general_items.items()]
@@ -135,7 +133,6 @@ class ProfileView(ui.View):
                 field_lines = [f"**{label}:** `{gear.get(key, BARE_HANDS)}`" for key, label in items.items()]
                 embed.add_field(name=f"**[ 현재 장비: {category_name} ]**", value="\n".join(field_lines), inline=False)
             
-            # [핵심 수정] '보유 중인 장비'를 필터링할 때 모든 관련 카테고리를 포함하도록 변경
             owned_gear_and_tools_categories = [GEAR_CATEGORY, BAIT_CATEGORY, FARM_TOOL_CATEGORY]
             owned_gear_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') in owned_gear_and_tools_categories}
 
@@ -236,7 +233,6 @@ class GearSelectView(ui.View):
         self.user = parent_view.user
         self.gear_type = gear_type
         
-        # [핵심 수정] 농장 도구에 대한 설정을 추가합니다.
         GEAR_SETTINGS = {
             "rod":          (GEAR_CATEGORY, "낚싯대", "낚싯대 해제", BARE_HANDS),
             "bait":         (BAIT_CATEGORY, "낚시 미끼", "미끼 해제", "미끼 없음"),
@@ -261,8 +257,8 @@ class GearSelectView(ui.View):
         
         for name, count in inventory.items():
             item_data = item_db.get(name)
-            # [핵심 수정] 필터링 로직은 gear_type과 db_category를 모두 확인하므로, GEAR_SETTINGS 수정만으로 정상 작동합니다.
-            if item_data and item_data.get('category') == self.db_category and item_data.get('gear_type') == self.gear_type:
+            # [핵심 수정] 아이템 필터링 시, 카테고리가 아닌 'gear_type'만 확인하도록 변경
+            if item_data and item_data.get('gear_type') == self.gear_type:
                  options.append(discord.SelectOption(label=f"{name} ({count}개)", value=name, emoji=item_data.get('emoji')))
 
         select = ui.Select(placeholder=gear_select_strings.get("placeholder", "{category_name} 선택...").format(category_name=self.category_name), options=options)
