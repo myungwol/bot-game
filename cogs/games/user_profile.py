@@ -18,8 +18,10 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# [수정] 카테고리 상수는 이제 '보유 중인 장비' 목록을 필터링하는 데에만 사용됩니다.
+# 아이템 카테고리를 상수로 정의
 GEAR_CATEGORY = "장비"
+BAIT_CATEGORY = "미끼"
+FARM_TOOL_CATEGORY = "농장_도구"
 
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
@@ -109,7 +111,7 @@ class ProfileView(ui.View):
             embed.description = description
         
         elif self.current_page == "item":
-            excluded_categories = [GEAR_CATEGORY, "농장_씨앗", "농장_작물"]
+            excluded_categories = [GEAR_CATEGORY, FARM_TOOL_CATEGORY, "농장_씨앗", "농장_작물", BAIT_CATEGORY]
             general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
             item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`개" for n, c in general_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items", "보유 중인 아이템이 없습니다."))
@@ -120,7 +122,9 @@ class ProfileView(ui.View):
                 field_lines = [f"**{label}:** `{gear.get(key, BARE_HANDS)}`" for key, label in items.items()]
                 embed.add_field(name=f"**[ 현재 장비: {category_name} ]**", value="\n".join(field_lines), inline=False)
             
-            owned_gear_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == GEAR_CATEGORY}
+            # [핵심 수정] '보유 중인 장비'를 필터링할 때 '장비'와 '미끼' 카테고리를 모두 포함하도록 변경
+            owned_gear_categories = [GEAR_CATEGORY, BAIT_CATEGORY]
+            owned_gear_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') in owned_gear_categories}
 
             if owned_gear_items:
                 gear_list = [f"{item_db.get(n,{}).get('emoji','🔧')} **{n}**: `{c}`개" for n, c in sorted(owned_gear_items.items())]
@@ -211,9 +215,8 @@ class GearSelectView(ui.View):
         super().__init__(timeout=180)
         self.parent_view = parent_view
         self.user = parent_view.user
-        self.gear_key = gear_key # 'rod', 'bait', 'hoe', 'watering_can'
+        self.gear_key = gear_key
         
-        # [핵심 수정] DB에 저장된 한글 값과 Python 코드의 키를 매핑합니다.
         GEAR_SETTINGS = {
             "rod":          {"display_name": "낚싯대", "gear_type_db": "낚싯대", "unequip_label": "낚싯대 해제", "default_item": BARE_HANDS},
             "bait":         {"display_name": "낚시 미끼", "gear_type_db": "미끼", "unequip_label": "미끼 해제", "default_item": "미끼 없음"},
@@ -238,7 +241,6 @@ class GearSelectView(ui.View):
         
         for name, count in inventory.items():
             item_data = item_db.get(name)
-            # [핵심 수정] DB의 한글 'gear_type'과 비교하도록 로직 변경
             if item_data and item_data.get('gear_type') == self.gear_type_db:
                  options.append(discord.SelectOption(label=f"{name} ({count}개)", value=name, emoji=item_data.get('emoji')))
 
