@@ -28,6 +28,8 @@ _channel_id_cache: Dict[str, int] = {}
 _item_database_cache: Dict[str, Dict[str, Any]] = {}
 _fishing_loot_cache: List[Dict[str, Any]] = []
 _user_abilities_cache: Dict[int, tuple[List[str], float]] = {}
+_initial_load_complete = False # [핵심] 로딩 완료 여부를 저장할 변수 추가
+
 KST = timezone(timedelta(hours=9))
 BARE_HANDS = "맨손"
 DEFAULT_ROD = "평범한 낚싯대"
@@ -45,10 +47,15 @@ def supabase_retry_handler(retries: int = 3, delay: int = 2):
         return wrapper
     return decorator
 
+# [핵심] 함수가 딱 한 번만 실행되도록 수정
 async def load_all_data_from_db():
+    global _initial_load_complete
+    if _initial_load_complete:
+        return
     logger.info("------ [ 모든 DB 데이터 캐시 로드 시작 ] ------")
     await asyncio.gather(load_bot_configs_from_db(), load_channel_ids_from_db(), load_game_data_from_db())
     logger.info("------ [ 모든 DB 데이터 캐시 로드 완료 ] ------")
+    _initial_load_complete = True
 
 @supabase_retry_handler()
 async def load_bot_configs_from_db():
@@ -148,11 +155,9 @@ async def get_panel_components_from_db(panel_key: str) -> list:
 
 @supabase_retry_handler()
 async def get_or_create_user(table_name: str, user_id: int, default_data: dict) -> dict:
-    # [수정] user_id를 문자열로 변환하여 DB에 질의합니다.
     user_id_str = str(user_id)
     response = await supabase.table(table_name).select("*").eq("user_id", user_id_str).maybe_single().execute()
     if response and response.data: return response.data
-    # [수정] user_id를 문자열로 변환하여 DB에 저장합니다.
     insert_data = {"user_id": user_id_str, **default_data}
     response = await supabase.table(table_name).insert(insert_data).select().maybe_single().execute()
     return response.data if response and response.data else default_data
@@ -162,7 +167,7 @@ async def get_wallet(user_id: int) -> dict:
 
 @supabase_retry_handler()
 async def update_wallet(user: discord.User, amount: int) -> Optional[dict]:
-    params = {'p_user_id': str(user.id), 'p_amount': amount} # RPC 함수를 위해 문자열로 전달
+    params = {'p_user_id': str(user.id), 'p_amount': amount}
     response = await supabase.rpc('update_wallet_balance', params).select().maybe_single().execute()
     return response.data if response and response.data else None
 
@@ -179,7 +184,7 @@ async def update_inventory(user_id: int, item_name: str, quantity: int):
 @supabase_retry_handler()
 async def get_user_gear(user: discord.User) -> dict:
     default_gear = {"rod": BARE_HANDS, "bait": "미끼 없음", "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
-    user_id_str = str(user.id) # user_id를 문자열로 변환
+    user_id_str = str(user.id)
 
     response = await supabase.table('gear_setups').select('*').eq('user_id', user_id_str).maybe_single().execute()
 
@@ -187,7 +192,6 @@ async def get_user_gear(user: discord.User) -> dict:
         return response.data
 
     logger.warning(f"유저(ID: {user.id})의 장비 정보가 DB에 없어 새로 생성합니다.")
-    # [수정] user_id를 문자열로 변환하여 저장합니다.
     insert_data = {"user_id": user_id_str, **default_gear}
 
     response = await supabase.table('gear_setups').insert(insert_data).select().maybe_single().execute()
@@ -265,7 +269,7 @@ async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
         daily_res, weekly_res, monthly_res, total_res = await asyncio.gather(
             daily_task, weekly_task, monthly_task, total_task
         )
-        
+
         stats = {
             "daily": daily_res.data if daily_res and hasattr(daily_res, 'data') and daily_res.data else {},
             "weekly": weekly_res.data if weekly_res.data and hasattr(weekly_res, 'data') and weekly_res.data else {},
