@@ -12,7 +12,8 @@ from collections import deque
 
 from utils.database import (
     get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
-    save_config_to_db, get_all_user_stats, log_activity, get_cooldown, set_cooldown
+    save_config_to_db, get_all_user_stats, log_activity, get_cooldown, set_cooldown,
+    get_user_gear # [핵심] get_user_gear 함수를 import 합니다.
 )
 from utils.helpers import format_embed_from_db
 
@@ -27,9 +28,9 @@ class EconomyCore(commands.Cog):
         self.bot = bot
         self.currency_icon = "🪙"
         self._coin_reward_cooldown = commands.CooldownMapping.from_cooldown(1, 3.0, commands.BucketType.user)
-        
+
         self.users_in_vc_last_minute: Set[int] = set()
-        
+
         self.chat_cache: Deque[Dict] = deque()
         self._cache_lock = asyncio.Lock()
 
@@ -50,12 +51,41 @@ class EconomyCore(commands.Cog):
         self.monthly_whale_reset.start()
 
         logger.info("EconomyCore Cog가 성공적으로 초기화되었습니다.")
-        
+
     async def cog_load(self):
         await self.load_configs()
         if not self.log_sender_task or self.log_sender_task.done():
             self.log_sender_task = self.bot.loop.create_task(self.coin_log_sender())
-        
+        # [신규 추가] Cog가 로드될 때, 모든 멤버의 장비 정보를 확인하는 작업을 시작합니다.
+        self.bot.loop.create_task(self._ensure_all_members_have_gear())
+
+    # [신규 추가] 모든 멤버의 장비 정보를 확인하고 없으면 생성하는 함수
+    async def _ensure_all_members_have_gear(self):
+        await self.bot.wait_until_ready()
+        logger.info("[초기화] 서버 멤버 장비 정보 확인 및 생성을 시작합니다.")
+
+        server_id_str = get_config("SERVER_ID")
+        if not server_id_str:
+            logger.error("[초기화] DB에 'SERVER_ID'가 설정되지 않아 멤버 확인을 건너뜁니다.")
+            return
+
+        guild = self.bot.get_guild(int(server_id_str))
+        if not guild:
+            logger.error(f"[초기화] 설정된 SERVER_ID({server_id_str})에 해당하는 서버를 찾을 수 없습니다.")
+            return
+
+        logger.info(f"[초기화] 대상 서버: {guild.name} (ID: {guild.id})")
+        logger.info(f"[초기화] 총 {len(guild.members)}명의 멤버를 확인합니다.")
+
+        for member in guild.members:
+            if member.bot:
+                continue
+            # get_user_gear 함수는 이제 내부적으로 데이터가 없으면 생성까지 하므로, 호출만 해주면 됩니다.
+            await get_user_gear(member)
+
+        logger.info("[초기화] 모든 멤버의 장비 정보 확인 작업이 완료되었습니다.")
+
+
     async def load_configs(self):
         game_config = get_config("GAME_CONFIG", {})
         self.currency_icon = game_config.get("CURRENCY_ICON", "🪙")
@@ -65,7 +95,7 @@ class EconomyCore(commands.Cog):
         self.chat_reward_range = game_config.get("CHAT_REWARD_RANGE", [10, 15])
         self.xp_from_chat = game_config.get("XP_FROM_CHAT", 5)
         self.xp_from_voice = game_config.get("XP_FROM_VOICE", 10)
-        
+
     def cog_unload(self):
         self.activity_log_loop.cancel()
         self.voice_activity_tracker.cancel()
@@ -73,7 +103,7 @@ class EconomyCore(commands.Cog):
         self.monthly_whale_reset.cancel()
         if self.log_sender_task:
             self.log_sender_task.cancel()
-    
+
     async def coin_log_sender(self):
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
@@ -87,7 +117,7 @@ class EconomyCore(commands.Cog):
             except Exception as e:
                 logger.error(f"코인 지급 로그 발송 중 오류: {e}", exc_info=True)
             await asyncio.sleep(2)
-    
+
     @tasks.loop(minutes=1)
     async def activity_log_loop(self):
         await self.bot.wait_until_ready()
@@ -97,30 +127,33 @@ class EconomyCore(commands.Cog):
             self.chat_cache.clear()
 
         try:
+            # [수정] user_id를 문자열로 변환하여 DB에 전송합니다.
+            for log in logs_to_process:
+                log['user_id'] = str(log['user_id'])
             await supabase.table('user_activities').insert(logs_to_process).execute()
-            
+
             user_chat_counts = {}
             for log in logs_to_process:
-                user_id = log['user_id']
+                user_id = int(log['user_id'])
                 user_chat_counts[user_id] = user_chat_counts.get(user_id, 0) + log['amount']
 
             for user_id, count in user_chat_counts.items():
                 user = self.bot.get_user(user_id)
                 if not user: continue
-                
+
                 xp_to_add = self.xp_from_chat * count
                 if xp_to_add > 0:
-                    xp_res = await supabase.rpc('add_xp', {'p_user_id': user_id, 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
+                    xp_res = await supabase.rpc('add_xp', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
                     if xp_res.data: await self.handle_level_up_event(user, xp_res.data)
 
                 stats = await get_all_user_stats(user_id)
                 daily_stats = stats.get('daily', {})
                 if daily_stats.get('chat_count', 0) >= self.chat_message_requirement:
-                    reward_res = await supabase.table('user_activities').select('id', count='exact').eq('user_id', user_id).eq('activity_type', 'reward_chat').gte('created_at', datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat()).execute()
+                    reward_res = await supabase.table('user_activities').select('id', count='exact').eq('user_id', str(user_id)).eq('activity_type', 'reward_chat').gte('created_at', datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat()).execute()
                     if reward_res.count == 0:
                         reward = random.randint(*self.chat_reward_range)
                         await update_wallet(user, reward)
-                        await supabase.table('user_activities').insert({'user_id': user_id, 'activity_type': 'reward_chat', 'coin_earned': reward}).execute()
+                        await supabase.table('user_activities').insert({'user_id': str(user_id), 'activity_type': 'reward_chat', 'coin_earned': reward}).execute()
                         await self.log_coin_activity(user, reward, f"채팅 {self.chat_message_requirement}회 달성")
 
         except Exception as e:
@@ -143,12 +176,12 @@ class EconomyCore(commands.Cog):
     @tasks.loop(minutes=1)
     async def voice_activity_tracker(self):
         logger.info("[음성 활동 추적] 1분 순찰을 시작합니다...")
-        
+
         server_id_str = get_config("SERVER_ID")
         if not server_id_str:
             logger.warning("[음성 활동 추적] SERVER_ID가 설정되지 않아 순찰을 건너뜁니다.")
             return
-            
+
         guild = self.bot.get_guild(int(server_id_str))
         if not guild:
             logger.warning(f"[음성 활동 추적] 서버(ID: {server_id_str})를 찾을 수 없어 순찰을 건너뜁니다.")
@@ -164,7 +197,7 @@ class EconomyCore(commands.Cog):
                 if member.bot:
                     continue
                 currently_active_users.add(member.id)
-        
+
         logger.info(f"[음성 활동 추적] 현재 활동 중인 유저 {len(currently_active_users)}명을 발견했습니다.")
 
         users_to_reward = currently_active_users.intersection(self.users_in_vc_last_minute)
@@ -182,10 +215,10 @@ class EconomyCore(commands.Cog):
                 if not user: continue
 
                 logger.info(f"[음성 활동 추적] {user.display_name}님의 보상 처리를 시작합니다.")
-                
+
                 stats = await get_all_user_stats(user_id)
                 old_total_voice_minutes_today = stats.get('daily', {}).get('voice_minutes', 0)
-                
+
                 new_total_voice_minutes_today = old_total_voice_minutes_today + 1
 
                 if new_total_voice_minutes_today > 0 and new_total_voice_minutes_today % self.voice_time_requirement_minutes == 0:
@@ -202,28 +235,28 @@ class EconomyCore(commands.Cog):
                         await set_cooldown(user_id, cooldown_key)
 
             logs_to_insert = [
-                {'user_id': user_id, 'activity_type': 'voice', 'amount': 1, 'xp_earned': xp_per_minute}
+                {'user_id': str(user_id), 'activity_type': 'voice', 'amount': 1, 'xp_earned': xp_per_minute}
                 for user_id in users_to_reward
             ]
-            
+
             if logs_to_insert:
                 await supabase.table('user_activities').insert(logs_to_insert).execute()
                 logger.info(f"[음성 활동 추적] {len(logs_to_insert)}명의 유저에게 1분 활동을 DB에 기록했습니다.")
 
                 xp_update_tasks = [
-                    supabase.rpc('add_xp', {'p_user_id': user_id, 'p_xp_to_add': xp_per_minute, 'p_source': 'voice'}).execute()
+                    supabase.rpc('add_xp', {'p_user_id': str(user_id), 'p_xp_to_add': xp_per_minute, 'p_source': 'voice'}).execute()
                     for user_id in users_to_reward
                 ]
                 xp_results = await asyncio.gather(*xp_update_tasks, return_exceptions=True)
-                
+
                 for i, result in enumerate(xp_results):
                     if not isinstance(result, Exception) and hasattr(result, 'data') and result.data:
                         user = self.bot.get_user(list(users_to_reward)[i])
                         if user: await self.handle_level_up_event(user, result.data)
-        
+
         except Exception as e:
             logger.error(f"[음성 활동 추적] 순찰 중 오류 발생: {e}", exc_info=True)
-        
+
         finally:
             self.users_in_vc_last_minute = currently_active_users
             logger.info("[음성 활동 추적] 순찰을 완료하고 다음 순찰을 위해 현재 명단을 저장했습니다.")
@@ -231,7 +264,7 @@ class EconomyCore(commands.Cog):
     @voice_activity_tracker.before_loop
     async def before_voice_activity_tracker(self):
         await self.bot.wait_until_ready()
-        
+
     async def handle_level_up_event(self, user: discord.User, result_data: List[Dict]):
         if not result_data or not result_data[0].get('leveled_up'): return
         new_level = result_data[0].get('new_level')
@@ -317,7 +350,7 @@ class EconomyCore(commands.Cog):
                     await log_channel.send(embed=embed)
         except Exception as e:
             logger.error(f"[시장] 아이템 가격 업데이트 중 오류: {e}", exc_info=True)
-    
+
     def _calculate_new_price(self, current, volatility, min_p, max_p):
         base_price = current
         change_percent = random.uniform(-volatility, volatility)
