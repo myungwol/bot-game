@@ -42,6 +42,7 @@ def supabase_retry_handler(retries: int = 3, delay: int = 2):
             for attempt in range(retries):
                 try: return await func(*args, **kwargs)
                 except Exception as e:
+                    logger.error(f"'{func.__name__}' 함수 실행 중 오류 발생 (시도 {attempt + 1}/{retries}): {e}", exc_info=True)
                     if attempt < retries - 1: await asyncio.sleep(delay)
             return None
         return wrapper
@@ -159,9 +160,7 @@ async def get_or_create_user(table_name: str, user_id: int, default_data: dict) 
     logger.warning(f"테이블 '{table_name}'에서 유저(ID: {user_id})의 정보를 찾을 수 없어 새로 생성합니다.")
     insert_data = {"user_id": user_id_str, **default_data}
     response = await supabase.table(table_name).upsert(insert_data, on_conflict="user_id").select().maybe_single().execute()
-
-    logger.info(f"[DEBUG] UPSERT 응답 for user {user_id}: {response}")
-
+    
     return response.data if response and response.data else default_data
 
 async def get_wallet(user_id: int) -> dict:
@@ -183,12 +182,31 @@ async def update_inventory(user_id: int, item_name: str, quantity: int):
     params = {'p_user_id': str(user_id), 'p_item_name': item_name, 'p_quantity_delta': quantity}
     await supabase.rpc('update_inventory_quantity', params).execute()
 
-# [최종 수정] get_user_gear 함수가 get_or_create_user를 올바르게 호출하도록 수정
+@supabase_retry_handler()
+async def ensure_user_gear_exists(user_id: int):
+    """
+    [핵심 수정] DB 함수를 호출하여 유저의 기본 장비가 존재하는지 확인하고 없으면 생성합니다.
+    이 함수는 데이터를 반환하지 않고, 존재 여부만 보장합니다.
+    """
+    await supabase.rpc('create_user_gear_if_not_exists', {'p_user_id': str(user_id)}).execute()
+
 @supabase_retry_handler()
 async def get_user_gear(user: discord.User) -> dict:
-    """유저의 장비 정보를 가져오고, 없으면 기본 장비를 생성합니다."""
-    default_gear = {"rod": BARE_HANDS, "bait": "미끼 없음", "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
-    return await get_or_create_user('gear_setups', user.id, default_gear)
+    """
+    [핵심 수정] 유저의 장비 정보를 가져옵니다.
+    먼저 ensure_user_gear_exists를 호출하여 데이터 존재를 보장한 후, select로 데이터를 가져옵니다.
+    """
+    user_id_str = str(user.id)
+    await ensure_user_gear_exists(user.id)
+    
+    response = await supabase.table('gear_setups').select('*').eq('user_id', user_id_str).maybe_single().execute()
+
+    if response and response.data:
+        return response.data
+    
+    # 만약 위 로직이 실패할 경우를 대비한 안전장치
+    logger.warning(f"DB에서 유저(ID: {user.id})의 장비 정보를 가져오지 못했습니다. 기본값을 반환합니다.")
+    return {"rod": BARE_HANDS, "bait": "미끼 없음", "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
 
 @supabase_retry_handler()
 async def set_user_gear(user_id: int, **kwargs):
@@ -262,7 +280,7 @@ async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
             "daily": daily_res.data if daily_res and hasattr(daily_res, 'data') and daily_res.data else {},
             "weekly": weekly_res.data if weekly_res and hasattr(weekly_res, 'data') and weekly_res.data else {},
             "monthly": monthly_res.data if monthly_res and hasattr(monthly_res, 'data') and monthly_res.data else {},
-            "total": total_res.data if total_res and hasattr(total_res, 'data') and total_res.data else {}
+            "total": total_res.data if total_res.data and hasattr(total_res, 'data') and total_res.data else {}
         }
         return stats
     except Exception as e:
