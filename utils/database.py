@@ -99,7 +99,7 @@ def get_string(key_path: str, default: Any = None, **kwargs) -> Any:
         value = get_config("strings", {})
         for key in keys:
             value = value[key]
-        
+
         if isinstance(value, str) and kwargs:
             class SafeFormatter(dict):
                 def __missing__(self, key: str) -> str:
@@ -120,7 +120,7 @@ async def save_id_to_db(key: str, object_id: int):
     global _channel_id_cache
     await supabase.table('channel_configs').upsert({"channel_key": key, "channel_id": str(object_id)}, on_conflict="channel_key").execute()
     _channel_id_cache[key] = object_id
-    
+
 async def save_panel_id(panel_name: str, message_id: int, channel_id: int):
     await save_id_to_db(f"panel_{panel_name}_message_id", message_id)
     await save_id_to_db(f"panel_{panel_name}_channel_id", channel_id)
@@ -173,15 +173,34 @@ async def update_inventory(user_id: int, item_name: str, quantity: int):
     params = {'p_user_id': user_id, 'p_item_name': item_name, 'p_quantity_delta': quantity}
     await supabase.rpc('update_inventory_quantity', params).execute()
 
+# [오류 수정] 유저 데이터가 없을 경우 새로 생성하도록 로직 강화
 @supabase_retry_handler()
 async def get_user_gear(user: discord.User) -> dict:
-    return await get_or_create_user('gear_setups', user.id, {"rod": "맨손", "bait": "미끼 없음", "hoe": "맨손", "watering_can": "맨손"})
+    """유저의 장비 정보를 가져옵니다. 정보가 없으면 기본값을 생성하여 반환합니다."""
+    default_gear = {"rod": BARE_HANDS, "bait": "미끼 없음", "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
+    
+    # 1. 먼저 유저의 장비 정보가 있는지 확인합니다.
+    response = await supabase.table('gear_setups').select('*').eq('user_id', user.id).maybe_single().execute()
+    
+    # 2. 정보가 있다면 그대로 반환합니다.
+    if response and response.data:
+        return response.data
+    
+    # 3. 정보가 없다면 (삭제되었거나, 신규 유저인 경우)
+    logger.warning(f"유저(ID: {user.id})의 장비 정보가 DB에 없어 새로 생성합니다.")
+    insert_data = {"user_id": user.id, **default_gear}
+    
+    # 기본 장비 정보를 새로 추가하고, 추가된 정보를 다시 불러와서 반환합니다.
+    response = await supabase.table('gear_setups').insert(insert_data).select().maybe_single().execute()
+    
+    # 만약 삽입 후에도 데이터를 못가져오는 최악의 경우를 대비해 기본값을 반환합니다.
+    return response.data if response and response.data else default_gear
 
 @supabase_retry_handler()
 async def set_user_gear(user_id: int, **kwargs):
     if kwargs:
         await supabase.table('gear_setups').update(kwargs).eq('user_id', user_id).execute()
-        
+
 @supabase_retry_handler()
 async def get_aquarium(user_id: int) -> list:
     response = await supabase.table('aquariums').select('id, name, size, emoji').eq('user_id', user_id).execute()
@@ -206,7 +225,7 @@ async def get_user_abilities(user_id: int) -> List[str]:
     abilities = response.data if response and hasattr(response, 'data') and response.data else []
     _user_abilities_cache[user_id] = (abilities, now)
     return abilities
-    
+
 @supabase_retry_handler()
 async def get_cooldown(user_id: int, cooldown_key: str) -> float:
     response = await supabase.table('cooldowns').select('last_cooldown_timestamp').eq('user_id', user_id).eq('cooldown_key', cooldown_key).maybe_single().execute()
@@ -243,11 +262,11 @@ async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
         weekly_task = supabase.table('weekly_stats').select('*').eq('user_id', user_id).maybe_single().execute()
         monthly_task = supabase.table('monthly_stats').select('*').eq('user_id', user_id).maybe_single().execute()
         total_task = supabase.table('total_stats').select('*').eq('user_id', user_id).maybe_single().execute()
-        
+
         daily_res, weekly_res, monthly_res, total_res = await asyncio.gather(
             daily_task, weekly_task, monthly_task, total_task
         )
-        
+
         # DB로부터 응답이 오지 않았을 경우(None)를 대비하여 안전장치를 추가합니다.
         # 응답 객체(res)가 존재하고, 그 안에 data가 있을 때만 값을 사용하고,
         # 그렇지 않으면 빈 딕셔너리 {}를 사용합니다.
@@ -282,7 +301,7 @@ async def expand_farm_db(farm_id: int, current_plot_count: int) -> bool:
     except Exception as e:
         logger.error(f"농장 확장 DB 작업(farm_id: {farm_id}) 중 오류: {e}", exc_info=True)
         return False
-    
+
 @supabase_retry_handler()
 async def update_plot(plot_id: int, updates: Dict[str, Any]):
     await supabase.table('farm_plots').update(updates).eq('id', plot_id).execute()
