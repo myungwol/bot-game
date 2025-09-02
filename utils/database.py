@@ -260,9 +260,9 @@ async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
         daily_res, weekly_res, monthly_res, total_res = await asyncio.gather(daily_task, weekly_task, monthly_task, total_task)
         stats = {
             "daily": daily_res.data if daily_res and hasattr(daily_res, 'data') and daily_res.data else {},
-            "weekly": weekly_res.data if weekly_res.data and hasattr(weekly_res, 'data') and weekly_res.data else {},
-            "monthly": monthly_res.data if monthly_res.data and hasattr(monthly_res, 'data') and monthly_res.data else {},
-            "total": total_res.data if total_res.data and hasattr(total_res, 'data') and total_res.data else {}
+            "weekly": weekly_res.data if weekly_res and hasattr(weekly_res, 'data') and weekly_res.data else {},
+            "monthly": monthly_res.data if monthly_res and hasattr(monthly_res, 'data') and monthly_res.data else {},
+            "total": total_res.data if total_res and hasattr(total_res, 'data') and total_res.data else {}
         }
         return stats
     except Exception as e:
