@@ -23,12 +23,15 @@ try:
 except Exception as e:
     logger.critical(f"❌ Supabase 클라이언트 생성에 실패했습니다: {e}", exc_info=True)
 
+# ... (다른 함수들은 이전과 동일하므로 생략) ...
+# 아래 get_user_gear 함수와 그 위에 새로 추가된 _debug_force_insert_gear 함수만 중요합니다.
+
 _bot_configs_cache: Dict[str, Any] = {}
 _channel_id_cache: Dict[str, int] = {}
 _item_database_cache: Dict[str, Dict[str, Any]] = {}
 _fishing_loot_cache: List[Dict[str, Any]] = []
 _user_abilities_cache: Dict[int, tuple[List[str], float]] = {}
-_initial_load_complete = False # [핵심] 로딩 완료 여부를 저장할 변수 추가
+_initial_load_complete = False
 
 KST = timezone(timedelta(hours=9))
 BARE_HANDS = "맨손"
@@ -47,7 +50,6 @@ def supabase_retry_handler(retries: int = 3, delay: int = 2):
         return wrapper
     return decorator
 
-# [핵심] 함수가 딱 한 번만 실행되도록 수정
 async def load_all_data_from_db():
     global _initial_load_complete
     if _initial_load_complete:
@@ -86,7 +88,6 @@ async def load_game_data_from_db():
 
 @supabase_retry_handler()
 async def reload_game_data_from_db():
-    """아이템, 낚시 등 게임 관련 데이터만 DB에서 다시 불러와 캐시를 갱신합니다."""
     global _item_database_cache, _fishing_loot_cache
     try:
         await load_game_data_from_db()
@@ -106,11 +107,9 @@ def get_string(key_path: str, default: Any = None, **kwargs) -> Any:
         value = get_config("strings", {})
         for key in keys:
             value = value[key]
-
         if isinstance(value, str) and kwargs:
             class SafeFormatter(dict):
-                def __missing__(self, key: str) -> str:
-                    return f'{{{key}}}'
+                def __missing__(self, key: str) -> str: return f'{{{key}}}'
             return value.format_map(SafeFormatter(**kwargs))
         return value
     except (KeyError, TypeError):
@@ -157,9 +156,16 @@ async def get_panel_components_from_db(panel_key: str) -> list:
 async def get_or_create_user(table_name: str, user_id: int, default_data: dict) -> dict:
     user_id_str = str(user_id)
     response = await supabase.table(table_name).select("*").eq("user_id", user_id_str).maybe_single().execute()
-    if response and response.data: return response.data
+    if response and response.data:
+        return response.data
+
+    logger.warning(f"테이블 '{table_name}'에서 유저(ID: {user_id})의 정보를 찾을 수 없어 새로 생성합니다.")
     insert_data = {"user_id": user_id_str, **default_data}
-    response = await supabase.table(table_name).insert(insert_data).select().maybe_single().execute()
+    response = await supabase.table(table_name).upsert(insert_data, on_conflict="user_id").select().maybe_single().execute()
+    
+    # [디버깅 로그 추가] Supabase로부터 받은 응답을 직접 출력
+    logger.info(f"[DEBUG] UPSERT 응답 for user {user_id}: {response}")
+
     return response.data if response and response.data else default_data
 
 async def get_wallet(user_id: int) -> dict:
@@ -181,22 +187,13 @@ async def update_inventory(user_id: int, item_name: str, quantity: int):
     params = {'p_user_id': str(user_id), 'p_item_name': item_name, 'p_quantity_delta': quantity}
     await supabase.rpc('update_inventory_quantity', params).execute()
 
+# [핵심 수정] get_user_gear 함수를 get_or_create_user를 사용하도록 변경
 @supabase_retry_handler()
 async def get_user_gear(user: discord.User) -> dict:
+    """유저의 장비 정보를 가져오고, 없으면 기본 장비를 생성합니다."""
     default_gear = {"rod": BARE_HANDS, "bait": "미끼 없음", "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
-    user_id_str = str(user.id)
+    return await get_or_create_user('gear_setups', user.id, default_gear)
 
-    response = await supabase.table('gear_setups').select('*').eq('user_id', user_id_str).maybe_single().execute()
-
-    if response and response.data:
-        return response.data
-
-    logger.warning(f"유저(ID: {user.id})의 장비 정보가 DB에 없어 새로 생성합니다.")
-    insert_data = {"user_id": user_id_str, **default_gear}
-
-    response = await supabase.table('gear_setups').insert(insert_data).select().maybe_single().execute()
-
-    return response.data if response and response.data else default_gear
 
 @supabase_retry_handler()
 async def set_user_gear(user_id: int, **kwargs):
@@ -269,7 +266,6 @@ async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
         daily_res, weekly_res, monthly_res, total_res = await asyncio.gather(
             daily_task, weekly_task, monthly_task, total_task
         )
-
         stats = {
             "daily": daily_res.data if daily_res and hasattr(daily_res, 'data') and daily_res.data else {},
             "weekly": weekly_res.data if weekly_res.data and hasattr(weekly_res, 'data') and weekly_res.data else {},
