@@ -179,7 +179,7 @@ class RPSGame(commands.Cog):
         players_in_round = list(game["players"].values())
 
         if len(players_in_round) <= 1:
-            winner = players_in_round if players_in_round else None
+            winner = players_in_round[0] if players_in_round else None
             await self.end_game(channel_id, winner)
             return
 
@@ -212,7 +212,7 @@ class RPSGame(commands.Cog):
 
         losers = all_players_in_round - participants_in_round
 
-        if len(made_choices) in:
+        if len(made_choices) in [1, 3]:
             winners = participants_in_round
         elif len(made_choices) == 2:
             c1, c2 = list(made_choices)
@@ -414,7 +414,7 @@ class RPSGame(commands.Cog):
 
         if not game.get("players"):
             return "오류: 플레이어 정보를 찾을 수 없습니다."
-        first_player = list(game["players"].values())
+        first_player = list(game["players"].values())[0]
         guild = first_player.guild
 
         for pid, choice in game["choices"].items():
