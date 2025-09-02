@@ -13,7 +13,7 @@ from collections import deque
 from utils.database import (
     get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
     save_config_to_db, get_all_user_stats, log_activity, get_cooldown, set_cooldown,
-    get_user_gear, load_all_data_from_db, ensure_user_gear_exists  # [핵심] ensure_user_gear_exists 함수를 import
+    get_user_gear, load_all_data_from_db, ensure_user_gear_exists
 )
 from utils.helpers import format_embed_from_db
 
@@ -95,7 +95,6 @@ class EconomyCore(commands.Cog):
         for member in guild.members:
             if member.bot:
                 continue
-            # [핵심 수정] get_user_gear 대신 ensure_user_gear_exists를 호출하여 효율적으로 처리
             tasks.append(ensure_user_gear_exists(member.id))
 
         if tasks:
