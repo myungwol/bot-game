@@ -13,7 +13,7 @@ from collections import deque
 from utils.database import (
     get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
     save_config_to_db, get_all_user_stats, log_activity, get_cooldown, set_cooldown,
-    get_user_gear, load_all_data_from_db # [핵심] load_all_data_from_db 함수를 import
+    get_user_gear, load_all_data_from_db, ensure_user_gear_exists  # [핵심] ensure_user_gear_exists 함수를 import
 )
 from utils.helpers import format_embed_from_db
 
@@ -50,11 +50,10 @@ class EconomyCore(commands.Cog):
         self.update_market_prices.start()
         self.monthly_whale_reset.start()
 
-        self.initial_setup_done = False # [핵심] 초기 설정이 완료되었는지 확인하는 플래그
+        self.initial_setup_done = False
 
         logger.info("EconomyCore Cog가 성공적으로 초기화되었습니다.")
 
-    # [핵심] on_ready 리스너를 사용하여 봇 준비 완료 후 딱 한 번만 실행되도록 변경
     @commands.Cog.listener()
     async def on_ready(self):
         if self.initial_setup_done:
@@ -68,14 +67,12 @@ class EconomyCore(commands.Cog):
 
         self.initial_setup_done = True
 
-
     async def cog_load(self):
         await self.load_configs()
         if not self.log_sender_task or self.log_sender_task.done():
             self.log_sender_task = self.bot.loop.create_task(self.coin_log_sender())
 
     async def _ensure_all_members_have_gear(self):
-        # [수정] 이 함수는 on_ready에서 직접 호출되므로 wait_until_ready가 더 이상 필요 없습니다.
         logger.info("[초기화] 서버 멤버 장비 정보 확인 및 생성을 시작합니다.")
 
         server_id_str = get_config("SERVER_ID")
@@ -93,15 +90,19 @@ class EconomyCore(commands.Cog):
             return
 
         logger.info(f"[초기화] 대상 서버: {guild.name} (ID: {guild.id})")
-        logger.info(f"[초기화] 총 {len(guild.members)}명의 멤버를 확인합니다.")
-
+        
+        tasks = []
         for member in guild.members:
             if member.bot:
                 continue
-            await get_user_gear(member)
+            # [핵심 수정] get_user_gear 대신 ensure_user_gear_exists를 호출하여 효율적으로 처리
+            tasks.append(ensure_user_gear_exists(member.id))
+
+        if tasks:
+            logger.info(f"[초기화] 총 {len(tasks)}명의 멤버 정보를 확인 및 생성합니다.")
+            await asyncio.gather(*tasks)
 
         logger.info("[초기화] 모든 멤버의 장비 정보 확인 작업이 완료되었습니다.")
-
 
     async def load_configs(self):
         game_config = get_config("GAME_CONFIG", {})
