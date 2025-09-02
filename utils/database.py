@@ -148,9 +148,12 @@ async def get_panel_components_from_db(panel_key: str) -> list:
 
 @supabase_retry_handler()
 async def get_or_create_user(table_name: str, user_id: int, default_data: dict) -> dict:
-    response = await supabase.table(table_name).select("*").eq("user_id", user_id).maybe_single().execute()
+    # [수정] user_id를 문자열로 변환하여 DB에 질의합니다.
+    user_id_str = str(user_id)
+    response = await supabase.table(table_name).select("*").eq("user_id", user_id_str).maybe_single().execute()
     if response and response.data: return response.data
-    insert_data = {"user_id": user_id, **default_data}
+    # [수정] user_id를 문자열로 변환하여 DB에 저장합니다.
+    insert_data = {"user_id": user_id_str, **default_data}
     response = await supabase.table(table_name).insert(insert_data).select().maybe_single().execute()
     return response.data if response and response.data else default_data
 
@@ -159,60 +162,55 @@ async def get_wallet(user_id: int) -> dict:
 
 @supabase_retry_handler()
 async def update_wallet(user: discord.User, amount: int) -> Optional[dict]:
-    params = {'p_user_id': user.id, 'p_amount': amount}
+    params = {'p_user_id': str(user.id), 'p_amount': amount} # RPC 함수를 위해 문자열로 전달
     response = await supabase.rpc('update_wallet_balance', params).select().maybe_single().execute()
     return response.data if response and response.data else None
 
 @supabase_retry_handler()
 async def get_inventory(user: discord.User) -> Dict[str, int]:
-    response = await supabase.table('inventories').select('item_name, quantity').eq('user_id', user.id).gt('quantity', 0).execute()
+    response = await supabase.table('inventories').select('item_name, quantity').eq('user_id', str(user.id)).gt('quantity', 0).execute()
     return {item['item_name']: item['quantity'] for item in response.data} if response and response.data else {}
 
 @supabase_retry_handler()
 async def update_inventory(user_id: int, item_name: str, quantity: int):
-    params = {'p_user_id': user_id, 'p_item_name': item_name, 'p_quantity_delta': quantity}
+    params = {'p_user_id': str(user_id), 'p_item_name': item_name, 'p_quantity_delta': quantity}
     await supabase.rpc('update_inventory_quantity', params).execute()
 
-# [오류 수정] 유저 데이터가 없을 경우 새로 생성하도록 로직 강화
 @supabase_retry_handler()
 async def get_user_gear(user: discord.User) -> dict:
-    """유저의 장비 정보를 가져옵니다. 정보가 없으면 기본값을 생성하여 반환합니다."""
     default_gear = {"rod": BARE_HANDS, "bait": "미끼 없음", "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
-    
-    # 1. 먼저 유저의 장비 정보가 있는지 확인합니다.
-    response = await supabase.table('gear_setups').select('*').eq('user_id', user.id).maybe_single().execute()
-    
-    # 2. 정보가 있다면 그대로 반환합니다.
+    user_id_str = str(user.id) # user_id를 문자열로 변환
+
+    response = await supabase.table('gear_setups').select('*').eq('user_id', user_id_str).maybe_single().execute()
+
     if response and response.data:
         return response.data
-    
-    # 3. 정보가 없다면 (삭제되었거나, 신규 유저인 경우)
+
     logger.warning(f"유저(ID: {user.id})의 장비 정보가 DB에 없어 새로 생성합니다.")
-    insert_data = {"user_id": user.id, **default_gear}
-    
-    # 기본 장비 정보를 새로 추가하고, 추가된 정보를 다시 불러와서 반환합니다.
+    # [수정] user_id를 문자열로 변환하여 저장합니다.
+    insert_data = {"user_id": user_id_str, **default_gear}
+
     response = await supabase.table('gear_setups').insert(insert_data).select().maybe_single().execute()
-    
-    # 만약 삽입 후에도 데이터를 못가져오는 최악의 경우를 대비해 기본값을 반환합니다.
+
     return response.data if response and response.data else default_gear
 
 @supabase_retry_handler()
 async def set_user_gear(user_id: int, **kwargs):
     if kwargs:
-        await supabase.table('gear_setups').update(kwargs).eq('user_id', user_id).execute()
+        await supabase.table('gear_setups').update(kwargs).eq('user_id', str(user_id)).execute()
 
 @supabase_retry_handler()
 async def get_aquarium(user_id: int) -> list:
-    response = await supabase.table('aquariums').select('id, name, size, emoji').eq('user_id', user_id).execute()
+    response = await supabase.table('aquariums').select('id, name, size, emoji').eq('user_id', str(user_id)).execute()
     return response.data if response and response.data else []
 
 @supabase_retry_handler()
 async def add_to_aquarium(user_id: int, fish_data: dict):
-    await supabase.table('aquariums').insert({"user_id": user_id, **fish_data}).execute()
+    await supabase.table('aquariums').insert({"user_id": str(user_id), **fish_data}).execute()
 
 @supabase_retry_handler()
 async def sell_fish_from_db(user_id: int, fish_ids: List[int], total_sell_price: int):
-    params = {'p_user_id': user_id, 'p_fish_ids': fish_ids, 'p_total_value': total_sell_price}
+    params = {'p_user_id': str(user_id), 'p_fish_ids': fish_ids, 'p_total_value': total_sell_price}
     await supabase.rpc('sell_fishes', params).execute()
 
 @supabase_retry_handler()
@@ -221,14 +219,14 @@ async def get_user_abilities(user_id: int) -> List[str]:
     if user_id in _user_abilities_cache:
         cached_data, timestamp = _user_abilities_cache[user_id]
         if now - timestamp < CACHE_TTL: return cached_data
-    response = await supabase.rpc('get_user_ability_keys', {'p_user_id': user_id}).execute()
+    response = await supabase.rpc('get_user_ability_keys', {'p_user_id': str(user_id)}).execute()
     abilities = response.data if response and hasattr(response, 'data') and response.data else []
     _user_abilities_cache[user_id] = (abilities, now)
     return abilities
 
 @supabase_retry_handler()
 async def get_cooldown(user_id: int, cooldown_key: str) -> float:
-    response = await supabase.table('cooldowns').select('last_cooldown_timestamp').eq('user_id', user_id).eq('cooldown_key', cooldown_key).maybe_single().execute()
+    response = await supabase.table('cooldowns').select('last_cooldown_timestamp').eq('user_id', str(user_id)).eq('cooldown_key', cooldown_key).maybe_single().execute()
     if response and response.data and (ts_str := response.data.get('last_cooldown_timestamp')):
         try: return datetime.fromisoformat(ts_str.replace('Z', '+00:00')).timestamp()
         except (ValueError, TypeError): return 0.0
@@ -237,7 +235,7 @@ async def get_cooldown(user_id: int, cooldown_key: str) -> float:
 @supabase_retry_handler()
 async def set_cooldown(user_id: int, cooldown_key: str):
     iso_timestamp = datetime.now(timezone.utc).isoformat()
-    await supabase.table('cooldowns').upsert({"user_id": user_id, "cooldown_key": cooldown_key, "last_cooldown_timestamp": iso_timestamp}).execute()
+    await supabase.table('cooldowns').upsert({"user_id": str(user_id), "cooldown_key": cooldown_key, "last_cooldown_timestamp": iso_timestamp}).execute()
 
 @supabase_retry_handler()
 async def log_activity(
@@ -246,7 +244,7 @@ async def log_activity(
 ):
     try:
         await supabase.table('user_activities').insert({
-            'user_id': user_id,
+            'user_id': str(user_id),
             'activity_type': activity_type,
             'amount': amount,
             'xp_earned': xp_earned,
@@ -258,18 +256,16 @@ async def log_activity(
 @supabase_retry_handler()
 async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
     try:
-        daily_task = supabase.table('daily_stats').select('*').eq('user_id', user_id).maybe_single().execute()
-        weekly_task = supabase.table('weekly_stats').select('*').eq('user_id', user_id).maybe_single().execute()
-        monthly_task = supabase.table('monthly_stats').select('*').eq('user_id', user_id).maybe_single().execute()
-        total_task = supabase.table('total_stats').select('*').eq('user_id', user_id).maybe_single().execute()
+        user_id_str = str(user_id)
+        daily_task = supabase.table('daily_stats').select('*').eq('user_id', user_id_str).maybe_single().execute()
+        weekly_task = supabase.table('weekly_stats').select('*').eq('user_id', user_id_str).maybe_single().execute()
+        monthly_task = supabase.table('monthly_stats').select('*').eq('user_id', user_id_str).maybe_single().execute()
+        total_task = supabase.table('total_stats').select('*').eq('user_id', user_id_str).maybe_single().execute()
 
         daily_res, weekly_res, monthly_res, total_res = await asyncio.gather(
             daily_task, weekly_task, monthly_task, total_task
         )
-
-        # DB로부터 응답이 오지 않았을 경우(None)를 대비하여 안전장치를 추가합니다.
-        # 응답 객체(res)가 존재하고, 그 안에 data가 있을 때만 값을 사용하고,
-        # 그렇지 않으면 빈 딕셔너리 {}를 사용합니다.
+        
         stats = {
             "daily": daily_res.data if daily_res and hasattr(daily_res, 'data') and daily_res.data else {},
             "weekly": weekly_res.data if weekly_res.data and hasattr(weekly_res, 'data') and weekly_res.data else {},
@@ -283,12 +279,12 @@ async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
 
 @supabase_retry_handler()
 async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
-    response = await supabase.table('farms').select('*, farm_plots(*)').eq('user_id', user_id).maybe_single().execute()
+    response = await supabase.table('farms').select('*, farm_plots(*)').eq('user_id', str(user_id)).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
 
 @supabase_retry_handler()
 async def create_farm(user_id: int) -> Optional[Dict[str, Any]]:
-    rpc_response = await supabase.rpc('create_farm_for_user', {'p_user_id': user_id}).execute()
+    rpc_response = await supabase.rpc('create_farm_for_user', {'p_user_id': str(user_id)}).execute()
     return await get_farm_data(user_id) if rpc_response and rpc_response.data else None
 
 @supabase_retry_handler()
@@ -313,12 +309,12 @@ async def clear_plots_db(plot_ids: List[int]):
 @supabase_retry_handler()
 async def check_farm_permission(farm_id: int, user_id: int, action: str) -> bool:
     permission_column = f"can_{action}"
-    response = await supabase.table('farm_permissions').select(permission_column, count='exact').eq('farm_id', farm_id).eq('granted_to_user_id', user_id).eq(permission_column, True).execute()
+    response = await supabase.table('farm_permissions').select(permission_column, count='exact').eq('farm_id', farm_id).eq('granted_to_user_id', str(user_id)).eq(permission_column, True).execute()
     return response.count > 0
 
 @supabase_retry_handler()
 async def grant_farm_permission(farm_id: int, user_id: int):
-    await supabase.table('farm_permissions').upsert({'farm_id': farm_id, 'granted_to_user_id': user_id, 'can_till': True, 'can_plant': True, 'can_water': True, 'can_harvest': True}, on_conflict='farm_id, granted_to_user_id').execute()
+    await supabase.table('farm_permissions').upsert({'farm_id': farm_id, 'granted_to_user_id': str(user_id), 'can_till': True, 'can_plant': True, 'can_water': True, 'can_harvest': True}, on_conflict='farm_id, granted_to_user_id').execute()
 
 @supabase_retry_handler()
 async def get_farm_owner_by_thread(thread_id: int) -> Optional[int]:
