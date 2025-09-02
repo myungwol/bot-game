@@ -185,7 +185,7 @@ async def update_inventory(user_id: int, item_name: str, quantity: int):
 @supabase_retry_handler()
 async def ensure_user_gear_exists(user_id: int):
     """
-    [핵심 수정] DB 함수를 호출하여 유저의 기본 장비가 존재하는지 확인하고 없으면 생성합니다.
+    DB 함수를 호출하여 유저의 기본 장비가 존재하는지 확인하고 없으면 생성합니다.
     이 함수는 데이터를 반환하지 않고, 존재 여부만 보장합니다.
     """
     await supabase.rpc('create_user_gear_if_not_exists', {'p_user_id': str(user_id)}).execute()
@@ -193,7 +193,7 @@ async def ensure_user_gear_exists(user_id: int):
 @supabase_retry_handler()
 async def get_user_gear(user: discord.User) -> dict:
     """
-    [핵심 수정] 유저의 장비 정보를 가져옵니다.
+    유저의 장비 정보를 가져옵니다.
     먼저 ensure_user_gear_exists를 호출하여 데이터 존재를 보장한 후, select로 데이터를 가져옵니다.
     """
     user_id_str = str(user.id)
@@ -280,7 +280,7 @@ async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
             "daily": daily_res.data if daily_res and hasattr(daily_res, 'data') and daily_res.data else {},
             "weekly": weekly_res.data if weekly_res and hasattr(weekly_res, 'data') and weekly_res.data else {},
             "monthly": monthly_res.data if monthly_res and hasattr(monthly_res, 'data') and monthly_res.data else {},
-            "total": total_res.data if total_res.data and hasattr(total_res, 'data') and total_res.data else {}
+            "total": total_res.data if total_res and hasattr(total_res, 'data') and total_res.data else {}
         }
         return stats
     except Exception as e:
