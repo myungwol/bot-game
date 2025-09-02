@@ -13,7 +13,7 @@ from collections import deque
 from utils.database import (
     get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
     save_config_to_db, get_all_user_stats, log_activity, get_cooldown, set_cooldown,
-    get_user_gear # [핵심] get_user_gear 함수를 import 합니다.
+    get_user_gear, load_all_data_from_db # [핵심] load_all_data_from_db 함수를 import
 )
 from utils.helpers import format_embed_from_db
 
@@ -50,18 +50,32 @@ class EconomyCore(commands.Cog):
         self.update_market_prices.start()
         self.monthly_whale_reset.start()
 
+        self.initial_setup_done = False # [핵심] 초기 설정이 완료되었는지 확인하는 플래그
+
         logger.info("EconomyCore Cog가 성공적으로 초기화되었습니다.")
+
+    # [핵심] on_ready 리스너를 사용하여 봇 준비 완료 후 딱 한 번만 실행되도록 변경
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if self.initial_setup_done:
+            return
+        
+        logger.info("EconomyCore: 봇이 준비되었습니다. 데이터베이스 초기화를 시작합니다.")
+        await load_all_data_from_db()
+        logger.info("EconomyCore: 데이터베이스 설정 로딩 완료.")
+        
+        await self._ensure_all_members_have_gear()
+
+        self.initial_setup_done = True
+
 
     async def cog_load(self):
         await self.load_configs()
         if not self.log_sender_task or self.log_sender_task.done():
             self.log_sender_task = self.bot.loop.create_task(self.coin_log_sender())
-        # [신규 추가] Cog가 로드될 때, 모든 멤버의 장비 정보를 확인하는 작업을 시작합니다.
-        self.bot.loop.create_task(self._ensure_all_members_have_gear())
 
-    # [신규 추가] 모든 멤버의 장비 정보를 확인하고 없으면 생성하는 함수
     async def _ensure_all_members_have_gear(self):
-        await self.bot.wait_until_ready()
+        # [수정] 이 함수는 on_ready에서 직접 호출되므로 wait_until_ready가 더 이상 필요 없습니다.
         logger.info("[초기화] 서버 멤버 장비 정보 확인 및 생성을 시작합니다.")
 
         server_id_str = get_config("SERVER_ID")
@@ -69,9 +83,13 @@ class EconomyCore(commands.Cog):
             logger.error("[초기화] DB에 'SERVER_ID'가 설정되지 않아 멤버 확인을 건너뜁니다.")
             return
 
-        guild = self.bot.get_guild(int(server_id_str))
-        if not guild:
-            logger.error(f"[초기화] 설정된 SERVER_ID({server_id_str})에 해당하는 서버를 찾을 수 없습니다.")
+        try:
+            guild = self.bot.get_guild(int(server_id_str))
+            if not guild:
+                logger.error(f"[초기화] 설정된 SERVER_ID({server_id_str})에 해당하는 서버를 찾을 수 없습니다.")
+                return
+        except ValueError:
+            logger.error(f"[초기화] DB의 SERVER_ID ('{server_id_str}')가 올바른 숫자가 아닙니다.")
             return
 
         logger.info(f"[초기화] 대상 서버: {guild.name} (ID: {guild.id})")
@@ -80,7 +98,6 @@ class EconomyCore(commands.Cog):
         for member in guild.members:
             if member.bot:
                 continue
-            # get_user_gear 함수는 이제 내부적으로 데이터가 없으면 생성까지 하므로, 호출만 해주면 됩니다.
             await get_user_gear(member)
 
         logger.info("[초기화] 모든 멤버의 장비 정보 확인 작업이 완료되었습니다.")
@@ -127,7 +144,6 @@ class EconomyCore(commands.Cog):
             self.chat_cache.clear()
 
         try:
-            # [수정] user_id를 문자열로 변환하여 DB에 전송합니다.
             for log in logs_to_process:
                 log['user_id'] = str(log['user_id'])
             await supabase.table('user_activities').insert(logs_to_process).execute()
@@ -175,16 +191,14 @@ class EconomyCore(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def voice_activity_tracker(self):
-        logger.info("[음성 활동 추적] 1분 순찰을 시작합니다...")
-
+        await self.bot.wait_until_ready()
+        
         server_id_str = get_config("SERVER_ID")
         if not server_id_str:
-            logger.warning("[음성 활동 추적] SERVER_ID가 설정되지 않아 순찰을 건너뜁니다.")
             return
 
         guild = self.bot.get_guild(int(server_id_str))
         if not guild:
-            logger.warning(f"[음성 활동 추적] 서버(ID: {server_id_str})를 찾을 수 없어 순찰을 건너뜁니다.")
             return
 
         currently_active_users: Set[int] = set()
@@ -198,14 +212,10 @@ class EconomyCore(commands.Cog):
                     continue
                 currently_active_users.add(member.id)
 
-        logger.info(f"[음성 활동 추적] 현재 활동 중인 유저 {len(currently_active_users)}명을 발견했습니다.")
-
         users_to_reward = currently_active_users.intersection(self.users_in_vc_last_minute)
-        logger.info(f"[음성 활동 추적] 지난 1분간 활동이 확인된 유저는 {len(users_to_reward)}명입니다.")
 
         if not users_to_reward:
             self.users_in_vc_last_minute = currently_active_users
-            logger.info("[음성 활동 추적] 보상 대상 유저가 없으므로 순찰을 마칩니다.")
             return
 
         try:
@@ -213,8 +223,6 @@ class EconomyCore(commands.Cog):
             for user_id in users_to_reward:
                 user = self.bot.get_user(user_id)
                 if not user: continue
-
-                logger.info(f"[음성 활동 추적] {user.display_name}님의 보상 처리를 시작합니다.")
 
                 stats = await get_all_user_stats(user_id)
                 old_total_voice_minutes_today = stats.get('daily', {}).get('voice_minutes', 0)
@@ -227,7 +235,6 @@ class EconomyCore(commands.Cog):
                     last_claimed = await get_cooldown(user_id, cooldown_key)
 
                     if last_claimed == 0:
-                        logger.info(f"[음성 활동 추적] {user.display_name}님이 {new_total_voice_minutes_today}분에 도달하여 코인 보상을 지급합니다.")
                         reward = random.randint(*self.voice_reward_range)
                         await update_wallet(user, reward)
                         await log_activity(user_id, 'reward_voice', coin_earned=reward)
@@ -241,7 +248,6 @@ class EconomyCore(commands.Cog):
 
             if logs_to_insert:
                 await supabase.table('user_activities').insert(logs_to_insert).execute()
-                logger.info(f"[음성 활동 추적] {len(logs_to_insert)}명의 유저에게 1분 활동을 DB에 기록했습니다.")
 
                 xp_update_tasks = [
                     supabase.rpc('add_xp', {'p_user_id': str(user_id), 'p_xp_to_add': xp_per_minute, 'p_source': 'voice'}).execute()
@@ -259,8 +265,7 @@ class EconomyCore(commands.Cog):
 
         finally:
             self.users_in_vc_last_minute = currently_active_users
-            logger.info("[음성 활동 추적] 순찰을 완료하고 다음 순찰을 위해 현재 명단을 저장했습니다.")
-
+    
     @voice_activity_tracker.before_loop
     async def before_voice_activity_tracker(self):
         await self.bot.wait_until_ready()
