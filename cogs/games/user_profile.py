@@ -12,7 +12,7 @@ from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
     get_item_database, get_config, get_string, BARE_HANDS,
-    supabase
+    supabase, get_farm_data, expand_farm_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -22,6 +22,21 @@ GEAR_CATEGORY = "장비"
 BAIT_CATEGORY = "미끼"
 FARM_TOOL_CATEGORY = "장비"
 
+class ReasonModal(ui.Modal):
+    reason_input = ui.TextInput(label="사유", style=discord.TextStyle.short)
+
+    def __init__(self, item_name: str):
+        super().__init__(title=get_string("profile_view.item_usage_view.reason_modal_title", item_name=item_name))
+        self.reason_input.label = get_string("profile_view.item_usage_view.reason_modal_label")
+        self.reason_input.placeholder = get_string("profile_view.item_usage_view.reason_modal_placeholder")
+        self.reason: Optional[str] = None
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.reason = self.reason_input.value
+        await interaction.response.defer()
+        self.stop()
+
+# [핵심 수정] 아이템 사용 로직을 담당하는 View
 class ItemUsageView(ui.View):
     def __init__(self, parent_view: 'ProfileView'):
         super().__init__(timeout=180)
@@ -32,38 +47,29 @@ class ItemUsageView(ui.View):
     async def build_and_send(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
-        # 사용자가 보유한 사용 가능 아이템 목록 생성
         usable_items_config = get_config("USABLE_ITEMS", {})
         user_role_ids = {role.id for role in self.user.roles}
         
         owned_usable_items = []
         for item_key, item_info in usable_items_config.items():
             if (role_id := get_id(item_key)) and role_id in user_role_ids:
-                owned_usable_items.append({
-                    "key": item_key,
-                    "name": item_info["name"],
-                    "description": item_info["description"]
-                })
+                owned_usable_items.append({"key": item_key, **item_info})
 
         if not owned_usable_items:
-            await interaction.followup.send("사용할 수 있는 아이템이 없습니다.", ephemeral=True, delete_after=5)
-            # 원래 프로필 뷰로 즉시 되돌리기
+            await interaction.followup.send(get_string("profile_view.item_usage_view.no_usable_items"), ephemeral=True, delete_after=5)
             await self.parent_view.update_display(interaction)
             return
 
-        options = [
-            discord.SelectOption(label=item["name"], value=item["key"], description=item["description"])
-            for item in owned_usable_items
-        ]
-        select = ui.Select(placeholder="사용할 아이템을 선택하세요...", options=options)
+        options = [discord.SelectOption(label=item["name"], value=item["key"], description=item["description"]) for item in owned_usable_items]
+        select = ui.Select(placeholder=get_string("profile_view.item_usage_view.select_placeholder"), options=options)
         select.callback = self.on_item_select
         self.add_item(select)
 
-        back_button = ui.Button(label="뒤로", style=discord.ButtonStyle.grey)
+        back_button = ui.Button(label=get_string("profile_view.item_usage_view.back_button"), style=discord.ButtonStyle.grey)
         back_button.callback = self.on_back
         self.add_item(back_button)
 
-        embed = discord.Embed(title="✨ 아이템 사용", description="인벤토리에서 사용할 아이템을 선택해주세요.", color=discord.Color.gold())
+        embed = discord.Embed(title=get_string("profile_view.item_usage_view.embed_title"), description=get_string("profile_view.item_usage_view.embed_description"), color=discord.Color.gold())
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     async def on_item_select(self, interaction: discord.Interaction):
@@ -72,49 +78,68 @@ class ItemUsageView(ui.View):
         
         usable_items_config = get_config("USABLE_ITEMS", {})
         item_info = usable_items_config.get(selected_item_key)
-        item_role_id = get_id(selected_item_key)
+        item_role = self.user.guild.get_role(get_id(selected_item_key))
 
-        if not item_info or not item_role_id:
-            await interaction.followup.send("❌ 잘못된 아이템 정보입니다.", ephemeral=True, delete_after=5)
-            return
+        if not item_info or not item_role:
+            self.parent_view.status_message = get_string("profile_view.item_usage_view.error_invalid_item")
+            return await self.on_back(interaction, reload_data=True)
 
-        item_type = item_info.get("type")
-        
         try:
-            if item_type == "warning_deduction":
-                # 관리 봇이 처리하도록 DB에 요청 기록
-                await supabase.table('item_usage_requests').insert({
-                    "user_id": str(self.user.id),
-                    "guild_id": str(self.user.guild.id),
-                    "item_key": selected_item_key
-                }).execute()
-                self.parent_view.status_message = f"✅ '{item_info['name']}' 사용을 요청했습니다. 잠시 후 처리됩니다."
+            item_type = item_info.get("type")
             
-            elif item_type == "simple_consume":
-                # 게임 봇이 즉시 역할 제거
-                role_to_remove = self.user.guild.get_role(item_role_id)
-                if role_to_remove:
-                    await self.user.remove_roles(role_to_remove, reason="아이템 사용")
-                    self.parent_view.status_message = f"✅ '{item_info['name']}'을(를) 사용했습니다."
+            if item_type == "request_to_admin":
+                await supabase.table('item_usage_requests').insert({"user_id": str(self.user.id), "guild_id": str(self.user.guild.id), "item_key": selected_item_key}).execute()
+                self.parent_view.status_message = get_string("profile_view.item_usage_view.request_success", item_name=item_info['name'])
+            
+            elif item_type == "consume_with_reason":
+                modal = ReasonModal(item_info['name'])
+                await interaction.followup.send_modal(modal)
+                await modal.wait()
+                if modal.reason:
+                    await self.log_item_usage(item_info['name'], modal.reason)
+                    await self.user.remove_roles(item_role, reason=f"{item_info['name']} 사용")
+                    self.parent_view.status_message = get_string("profile_view.item_usage_view.consume_success", item_name=item_info['name'])
+            
+            elif item_type == "farm_expansion":
+                farm_data = await get_farm_data(self.user.id)
+                if not farm_data:
+                    self.parent_view.status_message = get_string("profile_view.item_usage_view.farm_expand_fail_no_farm")
                 else:
-                    raise Exception("역할을 찾을 수 없습니다.")
-            else:
-                self.parent_view.status_message = f"⚠️ '{item_info['name']}'은(는) 아직 사용할 수 없는 아이템입니다."
+                    current_plots = len(farm_data.get('farm_plots', []))
+                    if current_plots >= 25:
+                        self.parent_view.status_message = get_string("profile_view.item_usage_view.farm_expand_fail_max")
+                    else:
+                        success = await expand_farm_db(farm_data['id'], current_plots)
+                        if success:
+                            await self.user.remove_roles(item_role, reason="밭 확장 허가증 사용")
+                            self.parent_view.status_message = get_string("profile_view.item_usage_view.farm_expand_success", plot_count=current_plots + 1)
+                        else:
+                            raise Exception("DB 농장 확장 실패")
 
         except Exception as e:
             logger.error(f"아이템 사용 처리 중 오류 (아이템: {selected_item_key}): {e}", exc_info=True)
-            self.parent_view.status_message = f"❌ '{item_info['name']}'을(를) 사용하는 중 오류가 발생했습니다."
+            self.parent_view.status_message = get_string("profile_view.item_usage_view.error_generic")
 
         await self.on_back(interaction, reload_data=True)
 
+    async def log_item_usage(self, item_name: str, reason: str):
+        log_channel_id = get_id("log_item_usage") # 로그 채널 ID를 DB에서 가져옵니다.
+        if not log_channel_id or not (log_channel := self.user.guild.get_channel(log_channel_id)):
+            return
+
+        embed_data = await get_embed_from_db("log_item_use") or {}
+        embed = format_embed_from_db(embed_data)
+        embed.description=f"{self.user.mention}님이 **'{item_name}'**을(를) 사용했습니다."
+        embed.add_field(name="사용 사유", value=reason, inline=False)
+        embed.set_author(name=self.user.display_name, icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
+        await log_channel.send(embed=embed)
+
     async def on_back(self, interaction: discord.Interaction, reload_data: bool = False):
         if self.message:
-            try:
-                await self.message.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
+            try: await self.message.delete()
+            except discord.HTTPException: pass
         await self.parent_view.update_display(interaction, reload_data=reload_data)
-        
+
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
         super().__init__(timeout=300)
@@ -302,14 +327,17 @@ class ProfileView(ui.View):
                 
     async def button_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.user.id:
-            await interaction.response.send_message("자신 전용 메뉴를 조작해주세요.", ephemeral=True, delete_after=5)
-            return
+            return await interaction.response.send_message("자신 전용 메뉴를 조작해주세요.", ephemeral=True, delete_after=5)
         
         custom_id = interaction.data['custom_id']
         if custom_id.startswith("profile_tab_"):
             self.current_page = custom_id.split("_")[-1]
             if self.current_page == 'fish': self.fish_page_index = 0
             await self.update_display(interaction) 
+        elif custom_id == "profile_use_item":
+            await interaction.message.edit(view=None)
+            usage_view = ItemUsageView(self)
+            await usage_view.build_and_send(interaction)
         elif custom_id.startswith("profile_change_"):
             gear_key = custom_id.replace("profile_change_", "", 1)
             await GearSelectView(self, gear_key).setup_and_update(interaction)
@@ -317,11 +345,6 @@ class ProfileView(ui.View):
             if custom_id.endswith("prev"): self.fish_page_index -= 1
             else: self.fish_page_index += 1
             await self.update_display(interaction)
-        elif custom_id == "profile_use_item":
-            await interaction.message.edit(view=None) # 기존 프로필 뷰 버튼 비활성화
-            usage_view = ItemUsageView(self)
-            await usage_view.build_and_send(interaction)
-        elif custom_id.startswith("profile_change_"):
             
 class GearSelectView(ui.View):
     def __init__(self, parent_view: ProfileView, gear_key: str):
