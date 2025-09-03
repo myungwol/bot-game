@@ -204,7 +204,7 @@ class ItemUsageView(ui.View):
         embed = format_embed_from_db(embed_data)
         if item_info.get("type") == "consume_with_reason":
             embed.title = f"{self.user.display_name}님이 {item_info['name']}을(를) 사용했습니다."
-            embed.add_field(name="사용 사유", value=reason, inline=False)
+            embed.add_field(name="신청 양식", value=reason, inline=False)
         else:
             embed.description=f"{self.user.mention}님이 **'{item_info['name']}'**을(를) 사용했습니다."
             embed.add_field(name="처리 내용", value=reason, inline=False)
