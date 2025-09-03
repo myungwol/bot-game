@@ -15,8 +15,6 @@ from utils.database import (
     supabase, get_farm_data, expand_farm_db, update_inventory
 )
 from utils.helpers import format_embed_from_db
-# [✅✅✅ 핵심 수정 ✅✅✅] 경고 단계 설정값을 가져옵니다.
-from utils.ui_defaults import WARNING_THRESHOLDS
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +36,6 @@ class ReasonModal(ui.Modal):
         await interaction.response.defer()
         self.stop()
 
-# [✅✅✅ 핵심 수정 ✅✅✅] ItemUsageView 클래스 전체를 새로운 로직으로 교체합니다.
 class ItemUsageView(ui.View):
     def __init__(self, parent_view: 'ProfileView'):
         super().__init__(timeout=180)
@@ -50,11 +47,18 @@ class ItemUsageView(ui.View):
         """누적 경고 횟수에 따라 역할을 업데이트합니다."""
         guild = member.guild
         
-        all_warning_role_ids = {get_id(t['role_key']) for t in WARNING_THRESHOLDS if get_id(t['role_key'])}
+        # [✅✅✅ 핵심 수정 ✅✅✅]
+        # 파일 대신 DB에서 설정을 가져옵니다.
+        warning_thresholds = get_config("WARNING_THRESHOLDS", [])
+        if not warning_thresholds:
+            logger.error("DB에서 WARNING_THRESHOLDS 설정을 찾을 수 없어 역할 업데이트를 건너뜁니다.")
+            return
+
+        all_warning_role_ids = {get_id(t['role_key']) for t in warning_thresholds if get_id(t['role_key'])}
         current_warning_roles = [role for role in member.roles if role.id in all_warning_role_ids]
         
         target_role_id = None
-        for threshold in sorted(WARNING_THRESHOLDS, key=lambda x: x['count'], reverse=True):
+        for threshold in sorted(warning_thresholds, key=lambda x: x['count'], reverse=True):
             if total_count >= threshold['count']:
                 target_role_id = get_id(threshold['role_key'])
                 break
@@ -98,7 +102,6 @@ class ItemUsageView(ui.View):
             
             if item_type == "deduct_warning":
                 try:
-                    # 1. DB 함수를 호출하여 벌점 차감(-1)과 최종 누적량 계산을 한 번에 처리
                     rpc_params = {
                         'p_guild_id': str(self.user.guild.id),
                         'p_user_id': str(self.user.id),
@@ -113,15 +116,9 @@ class ItemUsageView(ui.View):
                      self.parent_view.status_message = "❌ 벌점 차감 중 오류가 발생했습니다."
                      return await self.on_back(interaction, reload_data=True)
 
-                # 2. 아이템 소모
                 await update_inventory(self.user.id, item_info['name'], -1)
-                
-                # 3. 로그 메시지 전송
                 await self.log_item_usage(item_info, f"'{item_info['name']}'을(를) 사용하여 벌점을 1회 차감했습니다. (현재 벌점: {new_total}회)")
-
-                # 4. 역할 업데이트
                 await self._update_warning_roles(self.user, new_total)
-                
                 self.parent_view.status_message = f"✅ '{item_info['name']}'을(를) 사용했습니다. (현재 벌점: {new_total}회)"
             
             elif item_type == "consume_with_reason":
