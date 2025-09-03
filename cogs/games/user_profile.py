@@ -47,8 +47,6 @@ class ItemUsageView(ui.View):
         """누적 경고 횟수에 따라 역할을 업데이트합니다."""
         guild = member.guild
         
-        # [✅✅✅ 핵심 수정 ✅✅✅]
-        # 파일 대신 DB에서 설정을 가져옵니다.
         warning_thresholds = get_config("WARNING_THRESHOLDS", [])
         if not warning_thresholds:
             logger.error("DB에서 WARNING_THRESHOLDS 설정을 찾을 수 없어 역할 업데이트를 건너뜁니다.")
@@ -101,6 +99,24 @@ class ItemUsageView(ui.View):
             item_type = item_info.get("type")
             
             if item_type == "deduct_warning":
+                # [✅✅✅ 핵심 수정 ✅✅✅] 벌점 차감 전에 현재 벌점을 먼저 확인합니다.
+                try:
+                    current_warnings_res = await supabase.rpc(
+                        'get_total_warnings',
+                        {'p_user_id': self.user.id, 'p_guild_id': self.user.guild.id}
+                    ).execute()
+                    current_warnings = current_warnings_res.data
+                except Exception as e:
+                    logger.error(f"벌점 확인 RPC 호출 실패: {e}", exc_info=True)
+                    self.parent_view.status_message = "❌ 벌점을 확인하는 중 오류가 발생했습니다."
+                    return await self.on_back(interaction, reload_data=True)
+
+                # 현재 벌점이 0 이하이면 사용을 막습니다.
+                if current_warnings <= 0:
+                    self.parent_view.status_message = "ℹ️ 차감할 벌점이 없습니다. 아이템을 사용할 수 없습니다."
+                    return await self.on_back(interaction, reload_data=False) # 데이터 변경이 없으므로 reload=False
+
+                # 벌점이 1 이상일 때만 아래 로직을 실행합니다.
                 try:
                     rpc_params = {
                         'p_guild_id': self.user.guild.id,
