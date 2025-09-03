@@ -84,27 +84,35 @@ class ProfileView(ui.View):
         if self.current_page == "info":
             embed.add_field(name=get_string("profile_view.info_tab.field_balance", "소지금"), value=f"`{balance:,}`{self.currency_icon}", inline=True)
             
-            job_name = "직업 없음"
+            # [핵심 수정] 직업 표시 로직 변경 (멘션 기능 추가)
+            job_mention = "`없음`"
+            job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
+            job_role_map = job_system_config.get("JOB_ROLE_MAP", {})
             try:
-                job_res = await supabase.table('user_jobs').select('jobs(job_name)').eq('user_id', self.user.id).maybe_single().execute()
+                job_res = await supabase.table('user_jobs').select('jobs(job_key, job_name)').eq('user_id', self.user.id).maybe_single().execute()
                 if job_res and job_res.data and job_res.data.get('jobs'):
-                    job_name = job_res.data['jobs']['job_name']
+                    job_info = job_res.data['jobs']
+                    job_key = job_info['job_key']
+                    job_name = job_info['job_name']
+                    
+                    if (role_key := job_role_map.get(job_key)) and (role_id := get_id(role_key)):
+                        job_mention = f"<@&{role_id}>"
+                    else:
+                        job_mention = f"`{job_name}`" # 역할 ID를 못 찾으면 텍스트로 표시
             except Exception as e:
                 logger.error(f"직업 정보 조회 중 오류 발생 (유저: {self.user.id}): {e}")
-            embed.add_field(name="직업", value=f"`{job_name}`", inline=True)
+            embed.add_field(name="직업", value=job_mention, inline=True)
 
-            # [핵심 수정] 등급 표시 로직 변경
+            # [핵심 수정] 등급 표시 로직 (이전 답변과 동일, 이제 정상 작동할 것)
             user_rank_mention = get_string("profile_view.info_tab.default_rank_name", "새내기 주민")
-            rank_roles_config = get_config("PROFILE_RANK_ROLES", []) # 새로 추가한 설정값 가져오기
+            rank_roles_config = get_config("PROFILE_RANK_ROLES", []) 
             
             if rank_roles_config:
                 user_role_ids = {role.id for role in self.user.roles}
-                # 우선순위가 높은 역할부터 순서대로 확인
                 for rank_info in rank_roles_config:
-                    role_key = rank_info.get("role_key")
-                    if role_key and (rank_role_id := get_id(role_key)) and rank_role_id in user_role_ids:
+                    if (role_key := rank_info.get("role_key")) and (rank_role_id := get_id(role_key)) and rank_role_id in user_role_ids:
                         user_rank_mention = f"<@&{rank_role_id}>"
-                        break # 가장 높은 등급의 역할을 찾았으면 반복 중단
+                        break
             
             embed.add_field(name=get_string("profile_view.info_tab.field_rank", "등급"), value=user_rank_mention, inline=True)
             description += get_string("profile_view.info_tab.description", "아래 탭을 선택하여 상세 정보를 확인하세요.")
