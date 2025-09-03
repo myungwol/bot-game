@@ -13,10 +13,10 @@ from collections import deque
 # [✅✅✅ 핵심 수정 ✅✅✅]
 # DB에서 설정을 다시 불러오고, 삭제하는 함수를 import 합니다.
 from utils.database import (
-    get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
-    save_config_to_db, get_all_user_stats, log_activity, get_cooldown, set_cooldown,
-    get_user_gear, load_all_data_from_db, ensure_user_gear_exists,
-    load_bot_configs_from_db, delete_config_from_db
+    get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
+    save_panel_id, get_panel_id, get_id, get_embed_from_db,
+    get_item_database, get_config, get_string, BARE_HANDS,
+    supabase, get_farm_data, expand_farm_db, update_inventory, save_config_to_db
 )
 from utils.helpers import format_embed_from_db
 
