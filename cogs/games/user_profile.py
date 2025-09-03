@@ -24,18 +24,17 @@ FARM_TOOL_CATEGORY = "장비"
 
 class ReasonModal(ui.Modal):
     def __init__(self, item_name: str):
-        super().__init__(title=get_string("profile_view.item_usage_view.reason_modal_title", item_name=item_name))
+        super().__init__(title="이벤트 우선 참여권 사용") # 모달 제목을 아이템 이름으로 고정
         self.reason_input = ui.TextInput(
-            label=get_string("profile_view.item_usage_view.reason_modal_label"),
-            placeholder=get_string("profile_view.item_usage_view.reason_modal_placeholder"),
-            style=discord.TextStyle.short
+            label="이벤트 양식", # 라벨 변경
+            placeholder="이벤트 양식을 적어서 보내주세요.", # 플레이스홀더 변경
+            style=discord.TextStyle.paragraph # 여러 줄 입력이 가능한 스타일로 변경
         )
         self.add_item(self.reason_input)
         self.reason: Optional[str] = None
 
     async def on_submit(self, interaction: discord.Interaction):
         self.reason = self.reason_input.value
-        # [✅✅✅ 핵심 수정 ✅✅✅] 모달 제출 시에는 defer()만 호출합니다. 후속 처리는 원래 함수에서 이어갑니다.
         await interaction.response.defer(ephemeral=True)
         self.stop()
 
