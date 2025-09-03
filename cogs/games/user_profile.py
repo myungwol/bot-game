@@ -24,11 +24,11 @@ FARM_TOOL_CATEGORY = "장비"
 
 class ReasonModal(ui.Modal):
     def __init__(self, item_name: str):
-        super().__init__(title="이벤트 우선 참여권 사용") # 모달 제목을 아이템 이름으로 고정
+        super().__init__(title="이벤트 우선 참여권 사용")
         self.reason_input = ui.TextInput(
-            label="이벤트 양식", # 라벨 변경
-            placeholder="이벤트 양식을 적어서 보내주세요.", # 플레이스홀더 변경
-            style=discord.TextStyle.paragraph # 여러 줄 입력이 가능한 스타일로 변경
+            label="이벤트 양식",
+            placeholder="이벤트 양식을 적어서 보내주세요.",
+            style=discord.TextStyle.paragraph
         )
         self.add_item(self.reason_input)
         self.reason: Optional[str] = None
@@ -44,6 +44,15 @@ class ItemUsageView(ui.View):
         self.parent_view = parent_view
         self.user = parent_view.user
         self.message: Optional[discord.WebhookMessage] = None
+    
+    # [✅✅✅ 핵심 수정 ✅✅✅] id_key로 DB에서 실제 아이템 이름을 찾는 헬퍼 함수 추가
+    async def get_item_name_by_id_key(self, id_key: str) -> Optional[str]:
+        """id_key를 사용하여 items 테이블에서 실제 아이템 이름을 조회합니다."""
+        try:
+            res = await supabase.table('items').select('name').eq('id_key', id_key).single().execute()
+            return res.data.get('name') if res.data else None
+        except Exception:
+            return None
 
     async def _update_warning_roles(self, member: discord.Member, total_count: int):
         guild = member.guild
@@ -75,9 +84,6 @@ class ItemUsageView(ui.View):
             logger.error(f"경고 역할 업데이트 중 오류: {e}", exc_info=True)
 
     async def on_item_select(self, interaction: discord.Interaction):
-        # [✅✅✅ 핵심 수정 ✅✅✅]
-        # 모달을 띄우기 전에 defer()를 호출하지 않도록 로직을 분리합니다.
-        
         selected_item_key = interaction.data["values"][0]
         
         usable_items_config = get_config("USABLE_ITEMS", {})
@@ -87,81 +93,69 @@ class ItemUsageView(ui.View):
             await interaction.response.defer()
             self.parent_view.status_message = get_string("profile_view.item_usage_view.error_invalid_item")
             return await self.on_back(interaction, reload_data=True)
+            
+        # [✅✅✅ 핵심 수정 ✅✅✅] DB에서 실제 아이템 이름을 조회합니다.
+        item_name_from_db = await self.get_item_name_by_id_key(selected_item_key)
+        if not item_name_from_db:
+            await interaction.response.defer()
+            self.parent_view.status_message = "❌ 아이템 정보를 DB에서 찾을 수 없습니다."
+            return await self.on_back(interaction, reload_data=True)
 
         item_type = item_info.get("type")
         
-        # '이유'가 필요한 아이템은 모달을 먼저 띄웁니다.
         if item_type == "consume_with_reason":
             if selected_item_key == "role_item_event_priority":
                 is_active = get_config("event_priority_pass_active", False)
                 if not is_active:
-                    await interaction.response.defer()
-                    self.parent_view.status_message = "❌ 현재 우선 참여권을 사용할 수 있는 이벤트가 없습니다."
-                    return await self.on_back(interaction, reload_data=False)
+                    await interaction.response.send_message("❌ 현재 우선 참여권을 사용할 수 있는 이벤트가 없습니다.", ephemeral=True, delete_after=5)
+                    return
 
                 used_users = get_config("event_priority_pass_users", [])
                 if self.user.id in used_users:
-                    await interaction.response.defer()
-                    self.parent_view.status_message = "❌ 이미 이 이벤트에 우선 참여권을 사용했습니다."
-                    return await self.on_back(interaction, reload_data=False)
+                    await interaction.response.send_message("❌ 이미 이 이벤트에 우선 참여권을 사용했습니다.", ephemeral=True, delete_after=5)
+                    return
 
-            modal = ReasonModal(item_info['name'])
-            # defer() 없이 바로 모달을 보냅니다.
+            modal = ReasonModal(item_name_from_db)
             await interaction.response.send_modal(modal)
             await modal.wait()
             
-            # 모달이 닫혔지만 이유가 입력되지 않았다면 (취소), 아무것도 하지 않습니다.
-            if not modal.reason:
-                return
+            if not modal.reason: return
             
-            # 이유가 입력되었다면, 여기서부터 후속 처리를 진행합니다.
             try:
                 await self.log_item_usage(item_info, modal.reason)
-                await update_inventory(self.user.id, item_info['name'], -1)
+                # [✅✅✅ 핵심 수정 ✅✅✅] 설정 파일의 이름 대신 DB에서 조회한 이름으로 아이템을 차감합니다.
+                await update_inventory(self.user.id, item_name_from_db, -1)
                 
                 if selected_item_key == "role_item_event_priority":
                     used_users.append(self.user.id)
                     await save_config_to_db("event_priority_pass_users", used_users)
 
-                self.parent_view.status_message = get_string("profile_view.item_usage_view.consume_success", item_name=item_info['name'])
+                self.parent_view.status_message = get_string("profile_view.item_usage_view.consume_success", item_name=item_name_from_db)
             except Exception as e:
                 logger.error(f"아이템 사용 처리 중 오류 (아이템: {selected_item_key}): {e}", exc_info=True)
                 self.parent_view.status_message = get_string("profile_view.item_usage_view.error_generic")
 
-            # on_back은 interaction 객체가 필요하지만, 모달의 interaction은 이미 응답되었으므로
-            # 부모 View의 message를 통해 edit을 시도해야 합니다.
-            # 이를 위해 on_back 로직을 약간 수정합니다.
             return await self.on_back(None, reload_data=True)
 
-        # 모달이 필요 없는 아이템은 여기서 defer()를 호출하고 처리합니다.
         await interaction.response.defer()
         try:
             if item_type == "deduct_warning":
-                try:
-                    current_warnings_res = await supabase.rpc('get_total_warnings', {'p_user_id': self.user.id, 'p_guild_id': self.user.guild.id}).execute()
-                    current_warnings = current_warnings_res.data
-                except Exception as e:
-                    logger.error(f"벌점 확인 RPC 호출 실패: {e}", exc_info=True)
-                    self.parent_view.status_message = "❌ 벌점을 확인하는 중 오류가 발생했습니다."
-                    return await self.on_back(interaction, reload_data=True)
+                current_warnings_res = await supabase.rpc('get_total_warnings', {'p_user_id': self.user.id, 'p_guild_id': self.user.guild.id}).execute()
+                current_warnings = current_warnings_res.data
 
                 if current_warnings <= 0:
                     self.parent_view.status_message = "ℹ️ 차감할 벌점이 없습니다. 아이템을 사용할 수 없습니다."
                     return await self.on_back(interaction, reload_data=False)
 
-                try:
-                    rpc_params = {'p_guild_id': self.user.guild.id, 'p_user_id': self.user.id, 'p_moderator_id': self.user.id, 'p_reason': f"'{item_info['name']}' 아이템 사용", 'p_amount': -1}
-                    response = await supabase.rpc('add_warning_and_get_total', rpc_params).execute()
-                    new_total = response.data
-                except Exception as e:
-                     logger.error(f"벌점 차감 RPC 호출 실패: {e}", exc_info=True)
-                     self.parent_view.status_message = "❌ 벌점 차감 중 오류가 발생했습니다."
-                     return await self.on_back(interaction, reload_data=True)
+                rpc_params = {'p_guild_id': self.user.guild.id, 'p_user_id': self.user.id, 'p_moderator_id': self.user.id, 'p_reason': f"'{item_name_from_db}' 아이템 사용", 'p_amount': -1}
+                response = await supabase.rpc('add_warning_and_get_total', rpc_params).execute()
+                new_total = response.data
 
-                await update_inventory(self.user.id, item_info['name'], -1)
-                await self.log_item_usage(item_info, f"'{item_info['name']}'을(를) 사용하여 벌점을 1회 차감했습니다. (현재 벌점: {new_total}회)")
+                # [✅✅✅ 핵심 수정 ✅✅✅] DB에서 조회한 이름으로 아이템을 차감합니다.
+                await update_inventory(self.user.id, item_name_from_db, -1)
+                await self.log_item_usage(item_info, f"'{item_name_from_db}'을(를) 사용하여 벌점을 1회 차감했습니다. (현재 벌점: {new_total}회)")
                 await self._update_warning_roles(self.user, new_total)
-                self.parent_view.status_message = f"✅ '{item_info['name']}'을(를) 사용했습니다. (현재 벌점: {new_total}회)"
+                self.parent_view.status_message = f"✅ '{item_name_from_db}'을(를) 사용했습니다. (현재 벌점: {new_total}회)"
             
             elif item_type == "farm_expansion":
                 farm_data = await get_farm_data(self.user.id)
@@ -174,11 +168,11 @@ class ItemUsageView(ui.View):
                     else:
                         success = await expand_farm_db(farm_data['id'], current_plots)
                         if success:
-                            await update_inventory(self.user.id, item_info['name'], -1)
+                            # [✅✅✅ 핵심 수정 ✅✅✅] DB에서 조회한 이름으로 아이템을 차감합니다.
+                            await update_inventory(self.user.id, item_name_from_db, -1)
                             self.parent_view.status_message = get_string("profile_view.item_usage_view.farm_expand_success", plot_count=current_plots + 1)
                         else:
                             raise Exception("DB 농장 확장 실패")
-
         except Exception as e:
             logger.error(f"아이템 사용 처리 중 오류 (아이템: {selected_item_key}): {e}", exc_info=True)
             self.parent_view.status_message = get_string("profile_view.item_usage_view.error_generic")
@@ -186,8 +180,7 @@ class ItemUsageView(ui.View):
         await self.on_back(interaction, reload_data=True)
 
     async def log_item_usage(self, item_info: dict, reason: str):
-        if not (log_channel_key := item_info.get("log_channel_key")):
-            return
+        if not (log_channel_key := item_info.get("log_channel_key")): return
 
         log_channel_id = get_id(log_channel_key)
         if not log_channel_id or not (log_channel := self.user.guild.get_channel(log_channel_id)):
@@ -201,18 +194,19 @@ class ItemUsageView(ui.View):
             return
         
         embed = format_embed_from_db(embed_data)
+        item_display_name = item_info.get('name', '알 수 없는 아이템')
+        
         if item_info.get("type") == "consume_with_reason":
-            embed.title = f"{self.user.display_name}님이 {item_info['name']}을(를) 사용했습니다."
-            embed.add_field(name="신청 양식", value=reason, inline=False)
+            embed.title = f"{self.user.display_name}님이 {item_display_name}을(를) 사용했습니다."
+            embed.add_field(name="이벤트 양식", value=reason, inline=False)
         else:
-            embed.description=f"{self.user.mention}님이 **'{item_info['name']}'**을(를) 사용했습니다."
+            embed.description=f"{self.user.mention}님이 **'{item_display_name}'**을(를) 사용했습니다."
             embed.add_field(name="처리 내용", value=reason, inline=False)
             
         embed.set_author(name=self.user.display_name, icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
         await log_channel.send(embed=embed)
 
     async def on_back(self, interaction: Optional[discord.Interaction], reload_data: bool = False):
-        # interaction이 None일 수 있으므로, 부모의 message를 직접 수정하도록 변경
         await self.parent_view.update_display(interaction, reload_data=reload_data)
 
 
@@ -245,10 +239,14 @@ class ProfileView(ui.View):
         embed = await self.build_embed()
         self.build_components()
 
+        target_message = None
         if interaction:
-            await interaction.edit_original_response(embed=embed, view=self)
+            target_message = interaction.edit_original_response
         elif self.message:
-            await self.message.edit(embed=embed, view=self)
+            target_message = self.message.edit
+
+        if target_message:
+            await target_message(embed=embed, view=self)
             
         self.status_message = None
         
