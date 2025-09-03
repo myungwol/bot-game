@@ -23,17 +23,20 @@ BAIT_CATEGORY = "미끼"
 FARM_TOOL_CATEGORY = "장비"
 
 class ReasonModal(ui.Modal):
-    reason_input = ui.TextInput(label="사유", style=discord.TextStyle.short)
-
     def __init__(self, item_name: str):
         super().__init__(title=get_string("profile_view.item_usage_view.reason_modal_title", item_name=item_name))
-        self.reason_input.label = get_string("profile_view.item_usage_view.reason_modal_label")
-        self.reason_input.placeholder = get_string("profile_view.item_usage_view.reason_modal_placeholder")
+        self.reason_input = ui.TextInput(
+            label=get_string("profile_view.item_usage_view.reason_modal_label"),
+            placeholder=get_string("profile_view.item_usage_view.reason_modal_placeholder"),
+            style=discord.TextStyle.short
+        )
+        self.add_item(self.reason_input)
         self.reason: Optional[str] = None
 
     async def on_submit(self, interaction: discord.Interaction):
         self.reason = self.reason_input.value
-        await interaction.response.defer()
+        # [✅✅✅ 핵심 수정 ✅✅✅] 모달 제출 시에는 defer()만 호출합니다. 후속 처리는 원래 함수에서 이어갑니다.
+        await interaction.response.defer(ephemeral=True)
         self.stop()
 
 class ItemUsageView(ui.View):
@@ -73,19 +76,67 @@ class ItemUsageView(ui.View):
             logger.error(f"경고 역할 업데이트 중 오류: {e}", exc_info=True)
 
     async def on_item_select(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        # [✅✅✅ 핵심 수정 ✅✅✅]
+        # 모달을 띄우기 전에 defer()를 호출하지 않도록 로직을 분리합니다.
+        
         selected_item_key = interaction.data["values"][0]
         
         usable_items_config = get_config("USABLE_ITEMS", {})
         item_info = usable_items_config.get(selected_item_key)
 
         if not item_info:
+            await interaction.response.defer()
             self.parent_view.status_message = get_string("profile_view.item_usage_view.error_invalid_item")
             return await self.on_back(interaction, reload_data=True)
 
-        try:
-            item_type = item_info.get("type")
+        item_type = item_info.get("type")
+        
+        # '이유'가 필요한 아이템은 모달을 먼저 띄웁니다.
+        if item_type == "consume_with_reason":
+            if selected_item_key == "role_item_event_priority":
+                is_active = get_config("event_priority_pass_active", False)
+                if not is_active:
+                    await interaction.response.defer()
+                    self.parent_view.status_message = "❌ 현재 우선 참여권을 사용할 수 있는 이벤트가 없습니다."
+                    return await self.on_back(interaction, reload_data=False)
+
+                used_users = get_config("event_priority_pass_users", [])
+                if self.user.id in used_users:
+                    await interaction.response.defer()
+                    self.parent_view.status_message = "❌ 이미 이 이벤트에 우선 참여권을 사용했습니다."
+                    return await self.on_back(interaction, reload_data=False)
+
+            modal = ReasonModal(item_info['name'])
+            # defer() 없이 바로 모달을 보냅니다.
+            await interaction.response.send_modal(modal)
+            await modal.wait()
             
+            # 모달이 닫혔지만 이유가 입력되지 않았다면 (취소), 아무것도 하지 않습니다.
+            if not modal.reason:
+                return
+            
+            # 이유가 입력되었다면, 여기서부터 후속 처리를 진행합니다.
+            try:
+                await self.log_item_usage(item_info, modal.reason)
+                await update_inventory(self.user.id, item_info['name'], -1)
+                
+                if selected_item_key == "role_item_event_priority":
+                    used_users.append(self.user.id)
+                    await save_config_to_db("event_priority_pass_users", used_users)
+
+                self.parent_view.status_message = get_string("profile_view.item_usage_view.consume_success", item_name=item_info['name'])
+            except Exception as e:
+                logger.error(f"아이템 사용 처리 중 오류 (아이템: {selected_item_key}): {e}", exc_info=True)
+                self.parent_view.status_message = get_string("profile_view.item_usage_view.error_generic")
+
+            # on_back은 interaction 객체가 필요하지만, 모달의 interaction은 이미 응답되었으므로
+            # 부모 View의 message를 통해 edit을 시도해야 합니다.
+            # 이를 위해 on_back 로직을 약간 수정합니다.
+            return await self.on_back(None, reload_data=True)
+
+        # 모달이 필요 없는 아이템은 여기서 defer()를 호출하고 처리합니다.
+        await interaction.response.defer()
+        try:
             if item_type == "deduct_warning":
                 try:
                     current_warnings_res = await supabase.rpc('get_total_warnings', {'p_user_id': self.user.id, 'p_guild_id': self.user.guild.id}).execute()
@@ -112,32 +163,6 @@ class ItemUsageView(ui.View):
                 await self.log_item_usage(item_info, f"'{item_info['name']}'을(를) 사용하여 벌점을 1회 차감했습니다. (현재 벌점: {new_total}회)")
                 await self._update_warning_roles(self.user, new_total)
                 self.parent_view.status_message = f"✅ '{item_info['name']}'을(를) 사용했습니다. (현재 벌점: {new_total}회)"
-            
-            elif item_type == "consume_with_reason":
-                if selected_item_key == "role_item_event_priority":
-                    is_active = get_config("event_priority_pass_active", False)
-                    if not is_active:
-                        self.parent_view.status_message = "❌ 현재 우선 참여권을 사용할 수 있는 이벤트가 없습니다."
-                        return await self.on_back(interaction, reload_data=False)
-
-                    used_users = get_config("event_priority_pass_users", [])
-                    if self.user.id in used_users:
-                        self.parent_view.status_message = "❌ 이미 이 이벤트에 우선 참여권을 사용했습니다."
-                        return await self.on_back(interaction, reload_data=False)
-                
-                modal = ReasonModal(item_info['name'])
-                await interaction.followup.send_modal(modal)
-                await modal.wait()
-                
-                if modal.reason:
-                    await self.log_item_usage(item_info, modal.reason)
-                    await update_inventory(self.user.id, item_info['name'], -1)
-                    
-                    if selected_item_key == "role_item_event_priority":
-                        used_users.append(self.user.id)
-                        await save_config_to_db("event_priority_pass_users", used_users)
-
-                    self.parent_view.status_message = get_string("profile_view.item_usage_view.consume_success", item_name=item_info['name'])
             
             elif item_type == "farm_expansion":
                 farm_data = await get_farm_data(self.user.id)
@@ -187,7 +212,8 @@ class ItemUsageView(ui.View):
         embed.set_author(name=self.user.display_name, icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
         await log_channel.send(embed=embed)
 
-    async def on_back(self, interaction: discord.Interaction, reload_data: bool = False):
+    async def on_back(self, interaction: Optional[discord.Interaction], reload_data: bool = False):
+        # interaction이 None일 수 있으므로, 부모의 message를 직접 수정하도록 변경
         await self.parent_view.update_display(interaction, reload_data=reload_data)
 
 
@@ -210,16 +236,23 @@ class ProfileView(ui.View):
         self.build_components()
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
-    async def update_display(self, interaction: discord.Interaction, reload_data: bool = False):
-        if not interaction.response.is_done():
+    async def update_display(self, interaction: Optional[discord.Interaction], reload_data: bool = False):
+        if interaction and not interaction.response.is_done():
             await interaction.response.defer()
+
         if reload_data:
             await self.load_data(self.user)
+            
         embed = await self.build_embed()
         self.build_components()
-        await interaction.edit_original_response(embed=embed, view=self)
-        self.status_message = None
 
+        if interaction:
+            await interaction.edit_original_response(embed=embed, view=self)
+        elif self.message:
+            await self.message.edit(embed=embed, view=self)
+            
+        self.status_message = None
+        
     async def load_data(self, user: discord.Member):
         wallet_data, inventory, aquarium, gear = await asyncio.gather(
             get_wallet(user.id),
@@ -382,23 +415,19 @@ class ProfileView(ui.View):
             await self.update_display(interaction) 
             
         elif custom_id == "profile_use_item":
-            await interaction.response.defer()
+            # 이 함수는 이제 defer()를 호출하지 않습니다.
             usage_view = ItemUsageView(self)
             
-            # [✅✅✅ 핵심 수정 ✅✅✅]
-            # 아이템 이름 대신 id_key를 기준으로 사용 가능 여부를 판단하는 안정적인 로직으로 변경합니다.
             usable_items_config = get_config("USABLE_ITEMS", {})
             user_inventory = await get_inventory(self.user)
             item_db = get_item_database()
             
             owned_usable_items = []
             for item_name, quantity in user_inventory.items():
-                if quantity <= 0:
-                    continue
+                if quantity <= 0: continue
                 
                 item_data_from_db = item_db.get(item_name)
-                if not item_data_from_db:
-                    continue
+                if not item_data_from_db: continue
                 
                 item_id_key = item_data_from_db.get('id_key')
                 if item_id_key and item_id_key in usable_items_config:
@@ -410,11 +439,7 @@ class ProfileView(ui.View):
                     })
 
             if not owned_usable_items:
-                msg = await interaction.followup.send(get_string("profile_view.item_usage_view.no_usable_items"), ephemeral=True)
-                await asyncio.sleep(5)
-                try: await msg.delete()
-                except discord.HTTPException: pass
-                await self.update_display(interaction)
+                await interaction.response.send_message(get_string("profile_view.item_usage_view.no_usable_items"), ephemeral=True, delete_after=5)
                 return
 
             options = [discord.SelectOption(label=item["name"], value=item["key"], description=item["description"]) for item in owned_usable_items]
@@ -428,8 +453,7 @@ class ProfileView(ui.View):
 
             embed = discord.Embed(title=get_string("profile_view.item_usage_view.embed_title"), description=get_string("profile_view.item_usage_view.embed_description"), color=discord.Color.gold())
             
-            edited_message = await interaction.edit_original_response(embed=embed, view=usage_view)
-            usage_view.message = edited_message
+            await interaction.response.edit_message(embed=embed, view=usage_view)
 
         elif custom_id.startswith("profile_change_"):
             gear_key = custom_id.replace("profile_change_", "", 1)
