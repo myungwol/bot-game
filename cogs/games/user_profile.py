@@ -43,34 +43,6 @@ class ItemUsageView(ui.View):
         self.user = parent_view.user
         self.message: Optional[discord.WebhookMessage] = None
 
-    async def build_and_send(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        usable_items_config = get_config("USABLE_ITEMS", {})
-        user_role_ids = {role.id for role in self.user.roles}
-        
-        owned_usable_items = []
-        for item_key, item_info in usable_items_config.items():
-            if (role_id := get_id(item_key)) and role_id in user_role_ids:
-                owned_usable_items.append({"key": item_key, **item_info})
-
-        if not owned_usable_items:
-            await interaction.followup.send(get_string("profile_view.item_usage_view.no_usable_items"), ephemeral=True, delete_after=5)
-            await self.parent_view.update_display(interaction)
-            return
-
-        options = [discord.SelectOption(label=item["name"], value=item["key"], description=item["description"]) for item in owned_usable_items]
-        select = ui.Select(placeholder=get_string("profile_view.item_usage_view.select_placeholder"), options=options)
-        select.callback = self.on_item_select
-        self.add_item(select)
-
-        back_button = ui.Button(label=get_string("profile_view.item_usage_view.back_button"), style=discord.ButtonStyle.grey)
-        back_button.callback = self.on_back
-        self.add_item(back_button)
-
-        embed = discord.Embed(title=get_string("profile_view.item_usage_view.embed_title"), description=get_string("profile_view.item_usage_view.embed_description"), color=discord.Color.gold())
-        self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
-
     async def on_item_select(self, interaction: discord.Interaction):
         await interaction.response.defer()
         selected_item_key = interaction.data["values"][0]
@@ -143,9 +115,6 @@ class ItemUsageView(ui.View):
         await log_channel.send(embed=embed)
 
     async def on_back(self, interaction: discord.Interaction, reload_data: bool = False):
-        if self.message:
-            try: await self.message.delete()
-            except discord.HTTPException: pass
         await self.parent_view.update_display(interaction, reload_data=reload_data)
 
 
@@ -169,7 +138,8 @@ class ProfileView(ui.View):
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     async def update_display(self, interaction: discord.Interaction, reload_data: bool = False):
-        await interaction.response.defer()
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         if reload_data:
             await self.load_data(self.user)
         embed = await self.build_embed()
@@ -337,10 +307,45 @@ class ProfileView(ui.View):
             self.current_page = custom_id.split("_")[-1]
             if self.current_page == 'fish': self.fish_page_index = 0
             await self.update_display(interaction) 
+            
         elif custom_id == "profile_use_item":
-            await interaction.message.edit(view=None)
+            # [핵심 수정] 기존 메시지를 수정하는 대신, 현재 상호작용의 내용을 ItemUsageView로 교체합니다.
+            await interaction.response.defer()
             usage_view = ItemUsageView(self)
-            await usage_view.build_and_send(interaction)
+            
+            # ItemUsageView가 자신의 콘텐츠(embed, components)를 준비하도록 합니다.
+            usable_items_config = get_config("USABLE_ITEMS", {})
+            user_role_ids = {role.id for role in self.user.roles}
+            
+            owned_usable_items = []
+            for item_key, item_info in usable_items_config.items():
+                if (role_id := get_id(item_key)) and role_id in user_role_ids:
+                    owned_usable_items.append({"key": item_key, **item_info})
+
+            if not owned_usable_items:
+                msg = await interaction.followup.send(get_string("profile_view.item_usage_view.no_usable_items"), ephemeral=True)
+                await asyncio.sleep(5)
+                try: await msg.delete()
+                except discord.HTTPException: pass
+                # 원래대로 돌아가기 위해 defer()를 호출했으므로 edit_original_response를 사용합니다.
+                await self.update_display(interaction)
+                return
+
+            options = [discord.SelectOption(label=item["name"], value=item["key"], description=item["description"]) for item in owned_usable_items]
+            select = ui.Select(placeholder=get_string("profile_view.item_usage_view.select_placeholder"), options=options)
+            select.callback = usage_view.on_item_select
+            usage_view.add_item(select)
+
+            back_button = ui.Button(label=get_string("profile_view.item_usage_view.back_button"), style=discord.ButtonStyle.grey)
+            back_button.callback = usage_view.on_back
+            usage_view.add_item(back_button)
+
+            embed = discord.Embed(title=get_string("profile_view.item_usage_view.embed_title"), description=get_string("profile_view.item_usage_view.embed_description"), color=discord.Color.gold())
+            
+            # 현재 메시지를 ItemUsageView의 내용으로 수정합니다.
+            edited_message = await interaction.edit_original_response(embed=embed, view=usage_view)
+            usage_view.message = edited_message
+
         elif custom_id.startswith("profile_change_"):
             gear_key = custom_id.replace("profile_change_", "", 1)
             await GearSelectView(self, gear_key).setup_and_update(interaction)
