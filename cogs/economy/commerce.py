@@ -293,11 +293,37 @@ class BuyItemView(ShopViewBase):
         await update_inventory(str(self.user.id), item_name, 1)
         await update_wallet(self.user, -total_price)
         
-        # [핵심 수정] 역할 부여 로직을 다시 활성화합니다.
-        if id_key := item_data.get('id_key'):
-            if role_id := get_id(id_key):
-                if role := interaction.guild.get_role(role_id):
-                    await self.user.add_roles(role)
+        # --- [디버깅 로그 추가 시작] ---
+        logger.info(f"--- 역할 부여 디버깅 시작: 아이템 '{item_name}' ---")
+        
+        id_key = item_data.get('id_key')
+        logger.info(f"[1/4] DB에서 가져온 id_key: {id_key}")
+
+        if id_key:
+            role_id = get_id(id_key)
+            logger.info(f"[2/4] id_key '{id_key}'에 매칭된 역할 ID: {role_id}")
+
+            if role_id:
+                role = interaction.guild.get_role(role_id)
+                logger.info(f"[3/4] 역할 ID '{role_id}'로 서버에서 찾은 역할 객체: {role.name if role else '못 찾음'}")
+
+                if role:
+                    try:
+                        await self.user.add_roles(role, reason=f"'{item_name}' 아이템 구매")
+                        logger.info(f"[4/4] 성공: {self.user.display_name} 님에게 '{role.name}' 역할 부여 완료!")
+                    except discord.Forbidden:
+                        logger.error(f"[4/4] 실패: Forbidden 오류! 봇에게 '{role.name}' 역할을 부여할 권한이 없습니다. (권한, 역할 계층 확인 필요)")
+                    except Exception as e:
+                        logger.error(f"[4/4] 실패: 역할 부여 중 예외 발생: {e}", exc_info=True)
+                else:
+                    logger.warning("[4/4] 건너뜀: 역할 객체를 찾을 수 없어 역할을 부여할 수 없습니다.")
+            else:
+                logger.warning("[3/4 & 4/4] 건너뜀: 매칭된 역할 ID가 없어 역할을 찾거나 부여할 수 없습니다.")
+        else:
+            logger.info("[2/4 & 3/4 & 4/4] 건너뜀: 아이템에 id_key가 설정되어 있지 않아 역할 부여를 시도하지 않습니다.")
+        
+        logger.info("--- 역할 부여 디버깅 종료 ---")
+        # --- [디버깅 로그 추가 끝] ---
 
         new_wallet = await get_wallet(self.user.id)
         new_balance = new_wallet.get('balance', 0)
