@@ -172,19 +172,39 @@ class BuyItemView(ShopViewBase):
             self.page_index -= 1
         await self.update_view(interaction)
 
+# cogs/economy/commerce.py -> BuyItemView 클래스 내부
+
     async def select_callback(self, interaction: discord.Interaction):
+        # [디버깅 Ver.3] 이 함수가 실행되는지 먼저 확인합니다.
+        logger.info("--- select_callback 함수 실행됨 ---")
+
         item_name = interaction.data['values'][0]
         item_data = get_item_database().get(item_name)
-        if not item_data: return
+
+        logger.info(f"선택된 아이템: '{item_name}'")
+        logger.info(f"DB 캐시에서 가져온 아이템 정보: {item_data}")
+        
+        if not item_data:
+            logger.error("치명적 오류: 아이템 데이터가 DB 캐시에 없어 처리를 중단합니다.")
+            return
 
         try:
-            if item_data.get('instant_use'):
+            # [디버깅 Ver.3] 분기 조건에 사용될 값을 직접 확인합니다.
+            instant_use_val = item_data.get('instant_use', False)
+            max_ownable_val = item_data.get('max_ownable', 1)
+            logger.info(f"분기 조건 확인 -> instant_use: {instant_use_val}, max_ownable: {max_ownable_val}")
+
+            if instant_use_val:
+                logger.info("라우팅: handle_instant_use_item 으로 이동합니다.")
                 await self.handle_instant_use_item(interaction, item_name, item_data)
-            elif item_data.get('max_ownable', 1) > 1:
+            elif max_ownable_val > 1:
+                logger.info("라우팅: handle_quantity_purchase 으로 이동합니다.")
                 await self.handle_quantity_purchase(interaction, item_name, item_data)
             else:
+                logger.info("라우팅: handle_single_purchase 으로 이동합니다.")
                 await self.handle_single_purchase(interaction, item_name, item_data)
             
+            logger.info("아이템 처리 완료 후, 뷰를 업데이트합니다.")
             await self.update_view(interaction)
 
         except Exception as e:
