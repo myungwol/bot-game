@@ -12,7 +12,7 @@ from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
     get_item_database, get_config, get_string, BARE_HANDS,
-    supabase, get_farm_data, expand_farm_db, update_inventory, save_config_to_db # save_config_to_db 추가
+    supabase, get_farm_data, expand_farm_db, update_inventory, save_config_to_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -113,9 +113,7 @@ class ItemUsageView(ui.View):
                 await self._update_warning_roles(self.user, new_total)
                 self.parent_view.status_message = f"✅ '{item_info['name']}'을(를) 사용했습니다. (현재 벌점: {new_total}회)"
             
-            # [✅✅✅ 핵심 수정 ✅✅✅] 이벤트 우선 참여권에 대한 특별 로직을 추가합니다.
             elif item_type == "consume_with_reason":
-                # 이 아이템이 '이벤트 우선 참여권'일 경우에만 특별 검사를 수행합니다.
                 if selected_item_key == "role_item_event_priority":
                     is_active = get_config("event_priority_pass_active", False)
                     if not is_active:
@@ -127,7 +125,6 @@ class ItemUsageView(ui.View):
                         self.parent_view.status_message = "❌ 이미 이 이벤트에 우선 참여권을 사용했습니다."
                         return await self.on_back(interaction, reload_data=False)
                 
-                # 검사를 통과하면 모달을 띄웁니다.
                 modal = ReasonModal(item_info['name'])
                 await interaction.followup.send_modal(modal)
                 await modal.wait()
@@ -136,7 +133,6 @@ class ItemUsageView(ui.View):
                     await self.log_item_usage(item_info, modal.reason)
                     await update_inventory(self.user.id, item_info['name'], -1)
                     
-                    # '이벤트 우선 참여권'이었다면, 사용 기록을 DB에 남깁니다.
                     if selected_item_key == "role_item_event_priority":
                         used_users.append(self.user.id)
                         await save_config_to_db("event_priority_pass_users", used_users)
@@ -180,7 +176,6 @@ class ItemUsageView(ui.View):
             logger.warning(f"DB에서 '{log_embed_key}' 임베드를 찾을 수 없습니다.")
             return
         
-        # [✅✅✅ 핵심 수정 ✅✅✅] 이벤트 우선권 로그 제목을 동적으로 변경합니다.
         embed = format_embed_from_db(embed_data)
         if item_info.get("type") == "consume_with_reason":
             embed.title = f"{self.user.display_name}님이 {item_info['name']}을(를) 사용했습니다."
@@ -195,8 +190,6 @@ class ItemUsageView(ui.View):
     async def on_back(self, interaction: discord.Interaction, reload_data: bool = False):
         await self.parent_view.update_display(interaction, reload_data=reload_data)
 
-
-# ... (이하 ProfileView 및 다른 클래스들은 기존과 동일하게 유지) ...
 
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
@@ -392,17 +385,30 @@ class ProfileView(ui.View):
             await interaction.response.defer()
             usage_view = ItemUsageView(self)
             
+            # [✅✅✅ 핵심 수정 ✅✅✅]
+            # 아이템 이름 대신 id_key를 기준으로 사용 가능 여부를 판단하는 안정적인 로직으로 변경합니다.
             usable_items_config = get_config("USABLE_ITEMS", {})
-            name_to_key_map = {info['name']: key for key, info in usable_items_config.items()}
             user_inventory = await get_inventory(self.user)
-
+            item_db = get_item_database()
+            
             owned_usable_items = []
             for item_name, quantity in user_inventory.items():
-                if quantity > 0 and item_name in name_to_key_map:
-                    item_key = name_to_key_map[item_name]
-                    item_info = usable_items_config[item_key]
-                    owned_usable_items.append({"key": item_key, **item_info})
-            
+                if quantity <= 0:
+                    continue
+                
+                item_data_from_db = item_db.get(item_name)
+                if not item_data_from_db:
+                    continue
+                
+                item_id_key = item_data_from_db.get('id_key')
+                if item_id_key and item_id_key in usable_items_config:
+                    item_info_from_config = usable_items_config[item_id_key]
+                    owned_usable_items.append({
+                        "key": item_id_key,
+                        "name": item_info_from_config.get('name', item_name),
+                        "description": item_info_from_config.get('description', '설명 없음')
+                    })
+
             if not owned_usable_items:
                 msg = await interaction.followup.send(get_string("profile_view.item_usage_view.no_usable_items"), ephemeral=True)
                 await asyncio.sleep(5)
