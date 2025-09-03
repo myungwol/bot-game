@@ -103,9 +103,9 @@ class ItemUsageView(ui.View):
             if item_type == "deduct_warning":
                 try:
                     rpc_params = {
-                        'p_guild_id': str(self.user.guild.id),
-                        'p_user_id': str(self.user.id),
-                        'p_moderator_id': str(self.user.id),
+                        'p_guild_id': self.user.guild.id,
+                        'p_user_id': self.user.id,
+                        'p_moderator_id': self.user.id,
                         'p_reason': f"'{item_info['name']}' 아이템 사용",
                         'p_amount': -1
                     }
