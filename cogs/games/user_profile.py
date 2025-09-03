@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 GEAR_CATEGORY = "장비"
 BAIT_CATEGORY = "미끼"
-FARM_TOOL_CATEGORY = "농장_도구"
+FARM_TOOL_CATEGORY = "장비"
 
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
