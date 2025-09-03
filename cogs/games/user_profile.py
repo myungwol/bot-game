@@ -18,7 +18,6 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# 아이템 카테고리를 상수로 정의
 GEAR_CATEGORY = "장비"
 BAIT_CATEGORY = "미끼"
 FARM_TOOL_CATEGORY = "농장_도구"
@@ -85,7 +84,7 @@ class ProfileView(ui.View):
         if self.current_page == "info":
             embed.add_field(name=get_string("profile_view.info_tab.field_balance", "소지금"), value=f"`{balance:,}`{self.currency_icon}", inline=True)
             
-            job_name = "일반 주민"
+            job_name = "직업 없음"
             try:
                 job_res = await supabase.table('user_jobs').select('jobs(job_name)').eq('user_id', self.user.id).maybe_single().execute()
                 if job_res and job_res.data and job_res.data.get('jobs'):
@@ -94,27 +93,22 @@ class ProfileView(ui.View):
                 logger.error(f"직업 정보 조회 중 오류 발생 (유저: {self.user.id}): {e}")
             embed.add_field(name="직업", value=f"`{job_name}`", inline=True)
 
+            # [핵심 수정] 등급 표시 로직 변경
             user_rank_mention = get_string("profile_view.info_tab.default_rank_name", "새내기 주민")
-            job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
-            level_tier_roles = job_system_config.get("LEVEL_TIER_ROLES", [])
-            sorted_tier_roles = sorted(level_tier_roles, key=lambda x: x.get('level', 0), reverse=True)
-            user_role_ids = {role.id for role in self.user.roles}
+            rank_roles_config = get_config("PROFILE_RANK_ROLES", []) # 새로 추가한 설정값 가져오기
             
-            for tier in sorted_tier_roles:
-                if (role_key := tier.get('role_key')) and (rank_role_id := get_id(role_key)) and rank_role_id in user_role_ids:
-                    if rank_role := self.user.guild.get_role(rank_role_id):
-                        user_rank_mention = rank_role.mention
-                        break
+            if rank_roles_config:
+                user_role_ids = {role.id for role in self.user.roles}
+                # 우선순위가 높은 역할부터 순서대로 확인
+                for rank_info in rank_roles_config:
+                    role_key = rank_info.get("role_key")
+                    if role_key and (rank_role_id := get_id(role_key)) and rank_role_id in user_role_ids:
+                        user_rank_mention = f"<@&{rank_role_id}>"
+                        break # 가장 높은 등급의 역할을 찾았으면 반복 중단
             
             embed.add_field(name=get_string("profile_view.info_tab.field_rank", "등급"), value=user_rank_mention, inline=True)
             description += get_string("profile_view.info_tab.description", "아래 탭을 선택하여 상세 정보를 확인하세요.")
             embed.description = description
-        
-        elif self.current_page == "item":
-            excluded_categories = [GEAR_CATEGORY, FARM_TOOL_CATEGORY, "농장_씨앗", "농장_작물", BAIT_CATEGORY]
-            general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
-            item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`개" for n, c in general_items.items()]
-            embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items", "보유 중인 아이템이 없습니다."))
         
         elif self.current_page == "gear":
             gear_categories = {"낚시": {"rod": "🎣 낚싯대", "bait": "🐛 미끼"}, "농장": {"hoe": "🪓 괭이", "watering_can": "💧 물뿌리개"}}
@@ -122,7 +116,6 @@ class ProfileView(ui.View):
                 field_lines = [f"**{label}:** `{gear.get(key, BARE_HANDS)}`" for key, label in items.items()]
                 embed.add_field(name=f"**[ 현재 장비: {category_name} ]**", value="\n".join(field_lines), inline=False)
             
-            # [핵심 수정] '보유 중인 장비'를 필터링할 때 '장비'와 '미끼' 카테고리를 모두 포함하도록 변경
             owned_gear_categories = [GEAR_CATEGORY, BAIT_CATEGORY]
             owned_gear_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') in owned_gear_categories}
 
@@ -132,6 +125,14 @@ class ProfileView(ui.View):
             else:
                 embed.add_field(name="\n**[ 보유 중인 장비 ]**", value=get_string("profile_view.gear_tab.no_owned_gear", "보유 중인 장비가 없습니다."), inline=False)
             embed.description = description
+
+        # ... (나머지 탭 코드는 변경 없음) ...
+        # (이하 코드는 이전 답변과 동일합니다)
+        elif self.current_page == "item":
+            excluded_categories = [GEAR_CATEGORY, FARM_TOOL_CATEGORY, "농장_씨앗", "농장_작물", BAIT_CATEGORY]
+            general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
+            item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`개" for n, c in general_items.items()]
+            embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items", "보유 중인 아이템이 없습니다."))
         
         elif self.current_page == "fish":
             aquarium = self.cached_data.get("aquarium", [])
@@ -159,6 +160,7 @@ class ProfileView(ui.View):
         return embed
 
     def build_components(self):
+        # ... (이하 모든 코드는 이전 답변과 동일하게 유지) ...
         self.clear_items()
         tabs_config = get_string("profile_view.tabs", [])
         
@@ -215,7 +217,7 @@ class GearSelectView(ui.View):
         super().__init__(timeout=180)
         self.parent_view = parent_view
         self.user = parent_view.user
-        self.gear_key = gear_key
+        self.gear_key = gear_key 
         
         GEAR_SETTINGS = {
             "rod":          {"display_name": "낚싯대", "gear_type_db": "낚싯대", "unequip_label": "낚싯대 해제", "default_item": BARE_HANDS},
