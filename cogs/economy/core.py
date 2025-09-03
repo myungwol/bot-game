@@ -13,7 +13,8 @@ from collections import deque
 from utils.database import (
     get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
     save_config_to_db, get_all_user_stats, log_activity, get_cooldown, set_cooldown,
-    get_user_gear, load_all_data_from_db, ensure_user_gear_exists
+    get_user_gear, load_all_data_from_db, ensure_user_gear_exists,
+    load_bot_configs_from_db, delete_config_from_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -49,6 +50,7 @@ class EconomyCore(commands.Cog):
         self.voice_activity_tracker.start()
         self.update_market_prices.start()
         self.monthly_whale_reset.start()
+        self.config_reload_checker.start()
 
         self.initial_setup_done = False
 
@@ -120,6 +122,33 @@ class EconomyCore(commands.Cog):
         self.monthly_whale_reset.cancel()
         if self.log_sender_task:
             self.log_sender_task.cancel()
+        self.config_reload_checker.cancel()
+
+    @tasks.loop(seconds=10.0)
+    async def config_reload_checker(self):
+        try:
+            # get_config는 캐시를 먼저 확인하므로 DB 부하가 거의 없습니다.
+            # 이 방식은 DB를 직접 쿼리하여 캐시를 우회하고 최신 값을 가져옵니다.
+            response = await supabase.table('bot_configs').select('config_key').eq('config_key', 'config_reload_request').maybe_single().execute()
+            
+            if response and response.data:
+                logger.info("[CONFIG] 관리 봇으로부터 설정 새로고침 요청을 감지했습니다. DB에서 설정을 다시 불러옵니다...")
+                
+                await load_bot_configs_from_db()
+                
+                for cog in self.bot.cogs.values():
+                    if hasattr(cog, 'load_configs'):
+                        await cog.load_configs()
+
+                await delete_config_from_db("config_reload_request")
+                logger.info("[CONFIG] 모든 설정 새로고침이 완료되었습니다.")
+        except Exception as e:
+            logger.error(f"설정 새로고침 작업 중 오류 발생: {e}", exc_info=True)
+
+    @config_reload_checker.before_loop
+    async def before_config_reload_checker(self):
+        await self.bot.wait_until_ready()
+
 
     async def coin_log_sender(self):
         await self.bot.wait_until_ready()
