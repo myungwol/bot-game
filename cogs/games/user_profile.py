@@ -12,7 +12,7 @@ from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
     get_item_database, get_config, get_string, BARE_HANDS,
-    supabase, get_farm_data, expand_farm_db
+    supabase, get_farm_data, expand_farm_db, update_inventory
 )
 from utils.helpers import format_embed_from_db
 
@@ -49,9 +49,8 @@ class ItemUsageView(ui.View):
         
         usable_items_config = get_config("USABLE_ITEMS", {})
         item_info = usable_items_config.get(selected_item_key)
-        item_role = self.user.guild.get_role(get_id(selected_item_key))
 
-        if not item_info or not item_role:
+        if not item_info:
             self.parent_view.status_message = get_string("profile_view.item_usage_view.error_invalid_item")
             return await self.on_back(interaction, reload_data=True)
 
@@ -68,7 +67,7 @@ class ItemUsageView(ui.View):
                 await modal.wait()
                 if modal.reason:
                     await self.log_item_usage(item_info, modal.reason)
-                    await self.user.remove_roles(item_role, reason=f"{item_info['name']} 사용")
+                    await update_inventory(self.user.id, item_info['name'], -1) # [핵심 수정] DB에서 아이템 1개 차감
                     self.parent_view.status_message = get_string("profile_view.item_usage_view.consume_success", item_name=item_info['name'])
             
             elif item_type == "farm_expansion":
@@ -82,7 +81,7 @@ class ItemUsageView(ui.View):
                     else:
                         success = await expand_farm_db(farm_data['id'], current_plots)
                         if success:
-                            await self.user.remove_roles(item_role, reason="밭 확장 허가증 사용")
+                            await update_inventory(self.user.id, item_info['name'], -1) # [핵심 수정] DB에서 아이템 1개 차감
                             self.parent_view.status_message = get_string("profile_view.item_usage_view.farm_expand_success", plot_count=current_plots + 1)
                         else:
                             raise Exception("DB 농장 확장 실패")
@@ -309,25 +308,26 @@ class ProfileView(ui.View):
             await self.update_display(interaction) 
             
         elif custom_id == "profile_use_item":
-            # [핵심 수정] 기존 메시지를 수정하는 대신, 현재 상호작용의 내용을 ItemUsageView로 교체합니다.
             await interaction.response.defer()
             usage_view = ItemUsageView(self)
             
-            # ItemUsageView가 자신의 콘텐츠(embed, components)를 준비하도록 합니다.
+            # [핵심 수정] DB 인벤토리 기반으로 사용 가능 아이템 확인
             usable_items_config = get_config("USABLE_ITEMS", {})
-            user_role_ids = {role.id for role in self.user.roles}
-            
-            owned_usable_items = []
-            for item_key, item_info in usable_items_config.items():
-                if (role_id := get_id(item_key)) and role_id in user_role_ids:
-                    owned_usable_items.append({"key": item_key, **item_info})
+            name_to_key_map = {info['name']: key for key, info in usable_items_config.items()}
+            user_inventory = await get_inventory(self.user)
 
+            owned_usable_items = []
+            for item_name, quantity in user_inventory.items():
+                if quantity > 0 and item_name in name_to_key_map:
+                    item_key = name_to_key_map[item_name]
+                    item_info = usable_items_config[item_key]
+                    owned_usable_items.append({"key": item_key, **item_info})
+            
             if not owned_usable_items:
                 msg = await interaction.followup.send(get_string("profile_view.item_usage_view.no_usable_items"), ephemeral=True)
                 await asyncio.sleep(5)
                 try: await msg.delete()
                 except discord.HTTPException: pass
-                # 원래대로 돌아가기 위해 defer()를 호출했으므로 edit_original_response를 사용합니다.
                 await self.update_display(interaction)
                 return
 
@@ -342,7 +342,6 @@ class ProfileView(ui.View):
 
             embed = discord.Embed(title=get_string("profile_view.item_usage_view.embed_title"), description=get_string("profile_view.item_usage_view.embed_description"), color=discord.Color.gold())
             
-            # 현재 메시지를 ItemUsageView의 내용으로 수정합니다.
             edited_message = await interaction.edit_original_response(embed=embed, view=usage_view)
             usage_view.message = edited_message
 
