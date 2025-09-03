@@ -8,7 +8,8 @@ import asyncio
 from typing import Dict, Any, List
 
 from utils.database import supabase, get_config, get_id, get_embed_from_db
-from utils.game_config_defaults import JOB_SYSTEM_CONFIG, JOB_ADVANCEMENT_DATA
+# ▼ 아래 라인에서 JOB_SYSTEM_CONFIG와 JOB_ADVANCEMENT_DATA를 삭제합니다.
+# from utils.game_config_defaults import JOB_SYSTEM_CONFIG, JOB_ADVANCEMENT_DATA
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
@@ -119,7 +120,10 @@ class JobAdvancementView(ui.View):
             job_id, ability_id = job_res.data['id'], ability_res.data['id']
             
             job_role_key = selected_job_data['role_key']
-            all_job_role_keys = list(JOB_SYSTEM_CONFIG.get("JOB_ROLE_MAP", {}).values())
+            
+            # ▼ DB에서 JOB_SYSTEM_CONFIG를 가져오도록 수정
+            job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
+            all_job_role_keys = list(job_system_config.get("JOB_ROLE_MAP", {}).values())
             
             roles_to_remove = [role for key in all_job_role_keys if (role_id := get_id(key)) and (role := interaction.guild.get_role(role_id)) and role in user.roles and key != job_role_key]
             if roles_to_remove: await user.remove_roles(*roles_to_remove, reason="전직으로 인한 이전 직업 역할 제거")
@@ -207,7 +211,8 @@ class JobAndTierHandler(commands.Cog):
                         comp = message.components[0].children[0]
                         if isinstance(comp, discord.Button) and comp.custom_id and comp.custom_id.startswith("start_advancement_"):
                             level = int(comp.custom_id.split('_')[-1])
-                            advancement_data = JOB_ADVANCEMENT_DATA.get(level, [])
+                            # ▼ DB에서 JOB_ADVANCEMENT_DATA를 가져오도록 수정
+                            advancement_data = get_config("JOB_ADVANCEMENT_DATA", {}).get(str(level), [])
                             view = StartAdvancementView(self.bot, owner_id, advancement_data, level)
                             self.bot.add_view(view, message_id=message.id)
                             logger.info(f"'{thread.name}' 스레드에서 StartAdvancementView를 다시 로드했습니다.")
@@ -235,7 +240,8 @@ class JobAndTierHandler(commands.Cog):
             user_job_res = await supabase.table('user_jobs').select('jobs(job_key)').eq('user_id', member.id).maybe_single().execute()
             current_job_key = user_job_res.data['jobs']['job_key'] if user_job_res and user_job_res.data and user_job_res.data.get('jobs') else None
 
-            all_advancement_jobs = JOB_ADVANCEMENT_DATA.get(level, [])
+            # ▼ DB에서 JOB_ADVANCEMENT_DATA를 가져오도록 수정
+            all_advancement_jobs = get_config("JOB_ADVANCEMENT_DATA", {}).get(str(level), [])
             filtered_jobs = [job_info for job_info in all_advancement_jobs if not (prerequisite := job_info.get("prerequisite_job")) or prerequisite == current_job_key]
 
             if not filtered_jobs:
@@ -262,7 +268,9 @@ class JobAndTierHandler(commands.Cog):
     async def update_tier_role(self, member: discord.Member, level: int):
         try:
             guild = member.guild
-            tier_roles_config = sorted(JOB_SYSTEM_CONFIG.get("LEVEL_TIER_ROLES", []), key=lambda x: x['level'], reverse=True)
+            # ▼ DB에서 JOB_SYSTEM_CONFIG를 가져오도록 수정
+            job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
+            tier_roles_config = sorted(job_system_config.get("LEVEL_TIER_ROLES", []), key=lambda x: x['level'], reverse=True)
             
             target_role_key = next((tier['role_key'] for tier in tier_roles_config if level >= tier['level']), None)
             if not target_role_key: return
