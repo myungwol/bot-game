@@ -15,6 +15,8 @@ from utils.database import (
     supabase, get_farm_data, expand_farm_db, update_inventory
 )
 from utils.helpers import format_embed_from_db
+# [✅✅✅ 핵심 수정 ✅✅✅] 경고 단계 설정값을 가져옵니다.
+from utils.ui_defaults import WARNING_THRESHOLDS
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +38,49 @@ class ReasonModal(ui.Modal):
         await interaction.response.defer()
         self.stop()
 
+# [✅✅✅ 핵심 수정 ✅✅✅] ItemUsageView 클래스 전체를 새로운 로직으로 교체합니다.
 class ItemUsageView(ui.View):
     def __init__(self, parent_view: 'ProfileView'):
         super().__init__(timeout=180)
         self.parent_view = parent_view
         self.user = parent_view.user
         self.message: Optional[discord.WebhookMessage] = None
+
+    async def _update_warning_roles(self, member: discord.Member, total_count: int):
+        """누적 경고 횟수에 따라 역할을 업데이트합니다."""
+        guild = member.guild
+        
+        all_warning_role_ids = {get_id(t['role_key']) for t in WARNING_THRESHOLDS if get_id(t['role_key'])}
+        current_warning_roles = [role for role in member.roles if role.id in all_warning_role_ids]
+        
+        target_role_id = None
+        for threshold in sorted(WARNING_THRESHOLDS, key=lambda x: x['count'], reverse=True):
+            if total_count >= threshold['count']:
+                target_role_id = get_id(threshold['role_key'])
+                break
+        
+        target_role = guild.get_role(target_role_id) if target_role_id else None
+
+        try:
+            roles_to_add = []
+            roles_to_remove = []
+
+            if target_role and target_role not in current_warning_roles:
+                roles_to_add.append(target_role)
+
+            for role in current_warning_roles:
+                if not target_role or role.id != target_role.id:
+                    roles_to_remove.append(role)
+            
+            if roles_to_add:
+                await member.add_roles(*roles_to_add, reason=f"누적 경고 {total_count}회 달성 (아이템 사용)")
+            if roles_to_remove:
+                await member.remove_roles(*roles_to_remove, reason="경고 역할 업데이트 (아이템 사용)")
+                
+        except discord.Forbidden:
+            logger.error(f"경고 역할 업데이트 실패: {member.display_name}님의 역할을 변경할 권한이 없습니다.")
+        except Exception as e:
+            logger.error(f"경고 역할 업데이트 중 오류: {e}", exc_info=True)
 
     async def on_item_select(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -57,9 +96,33 @@ class ItemUsageView(ui.View):
         try:
             item_type = item_info.get("type")
             
-            if item_type == "request_to_admin":
-                await supabase.table('item_usage_requests').insert({"user_id": str(self.user.id), "guild_id": str(self.user.guild.id), "item_key": selected_item_key}).execute()
-                self.parent_view.status_message = get_string("profile_view.item_usage_view.request_success", item_name=item_info['name'])
+            if item_type == "deduct_warning":
+                try:
+                    # 1. DB 함수를 호출하여 벌점 차감(-1)과 최종 누적량 계산을 한 번에 처리
+                    rpc_params = {
+                        'p_guild_id': str(self.user.guild.id),
+                        'p_user_id': str(self.user.id),
+                        'p_moderator_id': str(self.user.id),
+                        'p_reason': f"'{item_info['name']}' 아이템 사용",
+                        'p_amount': -1
+                    }
+                    response = await supabase.rpc('add_warning_and_get_total', rpc_params).execute()
+                    new_total = response.data
+                except Exception as e:
+                     logger.error(f"벌점 차감 RPC 호출 실패: {e}", exc_info=True)
+                     self.parent_view.status_message = "❌ 벌점 차감 중 오류가 발생했습니다."
+                     return await self.on_back(interaction, reload_data=True)
+
+                # 2. 아이템 소모
+                await update_inventory(self.user.id, item_info['name'], -1)
+                
+                # 3. 로그 메시지 전송
+                await self.log_item_usage(item_info, f"'{item_info['name']}'을(를) 사용하여 벌점을 1회 차감했습니다. (현재 벌점: {new_total}회)")
+
+                # 4. 역할 업데이트
+                await self._update_warning_roles(self.user, new_total)
+                
+                self.parent_view.status_message = f"✅ '{item_info['name']}'을(를) 사용했습니다. (현재 벌점: {new_total}회)"
             
             elif item_type == "consume_with_reason":
                 modal = ReasonModal(item_info['name'])
@@ -67,7 +130,7 @@ class ItemUsageView(ui.View):
                 await modal.wait()
                 if modal.reason:
                     await self.log_item_usage(item_info, modal.reason)
-                    await update_inventory(self.user.id, item_info['name'], -1) # [핵심 수정] DB에서 아이템 1개 차감
+                    await update_inventory(self.user.id, item_info['name'], -1)
                     self.parent_view.status_message = get_string("profile_view.item_usage_view.consume_success", item_name=item_info['name'])
             
             elif item_type == "farm_expansion":
@@ -81,7 +144,7 @@ class ItemUsageView(ui.View):
                     else:
                         success = await expand_farm_db(farm_data['id'], current_plots)
                         if success:
-                            await update_inventory(self.user.id, item_info['name'], -1) # [핵심 수정] DB에서 아이템 1개 차감
+                            await update_inventory(self.user.id, item_info['name'], -1)
                             self.parent_view.status_message = get_string("profile_view.item_usage_view.farm_expand_success", plot_count=current_plots + 1)
                         else:
                             raise Exception("DB 농장 확장 실패")
@@ -109,7 +172,7 @@ class ItemUsageView(ui.View):
         
         embed = format_embed_from_db(embed_data)
         embed.description=f"{self.user.mention}님이 **'{item_info['name']}'**을(를) 사용했습니다."
-        embed.add_field(name="사용 사유", value=reason, inline=False)
+        embed.add_field(name="처리 내용", value=reason, inline=False)
         embed.set_author(name=self.user.display_name, icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
         await log_channel.send(embed=embed)
 
@@ -311,7 +374,6 @@ class ProfileView(ui.View):
             await interaction.response.defer()
             usage_view = ItemUsageView(self)
             
-            # [핵심 수정] DB 인벤토리 기반으로 사용 가능 아이템 확인
             usable_items_config = get_config("USABLE_ITEMS", {})
             name_to_key_map = {info['name']: key for key, info in usable_items_config.items()}
             user_inventory = await get_inventory(self.user)
