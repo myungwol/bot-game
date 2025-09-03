@@ -211,8 +211,10 @@ async def get_user_gear(user: discord.User) -> dict:
 @supabase_retry_handler()
 async def set_user_gear(user_id: int, **kwargs):
     if kwargs:
+        # 이 한 줄을 추가하여 문제를 해결합니다.
+        await ensure_user_gear_exists(user_id)
         await supabase.table('gear_setups').update(kwargs).eq('user_id', str(user_id)).execute()
-
+        
 @supabase_retry_handler()
 async def get_aquarium(user_id: int) -> list:
     response = await supabase.table('aquariums').select('id, name, size, emoji').eq('user_id', str(user_id)).execute()
@@ -335,3 +337,4 @@ async def get_farm_owner_by_thread(thread_id: int) -> Optional[int]:
 async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
     response = await supabase.table('farm_item_details').select('*').eq('item_name', item_name).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
+    
