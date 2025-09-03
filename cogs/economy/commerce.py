@@ -102,7 +102,7 @@ class BuyItemView(ShopViewBase):
         description_template = commerce_strings.get("item_view_desc", "현재 소지금: `{balance}`{currency_icon}\n구매하고 싶은 상품을 선택해주세요.")
 
         embed = discord.Embed(
-            title=f"🏪 상점 - {display_name}",
+            title=f"🏪 구매함 - {display_name}",
             description=description_template.format(balance=f"{balance:,}", currency_icon=self.currency_icon),
             color=discord.Color.blue()
         )
@@ -374,7 +374,7 @@ class BuyCategoryView(ShopViewBase):
         all_ui_strings = get_config("strings", {})
         commerce_strings = all_ui_strings.get("commerce", {})
         
-        title = commerce_strings.get("category_view_title", "🏪 상점")
+        title = commerce_strings.get("category_view_title", "🏪 구매함")
         description = commerce_strings.get("category_view_desc", "구매하고 싶은 아이템의 카테고리를 선택해주세요.")
 
         return discord.Embed(title=title, description=description, color=discord.Color.green())
@@ -616,7 +616,7 @@ class CommercePanelView(ui.View):
         super().__init__(timeout=None)
         self.commerce_cog = cog_instance
         
-        shop_button = ui.Button(label="상점 (아이템 구매)", style=discord.ButtonStyle.success, emoji="🏪", custom_id="commerce_open_shop")
+        shop_button = ui.Button(label="구매함 (아이템 구매)", style=discord.ButtonStyle.success, emoji="🏪", custom_id="commerce_open_shop")
         shop_button.callback = self.open_shop
         self.add_item(shop_button)
 
