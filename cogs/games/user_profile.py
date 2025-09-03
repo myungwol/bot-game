@@ -36,7 +36,6 @@ class ReasonModal(ui.Modal):
         await interaction.response.defer()
         self.stop()
 
-# [핵심 수정] 아이템 사용 로직을 담당하는 View
 class ItemUsageView(ui.View):
     def __init__(self, parent_view: 'ProfileView'):
         super().__init__(timeout=180)
@@ -96,7 +95,7 @@ class ItemUsageView(ui.View):
                 await interaction.followup.send_modal(modal)
                 await modal.wait()
                 if modal.reason:
-                    await self.log_item_usage(item_info['name'], modal.reason)
+                    await self.log_item_usage(item_info, modal.reason)
                     await self.user.remove_roles(item_role, reason=f"{item_info['name']} 사용")
                     self.parent_view.status_message = get_string("profile_view.item_usage_view.consume_success", item_name=item_info['name'])
             
@@ -122,14 +121,23 @@ class ItemUsageView(ui.View):
 
         await self.on_back(interaction, reload_data=True)
 
-    async def log_item_usage(self, item_name: str, reason: str):
-        log_channel_id = get_id("log_item_usage") # 로그 채널 ID를 DB에서 가져옵니다.
-        if not log_channel_id or not (log_channel := self.user.guild.get_channel(log_channel_id)):
+    async def log_item_usage(self, item_info: dict, reason: str):
+        if not (log_channel_key := item_info.get("log_channel_key")):
             return
 
-        embed_data = await get_embed_from_db("log_item_use") or {}
+        log_channel_id = get_id(log_channel_key)
+        if not log_channel_id or not (log_channel := self.user.guild.get_channel(log_channel_id)):
+            logger.warning(f"'{log_channel_key}'에 해당하는 로그 채널을 찾을 수 없습니다.")
+            return
+
+        log_embed_key = item_info.get("log_embed_key", "log_item_use")
+        embed_data = await get_embed_from_db(log_embed_key)
+        if not embed_data:
+            logger.warning(f"DB에서 '{log_embed_key}' 임베드를 찾을 수 없습니다.")
+            return
+        
         embed = format_embed_from_db(embed_data)
-        embed.description=f"{self.user.mention}님이 **'{item_name}'**을(를) 사용했습니다."
+        embed.description=f"{self.user.mention}님이 **'{item_info['name']}'**을(를) 사용했습니다."
         embed.add_field(name="사용 사유", value=reason, inline=False)
         embed.set_author(name=self.user.display_name, icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
         await log_channel.send(embed=embed)
@@ -139,6 +147,7 @@ class ItemUsageView(ui.View):
             try: await self.message.delete()
             except discord.HTTPException: pass
         await self.parent_view.update_display(interaction, reload_data=reload_data)
+
 
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
@@ -202,7 +211,6 @@ class ProfileView(ui.View):
         if self.current_page == "info":
             embed.add_field(name=get_string("profile_view.info_tab.field_balance", "소지금"), value=f"`{balance:,}`{self.currency_icon}", inline=True)
             
-            # [핵심 수정] 직업 표시 로직 변경 (멘션 기능 추가)
             job_mention = "`없음`"
             job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
             job_role_map = job_system_config.get("JOB_ROLE_MAP", {})
@@ -216,12 +224,11 @@ class ProfileView(ui.View):
                     if (role_key := job_role_map.get(job_key)) and (role_id := get_id(role_key)):
                         job_mention = f"<@&{role_id}>"
                     else:
-                        job_mention = f"`{job_name}`" # 역할 ID를 못 찾으면 텍스트로 표시
+                        job_mention = f"`{job_name}`"
             except Exception as e:
                 logger.error(f"직업 정보 조회 중 오류 발생 (유저: {self.user.id}): {e}")
             embed.add_field(name="직업", value=job_mention, inline=True)
 
-            # [핵심 수정] 등급 표시 로직 (이전 답변과 동일, 이제 정상 작동할 것)
             user_rank_mention = get_string("profile_view.info_tab.default_rank_name", "새내기 주민")
             rank_roles_config = get_config("PROFILE_RANK_ROLES", []) 
             
@@ -235,6 +242,12 @@ class ProfileView(ui.View):
             embed.add_field(name=get_string("profile_view.info_tab.field_rank", "등급"), value=user_rank_mention, inline=True)
             description += get_string("profile_view.info_tab.description", "아래 탭을 선택하여 상세 정보를 확인하세요.")
             embed.description = description
+        
+        elif self.current_page == "item":
+            excluded_categories = [GEAR_CATEGORY, FARM_TOOL_CATEGORY, "농장_씨앗", "농장_작물", BAIT_CATEGORY]
+            general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
+            item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`개" for n, c in general_items.items()]
+            embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items", "보유 중인 아이템이 없습니다."))
         
         elif self.current_page == "gear":
             gear_categories = {"낚시": {"rod": "🎣 낚싯대", "bait": "🐛 미끼"}, "농장": {"hoe": "🪓 괭이", "watering_can": "💧 물뿌리개"}}
@@ -251,14 +264,6 @@ class ProfileView(ui.View):
             else:
                 embed.add_field(name="\n**[ 보유 중인 장비 ]**", value=get_string("profile_view.gear_tab.no_owned_gear", "보유 중인 장비가 없습니다."), inline=False)
             embed.description = description
-
-        # ... (나머지 탭 코드는 변경 없음) ...
-        # (이하 코드는 이전 답변과 동일합니다)
-        elif self.current_page == "item":
-            excluded_categories = [GEAR_CATEGORY, FARM_TOOL_CATEGORY, "농장_씨앗", "농장_작물", BAIT_CATEGORY]
-            general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
-            item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`개" for n, c in general_items.items()]
-            embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items", "보유 중인 아이템이 없습니다."))
         
         elif self.current_page == "fish":
             aquarium = self.cached_data.get("aquarium", [])
@@ -299,8 +304,6 @@ class ProfileView(ui.View):
             tab_buttons_in_row += 1
         
         row_counter += 1
-        
-        # [핵심 추가] '아이템' 탭일 때만 '아이템 사용' 버튼 추가
         if self.current_page == "item":
             use_item_label = get_string("profile_view.item_tab.use_item_button_label", "아이템 사용")
             self.add_item(ui.Button(label=use_item_label, style=discord.ButtonStyle.success, emoji="✨", custom_id="profile_use_item", row=row_counter))
