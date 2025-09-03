@@ -274,9 +274,6 @@ class BuyItemView(ShopViewBase):
         msg = await interaction.followup.send(success_message, ephemeral=True)
         asyncio.create_task(delete_after(msg, 10))
 
-
-# cogs/economy/commerce.py -> BuyItemView 클래스 내부
-
     async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         # [디버깅 Ver.2] 함수 시작점에 로그 추가
         logger.info(f"--- '{item_name}' 단일 구매 처리 시작 (요청자: {self.user.display_name}) ---")
