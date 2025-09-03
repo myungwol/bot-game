@@ -120,6 +120,13 @@ async def save_config_to_db(key: str, value: Any):
     _bot_configs_cache[key] = value
 
 @supabase_retry_handler()
+async def delete_config_from_db(key: str):
+    """특정 설정 키를 DB와 로컬 캐시에서 삭제합니다."""
+    global _bot_configs_cache
+    await supabase.table('bot_configs').delete().eq('config_key', key).execute()
+    _bot_configs_cache.pop(key, None)
+
+@supabase_retry_handler()
 async def save_id_to_db(key: str, object_id: int):
     global _channel_id_cache
     await supabase.table('channel_configs').upsert({"channel_key": key, "channel_id": str(object_id)}, on_conflict="channel_key").execute()
@@ -184,18 +191,10 @@ async def update_inventory(user_id: int, item_name: str, quantity: int):
 
 @supabase_retry_handler()
 async def ensure_user_gear_exists(user_id: int):
-    """
-    DB 함수를 호출하여 유저의 기본 장비가 존재하는지 확인하고 없으면 생성합니다.
-    이 함수는 데이터를 반환하지 않고, 존재 여부만 보장합니다.
-    """
     await supabase.rpc('create_user_gear_if_not_exists', {'p_user_id': str(user_id)}).execute()
 
 @supabase_retry_handler()
 async def get_user_gear(user: discord.User) -> dict:
-    """
-    유저의 장비 정보를 가져옵니다.
-    먼저 ensure_user_gear_exists를 호출하여 데이터 존재를 보장한 후, select로 데이터를 가져옵니다.
-    """
     user_id_str = str(user.id)
     await ensure_user_gear_exists(user.id)
     
@@ -204,14 +203,12 @@ async def get_user_gear(user: discord.User) -> dict:
     if response and response.data:
         return response.data
     
-    # 만약 위 로직이 실패할 경우를 대비한 안전장치
     logger.warning(f"DB에서 유저(ID: {user.id})의 장비 정보를 가져오지 못했습니다. 기본값을 반환합니다.")
     return {"rod": BARE_HANDS, "bait": "미끼 없음", "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
 
 @supabase_retry_handler()
 async def set_user_gear(user_id: int, **kwargs):
     if kwargs:
-        # 이 한 줄을 추가하여 문제를 해결합니다.
         await ensure_user_gear_exists(user_id)
         await supabase.table('gear_setups').update(kwargs).eq('user_id', str(user_id)).execute()
         
@@ -337,4 +334,3 @@ async def get_farm_owner_by_thread(thread_id: int) -> Optional[int]:
 async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
     response = await supabase.table('farm_item_details').select('*').eq('item_name', item_name).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
-    
