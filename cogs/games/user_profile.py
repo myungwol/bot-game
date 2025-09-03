@@ -12,7 +12,7 @@ from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
     get_item_database, get_config, get_string, BARE_HANDS,
-    supabase, get_farm_data, expand_farm_db, update_inventory
+    supabase, get_farm_data, expand_farm_db, update_inventory, save_config_to_db # save_config_to_db 추가
 )
 from utils.helpers import format_embed_from_db
 
@@ -44,9 +44,7 @@ class ItemUsageView(ui.View):
         self.message: Optional[discord.WebhookMessage] = None
 
     async def _update_warning_roles(self, member: discord.Member, total_count: int):
-        """누적 경고 횟수에 따라 역할을 업데이트합니다."""
         guild = member.guild
-        
         warning_thresholds = get_config("WARNING_THRESHOLDS", [])
         if not warning_thresholds:
             logger.error("DB에서 WARNING_THRESHOLDS 설정을 찾을 수 없어 역할 업데이트를 건너뜁니다.")
@@ -64,21 +62,11 @@ class ItemUsageView(ui.View):
         target_role = guild.get_role(target_role_id) if target_role_id else None
 
         try:
-            roles_to_add = []
-            roles_to_remove = []
-
-            if target_role and target_role not in current_warning_roles:
-                roles_to_add.append(target_role)
-
-            for role in current_warning_roles:
-                if not target_role or role.id != target_role.id:
-                    roles_to_remove.append(role)
+            roles_to_add = [target_role] if target_role and target_role not in current_warning_roles else []
+            roles_to_remove = [role for role in current_warning_roles if not target_role or role.id != target_role.id]
             
-            if roles_to_add:
-                await member.add_roles(*roles_to_add, reason=f"누적 경고 {total_count}회 달성 (아이템 사용)")
-            if roles_to_remove:
-                await member.remove_roles(*roles_to_remove, reason="경고 역할 업데이트 (아이템 사용)")
-                
+            if roles_to_add: await member.add_roles(*roles_to_add, reason=f"누적 경고 {total_count}회 달성 (아이템 사용)")
+            if roles_to_remove: await member.remove_roles(*roles_to_remove, reason="경고 역할 업데이트 (아이템 사용)")
         except discord.Forbidden:
             logger.error(f"경고 역할 업데이트 실패: {member.display_name}님의 역할을 변경할 권한이 없습니다.")
         except Exception as e:
@@ -99,32 +87,20 @@ class ItemUsageView(ui.View):
             item_type = item_info.get("type")
             
             if item_type == "deduct_warning":
-                # [✅✅✅ 핵심 수정 ✅✅✅] 벌점 차감 전에 현재 벌점을 먼저 확인합니다.
                 try:
-                    current_warnings_res = await supabase.rpc(
-                        'get_total_warnings',
-                        {'p_user_id': self.user.id, 'p_guild_id': self.user.guild.id}
-                    ).execute()
+                    current_warnings_res = await supabase.rpc('get_total_warnings', {'p_user_id': self.user.id, 'p_guild_id': self.user.guild.id}).execute()
                     current_warnings = current_warnings_res.data
                 except Exception as e:
                     logger.error(f"벌점 확인 RPC 호출 실패: {e}", exc_info=True)
                     self.parent_view.status_message = "❌ 벌점을 확인하는 중 오류가 발생했습니다."
                     return await self.on_back(interaction, reload_data=True)
 
-                # 현재 벌점이 0 이하이면 사용을 막습니다.
                 if current_warnings <= 0:
                     self.parent_view.status_message = "ℹ️ 차감할 벌점이 없습니다. 아이템을 사용할 수 없습니다."
-                    return await self.on_back(interaction, reload_data=False) # 데이터 변경이 없으므로 reload=False
+                    return await self.on_back(interaction, reload_data=False)
 
-                # 벌점이 1 이상일 때만 아래 로직을 실행합니다.
                 try:
-                    rpc_params = {
-                        'p_guild_id': self.user.guild.id,
-                        'p_user_id': self.user.id,
-                        'p_moderator_id': self.user.id,
-                        'p_reason': f"'{item_info['name']}' 아이템 사용",
-                        'p_amount': -1
-                    }
+                    rpc_params = {'p_guild_id': self.user.guild.id, 'p_user_id': self.user.id, 'p_moderator_id': self.user.id, 'p_reason': f"'{item_info['name']}' 아이템 사용", 'p_amount': -1}
                     response = await supabase.rpc('add_warning_and_get_total', rpc_params).execute()
                     new_total = response.data
                 except Exception as e:
@@ -137,13 +113,34 @@ class ItemUsageView(ui.View):
                 await self._update_warning_roles(self.user, new_total)
                 self.parent_view.status_message = f"✅ '{item_info['name']}'을(를) 사용했습니다. (현재 벌점: {new_total}회)"
             
+            # [✅✅✅ 핵심 수정 ✅✅✅] 이벤트 우선 참여권에 대한 특별 로직을 추가합니다.
             elif item_type == "consume_with_reason":
+                # 이 아이템이 '이벤트 우선 참여권'일 경우에만 특별 검사를 수행합니다.
+                if selected_item_key == "role_item_event_priority":
+                    is_active = get_config("event_priority_pass_active", False)
+                    if not is_active:
+                        self.parent_view.status_message = "❌ 현재 우선 참여권을 사용할 수 있는 이벤트가 없습니다."
+                        return await self.on_back(interaction, reload_data=False)
+
+                    used_users = get_config("event_priority_pass_users", [])
+                    if self.user.id in used_users:
+                        self.parent_view.status_message = "❌ 이미 이 이벤트에 우선 참여권을 사용했습니다."
+                        return await self.on_back(interaction, reload_data=False)
+                
+                # 검사를 통과하면 모달을 띄웁니다.
                 modal = ReasonModal(item_info['name'])
                 await interaction.followup.send_modal(modal)
                 await modal.wait()
+                
                 if modal.reason:
                     await self.log_item_usage(item_info, modal.reason)
                     await update_inventory(self.user.id, item_info['name'], -1)
+                    
+                    # '이벤트 우선 참여권'이었다면, 사용 기록을 DB에 남깁니다.
+                    if selected_item_key == "role_item_event_priority":
+                        used_users.append(self.user.id)
+                        await save_config_to_db("event_priority_pass_users", used_users)
+
                     self.parent_view.status_message = get_string("profile_view.item_usage_view.consume_success", item_name=item_info['name'])
             
             elif item_type == "farm_expansion":
@@ -183,15 +180,23 @@ class ItemUsageView(ui.View):
             logger.warning(f"DB에서 '{log_embed_key}' 임베드를 찾을 수 없습니다.")
             return
         
+        # [✅✅✅ 핵심 수정 ✅✅✅] 이벤트 우선권 로그 제목을 동적으로 변경합니다.
         embed = format_embed_from_db(embed_data)
-        embed.description=f"{self.user.mention}님이 **'{item_info['name']}'**을(를) 사용했습니다."
-        embed.add_field(name="처리 내용", value=reason, inline=False)
+        if item_info.get("type") == "consume_with_reason":
+            embed.title = f"{self.user.display_name}님이 {item_info['name']}을(를) 사용했습니다."
+            embed.add_field(name="사용 사유", value=reason, inline=False)
+        else:
+            embed.description=f"{self.user.mention}님이 **'{item_info['name']}'**을(를) 사용했습니다."
+            embed.add_field(name="처리 내용", value=reason, inline=False)
+            
         embed.set_author(name=self.user.display_name, icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
         await log_channel.send(embed=embed)
 
     async def on_back(self, interaction: discord.Interaction, reload_data: bool = False):
         await self.parent_view.update_display(interaction, reload_data=reload_data)
 
+
+# ... (이하 ProfileView 및 다른 클래스들은 기존과 동일하게 유지) ...
 
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
