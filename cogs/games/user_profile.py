@@ -22,6 +22,99 @@ GEAR_CATEGORY = "장비"
 BAIT_CATEGORY = "미끼"
 FARM_TOOL_CATEGORY = "장비"
 
+class ItemUsageView(ui.View):
+    def __init__(self, parent_view: 'ProfileView'):
+        super().__init__(timeout=180)
+        self.parent_view = parent_view
+        self.user = parent_view.user
+        self.message: Optional[discord.WebhookMessage] = None
+
+    async def build_and_send(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        # 사용자가 보유한 사용 가능 아이템 목록 생성
+        usable_items_config = get_config("USABLE_ITEMS", {})
+        user_role_ids = {role.id for role in self.user.roles}
+        
+        owned_usable_items = []
+        for item_key, item_info in usable_items_config.items():
+            if (role_id := get_id(item_key)) and role_id in user_role_ids:
+                owned_usable_items.append({
+                    "key": item_key,
+                    "name": item_info["name"],
+                    "description": item_info["description"]
+                })
+
+        if not owned_usable_items:
+            await interaction.followup.send("사용할 수 있는 아이템이 없습니다.", ephemeral=True, delete_after=5)
+            # 원래 프로필 뷰로 즉시 되돌리기
+            await self.parent_view.update_display(interaction)
+            return
+
+        options = [
+            discord.SelectOption(label=item["name"], value=item["key"], description=item["description"])
+            for item in owned_usable_items
+        ]
+        select = ui.Select(placeholder="사용할 아이템을 선택하세요...", options=options)
+        select.callback = self.on_item_select
+        self.add_item(select)
+
+        back_button = ui.Button(label="뒤로", style=discord.ButtonStyle.grey)
+        back_button.callback = self.on_back
+        self.add_item(back_button)
+
+        embed = discord.Embed(title="✨ 아이템 사용", description="인벤토리에서 사용할 아이템을 선택해주세요.", color=discord.Color.gold())
+        self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
+
+    async def on_item_select(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        selected_item_key = interaction.data["values"][0]
+        
+        usable_items_config = get_config("USABLE_ITEMS", {})
+        item_info = usable_items_config.get(selected_item_key)
+        item_role_id = get_id(selected_item_key)
+
+        if not item_info or not item_role_id:
+            await interaction.followup.send("❌ 잘못된 아이템 정보입니다.", ephemeral=True, delete_after=5)
+            return
+
+        item_type = item_info.get("type")
+        
+        try:
+            if item_type == "warning_deduction":
+                # 관리 봇이 처리하도록 DB에 요청 기록
+                await supabase.table('item_usage_requests').insert({
+                    "user_id": str(self.user.id),
+                    "guild_id": str(self.user.guild.id),
+                    "item_key": selected_item_key
+                }).execute()
+                self.parent_view.status_message = f"✅ '{item_info['name']}' 사용을 요청했습니다. 잠시 후 처리됩니다."
+            
+            elif item_type == "simple_consume":
+                # 게임 봇이 즉시 역할 제거
+                role_to_remove = self.user.guild.get_role(item_role_id)
+                if role_to_remove:
+                    await self.user.remove_roles(role_to_remove, reason="아이템 사용")
+                    self.parent_view.status_message = f"✅ '{item_info['name']}'을(를) 사용했습니다."
+                else:
+                    raise Exception("역할을 찾을 수 없습니다.")
+            else:
+                self.parent_view.status_message = f"⚠️ '{item_info['name']}'은(는) 아직 사용할 수 없는 아이템입니다."
+
+        except Exception as e:
+            logger.error(f"아이템 사용 처리 중 오류 (아이템: {selected_item_key}): {e}", exc_info=True)
+            self.parent_view.status_message = f"❌ '{item_info['name']}'을(를) 사용하는 중 오류가 발생했습니다."
+
+        await self.on_back(interaction, reload_data=True)
+
+    async def on_back(self, interaction: discord.Interaction, reload_data: bool = False):
+        if self.message:
+            try:
+                await self.message.delete()
+            except (discord.NotFound, discord.Forbidden):
+                pass
+        await self.parent_view.update_display(interaction, reload_data=reload_data)
+        
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
         super().__init__(timeout=300)
@@ -168,7 +261,6 @@ class ProfileView(ui.View):
         return embed
 
     def build_components(self):
-        # ... (이하 모든 코드는 이전 답변과 동일하게 유지) ...
         self.clear_items()
         tabs_config = get_string("profile_view.tabs", [])
         
@@ -182,6 +274,12 @@ class ProfileView(ui.View):
             tab_buttons_in_row += 1
         
         row_counter += 1
+        
+        # [핵심 추가] '아이템' 탭일 때만 '아이템 사용' 버튼 추가
+        if self.current_page == "item":
+            use_item_label = get_string("profile_view.item_tab.use_item_button_label", "아이템 사용")
+            self.add_item(ui.Button(label=use_item_label, style=discord.ButtonStyle.success, emoji="✨", custom_id="profile_use_item", row=row_counter))
+
         if self.current_page == "gear":
             self.add_item(ui.Button(label="낚싯대 변경", style=discord.ButtonStyle.blurple, custom_id="profile_change_rod", emoji="🎣", row=row_counter))
             self.add_item(ui.Button(label="미끼 변경", style=discord.ButtonStyle.blurple, custom_id="profile_change_bait", emoji="🐛", row=row_counter))
@@ -219,6 +317,11 @@ class ProfileView(ui.View):
             if custom_id.endswith("prev"): self.fish_page_index -= 1
             else: self.fish_page_index += 1
             await self.update_display(interaction)
+        elif custom_id == "profile_use_item":
+            await interaction.message.edit(view=None) # 기존 프로필 뷰 버튼 비활성화
+            usage_view = ItemUsageView(self)
+            await usage_view.build_and_send(interaction)
+        elif custom_id.startswith("profile_change_"):
             
 class GearSelectView(ui.View):
     def __init__(self, parent_view: ProfileView, gear_key: str):
