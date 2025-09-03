@@ -293,10 +293,11 @@ class BuyItemView(ShopViewBase):
         await update_inventory(str(self.user.id), item_name, 1)
         await update_wallet(self.user, -total_price)
         
-        # [핵심 수정] 역할 부여 로직 제거
-        # if id_key := item_data.get('id_key'):
-        #     if role_id := get_id(id_key):
-        #         if role := interaction.guild.get_role(role_id): await self.user.add_roles(role)
+        # [핵심 수정] 역할 부여 로직을 다시 활성화합니다.
+        if id_key := item_data.get('id_key'):
+            if role_id := get_id(id_key):
+                if role := interaction.guild.get_role(role_id):
+                    await self.user.add_roles(role)
 
         new_wallet = await get_wallet(self.user.id)
         new_balance = new_wallet.get('balance', 0)
