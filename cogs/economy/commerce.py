@@ -274,26 +274,39 @@ class BuyItemView(ShopViewBase):
         msg = await interaction.followup.send(success_message, ephemeral=True)
         asyncio.create_task(delete_after(msg, 10))
 
+
+# cogs/economy/commerce.py -> BuyItemView 클래스 내부
+
     async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
+        # [디버깅 Ver.2] 함수 시작점에 로그 추가
+        logger.info(f"--- '{item_name}' 단일 구매 처리 시작 (요청자: {self.user.display_name}) ---")
+        
         await interaction.response.defer(ephemeral=True)
         wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(self.user))
 
+        # [디버깅 Ver.2] 첫 번째 분기문 검사 로그 추가
         if inventory.get(item_name, 0) > 0 and item_data.get('max_ownable', 1) == 1:
+            logger.warning(f"구매 중단: '{self.user.display_name}'님은 '{item_name}'(max: 1)을 이미 {inventory.get(item_name, 0)}개 보유 중입니다.")
             error_message = f"❌ '{item_name}'은(는) 이미 보유하고 있습니다. 1개만 가질 수 있습니다."
             msg = await interaction.followup.send(error_message, ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
             return
 
+        # [디버깅 Ver.2] 두 번째 분기문 검사 로그 추가
         total_price = item_data.get('current_price', item_data.get('price', 0))
-        if wallet.get('balance', 0) < total_price:
+        user_balance = wallet.get('balance', 0)
+        if user_balance < total_price:
+            logger.warning(f"구매 중단: '{self.user.display_name}'님의 코인이 부족합니다. (소지금: {user_balance}, 필요: {total_price})")
             msg = await interaction.followup.send("❌ 잔액이 부족합니다.", ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
             return
 
+        # 이 로그가 보인다면, 모든 구매 조건 통과
+        logger.info("모든 구매 조건 통과. DB 업데이트 및 역할 부여 로직을 시작합니다.")
         await update_inventory(str(self.user.id), item_name, 1)
         await update_wallet(self.user, -total_price)
         
-        # --- [디버깅 로그 추가 시작] ---
+        # --- 역할 부여 디버깅 ---
         logger.info(f"--- 역할 부여 디버깅 시작: 아이템 '{item_name}' ---")
         
         id_key = item_data.get('id_key')
@@ -323,7 +336,7 @@ class BuyItemView(ShopViewBase):
             logger.info("[2/4 & 3/4 & 4/4] 건너뜀: 아이템에 id_key가 설정되어 있지 않아 역할 부여를 시도하지 않습니다.")
         
         logger.info("--- 역할 부여 디버깅 종료 ---")
-        # --- [디버깅 로그 추가 끝] ---
+        # --- 역할 부여 디버깅 끝 ---
 
         new_wallet = await get_wallet(self.user.id)
         new_balance = new_wallet.get('balance', 0)
@@ -331,6 +344,7 @@ class BuyItemView(ShopViewBase):
         
         msg = await interaction.followup.send(success_message, ephemeral=True)
         asyncio.create_task(delete_after(msg, 10))
+
 
     async def back_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
