@@ -106,7 +106,7 @@ class FarmActionView(ui.View):
     async def _build_location_select(self):
         farmable_info = await get_farmable_item_info(self.selected_item)
         if not farmable_info: return
-        sx, sy = farmable_info['space_required_x'], farmable_info['space_required_y']
+        sx, sy = 1, 1 # [수정] 모든 작물 크기를 1x1로 고정
         available_plots = await self._find_available_space(sx, sy)
         if not available_plots: self.add_item(ui.Button(label=f"{sx}x{sy} 크기의 빈 땅이 없습니다.", disabled=True)); return
         options = [discord.SelectOption(label=f"{p['pos_y']+1}행 {p['pos_x']+1}열", value=f"{p['pos_x']},{p['pos_y']}") for p in available_plots]
@@ -147,8 +147,7 @@ class FarmActionView(ui.View):
     async def on_location_select(self, interaction: discord.Interaction):
         await interaction.response.defer()
         x, y = map(int, interaction.data['values'][0].split(','))
-        info = await get_farmable_item_info(self.selected_item)
-        sx, sy = info['space_required_x'], info['space_required_y']
+        sx, sy = 1, 1 # [수정] 모든 작물 크기를 1x1로 고정
         plots_to_update = [p for p in self.farm_data['farm_plots'] if x <= p['pos_x'] < x + sx and y <= p['pos_y'] < y + sy]
         
         now = datetime.now(timezone.utc)
@@ -201,8 +200,7 @@ class FarmActionView(ui.View):
         for plot in sorted(plots, key=lambda p: (p['pos_y'], p['pos_x'])):
             if plot['id'] in processed: continue
             name = plot['planted_item_name'] or "시든 작물"
-            info = info_map.get(name) if name != "시든 작물" else {}
-            sx, sy = info.get('space_required_x', 1), info.get('space_required_y', 1)
+            sx, sy = 1, 1 # [수정] 모든 작물 크기를 1x1로 고정
             related_ids = [p['id'] for p in plots if plot['pos_x'] <= p['pos_x'] < plot['pos_x'] + sx and plot['pos_y'] <= p['pos_y'] < plot['pos_y'] + sy]
             processed.update(related_ids)
             label = f"{'🥀' if plot['state'] == 'withered' else ''}{name} ({plot['pos_y']+1}행 {plot['pos_x']+1}열)"
@@ -368,7 +366,7 @@ class FarmUIView(ui.View):
                 info = info_map.get(p['planted_item_name'])
                 if not info: continue
                 
-                sx, sy = info['space_required_x'], info['space_required_y']
+                sx, sy = 1, 1 # [수정] 모든 작물 크기를 1x1로 고정
                 
                 related_plot_ids = [plot['id'] for plot in farm_data['farm_plots'] if p['pos_x'] <= plot['pos_x'] < p['pos_x'] + sx and p['pos_y'] <= plot['pos_y'] < p['pos_y'] + sy]
                 
@@ -407,7 +405,7 @@ class FarmUIView(ui.View):
             if p['id'] in processed or p['state'] != 'planted' or p['growth_stage'] < info_map.get(p['planted_item_name'], {}).get('max_growth_stage', 3): continue
             info = info_map.get(p['planted_item_name'])
             if not info: continue
-            sx, sy = info['space_required_x'], info['space_required_y']
+            sx, sy = 1, 1 # [수정] 모든 작물 크기를 1x1로 고정
             related = [plot for plot in farm_data['farm_plots'] if p['pos_x'] <= plot['pos_x'] < p['pos_x'] + sx and p['pos_y'] <= plot['pos_y'] < p['pos_y'] + sy]
             plot_ids = [plot['id'] for plot in related]; processed.update(plot_ids)
             quality = sum(plot['quality'] for plot in related) / len(related)
@@ -643,67 +641,59 @@ class Farm(commands.Cog):
         grid, infos, processed = [['' for _ in range(sx)] for _ in range(sy)], [], set()
         today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # ▼▼▼ [핵심 수정] build_farm_embed 함수 전체를 교체합니다. ▼▼▼
-        # 1. 그리드를 먼저 기본 상태로 채웁니다.
         for y in range(sy):
             for x in range(sx):
+                if (x, y) in processed: continue
+                
                 is_owned_plot = (y * sx + x) < plot_count
-                if not is_owned_plot:
-                    grid[y][x] = '⬛'
-                else:
-                    plot = plots.get((x,y))
-                    if not plot or plot['state'] == 'default':
-                        grid[y][x] = '🟤'
-                    elif plot['state'] == 'tilled':
-                        grid[y][x] = '🟫'
-                    elif plot['state'] == 'withered':
-                        grid[y][x] = '🥀'
-                    else: # planted
-                        grid[y][x] = '🟫' # 기본적으로 경작된 땅으로 설정
+                emoji = '⬛'
+                
+                if is_owned_plot:
+                    plot = plots.get((x, y))
+                    emoji = '🟤'
+                    if plot and plot['state'] != 'default':
+                        state = plot['state']
+                        if state == 'tilled': emoji = '🟫'
+                        elif state == 'withered': emoji = '🥀'
+                        elif state == 'planted':
+                            name = plot['planted_item_name']
+                            info = info_map.get(name)
+                            if info:
+                                stage = plot['growth_stage']
+                                max_stage = info.get('max_growth_stage', 3)
+                                emoji = info.get('item_emoji', '❓') if stage >= max_stage else CROP_EMOJI_MAP.get(info.get('item_type', 'seed'), {}).get(stage, '🌱')
+                                
+                                item_sx, item_sy = 1, 1 # [수정] 모든 작물 크기를 1x1로 고정
+                                
+                                for dy in range(item_sy):
+                                    for dx in range(item_sx):
+                                        if y + dy < sy and x + dx < sx:
+                                            if dx == 0 and dy == 0:
+                                                grid[y+dy][x+dx] = emoji
+                                            processed.add((x + dx, y + dy))
+                                
+                                last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
+                                last_watered_jst = last_watered_dt.astimezone(KST)
+                                water_emoji = '💧' if last_watered_jst >= today_jst_midnight else '➖'
+                                
+                                growth_status_text = ""
+                                if stage >= max_stage:
+                                    growth_status_text = "수확 가능! 🧺"
+                                else:
+                                    planted_at_dt = datetime.fromisoformat(plot['planted_at']).astimezone(KST)
+                                    days_passed = (datetime.now(KST) - planted_at_dt).days
+                                    
+                                    growth_days_to_use = info.get('total_growth_days', 99)
+                                    if info.get('is_tree') and stage == 2:
+                                        growth_days_to_use = info.get('regrowth_days', 99)
 
-        # 2. 심어진 작물을 그리드 위에 덮어씁니다. (우선순위가 더 높음)
-        for p in sorted(farm_data.get('farm_plots', []), key=lambda i: (i['pos_y'], i['pos_x'])):
-            if p['state'] != 'planted' or (p['pos_x'], p['pos_y']) in processed:
-                continue
-            
-            name = p['planted_item_name']
-            info = info_map.get(name)
-            if not info: continue
-            
-            x, y = p['pos_x'], p['pos_y']
-            stage = p['growth_stage']
-            max_stage = info.get('max_growth_stage', 3)
-            emoji = info.get('item_emoji', '❓') if stage >= max_stage else CROP_EMOJI_MAP.get(info.get('item_type', 'seed'), {}).get(stage, '🌱')
-            
-            # 대표 이모지 그리기
-            grid[y][x] = emoji
+                                    days_remaining = max(0, growth_days_to_use - days_passed)
+                                    growth_status_text = f"남은 날: {days_remaining}일"
 
-            # 작물이 차지하는 모든 칸을 처리 완료 목록에 추가
-            item_sx, item_sy = info['space_required_x'], info['space_required_y']
-            for dy in range(item_sy):
-                for dx in range(item_sx):
-                    if y + dy < sy and x + dx < sx:
-                        processed.add((x + dx, y + dy))
-            
-            # 작물 정보 텍스트 추가
-            last_watered_dt = datetime.fromisoformat(p['last_watered_at']) if p.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
-            last_watered_jst = last_watered_dt.astimezone(KST)
-            water_emoji = '💧' if last_watered_jst >= today_jst_midnight else '➖'
-            
-            growth_status_text = ""
-            if stage >= max_stage:
-                growth_status_text = "수확 가능! 🧺"
-            else:
-                planted_at_dt = datetime.fromisoformat(p['planted_at']).astimezone(KST)
-                days_passed = (datetime.now(KST) - planted_at_dt).days
-                growth_days_to_use = info.get('total_growth_days', 99)
-                if info.get('is_tree') and stage == 2:
-                    growth_days_to_use = info.get('regrowth_days', 99)
-                days_remaining = max(0, growth_days_to_use - days_passed)
-                growth_status_text = f"남은 날: {days_remaining}일"
+                                info_text = f"{emoji} **{name}** (물: {water_emoji}): {growth_status_text}"
+                                infos.append(info_text)
 
-            info_text = f"{emoji} **{name}** (물: {water_emoji}): {growth_status_text}"
-            infos.append(info_text)
+                if not (x,y) in processed: grid[y][x] = emoji
 
         farm_str = "\n".join("".join(row) for row in grid)
         farm_name = farm_data.get('name') or user.display_name
@@ -740,7 +730,6 @@ class Farm(commands.Cog):
         weather = WEATHER_TYPES.get(weather_key, {"emoji": "❔", "name": "알 수 없음"})
         embed.description += f"\n\n**오늘의 날씨:** {weather['emoji']} {weather['name']}"
         return embed
-        # ▲▲▲ [핵심 수정] build_farm_embed 함수 교체가 여기까지입니다. ▲▲▲
         
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User, farm_data: Dict, force_new: bool = False):
         lock = self.thread_locks.setdefault(thread.id, asyncio.Lock())
