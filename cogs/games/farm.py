@@ -567,15 +567,16 @@ class Farm(commands.Cog):
                 if 'farm_growth_speed_up_2' in abilities: growth_boost_users.append(user_id)
                 if 'farm_water_retention_1' in abilities: water_retention_users.append(user_id)
 
-            # ▼▼▼ [핵심 수정] 모든 농장을 대상으로 업데이트하도록 RPC 호출을 변경합니다. ▼▼▼
-            # 기존에는 능력이 있는 유저만 대상으로 하는 것처럼 보이는 'with_abilities' 함수를 호출했습니다.
-            # 이제 모든 농장을 처리하고, 능력은 DB 함수 내에서 보너스로 적용하도록 'process_daily_farm_update'를 호출합니다.
+            if growth_boost_users:
+                logger.info(f"[농장 능력 디버그] 성장 속도 UP 대상: {growth_boost_users}")
+            if water_retention_users:
+                logger.info(f"[농장 능력 디버그] 수분 유지력 UP 대상: {water_retention_users}")
+
             response = await supabase.rpc('process_daily_farm_update', {
                 'p_is_raining': is_raining,
                 'p_growth_boost_user_ids': growth_boost_users,
                 'p_water_retention_user_ids': water_retention_users
             }).execute()
-            # ▲▲▲ [핵심 수정] 여기까지가 수정된 부분입니다. ▲▲▲
             
             if response and response.data and response.data > 0:
                 logger.info(f"일일 작물 업데이트 완료. {response.data}개의 밭이 영향을 받았습니다. UI 업데이트를 요청합니다.")
@@ -668,7 +669,12 @@ class Farm(commands.Cog):
                                 for dy in range(item_sy):
                                     for dx in range(item_sx):
                                         if y + dy < sy and x + dx < sx:
-                                            grid[y+dy][x+dx] = emoji
+                                            # ▼▼▼ [핵심 수정] 첫 칸은 이모지, 나머지는 보이지 않는 문자로 채웁니다. ▼▼▼
+                                            if dx == 0 and dy == 0:
+                                                grid[y+dy][x+dx] = emoji
+                                            else:
+                                                grid[y+dy][x+dx] = '⠀' # Braille Pattern Blank (U+2800)
+                                            # ▲▲▲ [핵심 수정] 여기까지가 수정된 부분입니다. ▲▲▲
                                             processed.add((x + dx, y + dy))
                                 
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
