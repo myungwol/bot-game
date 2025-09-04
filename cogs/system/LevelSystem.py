@@ -16,7 +16,8 @@ from utils.database import (
     get_embed_from_db, log_activity
 )
 from utils.helpers import format_embed_from_db, calculate_xp_for_level
-from utils.game_config_defaults import JOB_ADVANCEMENT_DATA, GAME_CONFIG
+# ▼▼▼ [수정됨] 불필요하고 오류를 유발하는 JOB_ADVANCEMENT_DATA import를 제거합니다. ▼▼▼
+from utils.game_config_defaults import GAME_CONFIG
 
 logger = logging.getLogger(__name__)
 
