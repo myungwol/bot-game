@@ -217,18 +217,25 @@ class Mining(commands.Cog):
             duration *= 2
             duration_doubled = True
         
-        # ▼▼▼ [핵심 수정] 종료 타임스탬프 계산 및 푸터 설정 ▼▼▼
         end_timestamp = int(time.time()) + duration
 
         embed = format_embed_from_db(embed_data, user_name=user.display_name)
-        embed.description = "광산에 들어왔다. 어떤 광석이 있을지 찾아보자!"
-        if duration_doubled:
-            embed.description += "\n\n✨ **집중 탐사** 능력 발동! 광산이 20분 동안 열립니다!"
         
-        embed.set_footer(text=f"사용 중인 장비: {pickaxe} | 광산 닫힘: <t:{end_timestamp}:R>")
+        # ▼▼▼ [핵심 수정] 설명(description)을 만드는 부분을 아래와 같이 변경합니다. ▼▼▼
+        
+        description_lines = ["광산에 들어왔다. 어떤 광석이 있을지 찾아보자!"]
+        if duration_doubled:
+            description_lines.append("\n✨ **집중 탐사** 능력 발동! 광산이 20분 동안 열립니다!")
+        
+        # 설명 부분에 시간 정보를 추가합니다.
+        description_lines.append("\n" + "─" * 25)
+        description_lines.append(f"**사용 중인 장비:** {pickaxe}")
+        description_lines.append(f"**광산 닫힘:** <t:{end_timestamp}:R>")
+
+        embed.description = "\n".join(description_lines)
+        
         embed.set_image(url=ORE_DATA["꽝"]["image_url"])
 
-        # ▼▼▼ [핵심 수정] View 생성 시 end_timestamp 전달 ▼▼▼
         view = MiningGameView(self, user, thread, pickaxe, user_abilities, duration, end_timestamp)
         await thread.send(embed=embed, view=view)
 
