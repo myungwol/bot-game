@@ -125,14 +125,14 @@ class BuyItemView(ShopViewBase):
                 )
                 embed.add_field(name=field_name, value=field_value, inline=False)
             
-            # ▼▼▼ [핵심 수정] 페이지 푸터와 갱신 시간 푸터를 함께 표시 ▼▼▼
             total_pages = math.ceil(len(self.items_in_category) / self.items_per_page)
-            timestamp_text = f"최종 갱신: {discord.utils.format_dt(discord.utils.utcnow())}"
+            # ▼▼▼ [핵심 수정] 푸터 로직 변경 ▼▼▼
+            footer_text = "매일 00:05(KST)에 시세 변동"
             if total_pages > 1:
                 page_text = f"페이지 {self.page_index + 1} / {total_pages}"
-                embed.set_footer(text=f"{page_text} | {timestamp_text}")
+                embed.set_footer(text=f"{page_text} | {footer_text}")
             else:
-                embed.set_footer(text=timestamp_text)
+                embed.set_footer(text=footer_text)
 
         return embed
 
@@ -332,8 +332,8 @@ class BuyCategoryView(ShopViewBase):
         description = commerce_strings.get("category_view_desc", "구매하고 싶은 아이템의 카테고리를 선택해주세요.")
 
         embed = discord.Embed(title=title, description=description, color=discord.Color.green())
-        # ▼▼▼ [핵심 수정] 푸터 추가 ▼▼▼
-        embed.set_footer(text=f"최종 갱신: {discord.utils.format_dt(discord.utils.utcnow())}")
+        # ▼▼▼ [핵심 수정] 푸터 변경 ▼▼▼
+        embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         return embed
     
     async def build_components(self):
@@ -382,8 +382,8 @@ class SellFishView(ShopViewBase):
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
         embed = discord.Embed(title="🎣 판매함 - 물고기", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 물고기를 아래 메뉴에서 여러 개 선택해주세요.", color=discord.Color.blue())
-        # ▼▼▼ [핵심 수정] 푸터 추가 ▼▼▼
-        embed.set_footer(text=f"최종 갱신: {discord.utils.format_dt(discord.utils.utcnow())}")
+        # ▼▼▼ [핵심 수정] 푸터 변경 ▼▼▼
+        embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         return embed
 
     async def build_components(self):
@@ -475,8 +475,8 @@ class SellCropView(ShopViewBase):
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
         embed = discord.Embed(title="🌾 판매함 - 작물", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 작물을 아래 메뉴에서 선택해주세요.", color=discord.Color.green())
-        # ▼▼▼ [핵심 수정] 푸터 추가 ▼▼▼
-        embed.set_footer(text=f"최종 갱신: {discord.utils.format_dt(discord.utils.utcnow())}")
+        # ▼▼▼ [핵심 수정] 푸터 변경 ▼▼▼
+        embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         return embed
 
     async def build_components(self):
@@ -551,8 +551,8 @@ class SellCropView(ShopViewBase):
 class SellCategoryView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title="📦 판매함 - 카테고리 선택", description="판매할 아이템의 카테고리를 선택해주세요.", color=discord.Color.green())
-        # ▼▼▼ [핵심 수정] 푸터 추가 ▼▼▼
-        embed.set_footer(text=f"최종 갱신: {discord.utils.format_dt(discord.utils.utcnow())}")
+        # ▼▼▼ [핵심 수정] 푸터 변경 ▼▼▼
+        embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         return embed
 
     async def build_components(self):
@@ -631,8 +631,8 @@ class Commerce(commands.Cog):
             market_updates_text = "오늘은 큰 가격 변동이 없었습니다."
         
         embed = format_embed_from_db(embed_data, market_updates=market_updates_text)
-        # ▼▼▼ [핵심 수정] 푸터 추가 ▼▼▼
-        embed.set_footer(text=f"최종 갱신: {discord.utils.format_dt(discord.utils.utcnow())}")
+        # ▼▼▼ [핵심 수정] 푸터 변경 ▼▼▼
+        embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         view = CommercePanelView(self)
         
         new_message = await channel.send(embed=embed, view=view)
