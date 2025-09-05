@@ -64,35 +64,42 @@ class MiningGameView(ui.View):
         return True
 
     def _update_embed_layout(self, embed: discord.Embed, show_details: bool):
-        """임베드의 필드와 푸터를 상태에 맞게 업데이트하는 헬퍼 함수"""
+        """임베드의 설명, 필드, 푸터를 상태에 맞게 업데이트하는 헬퍼 함수"""
+        base_description = embed.description # 현재 description을 기본으로 사용
         embed.clear_fields()
         
-        # [✅ 수정] 뷰의 정확한 만료 시간을 가져오도록 변경
+        # 푸터 설정
         expiry_datetime = self.get_timeout_expiry()
         if expiry_datetime:
             end_time = int(expiry_datetime.timestamp())
             footer_text = f"사용 중인 장비: {self.pickaxe}  |  광산 닫힘: <t:{end_time}:R>"
         else:
             footer_text = f"사용 중인 장비: {self.pickaxe}"
-        
         embed.set_footer(text=footer_text)
+
+        # 설명(description) 부분 재구성
+        description_parts = [base_description]
 
         if show_details:
             if self.last_result_text:
-                embed.add_field(name="채굴 결과", value=self.last_result_text, inline=False)
+                description_parts.append(f"**채굴 결과**\n{self.last_result_text}")
 
             active_abilities = []
             if self.duration_doubled:
-                active_abilities.append("✨ 집중 탐사 (시간 2배)")
+                active_abilities.append("> ✨ 집중 탐사 (시간 2배)")
             if self.time_reduction > 0:
-                active_abilities.append("⚡ 신속한 채굴 (쿨타임 감소)")
+                active_abilities.append("> ⚡ 신속한 채굴 (쿨타임 감소)")
             if self.can_double_yield:
-                active_abilities.append("💰 풍부한 광맥 (수량 2배 확률)")
+                active_abilities.append("> 💰 풍부한 광맥 (수량 2배 확률)")
             if 'mine_rare_up_2' in self.user_abilities:
-                active_abilities.append("💎 노다지 발견 (희귀 광물 확률 증가)")
+                active_abilities.append("> 💎 노다지 발견 (희귀 광물 확률 증가)")
 
             if active_abilities:
-                embed.add_field(name="활성화된 능력", value="\n".join(active_abilities), inline=False)
+                ability_header = "**--- 활성화된 능력 ---**"
+                ability_text = "\n".join(active_abilities)
+                description_parts.append(f"{ability_header}\n{ability_text}")
+        
+        embed.description = "\n\n".join(filter(None, description_parts))
         
         return embed
 
