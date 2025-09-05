@@ -204,7 +204,7 @@ async def get_user_gear(user: discord.User) -> dict:
         return response.data
     
     logger.warning(f"DB에서 유저(ID: {user.id})의 장비 정보를 가져오지 못했습니다. 기본값을 반환합니다.")
-    return {"rod": BARE_HANDS, "bait": "미끼 없음", "hoe": BARE_HANDS, "watering_can": BARE_HANDS}
+    return {"rod": BARE_HANDS, "bait": "미끼 없음", "hoe": BARE_HANDS, "watering_can": BARE_HANDS, "pickaxe": BARE_HANDS}
 
 @supabase_retry_handler()
 async def set_user_gear(user_id: int, **kwargs):
