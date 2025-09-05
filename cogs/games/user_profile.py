@@ -320,7 +320,11 @@ class ProfileView(ui.View):
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items", "보유 중인 아이템이 없습니다."))
         
         elif self.current_page == "gear":
-            gear_categories = {"낚시": {"rod": "🎣 낚싯대", "bait": "🐛 미끼"}, "농장": {"hoe": "🪓 괭이", "watering_can": "💧 물뿌리개"}}
+            gear_categories = {
+                "낚시": {"rod": "🎣 낚싯대", "bait": "🐛 미끼"},
+                "농장": {"hoe": "🪓 괭이", "watering_can": "💧 물뿌리개"}
+                "광산": {"pickaxe": "⛏️ 곡괭이"},
+            }
             for category_name, items in gear_categories.items():
                 field_lines = [f"**{label}:** `{gear.get(key, BARE_HANDS)}`" for key, label in items.items()]
                 embed.add_field(name=f"**[ 현재 장비: {category_name} ]**", value="\n".join(field_lines), inline=False)
@@ -384,7 +388,8 @@ class ProfileView(ui.View):
             row_counter += 1
             self.add_item(ui.Button(label="괭이 변경", style=discord.ButtonStyle.success, custom_id="profile_change_hoe", emoji="🪓", row=row_counter))
             self.add_item(ui.Button(label="물뿌리개 변경", style=discord.ButtonStyle.success, custom_id="profile_change_watering_can", emoji="💧", row=row_counter))
-        
+            self.add_item(ui.Button(label="곡괭이 변경", style=discord.ButtonStyle.secondary, custom_id="profile_change_pickaxe", emoji="⛏️", row=row_counter))
+            
         row_counter += 1
         if self.current_page == "fish" and self.cached_data.get("aquarium"):
             total_pages = math.ceil(len(self.cached_data["aquarium"]) / 10)
