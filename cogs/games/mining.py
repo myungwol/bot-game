@@ -67,7 +67,7 @@ class MiningGameView(ui.View):
         return True
 
     def build_embed(self) -> discord.Embed:
-        """현재 상태에 따라 임베드를 생성하거나 업데이트합니다."""
+        """현재 상태에 따라 임베드를 처음부터 생성합니다."""
         embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", color=0x607D8B)
 
         if self.state == "finding":
@@ -216,12 +216,6 @@ class Mining(commands.Cog):
             await interaction.followup.send("❌ 광산을 여는 데 실패했습니다. 채널 권한을 확인해주세요.", ephemeral=True)
             await update_inventory(user.id, MINING_PASS_NAME, 1)
             return
-
-        embed_data = await get_embed_from_db("mine_thread_welcome")
-        if not embed_data:
-            logger.error("DB에서 'mine_thread_welcome' 임베드를 찾을 수 없습니다.")
-            await interaction.followup.send("❌ 광산 정보를 불러오는 데 실패했습니다.", ephemeral=True)
-            return
         
         duration = DEFAULT_MINE_DURATION_SECONDS
         duration_doubled = 'mine_duration_up_1' in user_abilities and random.random() < 0.15
@@ -230,11 +224,9 @@ class Mining(commands.Cog):
         
         view = MiningGameView(self, user, thread, pickaxe, user_abilities, duration, duration_doubled)
         
-        embed = format_embed_from_db(embed_data, user_name=user.display_name)
-        # 초기 상태는 'finding'이므로 build_embed가 알아서 레이아웃을 구성
         embed = view.build_embed()
-        embed.set_image(url=ORE_DATA["꽝"]["image_url"])
-
+        embed.title = f"⛏️ {user.display_name}님의 광산 채굴"
+        
         await thread.send(embed=embed, view=view)
 
         session_task = asyncio.create_task(self.mine_timer(user.id, thread, duration))
