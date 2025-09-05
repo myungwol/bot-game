@@ -58,7 +58,6 @@ class MiningGameView(ui.View):
         self.discovered_ore: Optional[str] = None
         self.last_result_text: Optional[str] = None
         
-        # [✅ 최종 수정] 뷰가 생성될 때 만료 시간을 미리 계산하여 저장
         self.end_time = discord.utils.utcnow() + timedelta(seconds=duration)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -72,9 +71,8 @@ class MiningGameView(ui.View):
         base_description = embed.description
         embed.clear_fields()
         
-        # [✅ 최종 수정] 미리 계산된 만료 시간을 사용하여 푸터 설정
-        end_time_ts = int(self.end_time.timestamp())
-        footer_text = f"사용 중인 장비: {self.pickaxe}  |  광산 닫힘: <t:{end_time_ts}:R>"
+        # [✅ 최종 수정] discord.utils.format_dt() 함수를 사용하여 타임스탬프 생성
+        footer_text = f"사용 중인 장비: {self.pickaxe}  |  광산 닫힘: {discord.utils.format_dt(self.end_time, style='R')}"
         embed.set_footer(text=footer_text)
 
         description_parts = [base_description]
