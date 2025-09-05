@@ -106,17 +106,23 @@ class MiningGameView(ui.View):
             
             description_parts.append(f"**사용 중인 장비:** {self.pickaxe}")
             embed.description = "\n\n".join(description_parts)
-            embed.set_image(url=ORE_DATA["꽝"]['image_url']) # [✅ 최종 수정] 탐색 시에는 기본 이미지 표시
+            # [✅ 최종 수정] 초기/결과 화면에서는 이미지를 표시하지 않음 (단, 최초 입장 시에는 표시)
+            embed.set_image(url=ORE_DATA["꽝"]['image_url'] if self.state == "initial" else None)
 
         elif self.state == "discovered":
             embed.description = f"### {self.discovered_ore}을(를) 발견했다!"
-            embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url']) # [✅ 최종 수정] 발견 시에만 해당 광석 이미지 표시
+            embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url'])
             embed.set_footer(text=f"사용 중인 장비: {self.pickaxe}")
             
-        elif self.state == "mining" or self.state == "searching":
-            desc = "더 깊이 들어가서 찾아보자..." if self.state == "searching" else f"**{self.pickaxe}**(으)로 열심히 **{self.discovered_ore}**을(를) 캐는 중입니다..."
-            embed.description = desc
-            embed.set_image(url=None) # [✅ 최종 수정] 채굴/탐색 중에는 이미지 없음
+        elif self.state == "mining":
+            embed.description = f"**{self.pickaxe}**(으)로 열심히 **{self.discovered_ore}**을(를) 캐는 중입니다..."
+            embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url']) # [✅ 최종 수정] 채굴 중에 이미지 표시
+            embed.set_footer(text=f"사용 중인 장비: {self.pickaxe}")
+        
+        elif self.state == "searching":
+            embed.description = "더 깊이 들어가서 찾아보자..."
+            embed.set_image(url=None)
+            embed.set_footer(text=f"사용 중인 장비: {self.pickaxe}")
 
         return embed
 
