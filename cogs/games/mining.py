@@ -38,6 +38,7 @@ ORE_DATA = {
     "다이아몬드": {"weight": 2,  "image_url": "https://saewayvzcyzueviasftu.supabase.co/storage/v1/object/public/game_assets/diamond.jpg"}
 }
 
+
 class MiningGameView(ui.View):
     def __init__(self, cog_instance: 'Mining', user: discord.Member, thread: discord.Thread, pickaxe: str):
         super().__init__(timeout=MINE_DURATION_SECONDS)
@@ -47,46 +48,78 @@ class MiningGameView(ui.View):
         self.pickaxe = pickaxe
         self.mining_speed = PICKAXE_SPEEDS.get(pickaxe, 999)
 
+        # 게임 상태를 관리하는 변수: 'finding', 'discovered', 'mining'
+        self.state = "finding" 
+        # 발견된 광석을 저장하는 변수
+        self.discovered_ore: Optional[str] = None
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user.id:
             await interaction.response.send_message("본인만 채굴할 수 있습니다.", ephemeral=True, delete_after=5)
             return False
         return True
 
-    @ui.button(label="채굴하기", style=discord.ButtonStyle.primary, emoji="⛏️", custom_id="mine_ore_button")
-    async def mine_button(self, interaction: discord.Interaction, button: ui.Button):
-        button.disabled = True
+    @ui.button(label="광석 찾기", style=discord.ButtonStyle.secondary, emoji="🔍", custom_id="mine_action_button")
+    async def action_button(self, interaction: discord.Interaction, button: ui.Button):
         
-        # 1. 채굴 중 상태로 변경
-        mining_duration = self.mining_speed
-        button.label = f"채굴 중... ({mining_duration}초)"
-        original_embed = interaction.message.embeds[0]
-        original_embed.description = f"**{self.pickaxe}**(으)로 열심히 광석을 캐는 중입니다..."
-        await interaction.response.edit_message(embed=original_embed, view=self)
+        # 버튼 로직을 게임 상태에 따라 분기
+        if self.state == "finding":
+            # [상태 1: 광석 찾기]
+            button.disabled = True
+            await interaction.response.edit_message(view=self)
 
-        # 2. 곡괭이 속도만큼 대기
-        await asyncio.sleep(mining_duration)
+            ores = list(ORE_DATA.keys())
+            weights = [data['weight'] for data in ORE_DATA.values()]
+            self.discovered_ore = random.choices(ores, weights=weights, k=1)[0]
 
-        if self.is_finished() or self.user.id not in self.cog.active_sessions:
-            return
+            embed = interaction.message.embeds[0]
+            embed.description = f"**{self.discovered_ore}**을(를) 발견했다!"
+            embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url'])
 
-        # 3. 채굴 완료 및 다음 광석 발견
-        ores = list(ORE_DATA.keys())
-        weights = [data['weight'] for data in ORE_DATA.values()]
-        found_ore = random.choices(ores, weights=weights, k=1)[0]
+            button.label = "채굴하기"
+            button.style = discord.ButtonStyle.primary
+            button.emoji = "⛏️"
+            button.disabled = False
+            self.state = "discovered"
+            
+            await interaction.edit_original_response(embed=embed, view=self)
 
-        embed = interaction.message.embeds[0]
-        embed.description = f"**{found_ore}**을(를) 발견했다!"
-        embed.set_image(url=ORE_DATA[found_ore]['image_url'])
+        elif self.state == "discovered":
+            # [상태 2: 발견된 광석 채굴]
+            button.disabled = True
+            
+            mining_duration = self.mining_speed
+            button.label = f"채굴 중... ({mining_duration}초)"
+            button.style = discord.ButtonStyle.secondary
+            
+            original_embed = interaction.message.embeds[0]
+            original_embed.description = f"**{self.pickaxe}**(으)로 열심히 **{self.discovered_ore}**을(를) 캐는 중입니다..."
+            await interaction.response.edit_message(embed=original_embed, view=self)
 
-        if found_ore != "꽝":
-            await update_inventory(self.user.id, found_ore, 1)
-            embed.description += "\n\n인벤토리에 추가되었습니다."
-            await log_activity(self.user.id, 'mining', amount=1)
+            await asyncio.sleep(mining_duration)
 
-        button.disabled = False
-        button.label = "채굴하기"
-        await interaction.message.edit(embed=embed, view=self)
+            if self.is_finished() or self.user.id not in self.cog.active_sessions:
+                return
+
+            # 채굴 완료 및 인벤토리 추가
+            if self.discovered_ore != "꽝":
+                await update_inventory(self.user.id, self.discovered_ore, 1)
+                await log_activity(self.user.id, 'mining', amount=1)
+                await interaction.followup.send(f"✅ **{self.discovered_ore}** 1개를 획득했습니다!", ephemeral=True)
+
+            # 다시 '광석 찾기' 상태로 복귀
+            embed = interaction.message.embeds[0]
+            embed.description = "다시 주변을 둘러보자. 어떤 광석이 나올까?"
+            embed.set_image(url=ORE_DATA["꽝"]["image_url"]) # 기본 이미지로 변경
+
+            button.label = "광석 찾기"
+            button.style = discord.ButtonStyle.secondary
+            button.emoji = "🔍"
+            button.disabled = False
+            self.state = "finding"
+            self.discovered_ore = None
+            
+            await interaction.edit_original_response(embed=embed, view=self)
 
     async def on_timeout(self):
         await self.cog.close_mine_session(self.user.id, self.thread, "시간이 다 되어")
@@ -109,7 +142,6 @@ class Mining(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         user = interaction.user
 
-        # 이미 세션이 있는지 확인
         if user.id in self.active_sessions:
             thread_id = self.active_sessions[user.id].get("thread_id")
             if thread := self.bot.get_channel(thread_id):
@@ -119,27 +151,22 @@ class Mining(commands.Cog):
                 await interaction.followup.send("이전 광산 정보를 찾을 수 없어 초기화했습니다. 다시 시도해주세요.", ephemeral=True)
             return
 
-        # 인벤토리 및 장비 확인
         inventory, gear = await asyncio.gather(
             get_inventory(user),
             get_user_gear(user)
         )
 
-        # 입장권 확인
         if inventory.get(MINING_PASS_NAME, 0) < 1:
             await interaction.followup.send(f"'{MINING_PASS_NAME}'이 부족합니다. 상점에서 구매해주세요.", ephemeral=True)
             return
 
-        # 곡괭이 장착 확인
         pickaxe = gear.get('pickaxe', BARE_HANDS)
         if pickaxe == BARE_HANDS:
             await interaction.followup.send("❌ 곡괭이를 장착해야 광산에 입장할 수 있습니다.\n상점에서 구매 후 프로필에서 장착해주세요.", ephemeral=True)
             return
 
-        # 입장권 소모
         await update_inventory(user.id, MINING_PASS_NAME, -1)
 
-        # 비공개 스레드 생성
         try:
             thread = await interaction.channel.create_thread(
                 name=f"⛏️｜{user.display_name}의 광산",
@@ -150,24 +177,24 @@ class Mining(commands.Cog):
         except Exception as e:
             logger.error(f"광산 스레드 생성 실패: {e}", exc_info=True)
             await interaction.followup.send("❌ 광산을 여는 데 실패했습니다. 채널 권한을 확인해주세요.", ephemeral=True)
-            await update_inventory(user.id, MINING_PASS_NAME, 1) # 입장권 환불
+            await update_inventory(user.id, MINING_PASS_NAME, 1)
             return
 
-        # 환영 메시지 및 게임 View 전송
         embed_data = await get_embed_from_db("mine_thread_welcome")
         if not embed_data:
             logger.error("DB에서 'mine_thread_welcome' 임베드를 찾을 수 없습니다.")
             await interaction.followup.send("❌ 광산 정보를 불러오는 데 실패했습니다.", ephemeral=True)
             return
         
+        # 시작 메시지를 새로운 흐름에 맞게 수정
         embed = format_embed_from_db(embed_data, user_name=user.display_name)
+        embed.description = "광산에 들어왔다. 어떤 광석이 있을지 찾아보자!"
         embed.set_footer(text=f"사용 중인 장비: {pickaxe}")
-        embed.set_image(url=ORE_DATA["꽝"]["image_url"])
+        embed.set_image(url=ORE_DATA["꽝"]["image_url"]) # 초기 이미지는 '꽝' 이미지
 
         view = MiningGameView(self, user, thread, pickaxe)
         await thread.send(embed=embed, view=view)
 
-        # 세션 시작
         session_task = asyncio.create_task(self.mine_timer(user.id, thread))
         self.active_sessions[user.id] = {"thread_id": thread.id, "task": session_task}
 
