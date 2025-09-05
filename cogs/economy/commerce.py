@@ -125,9 +125,14 @@ class BuyItemView(ShopViewBase):
                 )
                 embed.add_field(name=field_name, value=field_value, inline=False)
             
+            # ▼▼▼ [핵심 수정] 페이지 푸터와 갱신 시간 푸터를 함께 표시 ▼▼▼
             total_pages = math.ceil(len(self.items_in_category) / self.items_per_page)
+            timestamp_text = f"최종 갱신: {discord.utils.format_dt(discord.utils.utcnow())}"
             if total_pages > 1:
-                embed.set_footer(text=f"페이지 {self.page_index + 1} / {total_pages}")
+                page_text = f"페이지 {self.page_index + 1} / {total_pages}"
+                embed.set_footer(text=f"{page_text} | {timestamp_text}")
+            else:
+                embed.set_footer(text=timestamp_text)
 
         return embed
 
@@ -172,39 +177,21 @@ class BuyItemView(ShopViewBase):
             self.page_index -= 1
         await self.update_view(interaction)
 
-# cogs/economy/commerce.py -> BuyItemView 클래스 내부
-
     async def select_callback(self, interaction: discord.Interaction):
-        # [디버깅 Ver.3] 이 함수가 실행되는지 먼저 확인합니다.
-        logger.info("--- select_callback 함수 실행됨 ---")
-
         item_name = interaction.data['values'][0]
         item_data = get_item_database().get(item_name)
-
-        logger.info(f"선택된 아이템: '{item_name}'")
-        logger.info(f"DB 캐시에서 가져온 아이템 정보: {item_data}")
         
         if not item_data:
-            logger.error("치명적 오류: 아이템 데이터가 DB 캐시에 없어 처리를 중단합니다.")
             return
 
         try:
-            # [디버깅 Ver.3] 분기 조건에 사용될 값을 직접 확인합니다.
-            instant_use_val = item_data.get('instant_use', False)
-            max_ownable_val = item_data.get('max_ownable', 1)
-            logger.info(f"분기 조건 확인 -> instant_use: {instant_use_val}, max_ownable: {max_ownable_val}")
-
-            if instant_use_val:
-                logger.info("라우팅: handle_instant_use_item 으로 이동합니다.")
+            if item_data.get('instant_use', False):
                 await self.handle_instant_use_item(interaction, item_name, item_data)
-            elif max_ownable_val > 1:
-                logger.info("라우팅: handle_quantity_purchase 으로 이동합니다.")
+            elif item_data.get('max_ownable', 1) > 1:
                 await self.handle_quantity_purchase(interaction, item_name, item_data)
             else:
-                logger.info("라우팅: handle_single_purchase 으로 이동합니다.")
                 await self.handle_single_purchase(interaction, item_name, item_data)
             
-            logger.info("아이템 처리 완료 후, 뷰를 업데이트합니다.")
             await self.update_view(interaction)
 
         except Exception as e:
@@ -295,65 +282,32 @@ class BuyItemView(ShopViewBase):
         asyncio.create_task(delete_after(msg, 10))
 
     async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
-        # [디버깅 Ver.2] 함수 시작점에 로그 추가
-        logger.info(f"--- '{item_name}' 단일 구매 처리 시작 (요청자: {self.user.display_name}) ---")
-        
         await interaction.response.defer(ephemeral=True)
         wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(self.user))
 
-        # [디버깅 Ver.2] 첫 번째 분기문 검사 로그 추가
         if inventory.get(item_name, 0) > 0 and item_data.get('max_ownable', 1) == 1:
-            logger.warning(f"구매 중단: '{self.user.display_name}'님은 '{item_name}'(max: 1)을 이미 {inventory.get(item_name, 0)}개 보유 중입니다.")
             error_message = f"❌ '{item_name}'은(는) 이미 보유하고 있습니다. 1개만 가질 수 있습니다."
             msg = await interaction.followup.send(error_message, ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
             return
 
-        # [디버깅 Ver.2] 두 번째 분기문 검사 로그 추가
         total_price = item_data.get('current_price', item_data.get('price', 0))
         user_balance = wallet.get('balance', 0)
         if user_balance < total_price:
-            logger.warning(f"구매 중단: '{self.user.display_name}'님의 코인이 부족합니다. (소지금: {user_balance}, 필요: {total_price})")
             msg = await interaction.followup.send("❌ 잔액이 부족합니다.", ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
             return
 
-        # 이 로그가 보인다면, 모든 구매 조건 통과
-        logger.info("모든 구매 조건 통과. DB 업데이트 및 역할 부여 로직을 시작합니다.")
         await update_inventory(str(self.user.id), item_name, 1)
         await update_wallet(self.user, -total_price)
         
-        # --- 역할 부여 디버깅 ---
-        logger.info(f"--- 역할 부여 디버깅 시작: 아이템 '{item_name}' ---")
-        
-        id_key = item_data.get('id_key')
-        logger.info(f"[1/4] DB에서 가져온 id_key: {id_key}")
-
-        if id_key:
-            role_id = get_id(id_key)
-            logger.info(f"[2/4] id_key '{id_key}'에 매칭된 역할 ID: {role_id}")
-
-            if role_id:
-                role = interaction.guild.get_role(role_id)
-                logger.info(f"[3/4] 역할 ID '{role_id}'로 서버에서 찾은 역할 객체: {role.name if role else '못 찾음'}")
-
-                if role:
+        if id_key := item_data.get('id_key'):
+            if role_id := get_id(id_key):
+                if role := interaction.guild.get_role(role_id):
                     try:
                         await self.user.add_roles(role, reason=f"'{item_name}' 아이템 구매")
-                        logger.info(f"[4/4] 성공: {self.user.display_name} 님에게 '{role.name}' 역할 부여 완료!")
                     except discord.Forbidden:
-                        logger.error(f"[4/4] 실패: Forbidden 오류! 봇에게 '{role.name}' 역할을 부여할 권한이 없습니다. (권한, 역할 계층 확인 필요)")
-                    except Exception as e:
-                        logger.error(f"[4/4] 실패: 역할 부여 중 예외 발생: {e}", exc_info=True)
-                else:
-                    logger.warning("[4/4] 건너뜀: 역할 객체를 찾을 수 없어 역할을 부여할 수 없습니다.")
-            else:
-                logger.warning("[3/4 & 4/4] 건너뜀: 매칭된 역할 ID가 없어 역할을 찾거나 부여할 수 없습니다.")
-        else:
-            logger.info("[2/4 & 3/4 & 4/4] 건너뜀: 아이템에 id_key가 설정되어 있지 않아 역할 부여를 시도하지 않습니다.")
-        
-        logger.info("--- 역할 부여 디버깅 종료 ---")
-        # --- 역할 부여 디버깅 끝 ---
+                        logger.error(f"역할 부여 실패: {role.name} 역할을 부여할 권한이 없습니다.")
 
         new_wallet = await get_wallet(self.user.id)
         new_balance = new_wallet.get('balance', 0)
@@ -377,7 +331,10 @@ class BuyCategoryView(ShopViewBase):
         title = commerce_strings.get("category_view_title", "🏪 구매함")
         description = commerce_strings.get("category_view_desc", "구매하고 싶은 아이템의 카테고리를 선택해주세요.")
 
-        return discord.Embed(title=title, description=description, color=discord.Color.green())
+        embed = discord.Embed(title=title, description=description, color=discord.Color.green())
+        # ▼▼▼ [핵심 수정] 푸터 추가 ▼▼▼
+        embed.set_footer(text=f"최종 갱신: {discord.utils.format_dt(discord.utils.utcnow())}")
+        return embed
     
     async def build_components(self):
         self.clear_items()
@@ -425,6 +382,8 @@ class SellFishView(ShopViewBase):
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
         embed = discord.Embed(title="🎣 판매함 - 물고기", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 물고기를 아래 메뉴에서 여러 개 선택해주세요.", color=discord.Color.blue())
+        # ▼▼▼ [핵심 수정] 푸터 추가 ▼▼▼
+        embed.set_footer(text=f"최종 갱신: {discord.utils.format_dt(discord.utils.utcnow())}")
         return embed
 
     async def build_components(self):
@@ -516,6 +475,8 @@ class SellCropView(ShopViewBase):
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
         embed = discord.Embed(title="🌾 판매함 - 작물", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 작물을 아래 메뉴에서 선택해주세요.", color=discord.Color.green())
+        # ▼▼▼ [핵심 수정] 푸터 추가 ▼▼▼
+        embed.set_footer(text=f"최종 갱신: {discord.utils.format_dt(discord.utils.utcnow())}")
         return embed
 
     async def build_components(self):
@@ -589,7 +550,10 @@ class SellCropView(ShopViewBase):
 
 class SellCategoryView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
-        return discord.Embed(title="📦 판매함 - 카테고리 선택", description="판매할 아이템의 카테고리를 선택해주세요.", color=discord.Color.green())
+        embed = discord.Embed(title="📦 판매함 - 카테고리 선택", description="판매할 아이템의 카테고리를 선택해주세요.", color=discord.Color.green())
+        # ▼▼▼ [핵심 수정] 푸터 추가 ▼▼▼
+        embed.set_footer(text=f"최종 갱신: {discord.utils.format_dt(discord.utils.utcnow())}")
+        return embed
 
     async def build_components(self):
         self.clear_items()
@@ -667,6 +631,8 @@ class Commerce(commands.Cog):
             market_updates_text = "오늘은 큰 가격 변동이 없었습니다."
         
         embed = format_embed_from_db(embed_data, market_updates=market_updates_text)
+        # ▼▼▼ [핵심 수정] 푸터 추가 ▼▼▼
+        embed.set_footer(text=f"최종 갱신: {discord.utils.format_dt(discord.utils.utcnow())}")
         view = CommercePanelView(self)
         
         new_message = await channel.send(embed=embed, view=view)
