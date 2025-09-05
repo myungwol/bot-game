@@ -21,7 +21,8 @@ from utils.game_config_defaults import GAME_CONFIG
 logger = logging.getLogger(__name__)
 
 KST = timezone(timedelta(hours=9))
-KST_MONDAY_MIDNIGHT = dt_time(hour=0, minute=1, tzinfo=KST)
+# [✅ 최종 수정] 매주 월요일 -> 매일 자정 5분으로 변경
+KST_MIDNIGHT_UPDATE = dt_time(hour=0, minute=5, tzinfo=KST)
 
 def create_xp_bar(current_xp: int, required_xp: int, length: int = 10) -> str:
     if required_xp <= 0: return "▓" * length
@@ -288,32 +289,12 @@ class LevelPanelView(ui.View):
 
     @ui.button(label="상태 확인", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
     async def check_level_button(self, interaction: discord.Interaction, button: ui.Button):
-        user = interaction.user
-        cooldown_key = f"level_check_public_{user.id}"
-        cooldown_seconds = 60
-
-        last_used = await get_cooldown(user.id, cooldown_key)
-        if time.time() - last_used < cooldown_seconds:
-            can_use_time = int(last_used + cooldown_seconds)
-            await interaction.response.send_message(f"⏳ 이 버튼은 <t:{can_use_time}:R>에 다시 사용할 수 있습니다.", ephemeral=True)
-            return
-
         try:
-            if interaction.message:
-                await interaction.message.delete()
-            
-            await interaction.response.send_message(embed=await build_level_embed(user))
-
-            await self.cog.regenerate_panel(interaction.channel)
-            
-            await set_cooldown(user.id, cooldown_key)
-
-        except discord.Forbidden:
-            await interaction.response.send_message("❌ 채널에 메시지를 보내거나 삭제할 권한이 없습니다.", ephemeral=True)
+            await interaction.response.send_message(embed=await build_level_embed(interaction.user), ephemeral=True)
         except Exception as e:
-            logger.error(f"공개 레벨 확인 및 패널 재생성 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
+            logger.error(f"개인 레벨 확인 중 오류 발생 (유저: {interaction.user.id}): {e}", exc_info=True)
             if not interaction.response.is_done():
-                await interaction.response.send_message("❌ 처리 중 오류가 발생했습니다.", ephemeral=True)
+                await interaction.response.send_message("❌ 상태 정보를 불러오는 중 오류가 발생했습니다.", ephemeral=True)
 
 
     @ui.button(label="랭킹 확인", style=discord.ButtonStyle.secondary, emoji="👑", custom_id="show_ranking_button")
@@ -334,16 +315,14 @@ class LevelSystem(commands.Cog):
     def cog_unload(self):
         self.update_champion_panel.cancel()
         
-    @tasks.loop(time=KST_MONDAY_MIDNIGHT)
+    @tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def update_champion_panel(self):
         logger.info("[LevelSystem] 챔피언 보드 패널 새로고침을 시작합니다.")
         try:
             channel_id = get_id(self.channel_id_key)
-            if not channel_id:
+            if not (channel_id and (channel := self.bot.get_channel(channel_id))):
+                logger.warning("레벨/챔피언 패널 채널이 설정되지 않아 자동 업데이트를 건너뜁니다.")
                 return
-
-            channel = self.bot.get_channel(channel_id)
-            if not channel: return
             
             await self.regenerate_panel(channel)
             logger.info("[LevelSystem] 챔피언 보드 패널을 성공적으로 새로고침했습니다.")
@@ -451,33 +430,29 @@ class LevelSystem(commands.Cog):
         except Exception as e:
             logger.error(f"관리자 요청으로 레벨/XP 업데이트 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
 
-    # ▼▼▼ [핵심 수정] regenerate_panel 함수 전체를 교체합니다. ▼▼▼
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_champion_board") -> bool:
         try:
-            # 1. DB에서 이전 패널 정보를 가져옵니다.
-            panel_info = get_panel_id(panel_key)
+            # [✅ 최종 수정] 다른 파일들과의 일관성을 위해 panel_key에서 접두사를 제거
+            panel_name = panel_key.replace("panel_", "")
+            panel_info = get_panel_id(panel_name)
             
-            # 2. 이전 패널 정보가 있다면, 해당 채널에서 메시지를 찾아 삭제합니다.
             if panel_info and panel_info.get('message_id') and panel_info.get('channel_id'):
                 try:
-                    # DB에 저장된 'channel_id'를 사용하여 정확한 채널 객체를 가져옵니다.
                     old_channel = self.bot.get_channel(panel_info['channel_id'])
                     if old_channel:
-                        # 정확한 채널에서 메시지를 찾습니다.
                         msg_to_delete = await old_channel.fetch_message(panel_info['message_id'])
                         await msg_to_delete.delete()
                         logger.info(f"이전 '{panel_key}' 패널(ID: {panel_info['message_id']})을 채널 '{old_channel.name}'에서 삭제했습니다.")
                 except (discord.NotFound, discord.Forbidden):
-                    logger.warning(f"이전 '{panel_key}' 패널(ID: {panel_info.get('message_id')})을 찾지 못했거나 삭제할 수 없습니다.")
+                    logger.warning(f"이전 '{panel_key}' 패널(ID: {panel_info.get('message_id')})을 찾을 수 없거나 삭제할 수 없습니다. 계속 진행합니다.")
                 except Exception as e:
                     logger.error(f"이전 패널 삭제 중 예기치 않은 오류 발생: {e}", exc_info=True)
 
-            # 3. 새로운 패널을 생성합니다.
             embed = await self._build_champion_embed()
             message = await channel.send(embed=embed, view=LevelPanelView(self))
 
-            # 4. 새로 생성된 패널의 정보를 DB에 저장합니다.
-            await save_panel_id(panel_key, message.id, channel.id)
+            # [✅ 최종 수정] 접두사가 제거된 이름으로 DB에 저장
+            await save_panel_id(panel_name, message.id, channel.id)
             
             logger.info(f"✅ '{panel_key}' 패널을 #{channel.name} 에 재설치했습니다.")
             return True
