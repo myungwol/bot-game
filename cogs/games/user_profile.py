@@ -403,6 +403,7 @@ class ProfileView(ui.View):
             row_counter += 1
             self.add_item(ui.Button(label="괭이 변경", style=discord.ButtonStyle.success, custom_id="profile_change_hoe", emoji="🪓", row=row_counter))
             self.add_item(ui.Button(label="물뿌리개 변경", style=discord.ButtonStyle.success, custom_id="profile_change_watering_can", emoji="💧", row=row_counter))
+            row_counter += 1
             self.add_item(ui.Button(label="곡괭이 변경", style=discord.ButtonStyle.secondary, custom_id="profile_change_pickaxe", emoji="⛏️", row=row_counter))
             
         row_counter += 1
