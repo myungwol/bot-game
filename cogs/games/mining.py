@@ -55,6 +55,7 @@ class MiningGameView(ui.View):
 
         self.state = "finding"
         self.discovered_ore: Optional[str] = None
+        self.last_result_text: Optional[str] = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user.id:
@@ -62,15 +63,32 @@ class MiningGameView(ui.View):
             return False
         return True
 
-    def _update_embed_fields(self, embed: discord.Embed, result_text: Optional[str] = None):
-        """임베드의 필드 부분을 업데이트하는 헬퍼 함수"""
+    def _update_embed_fields(self, embed: discord.Embed):
+        """임베드의 필드 부분을 공통으로 업데이트하는 헬퍼 함수"""
         embed.clear_fields()
-        if result_text:
-            embed.add_field(name="채굴 결과", value=result_text, inline=False)
+        
+        if self.last_result_text:
+            embed.add_field(name="채굴 결과", value=self.last_result_text, inline=False)
+            
         embed.add_field(name="사용 중인 장비", value=self.pickaxe, inline=True)
-        embed.add_field(name="광산 닫힘", value=f"<t:{int(time.time()) + self.timeout}:R>", inline=True)
+        
+        # timeout은 뷰가 시작된 시점부터의 절대 시간을 나타내므로, time.time() + self.timeout으로 종료 시간을 계산합니다.
+        end_time = int(time.time() + self.timeout) if self.timeout else int(time.time() + DEFAULT_MINE_DURATION_SECONDS)
+        embed.add_field(name="광산 닫힘", value=f"<t:{end_time}:R>", inline=True)
+
+        active_abilities = []
         if self.duration_doubled:
-            embed.add_field(name="활성화된 능력", value="✨ 집중 탐사 (시간 2배)", inline=False)
+            active_abilities.append("✨ 집중 탐사 (시간 2배)")
+        if self.time_reduction > 0:
+            active_abilities.append("⚡ 신속한 채굴 (쿨타임 감소)")
+        if self.can_double_yield:
+            active_abilities.append("💰 풍부한 광맥 (수량 2배 확률)")
+        if 'mine_rare_up_2' in self.user_abilities:
+            active_abilities.append("💎 노다지 발견 (희귀 광물 확률 증가)")
+
+        if active_abilities:
+            embed.add_field(name="활성화된 능력", value="\n".join(active_abilities), inline=False)
+        
         return embed
 
     @ui.button(label="광석 찾기", style=discord.ButtonStyle.secondary, emoji="🔍", custom_id="mine_action_button")
@@ -78,7 +96,7 @@ class MiningGameView(ui.View):
         
         if self.state == "finding":
             button.disabled = True
-            # 상호작용에 대한 즉각적인 응답
+            button.label = "탐색 중..."
             await interaction.response.edit_message(view=self)
 
             ores = list(ORE_DATA.keys())
@@ -87,22 +105,33 @@ class MiningGameView(ui.View):
             self.discovered_ore = random.choices(ores, weights=new_weights, k=1)[0]
             
             embed = interaction.message.embeds[0]
-            embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url'])
-            embed = self._update_embed_fields(embed)
 
             if self.discovered_ore == "꽝":
-                embed.description = "아무것도 발견하지 못했다..."
-                button.label = "다시 찾아보기"
+                self.last_result_text = "아무것도 발견하지 못했다..."
+                embed.description = "주변을 다시 둘러보자. 어떤 광석이 나올까?"
+                embed.set_image(url=ORE_DATA["꽝"]['image_url'])
+                embed = self._update_embed_fields(embed)
+                
+                await interaction.message.edit(embed=embed, view=self)
+
+                cooldown = MINING_COOLDOWN_SECONDS - self.time_reduction
+                await asyncio.sleep(cooldown)
+
+                if self.is_finished(): return
+
+                button.label = "광석 찾기"
                 self.state = "finding"
-            else:
+
+            else: # 광석 발견
                 embed.description = f"**{self.discovered_ore}**을(를) 발견했다!"
+                embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url'])
+                embed = self._update_embed_fields(embed)
                 button.label = "채굴하기"
                 button.style = discord.ButtonStyle.primary
                 button.emoji = "⛏️"
                 self.state = "discovered"
             
             button.disabled = False
-            # interaction.message를 사용하여 수정 (웹훅 토큰 만료와 무관)
             await interaction.message.edit(embed=embed, view=self)
 
         elif self.state == "discovered":
@@ -114,7 +143,6 @@ class MiningGameView(ui.View):
             embed = interaction.message.embeds[0]
             embed.description = f"**{self.pickaxe}**(으)로 열심히 **{self.discovered_ore}**을(를) 캐는 중입니다..."
             embed = self._update_embed_fields(embed)
-            # 상호작용에 대한 즉각적인 응답
             await interaction.response.edit_message(embed=embed, view=self)
 
             await asyncio.sleep(mining_duration)
@@ -122,20 +150,19 @@ class MiningGameView(ui.View):
             if self.is_finished() or self.user.id not in self.cog.active_sessions:
                 return
 
-            result_text = None
             if self.discovered_ore != "꽝":
                 quantity = 2 if self.can_double_yield and random.random() < 0.20 else 1
                 await update_inventory(self.user.id, self.discovered_ore, quantity)
                 await log_activity(self.user.id, 'mining', amount=quantity)
                 
-                result_text = f"✅ **{self.discovered_ore}** {quantity}개를 획득했습니다!"
+                self.last_result_text = f"✅ **{self.discovered_ore}** {quantity}개를 획득했습니다!"
                 if quantity > 1:
-                    result_text += "\n✨ **풍부한 광맥** 능력으로 광석을 2개 획득했습니다!"
+                    self.last_result_text += "\n✨ **풍부한 광맥** 능력으로 광석을 2개 획득했습니다!"
             
-            embed = interaction.message.embeds[0] # 최신 임베드 다시 가져오기
+            embed = interaction.message.embeds[0] 
             embed.description = "다시 주변을 둘러보자. 어떤 광석이 나올까?"
             embed.set_image(url=ORE_DATA["꽝"]['image_url'])
-            embed = self._update_embed_fields(embed, result_text=result_text)
+            embed = self._update_embed_fields(embed)
 
             button.label = "광석 찾기"
             button.style = discord.ButtonStyle.secondary
@@ -144,8 +171,10 @@ class MiningGameView(ui.View):
             self.state = "finding"
             self.discovered_ore = None
             
-            # sleep 이후에는 interaction.message.edit 사용
-            await interaction.message.edit(embed=embed, view=self)
+            try:
+                await interaction.message.edit(embed=embed, view=self)
+            except discord.NotFound:
+                self.stop()
 
     async def on_timeout(self):
         await self.cog.close_mine_session(self.user.id, self.thread, "시간이 다 되어")
@@ -216,17 +245,13 @@ class Mining(commands.Cog):
         if duration_doubled:
             duration *= 2
         
+        view = MiningGameView(self, user, thread, pickaxe, user_abilities, duration, duration_doubled)
+        
         embed = format_embed_from_db(embed_data, user_name=user.display_name)
         embed.description = "광산에 들어왔다. 어떤 광석이 있을지 찾아보자!"
         embed.set_image(url=ORE_DATA["꽝"]["image_url"])
-        embed.clear_fields()
-        
-        embed.add_field(name="사용 중인 장비", value=pickaxe, inline=True)
-        embed.add_field(name="광산 닫힘", value=f"<t:{int(time.time()) + duration}:R>", inline=True)
-        if duration_doubled:
-            embed.add_field(name="활성화된 능력", value="✨ 집중 탐사 (시간 2배)", inline=False)
+        embed = view._update_embed_fields(embed) # 뷰의 헬퍼 함수로 초기 필드 설정
 
-        view = MiningGameView(self, user, thread, pickaxe, user_abilities, duration, duration_doubled)
         await thread.send(embed=embed, view=view)
 
         session_task = asyncio.create_task(self.mine_timer(user.id, thread, duration))
