@@ -138,7 +138,15 @@ class Mining(commands.Cog):
         self.bot = bot
         self.active_sessions: Dict[int, Dict] = {}
 
+    # ▼▼▼ [핵심 수정] 아래 메소드 전체를 추가하세요. ▼▼▼
+    async def register_persistent_views(self):
+        """봇이 시작될 때 MiningPanelView를 영구 뷰로 등록합니다."""
+        self.bot.add_view(MiningPanelView(self))
+        logger.info("✅ 광산 패널의 영구 View가 성공적으로 등록되었습니다.")
+    # ▲▲▲ [핵심 수정] 여기까지 추가 ▲▲▲
+
     async def handle_enter_mine(self, interaction: discord.Interaction):
+        # ... (이하 다른 메소드들은 그대로 둡니다) ...
         await interaction.response.defer(ephemeral=True)
         user = interaction.user
 
