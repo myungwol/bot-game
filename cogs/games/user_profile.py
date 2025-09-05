@@ -322,8 +322,8 @@ class ProfileView(ui.View):
         elif self.current_page == "gear":
             gear_categories = {
                 "낚시": {"rod": "🎣 낚싯대", "bait": "🐛 미끼"},
-                "농장": {"hoe": "🪓 괭이", "watering_can": "💧 물뿌리개"}
-                "광산": {"pickaxe": "⛏️ 곡괭이"},
+                "농장": {"hoe": "🪓 괭이", "watering_can": "💧 물뿌리개"},
+                "광산": {"pickaxe": "⛏️ 곡괭이"}
             }
             for category_name, items in gear_categories.items():
                 field_lines = [f"**{label}:** `{gear.get(key, BARE_HANDS)}`" for key, label in items.items()]
