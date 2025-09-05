@@ -126,7 +126,6 @@ class BuyItemView(ShopViewBase):
                 embed.add_field(name=field_name, value=field_value, inline=False)
             
             total_pages = math.ceil(len(self.items_in_category) / self.items_per_page)
-            # ▼▼▼ [핵심 수정] 푸터 로직 변경 ▼▼▼
             footer_text = "매일 00:05(KST)에 시세 변동"
             if total_pages > 1:
                 page_text = f"페이지 {self.page_index + 1} / {total_pages}"
@@ -284,6 +283,16 @@ class BuyItemView(ShopViewBase):
     async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
         await interaction.response.defer(ephemeral=True)
         wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(self.user))
+
+        # 곡괭이 중복 구매 방지 로직
+        if item_data.get('gear_type') == '곡괭이':
+            item_db = get_item_database()
+            for owned_item_name in inventory.keys():
+                if item_db.get(owned_item_name, {}).get('gear_type') == '곡괭이':
+                    error_message = f"❌ 곡괭이는 하나만 소지할 수 있습니다. (현재 보유: {owned_item_name})"
+                    msg = await interaction.followup.send(error_message, ephemeral=True)
+                    asyncio.create_task(delete_after(msg, 5))
+                    return
 
         if inventory.get(item_name, 0) > 0 and item_data.get('max_ownable', 1) == 1:
             error_message = f"❌ '{item_name}'은(는) 이미 보유하고 있습니다. 1개만 가질 수 있습니다."
