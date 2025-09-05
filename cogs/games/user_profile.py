@@ -466,6 +466,7 @@ class GearSelectView(ui.View):
         GEAR_SETTINGS = {
             "rod":          {"display_name": "낚싯대", "gear_type_db": "낚싯대", "unequip_label": "낚싯대 해제", "default_item": BARE_HANDS},
             "bait":         {"display_name": "낚시 미끼", "gear_type_db": "미끼", "unequip_label": "미끼 해제", "default_item": "미끼 없음"},
+            "pickaxe":      {"display_name": "곡괭이", "gear_type_db": "곡괭이", "unequip_label": "곡괭이 해제", "default_item": BARE_HANDS},
             "hoe":          {"display_name": "괭이", "gear_type_db": "괭이", "unequip_label": "괭이 해제", "default_item": BARE_HANDS},
             "watering_can": {"display_name": "물뿌리개", "gear_type_db": "물뿌리개", "unequip_label": "물뿌리개 해제", "default_item": BARE_HANDS}
         }
