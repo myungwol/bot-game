@@ -67,8 +67,14 @@ class MiningGameView(ui.View):
         """임베드의 필드와 푸터를 상태에 맞게 업데이트하는 헬퍼 함수"""
         embed.clear_fields()
         
-        end_time = int(time.time() + self.timeout) if self.timeout else int(time.time() + DEFAULT_MINE_DURATION_SECONDS)
-        footer_text = f"사용 중인 장비: {self.pickaxe}  |  광산 닫힘: <t:{end_time}:R>"
+        # [✅ 수정] 뷰의 정확한 만료 시간을 가져오도록 변경
+        expiry_datetime = self.get_timeout_expiry()
+        if expiry_datetime:
+            end_time = int(expiry_datetime.timestamp())
+            footer_text = f"사용 중인 장비: {self.pickaxe}  |  광산 닫힘: <t:{end_time}:R>"
+        else:
+            footer_text = f"사용 중인 장비: {self.pickaxe}"
+        
         embed.set_footer(text=footer_text)
 
         if show_details:
@@ -123,7 +129,7 @@ class MiningGameView(ui.View):
             else: # 광석 발견
                 embed.description = f"**{self.discovered_ore}**을(를) 발견했다!"
                 embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url'])
-                embed = self._update_embed_layout(embed, show_details=False) # [✅ 수정] 정보 숨김
+                embed = self._update_embed_layout(embed, show_details=False)
                 button.label = "채굴하기"
                 button.style = discord.ButtonStyle.primary
                 button.emoji = "⛏️"
@@ -140,7 +146,7 @@ class MiningGameView(ui.View):
             
             embed = interaction.message.embeds[0]
             embed.description = f"**{self.pickaxe}**(으)로 열심히 **{self.discovered_ore}**을(를) 캐는 중입니다..."
-            embed = self._update_embed_layout(embed, show_details=False) # [✅ 수정] 정보 숨김
+            embed = self._update_embed_layout(embed, show_details=False)
             await interaction.response.edit_message(embed=embed, view=self)
 
             await asyncio.sleep(mining_duration)
@@ -155,13 +161,12 @@ class MiningGameView(ui.View):
                 
                 self.last_result_text = f"✅ **{self.discovered_ore}** {quantity}개를 획득했습니다!"
                 if quantity > 1:
-                    # [✅ 수정] 가독성을 위한 줄바꿈 추가
                     self.last_result_text += f"\n\n✨ **풍부한 광맥** 능력으로 광석을 2개 획득했습니다!"
             
             embed = interaction.message.embeds[0] 
             embed.description = "다시 주변을 둘러보자. 어떤 광석이 나올까?"
-            embed.set_image(url=None) # [✅ 수정] 채굴 결과 표시 시 이미지 숨김
-            embed = self._update_embed_layout(embed, show_details=True) # [✅ 수정] 정보 다시 표시
+            embed.set_image(url=None)
+            embed = self._update_embed_layout(embed, show_details=True)
 
             button.label = "광석 찾기"
             button.style = discord.ButtonStyle.secondary
@@ -249,7 +254,7 @@ class Mining(commands.Cog):
         embed = format_embed_from_db(embed_data, user_name=user.display_name)
         embed.description = "광산에 들어왔다. 어떤 광석이 있을지 찾아보자!"
         embed.set_image(url=ORE_DATA["꽝"]["image_url"])
-        embed = view._update_embed_layout(embed, show_details=True) # 시작 시에는 모든 정보 표시
+        embed = view._update_embed_layout(embed, show_details=True)
 
         await thread.send(embed=embed, view=view)
 
