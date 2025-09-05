@@ -59,6 +59,27 @@ class MiningGameView(ui.View):
         self.last_result_text: Optional[str] = None
         
         self.end_time = discord.utils.utcnow() + timedelta(seconds=duration)
+        self.warning_task: Optional[asyncio.Task] = None
+
+    async def start(self):
+        """뷰와 함께 경고 타이머를 시작합니다."""
+        if self.timeout is not None and self.timeout > 60:
+            self.warning_task = asyncio.create_task(self.send_warning())
+
+    async def send_warning(self):
+        """세션 만료 1분 전에 경고 메시지를 보냅니다."""
+        try:
+            await asyncio.sleep(self.timeout - 60)
+            if not self.is_finished() and self.thread:
+                await self.thread.send("⚠️ 곧 광산이 닫힙니다...", delete_after=60)
+        except asyncio.CancelledError:
+            pass # 뷰가 먼저 중지되면 태스크가 취소됩니다.
+
+    def stop(self):
+        """뷰가 중지될 때 경고 태스크도 함께 취소합니다."""
+        if self.warning_task and not self.warning_task.done():
+            self.warning_task.cancel()
+        super().stop()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user.id:
@@ -67,7 +88,6 @@ class MiningGameView(ui.View):
         return True
 
     def build_embed(self) -> discord.Embed:
-        """현재 상태에 따라 임베드를 처음부터 생성합니다."""
         embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", color=0x607D8B)
 
         if self.state == "finding":
@@ -161,6 +181,7 @@ class MiningGameView(ui.View):
 
     async def on_timeout(self):
         await self.cog.close_mine_session(self.user.id, self.thread, "시간이 다 되어")
+        self.stop()
 
 class MiningPanelView(ui.View):
     def __init__(self, cog_instance: 'Mining'):
@@ -228,22 +249,16 @@ class Mining(commands.Cog):
         embed.title = f"⛏️ {user.display_name}님의 광산 채굴"
         
         await thread.send(embed=embed, view=view)
-
-        session_task = asyncio.create_task(self.mine_timer(user.id, thread, duration))
-        self.active_sessions[user.id] = {"thread_id": thread.id, "task": session_task}
-
+        await view.start() # 뷰와 함께 경고 타이머 시작
+        
+        self.active_sessions[user.id] = {"thread_id": thread.id}
         await interaction.followup.send(f"광산에 입장했습니다! {thread.mention}", ephemeral=True)
 
-    async def mine_timer(self, user_id: int, thread: discord.Thread, duration: int):
-        await asyncio.sleep(duration)
-        reason = f"{duration // 60}분이 지나"
-        await self.close_mine_session(user_id, thread, reason)
-
     async def close_mine_session(self, user_id: int, thread: Optional[discord.Thread], reason: str):
+        if user_id not in self.active_sessions:
+            return
         logger.info(f"{user_id}의 광산 세션을 '{reason}' 이유로 종료합니다.")
-        session = self.active_sessions.pop(user_id, None)
-        if session and not session["task"].done():
-            session["task"].cancel()
+        self.active_sessions.pop(user_id, None)
 
         if thread:
             try:
