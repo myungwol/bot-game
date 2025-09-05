@@ -497,12 +497,10 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 농장 관련 영구 View가 정상적으로 등록되었습니다.")
         
-    # ▼▼▼ [핵심 수정] daily_crop_update 함수 전체를 교체합니다. ▼▼▼
     @tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("일일 작물 상태 업데이트 시작...")
         try:
-            # 1. 필요한 모든 데이터 사전 로드
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
 
@@ -513,7 +511,6 @@ class Farm(commands.Cog):
 
             all_plots = planted_plots_res.data
             
-            # 2. 작물 정보 및 소유자 능력 정보 취합
             item_names = {p['planted_item_name'] for p in all_plots if p.get('planted_item_name')}
             owner_ids = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
             
@@ -529,7 +526,6 @@ class Farm(commands.Cog):
                 for ua in abilities_res.data:
                     owner_abilities_map[ua['user_id']] = {a['abilities']['ability_key'] for a in ua.get('abilities', []) if a.get('abilities')}
 
-            # 3. 각 밭에 대한 업데이트 로직 처리
             plots_to_update_db = []
             today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
             yesterday_jst_midnight = today_jst_midnight - timedelta(days=1)
@@ -540,26 +536,22 @@ class Farm(commands.Cog):
                 if not owner_id or not item_info:
                     continue
                 
-                # 이미 수확 가능한 상태면 건너뛰기
                 if plot['growth_stage'] >= item_info.get('max_growth_stage', 99):
                     continue
 
                 owner_abilities = owner_abilities_map.get(owner_id, set())
                 
-                # 물주기 상태 판정
                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
                 last_watered_kst = last_watered_dt.astimezone(KST)
 
                 is_watered_today = last_watered_kst >= today_jst_midnight or is_raining
                 
-                # [수분 유지력 능력 적용]
                 if not is_watered_today and 'farm_water_retention_1' in owner_abilities:
                     if last_watered_kst >= yesterday_jst_midnight:
                         is_watered_today = True
 
                 update_payload = {'id': plot['id']}
                 if is_watered_today:
-                    # 성장 처리
                     growth_amount = 1
                     if 'farm_growth_speed_up_2' in owner_abilities:
                         growth_amount += 1
@@ -569,12 +561,10 @@ class Farm(commands.Cog):
                         item_info.get('max_growth_stage', 99)
                     )
                 else:
-                    # 시듦 처리
                     update_payload['state'] = 'withered'
                 
                 plots_to_update_db.append(update_payload)
 
-            # 4. DB 일괄 업데이트 및 UI 갱신 요청
             if plots_to_update_db:
                 await supabase.table('farm_plots').upsert(plots_to_update_db).execute()
                 logger.info(f"일일 작물 업데이트 완료. {len(plots_to_update_db)}개의 밭이 영향을 받았습니다. UI 업데이트를 요청합니다.")
@@ -672,7 +662,6 @@ class Farm(commands.Cog):
                                 if stage >= max_stage:
                                     growth_status_text = "수확 가능! 🧺"
                                 else:
-                                    # [UI 수정] planted_at 대신 growth_stage를 기준으로 남은 날 계산
                                     days_to_grow = max_stage - stage
                                     growth_status_text = f"남은 날: {days_to_grow}일"
 
@@ -715,6 +704,10 @@ class Farm(commands.Cog):
         weather_key = get_config("current_weather", "sunny")
         weather = WEATHER_TYPES.get(weather_key, {"emoji": "❔", "name": "알 수 없음"})
         embed.description += f"\n\n**오늘의 날씨:** {weather['emoji']} {weather['name']}"
+        
+        # ▼▼▼ [핵심 수정] 푸터 추가 ▼▼▼
+        embed.set_footer(text=f"최종 갱신: {discord.utils.format_dt(discord.utils.utcnow())}")
+        
         return embed
         
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User, farm_data: Dict, force_new: bool = False):
