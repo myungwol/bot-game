@@ -284,7 +284,6 @@ class BuyItemView(ShopViewBase):
         await interaction.response.defer(ephemeral=True)
         wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(self.user))
 
-        # 곡괭이 중복 구매 방지 로직
         if item_data.get('gear_type') == '곡괭이':
             item_db = get_item_database()
             for owned_item_name in inventory.keys():
@@ -325,7 +324,6 @@ class BuyItemView(ShopViewBase):
         msg = await interaction.followup.send(success_message, ephemeral=True)
         asyncio.create_task(delete_after(msg, 10))
 
-
     async def back_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         category_view = BuyCategoryView(self.user)
@@ -341,7 +339,6 @@ class BuyCategoryView(ShopViewBase):
         description = commerce_strings.get("category_view_desc", "구매하고 싶은 아이템의 카테고리를 선택해주세요.")
 
         embed = discord.Embed(title=title, description=description, color=discord.Color.green())
-        # ▼▼▼ [핵심 수정] 푸터 변경 ▼▼▼
         embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         return embed
     
@@ -391,7 +388,6 @@ class SellFishView(ShopViewBase):
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
         embed = discord.Embed(title="🎣 판매함 - 물고기", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 물고기를 아래 메뉴에서 여러 개 선택해주세요.", color=discord.Color.blue())
-        # ▼▼▼ [핵심 수정] 푸터 변경 ▼▼▼
         embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         return embed
 
@@ -484,7 +480,6 @@ class SellCropView(ShopViewBase):
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
         embed = discord.Embed(title="🌾 판매함 - 작물", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 작물을 아래 메뉴에서 선택해주세요.", color=discord.Color.green())
-        # ▼▼▼ [핵심 수정] 푸터 변경 ▼▼▼
         embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         return embed
 
@@ -557,10 +552,95 @@ class SellCropView(ShopViewBase):
         view.message = self.message
         await view.update_view(interaction)
 
+class SellMineralView(ShopViewBase):
+    def __init__(self, user: discord.Member):
+        super().__init__(user)
+        self.mineral_data_map: Dict[str, Dict[str, Any]] = {}
+
+    async def refresh_view(self, interaction: discord.Interaction):
+        embed = await self.build_embed()
+        await self.build_components()
+        await interaction.edit_original_response(embed=embed, view=self)
+    
+    async def build_embed(self) -> discord.Embed:
+        wallet = await get_wallet(self.user.id)
+        balance = wallet.get('balance', 0)
+        embed = discord.Embed(title="💎 판매함 - 광물", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 광물을 아래 메뉴에서 선택해주세요.", color=0x607D8B)
+        embed.set_footer(text="매일 00:05(KST)에 시세 변동")
+        return embed
+
+    async def build_components(self):
+        self.clear_items()
+        inventory = await get_inventory(self.user)
+        item_db = get_item_database()
+        self.mineral_data_map.clear()
+        
+        options = []
+        mineral_items = {name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category', '').strip() == '광물'}
+
+        if mineral_items:
+            for name, qty in mineral_items.items():
+                item_data = item_db.get(name, {})
+                price = item_data.get('current_price', item_data.get('sell_price', 0))
+                self.mineral_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
+                
+                options.append(discord.SelectOption(
+                    label=f"{name} (보유: {qty}개)", 
+                    value=name, 
+                    description=f"개당: {price}{self.currency_icon}",
+                    emoji=item_data.get('emoji', '💎')
+                ))
+
+        if options:
+            select = ui.Select(placeholder="판매할 광물을 선택하세요...", options=options)
+            select.callback = self.on_select
+            self.add_item(select)
+        
+        back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=1)
+        back_button.callback = self.go_back
+        self.add_item(back_button)
+
+    async def on_select(self, interaction: discord.Interaction):
+        selected_mineral = interaction.data['values'][0]
+        mineral_info = self.mineral_data_map.get(selected_mineral)
+        if not mineral_info: return
+
+        modal = QuantityModal(f"'{selected_mineral}' 판매", mineral_info['max_qty'])
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+
+        if modal.value is None:
+            msg = await interaction.followup.send("판매가 취소되었습니다.", ephemeral=True)
+            asyncio.create_task(delete_after(msg, 5))
+            return
+
+        quantity_to_sell = modal.value
+        total_price = mineral_info['price'] * quantity_to_sell
+        
+        try:
+            await update_inventory(str(self.user.id), selected_mineral, -quantity_to_sell)
+            await update_wallet(self.user, total_price)
+
+            new_wallet = await get_wallet(self.user.id)
+            new_balance = new_wallet.get('balance', 0)
+            success_message = f"✅ **{selected_mineral}** {quantity_to_sell}개를 `{total_price:,}`{self.currency_icon}에 판매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
+            msg = await interaction.followup.send(success_message, ephemeral=True)
+            asyncio.create_task(delete_after(msg, 10))
+            
+            await self.refresh_view(interaction)
+        except Exception as e:
+            logger.error(f"광물 판매 중 오류: {e}", exc_info=True)
+            await self.handle_error(interaction, e)
+
+    async def go_back(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        view = SellCategoryView(self.user)
+        view.message = self.message
+        await view.update_view(interaction)
+
 class SellCategoryView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title="📦 판매함 - 카테고리 선택", description="판매할 아이템의 카테고리를 선택해주세요.", color=discord.Color.green())
-        # ▼▼▼ [핵심 수정] 푸터 변경 ▼▼▼
         embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         return embed
 
@@ -569,6 +649,7 @@ class SellCategoryView(ShopViewBase):
         self.add_item(ui.Button(label="장비", custom_id="sell_category_gear", disabled=True))
         self.add_item(ui.Button(label="물고기", custom_id="sell_category_fish"))
         self.add_item(ui.Button(label="작물", custom_id="sell_category_crop"))
+        self.add_item(ui.Button(label="광물", custom_id="sell_category_mineral"))
         for child in self.children:
             if isinstance(child, ui.Button):
                 child.callback = self.on_button_click
@@ -579,6 +660,7 @@ class SellCategoryView(ShopViewBase):
         
         if category == "fish": view = SellFishView(self.user)
         elif category == "crop": view = SellCropView(self.user)
+        elif category == "mineral": view = SellMineralView(self.user)
         else: return
 
         view.message = self.message
@@ -640,7 +722,6 @@ class Commerce(commands.Cog):
             market_updates_text = "오늘은 큰 가격 변동이 없었습니다."
         
         embed = format_embed_from_db(embed_data, market_updates=market_updates_text)
-        # ▼▼▼ [핵심 수정] 푸터 변경 ▼▼▼
         embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         view = CommercePanelView(self)
         
