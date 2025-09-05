@@ -69,10 +69,11 @@ class MiningGameView(ui.View):
         
         if self.last_result_text:
             embed.add_field(name="채굴 결과", value=self.last_result_text, inline=False)
+            # [✅ 수정] 가독성을 위한 빈 필드 추가
+            embed.add_field(name='\u200b', value='\u200b', inline=False)
             
         embed.add_field(name="사용 중인 장비", value=self.pickaxe, inline=True)
         
-        # timeout은 뷰가 시작된 시점부터의 절대 시간을 나타내므로, time.time() + self.timeout으로 종료 시간을 계산합니다.
         end_time = int(time.time() + self.timeout) if self.timeout else int(time.time() + DEFAULT_MINE_DURATION_SECONDS)
         embed.add_field(name="광산 닫힘", value=f"<t:{end_time}:R>", inline=True)
 
@@ -95,6 +96,9 @@ class MiningGameView(ui.View):
     async def action_button(self, interaction: discord.Interaction, button: ui.Button):
         
         if self.state == "finding":
+            # [✅ 수정] 새로운 탐색 시작 시 이전 결과 메시지 초기화
+            self.last_result_text = None
+
             button.disabled = True
             button.label = "탐색 중..."
             await interaction.response.edit_message(view=self)
@@ -161,7 +165,8 @@ class MiningGameView(ui.View):
             
             embed = interaction.message.embeds[0] 
             embed.description = "다시 주변을 둘러보자. 어떤 광석이 나올까?"
-            embed.set_image(url=ORE_DATA["꽝"]['image_url'])
+            # [✅ 수정] 채굴 결과 표시 시 이미지 숨김
+            embed.set_image(url=None)
             embed = self._update_embed_fields(embed)
 
             button.label = "광석 찾기"
@@ -250,7 +255,7 @@ class Mining(commands.Cog):
         embed = format_embed_from_db(embed_data, user_name=user.display_name)
         embed.description = "광산에 들어왔다. 어떤 광석이 있을지 찾아보자!"
         embed.set_image(url=ORE_DATA["꽝"]["image_url"])
-        embed = view._update_embed_fields(embed) # 뷰의 헬퍼 함수로 초기 필드 설정
+        embed = view._update_embed_fields(embed)
 
         await thread.send(embed=embed, view=view)
 
