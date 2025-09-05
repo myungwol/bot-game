@@ -515,22 +515,14 @@ class Farm(commands.Cog):
             owner_ids = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
             
             item_info_tasks = [get_farmable_item_info(name) for name in item_names]
-            
-            # ▼▼▼ [핵심 수정] 쿼리 방식을 변경하여 오류를 해결합니다. ▼▼▼
-            abilities_task = supabase.rpc('get_users_abilities', {'user_ids': list(owner_ids)}).execute()
+            # [✅ 최종 수정] 각 유저의 능력을 개별적으로, 캐시를 사용하여 불러옵니다.
+            abilities_tasks = [get_user_abilities(uid) for uid in owner_ids]
 
-            item_info_results, abilities_res = await asyncio.gather(asyncio.gather(*item_info_tasks), abilities_task)
+            item_info_results, abilities_results = await asyncio.gather(asyncio.gather(*item_info_tasks), asyncio.gather(*abilities_tasks))
             
             item_info_map = {info['item_name']: info for info in item_info_results if info}
-            
-            owner_abilities_map = {}
-            if abilities_res and abilities_res.data:
-                for row in abilities_res.data:
-                    user_id = row.get('user_id')
-                    abilities = row.get('ability_keys', [])
-                    if user_id:
-                        owner_abilities_map[user_id] = set(abilities)
-            # ▲▲▲ 여기까지 수정 ▲▲▲
+            # [✅ 최종 수정] 결과를 맵 형태로 재구성합니다.
+            owner_abilities_map = {uid: set(abilities) for uid, abilities in zip(owner_ids, abilities_results)}
 
             plots_to_update_db = []
             today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -678,10 +670,12 @@ class Farm(commands.Cog):
 
         farm_str = "\n".join("".join(row) for row in grid)
         farm_name = farm_data.get('name') or user.display_name
-        embed = discord.Embed(title=f"**{farm_name}님의 농장**", color=0x8BC34A, description=f"```{farm_str}```")
+        embed = discord.Embed(title=f"**{farm_name}님의 농장**", color=0x8BC34A)
+        
+        description_parts = [f"```{farm_str}```"]
         
         if infos:
-            embed.description += "\n" + "\n".join(sorted(infos))
+            description_parts.append("\n".join(sorted(infos)))
         
         owner_abilities = await get_user_abilities(user.id)
         
@@ -705,20 +699,20 @@ class Farm(commands.Cog):
                 active_effects.append(f"> {emoji} **{ability_info['name']}**: {ability_info['description']}")
         
         if active_effects:
-            embed.description += "\n\n**--- 농장 패시브 효과 ---**\n" + "\n".join(active_effects)
+            description_parts.append(f"**--- 농장 패시브 효과 ---**\n" + "\n".join(active_effects))
 
         weather_key = get_config("current_weather", "sunny")
         weather = WEATHER_TYPES.get(weather_key, {"emoji": "❔", "name": "알 수 없음"})
-        embed.description += f"\n\n**오늘의 날씨:** {weather['emoji']} {weather['name']}"
+        description_parts.append(f"**오늘의 날씨:** {weather['emoji']} {weather['name']}")
         
-        # ▼▼▼ [핵심 수정] 푸터를 설명란 하단으로 이동 및 내용 변경 ▼▼▼
         now_kst = discord.utils.utcnow().astimezone(KST)
         next_update_time = now_kst.replace(hour=0, minute=5, second=0, microsecond=0)
         if now_kst >= next_update_time:
             next_update_time += timedelta(days=1)
         
-        embed.description += f"\n\n*다음 작물 업데이트: {discord.utils.format_dt(next_update_time, style='R')}*"
+        description_parts.append(f"다음 작물 업데이트: {discord.utils.format_dt(next_update_time, style='R')}")
         
+        embed.description = "\n\n".join(description_parts)
         return embed
         
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User, farm_data: Dict, force_new: bool = False):
