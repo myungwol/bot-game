@@ -515,7 +515,9 @@ class Farm(commands.Cog):
             owner_ids = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
             
             item_info_tasks = [get_farmable_item_info(name) for name in item_names]
-            abilities_task = supabase.table('user_abilities').select('user_id, abilities(ability_key)').in_('user_id', list(owner_ids)).execute()
+            
+            # ▼▼▼ [핵심 수정] 쿼리 방식을 변경하여 오류를 해결합니다. ▼▼▼
+            abilities_task = supabase.rpc('get_users_abilities', {'user_ids': list(owner_ids)}).execute()
 
             item_info_results, abilities_res = await asyncio.gather(asyncio.gather(*item_info_tasks), abilities_task)
             
@@ -523,8 +525,12 @@ class Farm(commands.Cog):
             
             owner_abilities_map = {}
             if abilities_res and abilities_res.data:
-                for ua in abilities_res.data:
-                    owner_abilities_map[ua['user_id']] = {a['abilities']['ability_key'] for a in ua.get('abilities', []) if a.get('abilities')}
+                for row in abilities_res.data:
+                    user_id = row.get('user_id')
+                    abilities = row.get('ability_keys', [])
+                    if user_id:
+                        owner_abilities_map[user_id] = set(abilities)
+            # ▲▲▲ 여기까지 수정 ▲▲▲
 
             plots_to_update_db = []
             today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
