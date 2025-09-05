@@ -60,6 +60,9 @@ class MiningGameView(ui.View):
         
         self.end_time = discord.utils.utcnow() + timedelta(seconds=duration)
         self.warning_task: Optional[asyncio.Task] = None
+        
+        # [✅ 최종 수정] 마지막 행동 시간을 기록하여 쿨타임 관리
+        self.last_action_time = 0
 
     async def start(self):
         """뷰와 함께 경고 타이머를 시작합니다."""
@@ -73,7 +76,7 @@ class MiningGameView(ui.View):
             if not self.is_finished() and self.thread:
                 await self.thread.send("⚠️ 곧 광산이 닫힙니다...", delete_after=60)
         except asyncio.CancelledError:
-            pass # 뷰가 먼저 중지되면 태스크가 취소됩니다.
+            pass
 
     def stop(self):
         """뷰가 중지될 때 경고 태스크도 함께 취소합니다."""
@@ -125,6 +128,15 @@ class MiningGameView(ui.View):
     async def action_button(self, interaction: discord.Interaction, button: ui.Button):
         
         if self.state == "finding":
+            # [✅ 최종 수정] 쿨타임 체크 로직 추가
+            now = time.time()
+            cooldown = MINING_COOLDOWN_SECONDS - self.time_reduction
+            if now - self.last_action_time < cooldown:
+                remaining = cooldown - (now - self.last_action_time)
+                await interaction.response.send_message(f"⏳ 아직 주변을 살피고 있습니다. {remaining:.1f}초 후에 다시 시도해주세요.", ephemeral=True, delete_after=5)
+                return
+
+            self.last_action_time = now
             self.last_result_text = None
             button.disabled = True
             await interaction.response.edit_message(view=self)
@@ -139,10 +151,6 @@ class MiningGameView(ui.View):
                 self.state = "finding"
                 embed = self.build_embed()
                 await interaction.edit_original_response(embed=embed, view=self)
-
-                cooldown = MINING_COOLDOWN_SECONDS - self.time_reduction
-                await asyncio.sleep(cooldown)
-                if self.is_finished(): return
             else: # 광석 발견
                 self.state = "discovered"
                 embed = self.build_embed()
@@ -172,6 +180,7 @@ class MiningGameView(ui.View):
                 if quantity > 1: self.last_result_text += f"\n\n✨ **풍부한 광맥** 능력으로 광석을 2개 획득했습니다!"
             
             self.state = "finding"
+            self.last_action_time = time.time() # [✅ 최종 수정] 채굴 완료 후 쿨타임 시작
             embed = self.build_embed()
             button.label = "광석 찾기"; button.style = discord.ButtonStyle.secondary; button.emoji = "🔍"
             button.disabled = False
@@ -249,7 +258,7 @@ class Mining(commands.Cog):
         embed.title = f"⛏️ {user.display_name}님의 광산 채굴"
         
         await thread.send(embed=embed, view=view)
-        await view.start() # 뷰와 함께 경고 타이머 시작
+        await view.start()
         
         self.active_sessions[user.id] = {"thread_id": thread.id}
         await interaction.followup.send(f"광산에 입장했습니다! {thread.mention}", ephemeral=True)
