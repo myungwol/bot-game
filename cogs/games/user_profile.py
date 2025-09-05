@@ -329,16 +329,24 @@ class ProfileView(ui.View):
                 field_lines = [f"**{label}:** `{gear.get(key, BARE_HANDS)}`" for key, label in items.items()]
                 embed.add_field(name=f"**[ 현재 장비: {category_name} ]**", value="\n".join(field_lines), inline=False)
             
+            equipped_gear_names = set(gear.values())
+
             owned_gear_categories = [GEAR_CATEGORY, BAIT_CATEGORY]
-            owned_gear_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') in owned_gear_categories}
+            
+            owned_gear_items = {
+                name: count for name, count in inventory.items()
+                if item_db.get(name, {}).get('category') in owned_gear_categories
+                and name not in equipped_gear_names
+            }
 
             if owned_gear_items:
                 gear_list = [f"{item_db.get(n,{}).get('emoji','🔧')} **{n}**: `{c}`개" for n, c in sorted(owned_gear_items.items())]
                 embed.add_field(name="\n**[ 보유 중인 장비 ]**", value="\n".join(gear_list), inline=False)
             else:
                 embed.add_field(name="\n**[ 보유 중인 장비 ]**", value=get_string("profile_view.gear_tab.no_owned_gear", "보유 중인 장비가 없습니다."), inline=False)
+            
             embed.description = description
-        
+
         elif self.current_page == "fish":
             aquarium = self.cached_data.get("aquarium", [])
             if not aquarium:
