@@ -705,13 +705,13 @@ class Farm(commands.Cog):
         weather = WEATHER_TYPES.get(weather_key, {"emoji": "❔", "name": "알 수 없음"})
         embed.description += f"\n\n**오늘의 날씨:** {weather['emoji']} {weather['name']}"
         
-        # ▼▼▼ [핵심 수정] 푸터 로직 변경 ▼▼▼
+        # ▼▼▼ [핵심 수정] 푸터를 설명란 하단으로 이동 및 내용 변경 ▼▼▼
         now_kst = discord.utils.utcnow().astimezone(KST)
         next_update_time = now_kst.replace(hour=0, minute=5, second=0, microsecond=0)
         if now_kst >= next_update_time:
             next_update_time += timedelta(days=1)
         
-        embed.set_footer(text=f"다음 작물 업데이트: {discord.utils.format_dt(next_update_time, style='R')}")
+        embed.description += f"\n\n*다음 작물 업데이트: {discord.utils.format_dt(next_update_time, style='R')}*"
         
         return embed
         
