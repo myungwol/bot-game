@@ -71,9 +71,7 @@ class MiningGameView(ui.View):
         base_description = embed.description
         embed.clear_fields()
         
-        # [✅ 최종 수정] discord.utils.format_dt() 함수를 사용하여 타임스탬프 생성
-        footer_text = f"사용 중인 장비: {self.pickaxe}  |  광산 닫힘: {discord.utils.format_dt(self.end_time, style='R')}"
-        embed.set_footer(text=footer_text)
+        embed.set_footer(text=f"사용 중인 장비: {self.pickaxe}")
 
         description_parts = [base_description]
 
@@ -96,6 +94,9 @@ class MiningGameView(ui.View):
                 ability_text = "\n".join(active_abilities)
                 description_parts.append(f"{ability_header}\n{ability_text}")
         
+        time_info = f"*광산 닫힘: {discord.utils.format_dt(self.end_time, style='R')}*"
+        description_parts.append(time_info)
+
         embed.description = "\n\n".join(filter(None, description_parts))
         
         return embed
