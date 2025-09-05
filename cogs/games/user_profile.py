@@ -314,7 +314,8 @@ class ProfileView(ui.View):
             embed.description = description
         
         elif self.current_page == "item":
-            excluded_categories = [GEAR_CATEGORY, FARM_TOOL_CATEGORY, "농장_씨앗", "농장_작물", BAIT_CATEGORY]
+            # [✅ 최종 수정] 제외 목록에 '광물' 카테고리 추가
+            excluded_categories = [GEAR_CATEGORY, FARM_TOOL_CATEGORY, "농장_씨앗", "농장_작물", BAIT_CATEGORY, "광물"]
             general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
             item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`개" for n, c in general_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items", "보유 중인 아이템이 없습니다."))
@@ -358,12 +359,10 @@ class ProfileView(ui.View):
                 embed.description = description + "\n".join([f"{f['emoji']} **{f['name']}**: `{f['size']}`cm" for f in fish_on_page])
                 embed.set_footer(text=get_string("profile_view.fish_tab.pagination_footer", "페이지 {current_page} / {total_pages}", current_page=self.fish_page_index + 1, total_pages=total_pages))
                 
-        # ▼▼▼ [핵심 수정] 아래 elif 블록 전체를 새로 추가하세요. ▼▼▼
         elif self.current_page == "mineral":
             mineral_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "광물"}
             item_list = [f"{item_db.get(n,{}).get('emoji','💎')} **{n}**: `{c}`개" for n, c in mineral_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.mineral_tab.no_items", "보유 중인 광물이 없습니다."))
-        # ▲▲▲ 여기까지 추가 ▲▲▲
         
         elif self.current_page == "seed":
             seed_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "농장_씨앗"}
