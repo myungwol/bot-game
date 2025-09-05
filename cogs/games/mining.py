@@ -7,6 +7,7 @@ import asyncio
 import time
 import random
 from typing import Optional, Dict, List
+from datetime import timedelta # [✅ 수정] timedelta import 추가
 
 from utils.database import (
     get_inventory, update_inventory, get_user_gear, BARE_HANDS,
@@ -56,6 +57,9 @@ class MiningGameView(ui.View):
         self.state = "finding"
         self.discovered_ore: Optional[str] = None
         self.last_result_text: Optional[str] = None
+        
+        # [✅ 수정] 뷰가 생성될 때 만료 시간을 미리 계산하여 저장
+        self.end_time = discord.utils.utcnow() + timedelta(seconds=duration)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user.id:
@@ -65,19 +69,14 @@ class MiningGameView(ui.View):
 
     def _update_embed_layout(self, embed: discord.Embed, show_details: bool):
         """임베드의 설명, 필드, 푸터를 상태에 맞게 업데이트하는 헬퍼 함수"""
-        base_description = embed.description # 현재 description을 기본으로 사용
+        base_description = embed.description
         embed.clear_fields()
         
-        # 푸터 설정
-        expiry_datetime = self.get_timeout_expiry()
-        if expiry_datetime:
-            end_time = int(expiry_datetime.timestamp())
-            footer_text = f"사용 중인 장비: {self.pickaxe}  |  광산 닫힘: <t:{end_time}:R>"
-        else:
-            footer_text = f"사용 중인 장비: {self.pickaxe}"
+        # [✅ 수정] 미리 계산된 만료 시간을 사용하여 푸터 설정
+        end_time_ts = int(self.end_time.timestamp())
+        footer_text = f"사용 중인 장비: {self.pickaxe}  |  광산 닫힘: <t:{end_time_ts}:R>"
         embed.set_footer(text=footer_text)
 
-        # 설명(description) 부분 재구성
         description_parts = [base_description]
 
         if show_details:
@@ -259,6 +258,7 @@ class Mining(commands.Cog):
         view = MiningGameView(self, user, thread, pickaxe, user_abilities, duration, duration_doubled)
         
         embed = format_embed_from_db(embed_data, user_name=user.display_name)
+        # 초기 description을 명확하게 설정
         embed.description = "광산에 들어왔다. 어떤 광석이 있을지 찾아보자!"
         embed.set_image(url=ORE_DATA["꽝"]["image_url"])
         embed = view._update_embed_layout(embed, show_details=True)
