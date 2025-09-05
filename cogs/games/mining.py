@@ -88,10 +88,9 @@ class MiningGameView(ui.View):
     def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", color=0x607D8B)
 
-        description_parts = []
         if self.state == "initial" or self.state == "finding":
             base_desc = "## 앞으로 나아가 광물을 찾아보자" if self.state == "initial" else "주변을 다시 둘러보자. 어떤 광석이 나올까?"
-            description_parts.append(base_desc)
+            description_parts = [base_desc]
             if self.last_result_text:
                 description_parts.append(f"## 채굴 결과\n{self.last_result_text}")
 
@@ -106,18 +105,19 @@ class MiningGameView(ui.View):
                 description_parts.append(f"**--- 활성화된 능력 ---**\n" + "\n".join(active_abilities))
             
             description_parts.append(f"**사용 중인 장비:** {self.pickaxe}")
-            embed.set_image(url=ORE_DATA["꽝"]['image_url'])
+            embed.description = "\n\n".join(description_parts)
+            embed.set_image(url=ORE_DATA["꽝"]['image_url']) # [✅ 최종 수정] 탐색 시에는 기본 이미지 표시
 
         elif self.state == "discovered":
             embed.description = f"### {self.discovered_ore}을(를) 발견했다!"
-            embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url'])
-        
+            embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url']) # [✅ 최종 수정] 발견 시에만 해당 광석 이미지 표시
+            embed.set_footer(text=f"사용 중인 장비: {self.pickaxe}")
+            
         elif self.state == "mining" or self.state == "searching":
             desc = "더 깊이 들어가서 찾아보자..." if self.state == "searching" else f"**{self.pickaxe}**(으)로 열심히 **{self.discovered_ore}**을(를) 캐는 중입니다..."
             embed.description = desc
-            embed.set_image(url=None)
+            embed.set_image(url=None) # [✅ 최종 수정] 채굴/탐색 중에는 이미지 없음
 
-        embed.description = "\n\n".join(description_parts) if description_parts else embed.description
         return embed
 
     @ui.button(label="광석 찾기", style=discord.ButtonStyle.secondary, emoji="🔍", custom_id="mine_action_button")
