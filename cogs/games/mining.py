@@ -18,8 +18,8 @@ from utils.helpers import format_embed_from_db
 logger = logging.getLogger(__name__)
 
 MINING_PASS_NAME = "광산 입장권"
-DEFAULT_MINE_DURATION_SECONDS = 600  # 10분
-MINING_COOLDOWN_SECONDS = 10 # 고정 채굴 시간
+DEFAULT_MINE_DURATION_SECONDS = 600
+MINING_COOLDOWN_SECONDS = 10
 
 PICKAXE_LUCK_BONUS = {
     "나무 곡괭이": 1.0,
@@ -46,10 +46,9 @@ class MiningGameView(ui.View):
         self.pickaxe = pickaxe
         self.user_abilities = user_abilities
         
-        # 능력 적용
         self.luck_bonus = PICKAXE_LUCK_BONUS.get(pickaxe, 1.0)
         if 'mine_rare_up_2' in self.user_abilities:
-            self.luck_bonus += 0.5 # 전문 광부 능력: 희귀 광물 확률 50% 추가 증가
+            self.luck_bonus += 0.5
         
         self.time_reduction = 3 if 'mine_time_down_1' in self.user_abilities else 0
         self.can_double_yield = 'mine_double_yield_2' in self.user_abilities
@@ -81,17 +80,25 @@ class MiningGameView(ui.View):
                     new_weights.append(weight)
             
             self.discovered_ore = random.choices(ores, weights=new_weights, k=1)[0]
-
             embed = interaction.message.embeds[0]
-            embed.description = f"**{self.discovered_ore}**을(를) 발견했다!"
             embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url'])
 
-            button.label = "채굴하기"
-            button.style = discord.ButtonStyle.primary
-            button.emoji = "⛏️"
-            button.disabled = False
-            self.state = "discovered"
+            # ▼▼▼ [핵심 수정] '꽝' 발견 시 분기 처리 ▼▼▼
+            if self.discovered_ore == "꽝":
+                embed.description = "아무것도 발견하지 못했다..."
+                button.label = "다시 찾아보기"
+                button.style = discord.ButtonStyle.secondary
+                button.emoji = "🔍"
+                self.state = "finding" # 상태 유지
+            else:
+                embed.description = f"**{self.discovered_ore}**을(를) 발견했다!"
+                button.label = "채굴하기"
+                button.style = discord.ButtonStyle.primary
+                button.emoji = "⛏️"
+                self.state = "discovered"
+            # ▲▲▲ 여기까지 수정 ▲▲▲
             
+            button.disabled = False
             await interaction.edit_original_response(embed=embed, view=self)
 
         elif self.state == "discovered":
@@ -110,10 +117,12 @@ class MiningGameView(ui.View):
             if self.is_finished() or self.user.id not in self.cog.active_sessions:
                 return
 
+            # ▼▼▼ [핵심 수정] 획득 메시지를 임베드에 포함하도록 변경 ▼▼▼
+            success_msg = ""
             if self.discovered_ore != "꽝":
                 quantity = 1
                 double_yield_success = False
-                if self.can_double_yield and random.random() < 0.20: # 20% 확률로 2배
+                if self.can_double_yield and random.random() < 0.20:
                     quantity = 2
                     double_yield_success = True
 
@@ -123,12 +132,11 @@ class MiningGameView(ui.View):
                 success_msg = f"✅ **{self.discovered_ore}** {quantity}개를 획득했습니다!"
                 if double_yield_success:
                     success_msg += "\n✨ **풍부한 광맥** 능력으로 광석을 2개 획득했습니다!"
-
-                await interaction.followup.send(success_msg, ephemeral=True)
-
+            
             embed = interaction.message.embeds[0]
-            embed.description = "다시 주변을 둘러보자. 어떤 광석이 나올까?"
+            embed.description = f"{success_msg}\n\n다시 주변을 둘러보자. 어떤 광석이 나올까?"
             embed.set_image(url=ORE_DATA["꽝"]["image_url"])
+            # ▲▲▲ 여기까지 수정 ▲▲▲
 
             button.label = "광석 찾기"
             button.style = discord.ButtonStyle.secondary
@@ -207,7 +215,7 @@ class Mining(commands.Cog):
         
         duration = DEFAULT_MINE_DURATION_SECONDS
         duration_doubled = False
-        if 'mine_duration_up_1' in user_abilities and random.random() < 0.15: # 15% 확률
+        if 'mine_duration_up_1' in user_abilities and random.random() < 0.15:
             duration *= 2
             duration_doubled = True
 
