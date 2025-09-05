@@ -91,10 +91,11 @@ class MiningGameView(ui.View):
         if self.state == "finding":
             description_parts = ["주변을 다시 둘러보자. 어떤 광석이 나올까?"]
             if self.last_result_text:
-                description_parts.append(f"## 채굴 결과\n{self.last_result_text}")
+                description_parts.append(f"## 채굴 결과\n{self.last_result_text}"\n"광산 닫힘: {discord.utils.format_dt(self.end_time, style='R')}")
+                
             embed.description = "\n\n".join(description_parts)
             embed.set_image(url=None)
-            embed.set_footer(text=f"사용 중인 장비: {self.pickaxe} | 광산 닫힘: {discord.utils.format_dt(self.end_time, style='R')}")
+            embed.set_footer(text=f"사용 중인 장비: {self.pickaxe}")
         
         elif self.state == "discovered":
             embed.description = f"### {self.discovered_ore}을(를) 발견했다!"
