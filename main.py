@@ -45,7 +45,6 @@ intents.message_content = True
 intents.voice_states = True
 BOT_VERSION = "v2.3-game-stable-ko" # 게임 봇 안정화 버전 (한국어)
 
-# --- 커스텀 봇 클래스 ---
 class MyBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -53,11 +52,13 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         await self.load_all_extensions()
         
+        # ▼▼▼ [핵심 수정] 아래 리스트에 'Mining'을 추가하세요. ▼▼▼
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
             "DiceGame", "SlotMachine", "RPSGame",
             "DailyCheck", "Quests", "Farm", "PanelUpdater",
-            "WorldSystem", "EconomyCore", "LevelSystem"
+            "WorldSystem", "EconomyCore", "LevelSystem",
+            "Mining" 
         ]
         
         registered_views_count = 0
