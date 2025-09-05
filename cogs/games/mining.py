@@ -94,7 +94,7 @@ class MiningGameView(ui.View):
                 ability_text = "\n".join(active_abilities)
                 description_parts.append(f"{ability_header}\n{ability_text}")
         
-        time_info = f"`광산 닫힘: {discord.utils.format_dt(self.end_time, style='R')}`"
+        time_info = f"*광산 닫힘: {discord.utils.format_dt(self.end_time, style='R')}*"
         description_parts.append(time_info)
 
         embed.description = "\n\n".join(filter(None, description_parts))
