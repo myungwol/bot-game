@@ -6,33 +6,29 @@ import logging
 import asyncio
 import time
 import random
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 from utils.database import (
     get_inventory, update_inventory, get_user_gear, BARE_HANDS,
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
-    log_activity
+    log_activity, get_user_abilities
 )
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
 MINING_PASS_NAME = "광산 입장권"
-MINE_DURATION_SECONDS = 600  # 10분
+DEFAULT_MINE_DURATION_SECONDS = 600  # 10분
 MINING_COOLDOWN_SECONDS = 10 # 고정 채굴 시간
 
-# ▼▼▼ [핵심 수정] 곡괭이 등급별 행운 보너스 설정 ▼▼▼
-# 희귀 광물(구리 이상)의 등장 가중치에 곱해지는 배율입니다.
 PICKAXE_LUCK_BONUS = {
-    "나무 곡괭이": 1.0,  # 기준 (보너스 없음)
-    "구리 곡괭이": 1.1,  # 10% 보너스
-    "철 곡괭이": 1.25, # 25% 보너스
-    "금 곡괭이": 1.5,  # 50% 보너스
-    "다이아 곡괭이": 2.0, # 100% 보너스 (2배)
+    "나무 곡괭이": 1.0,
+    "구리 곡괭이": 1.1,
+    "철 곡괭이": 1.25,
+    "금 곡괭이": 1.5,
+    "다이아 곡괭이": 2.0,
 }
-# ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
-# ⚠️ 중요: 아래 URL들을 실제 Supabase Storage 이미지 URL로 교체해주세요!
 ORE_DATA = {
     "꽝":       {"weight": 40, "image_url": "https://saewayvzcyzueviasftu.supabase.co/storage/v1/object/public/game_assets/stone.jpg"},
     "구리 광석": {"weight": 30, "image_url": "https://saewayvzcyzueviasftu.supabase.co/storage/v1/object/public/game_assets/cooper.jpg"},
@@ -42,13 +38,22 @@ ORE_DATA = {
 }
 
 class MiningGameView(ui.View):
-    def __init__(self, cog_instance: 'Mining', user: discord.Member, thread: discord.Thread, pickaxe: str):
-        super().__init__(timeout=MINE_DURATION_SECONDS)
+    def __init__(self, cog_instance: 'Mining', user: discord.Member, thread: discord.Thread, pickaxe: str, user_abilities: List[str], duration: int):
+        super().__init__(timeout=duration)
         self.cog = cog_instance
         self.user = user
         self.thread = thread
         self.pickaxe = pickaxe
-        self.luck_bonus = PICKAXE_LUCK_BONUS.get(pickaxe, 1.0) # 곡괭이의 행운 보너스
+        self.user_abilities = user_abilities
+        
+        # 능력 적용
+        self.luck_bonus = PICKAXE_LUCK_BONUS.get(pickaxe, 1.0)
+        if 'mine_rare_up_2' in self.user_abilities:
+            self.luck_bonus += 0.5 # 전문 광부 능력: 희귀 광물 확률 50% 추가 증가
+        
+        self.time_reduction = 3 if 'mine_time_down_1' in self.user_abilities else 0
+        self.can_double_yield = 'mine_double_yield_2' in self.user_abilities
+
         self.state = "finding"
         self.discovered_ore: Optional[str] = None
 
@@ -65,20 +70,17 @@ class MiningGameView(ui.View):
             button.disabled = True
             await interaction.response.edit_message(view=self)
 
-            # ▼▼▼ [핵심 수정] 곡괭이 등급에 따라 확률 보정 ▼▼▼
             ores = list(ORE_DATA.keys())
             original_weights = [data['weight'] for data in ORE_DATA.values()]
             
-            # 보너스를 적용할 새로운 가중치 리스트 생성
             new_weights = []
             for ore, weight in zip(ores, original_weights):
-                if ore != "꽝": # '꽝'을 제외한 모든 광석에 행운 보너스 적용
+                if ore != "꽝":
                     new_weights.append(weight * self.luck_bonus)
                 else:
                     new_weights.append(weight)
             
             self.discovered_ore = random.choices(ores, weights=new_weights, k=1)[0]
-            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
             embed = interaction.message.embeds[0]
             embed.description = f"**{self.discovered_ore}**을(를) 발견했다!"
@@ -95,7 +97,7 @@ class MiningGameView(ui.View):
         elif self.state == "discovered":
             button.disabled = True
             
-            mining_duration = MINING_COOLDOWN_SECONDS # 고정된 채굴 시간
+            mining_duration = max(3, MINING_COOLDOWN_SECONDS - self.time_reduction)
             button.label = f"채굴 중... ({mining_duration}초)"
             button.style = discord.ButtonStyle.secondary
             
@@ -109,9 +111,20 @@ class MiningGameView(ui.View):
                 return
 
             if self.discovered_ore != "꽝":
-                await update_inventory(self.user.id, self.discovered_ore, 1)
-                await log_activity(self.user.id, 'mining', amount=1)
-                await interaction.followup.send(f"✅ **{self.discovered_ore}** 1개를 획득했습니다!", ephemeral=True)
+                quantity = 1
+                double_yield_success = False
+                if self.can_double_yield and random.random() < 0.20: # 20% 확률로 2배
+                    quantity = 2
+                    double_yield_success = True
+
+                await update_inventory(self.user.id, self.discovered_ore, quantity)
+                await log_activity(self.user.id, 'mining', amount=quantity)
+                
+                success_msg = f"✅ **{self.discovered_ore}** {quantity}개를 획득했습니다!"
+                if double_yield_success:
+                    success_msg += "\n✨ **풍부한 광맥** 능력으로 광석을 2개 획득했습니다!"
+
+                await interaction.followup.send(success_msg, ephemeral=True)
 
             embed = interaction.message.embeds[0]
             embed.description = "다시 주변을 둘러보자. 어떤 광석이 나올까?"
@@ -156,9 +169,10 @@ class Mining(commands.Cog):
                 await interaction.followup.send("이전 광산 정보를 찾을 수 없어 초기화했습니다. 다시 시도해주세요.", ephemeral=True)
             return
 
-        inventory, gear = await asyncio.gather(
+        inventory, gear, user_abilities = await asyncio.gather(
             get_inventory(user),
-            get_user_gear(user)
+            get_user_gear(user),
+            get_user_abilities(user.id)
         )
 
         if inventory.get(MINING_PASS_NAME, 0) < 1:
@@ -191,22 +205,32 @@ class Mining(commands.Cog):
             await interaction.followup.send("❌ 광산 정보를 불러오는 데 실패했습니다.", ephemeral=True)
             return
         
+        duration = DEFAULT_MINE_DURATION_SECONDS
+        duration_doubled = False
+        if 'mine_duration_up_1' in user_abilities and random.random() < 0.15: # 15% 확률
+            duration *= 2
+            duration_doubled = True
+
         embed = format_embed_from_db(embed_data, user_name=user.display_name)
         embed.description = "광산에 들어왔다. 어떤 광석이 있을지 찾아보자!"
+        if duration_doubled:
+            embed.description += "\n\n✨ **집중 탐사** 능력 발동! 광산이 20분 동안 열립니다!"
+        
         embed.set_footer(text=f"사용 중인 장비: {pickaxe}")
         embed.set_image(url=ORE_DATA["꽝"]["image_url"])
 
-        view = MiningGameView(self, user, thread, pickaxe)
+        view = MiningGameView(self, user, thread, pickaxe, user_abilities, duration)
         await thread.send(embed=embed, view=view)
 
-        session_task = asyncio.create_task(self.mine_timer(user.id, thread))
+        session_task = asyncio.create_task(self.mine_timer(user.id, thread, duration))
         self.active_sessions[user.id] = {"thread_id": thread.id, "task": session_task}
 
         await interaction.followup.send(f"광산에 입장했습니다! {thread.mention}", ephemeral=True)
 
-    async def mine_timer(self, user_id: int, thread: discord.Thread):
-        await asyncio.sleep(MINE_DURATION_SECONDS)
-        await self.close_mine_session(user_id, thread, "10분이 지나")
+    async def mine_timer(self, user_id: int, thread: discord.Thread, duration: int):
+        await asyncio.sleep(duration)
+        reason = f"{duration // 60}분이 지나"
+        await self.close_mine_session(user_id, thread, reason)
 
     async def close_mine_session(self, user_id: int, thread: Optional[discord.Thread], reason: str):
         logger.info(f"{user_id}의 광산 세션을 '{reason}' 이유로 종료합니다.")
