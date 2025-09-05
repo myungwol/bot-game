@@ -19,15 +19,18 @@ logger = logging.getLogger(__name__)
 
 MINING_PASS_NAME = "광산 입장권"
 MINE_DURATION_SECONDS = 600  # 10분
+MINING_COOLDOWN_SECONDS = 10 # 고정 채굴 시간
 
-# 곡괭이별 채굴 속도 (초)
-PICKAXE_SPEEDS = {
-    "나무 곡괭이": 30,
-    "구리 곡괭이": 25,
-    "철 곡괭이": 20,
-    "금 곡괭이": 15,
-    "다이아 곡괭이": 10,
+# ▼▼▼ [핵심 수정] 곡괭이 등급별 행운 보너스 설정 ▼▼▼
+# 희귀 광물(구리 이상)의 등장 가중치에 곱해지는 배율입니다.
+PICKAXE_LUCK_BONUS = {
+    "나무 곡괭이": 1.0,  # 기준 (보너스 없음)
+    "구리 곡괭이": 1.1,  # 10% 보너스
+    "철 곡괭이": 1.25, # 25% 보너스
+    "금 곡괭이": 1.5,  # 50% 보너스
+    "다이아 곡괭이": 2.0, # 100% 보너스 (2배)
 }
+# ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
 # ⚠️ 중요: 아래 URL들을 실제 Supabase Storage 이미지 URL로 교체해주세요!
 ORE_DATA = {
@@ -38,7 +41,6 @@ ORE_DATA = {
     "다이아몬드": {"weight": 2,  "image_url": "https://saewayvzcyzueviasftu.supabase.co/storage/v1/object/public/game_assets/diamond.jpg"}
 }
 
-
 class MiningGameView(ui.View):
     def __init__(self, cog_instance: 'Mining', user: discord.Member, thread: discord.Thread, pickaxe: str):
         super().__init__(timeout=MINE_DURATION_SECONDS)
@@ -46,11 +48,8 @@ class MiningGameView(ui.View):
         self.user = user
         self.thread = thread
         self.pickaxe = pickaxe
-        self.mining_speed = PICKAXE_SPEEDS.get(pickaxe, 999)
-
-        # 게임 상태를 관리하는 변수: 'finding', 'discovered', 'mining'
-        self.state = "finding" 
-        # 발견된 광석을 저장하는 변수
+        self.luck_bonus = PICKAXE_LUCK_BONUS.get(pickaxe, 1.0) # 곡괭이의 행운 보너스
+        self.state = "finding"
         self.discovered_ore: Optional[str] = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -62,15 +61,24 @@ class MiningGameView(ui.View):
     @ui.button(label="광석 찾기", style=discord.ButtonStyle.secondary, emoji="🔍", custom_id="mine_action_button")
     async def action_button(self, interaction: discord.Interaction, button: ui.Button):
         
-        # 버튼 로직을 게임 상태에 따라 분기
         if self.state == "finding":
-            # [상태 1: 광석 찾기]
             button.disabled = True
             await interaction.response.edit_message(view=self)
 
+            # ▼▼▼ [핵심 수정] 곡괭이 등급에 따라 확률 보정 ▼▼▼
             ores = list(ORE_DATA.keys())
-            weights = [data['weight'] for data in ORE_DATA.values()]
-            self.discovered_ore = random.choices(ores, weights=weights, k=1)[0]
+            original_weights = [data['weight'] for data in ORE_DATA.values()]
+            
+            # 보너스를 적용할 새로운 가중치 리스트 생성
+            new_weights = []
+            for ore, weight in zip(ores, original_weights):
+                if ore != "꽝": # '꽝'을 제외한 모든 광석에 행운 보너스 적용
+                    new_weights.append(weight * self.luck_bonus)
+                else:
+                    new_weights.append(weight)
+            
+            self.discovered_ore = random.choices(ores, weights=new_weights, k=1)[0]
+            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
             embed = interaction.message.embeds[0]
             embed.description = f"**{self.discovered_ore}**을(를) 발견했다!"
@@ -85,10 +93,9 @@ class MiningGameView(ui.View):
             await interaction.edit_original_response(embed=embed, view=self)
 
         elif self.state == "discovered":
-            # [상태 2: 발견된 광석 채굴]
             button.disabled = True
             
-            mining_duration = self.mining_speed
+            mining_duration = MINING_COOLDOWN_SECONDS # 고정된 채굴 시간
             button.label = f"채굴 중... ({mining_duration}초)"
             button.style = discord.ButtonStyle.secondary
             
@@ -101,16 +108,14 @@ class MiningGameView(ui.View):
             if self.is_finished() or self.user.id not in self.cog.active_sessions:
                 return
 
-            # 채굴 완료 및 인벤토리 추가
             if self.discovered_ore != "꽝":
                 await update_inventory(self.user.id, self.discovered_ore, 1)
                 await log_activity(self.user.id, 'mining', amount=1)
                 await interaction.followup.send(f"✅ **{self.discovered_ore}** 1개를 획득했습니다!", ephemeral=True)
 
-            # 다시 '광석 찾기' 상태로 복귀
             embed = interaction.message.embeds[0]
             embed.description = "다시 주변을 둘러보자. 어떤 광석이 나올까?"
-            embed.set_image(url=ORE_DATA["꽝"]["image_url"]) # 기본 이미지로 변경
+            embed.set_image(url=ORE_DATA["꽝"]["image_url"])
 
             button.label = "광석 찾기"
             button.style = discord.ButtonStyle.secondary
@@ -138,15 +143,7 @@ class Mining(commands.Cog):
         self.bot = bot
         self.active_sessions: Dict[int, Dict] = {}
 
-    # ▼▼▼ [핵심 수정] 아래 메소드 전체를 추가하세요. ▼▼▼
-    async def register_persistent_views(self):
-        """봇이 시작될 때 MiningPanelView를 영구 뷰로 등록합니다."""
-        self.bot.add_view(MiningPanelView(self))
-        logger.info("✅ 광산 패널의 영구 View가 성공적으로 등록되었습니다.")
-    # ▲▲▲ [핵심 수정] 여기까지 추가 ▲▲▲
-
     async def handle_enter_mine(self, interaction: discord.Interaction):
-        # ... (이하 다른 메소드들은 그대로 둡니다) ...
         await interaction.response.defer(ephemeral=True)
         user = interaction.user
 
@@ -194,11 +191,10 @@ class Mining(commands.Cog):
             await interaction.followup.send("❌ 광산 정보를 불러오는 데 실패했습니다.", ephemeral=True)
             return
         
-        # 시작 메시지를 새로운 흐름에 맞게 수정
         embed = format_embed_from_db(embed_data, user_name=user.display_name)
         embed.description = "광산에 들어왔다. 어떤 광석이 있을지 찾아보자!"
         embed.set_footer(text=f"사용 중인 장비: {pickaxe}")
-        embed.set_image(url=ORE_DATA["꽝"]["image_url"]) # 초기 이미지는 '꽝' 이미지
+        embed.set_image(url=ORE_DATA["꽝"]["image_url"])
 
         view = MiningGameView(self, user, thread, pickaxe)
         await thread.send(embed=embed, view=view)
