@@ -16,7 +16,6 @@ from utils.database import (
     get_embed_from_db, log_activity
 )
 from utils.helpers import format_embed_from_db, calculate_xp_for_level
-# ▼▼▼ [수정됨] 불필요하고 오류를 유발하는 JOB_ADVANCEMENT_DATA import를 제거합니다. ▼▼▼
 from utils.game_config_defaults import GAME_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -452,19 +451,32 @@ class LevelSystem(commands.Cog):
         except Exception as e:
             logger.error(f"관리자 요청으로 레벨/XP 업데이트 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
 
+    # ▼▼▼ [핵심 수정] regenerate_panel 함수 전체를 교체합니다. ▼▼▼
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_champion_board") -> bool:
         try:
+            # 1. DB에서 이전 패널 정보를 가져옵니다.
             panel_info = get_panel_id(panel_key)
-            if panel_info and panel_info.get('message_id'):
-                try: 
-                    msg = await channel.fetch_message(panel_info['message_id'])
-                    await msg.delete()
+            
+            # 2. 이전 패널 정보가 있다면, 해당 채널에서 메시지를 찾아 삭제합니다.
+            if panel_info and panel_info.get('message_id') and panel_info.get('channel_id'):
+                try:
+                    # DB에 저장된 'channel_id'를 사용하여 정확한 채널 객체를 가져옵니다.
+                    old_channel = self.bot.get_channel(panel_info['channel_id'])
+                    if old_channel:
+                        # 정확한 채널에서 메시지를 찾습니다.
+                        msg_to_delete = await old_channel.fetch_message(panel_info['message_id'])
+                        await msg_to_delete.delete()
+                        logger.info(f"이전 '{panel_key}' 패널(ID: {panel_info['message_id']})을 채널 '{old_channel.name}'에서 삭제했습니다.")
                 except (discord.NotFound, discord.Forbidden):
-                    pass
-            
+                    logger.warning(f"이전 '{panel_key}' 패널(ID: {panel_info.get('message_id')})을 찾지 못했거나 삭제할 수 없습니다.")
+                except Exception as e:
+                    logger.error(f"이전 패널 삭제 중 예기치 않은 오류 발생: {e}", exc_info=True)
+
+            # 3. 새로운 패널을 생성합니다.
             embed = await self._build_champion_embed()
-            
             message = await channel.send(embed=embed, view=LevelPanelView(self))
+
+            # 4. 새로 생성된 패널의 정보를 DB에 저장합니다.
             await save_panel_id(panel_key, message.id, channel.id)
             
             logger.info(f"✅ '{panel_key}' 패널을 #{channel.name} 에 재설치했습니다.")
