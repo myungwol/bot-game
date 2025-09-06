@@ -191,21 +191,6 @@ class TradeView(ui.View):
         user1, user2 = self.initiator, self.partner
         offer1, offer2 = self.offers[user1.id], self.offers[user2.id]
         commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
-        
-        wallet1, inv1 = await asyncio.gather(get_wallet(user1.id), get_inventory(user1))
-        wallet2, inv2 = await asyncio.gather(get_wallet(user2.id), get_inventory(user2))
-
-        if wallet1.get('balance', 0) < offer1['coins'] + commission:
-            return await self.fail_trade(f"{user1.mention}님의 코인이 부족합니다.")
-        for name, qty in offer1['items'].items():
-            if inv1.get(name, 0) < qty:
-                return await self.fail_trade(f"{user1.mention}님의 '{name}' 아이템이 부족합니다.")
-        
-        if wallet2.get('balance', 0) < offer2['coins']:
-            return await self.fail_trade(f"{user2.mention}님의 코인이 부족합니다.")
-        for name, qty in offer2['items'].items():
-            if inv2.get(name, 0) < qty:
-                return await self.fail_trade(f"{user2.mention}님의 '{name}' 아이템이 부족합니다.")
 
         p_offer1 = {"items": [{"name": k, "qty": v} for k, v in offer1['items'].items()], "coins": offer1['coins']}
         p_offer2 = {"items": [{"name": k, "qty": v} for k, v in offer2['items'].items()], "coins": offer2['coins']}
@@ -216,8 +201,9 @@ class TradeView(ui.View):
             'p_commission_fee': commission
         }).execute()
         
-        if not (hasattr(res, 'data') and res.data is True):
-             return await self.fail_trade("데이터베이스 처리 중 오류가 발생했습니다.")
+        if not (hasattr(res, 'data') and res.data and res.data.get('success')):
+            error_message = res.data.get('message', '알 수 없는 데이터베이스 오류입니다.') if hasattr(res, 'data') and res.data else '데이터베이스 응답이 없습니다.'
+            return await self.fail_trade(error_message)
         
         log_channel = self.message.channel
         if self.message: await self.message.delete()
@@ -274,11 +260,9 @@ class MailComposeView(ui.View):
     async def update_view(self, interaction: discord.Interaction, new_message=False):
         embed = await self.build_embed()
         if new_message:
-            if interaction.response.is_done():
-                self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
-            else:
-                await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
-                self.message = await interaction.original_response()
+            target = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+            self.message = await target(embed=embed, view=self, ephemeral=True)
+            if not isinstance(self.message, discord.WebhookMessage): self.message = await interaction.original_response()
         else:
             await interaction.response.edit_message(embed=embed, view=self)
 
@@ -335,7 +319,7 @@ class MailComposeView(ui.View):
         if wallet.get('balance', 0) < shipping_fee:
             return await interaction.response.send_message(f"코인이 부족합니다. (배송비: {shipping_fee:,}{self.currency_icon})", ephemeral=True)
             
-        p_attachments = [{"item_name": name, "quantity": qty, "is_coin": False} for name, qty in self.attachments["items"].items()]
+        p_attachments = [{"item_name": name, "quantity": qty} for name, qty in self.attachments["items"].items()]
         await interaction.response.defer()
         res = await supabase.rpc('send_mail_with_attachments', {
             'p_sender_id': str(self.user.id), 'p_recipient_id': str(self.recipient.id),
@@ -381,15 +365,11 @@ class MailboxView(ui.View):
         
         target = interaction.edit_original_response
         if new_message:
-            if interaction.response.is_done():
-                target = interaction.followup.send
-            else:
-                target = interaction.response.send_message
+            target = interaction.response.send_message if not interaction.response.is_done() else interaction.followup.send
         
         kwargs = {'embed': embed, 'view': self}
-        if new_message:
-            kwargs['ephemeral'] = True
-            
+        if new_message: kwargs['ephemeral'] = True
+        
         message = await target(**kwargs)
         if new_message and not self.message:
             self.message = await interaction.original_response()
@@ -422,6 +402,7 @@ class MailboxView(ui.View):
             claim_select = ui.Select(placeholder="받을 편지 선택 (1개)", options=mail_options)
             claim_select.callback = self.claim_mail
             self.add_item(claim_select)
+            
             delete_select = ui.Select(placeholder="삭제할 편지 선택 (1개)", options=mail_options)
             delete_select.callback = self.delete_mail
             self.add_item(delete_select)
