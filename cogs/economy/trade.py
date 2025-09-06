@@ -189,7 +189,7 @@ class TradeView(ui.View):
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=None)
         
         user1, user2 = self.initiator, self.partner
-        offer1, offer2 = self.offers[user1.id], self.offers[user2.id]
+        offer1, offer2 = self.offers[user1.id], self.offers[user1.id]
         commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
 
         p_offer1 = {
@@ -212,8 +212,6 @@ class TradeView(ui.View):
         try:
             res = await supabase.rpc('process_trade', params_to_send).execute()
 
-            # 응답 데이터를 직접 확인하여 성공 여부 판단
-            # supabase-py v1에서는 res.data가 리스트일 수 있음
             response_data = res.data[0] if isinstance(res.data, list) and res.data else res.data
             
             if not (isinstance(response_data, dict) and response_data.get('success')):
@@ -221,19 +219,26 @@ class TradeView(ui.View):
                 return await self.fail_trade(error_message)
 
         except APIError as e:
-            # APIError 발생 시, details에서 실제 에러 메시지를 파싱
+            # ▼▼▼▼▼▼ [핵심 수정] 예외 처리 로직을 완전히 교체합니다. ▼▼▼▼▼▼
             try:
-                error_dict_str = str(e.message)
-                error_dict = ast.literal_eval(error_dict_str)
-                details_bytes = error_dict.get('details', b'{}')
-                details_str = details_bytes.decode('utf-8', errors='ignore')
-                real_error_data = json.loads(details_str)
-                user_facing_message = real_error_data.get('message', '알 수 없는 거래 서버 오류입니다.')
+                # e.message가 아닌 e.__dict__ 에서 직접 상세 정보를 추출합니다.
+                error_details = e.__dict__.get('details')
+                if isinstance(error_details, bytes):
+                    # 바이트 문자열을 UTF-8로 디코딩합니다.
+                    details_str = error_details.decode('utf-8', errors='ignore')
+                    # 디코딩된 JSON 문자열을 파싱합니다.
+                    real_error_data = json.loads(details_str)
+                    user_facing_message = real_error_data.get('message', '알 수 없는 거래 서버 오류입니다.')
+                else:
+                    user_facing_message = "거래 서버로부터 상세 오류 정보를 받지 못했습니다."
+                
                 logger.error(f"거래 처리 중 파싱된 APIError: {user_facing_message}")
                 return await self.fail_trade(user_facing_message)
             except Exception as parse_error:
                 logger.error(f"APIError 파싱 실패: {parse_error}", exc_info=True)
+                logger.error(f"원본 APIError 객체: {e.__dict__}")
                 return await self.fail_trade("거래 서버와 통신 중 알 수 없는 오류가 발생했습니다.")
+            # ▲▲▲▲▲▲ [핵심 수정] 여기까지 교체 ▲▲▲▲▲▲
         except Exception as e:
             logger.error(f"거래 처리 중 예외 발생: {e}", exc_info=True)
             return await self.fail_trade("알 수 없는 오류가 발생했습니다.")
