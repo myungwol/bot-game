@@ -375,7 +375,6 @@ class FarmUIView(ui.View):
                 if not info.get('is_tree'): 
                     plots_to_reset.append(p['id'])
                 else:
-                    # [수정] 나무의 재성장 로직을 명확하게 수정
                     max_stage = info.get('max_growth_stage', 3)
                     regrowth = info.get('regrowth_days', 3)
                     new_growth_stage = max(0, max_stage - regrowth)
@@ -403,7 +402,6 @@ class FarmUIView(ui.View):
         if trees_to_update:
             now_iso = datetime.now(timezone.utc).isoformat()
             for pid, new_stage in trees_to_update.items():
-                # [수정] 수정된 재성장 로직에 따라 DB 업데이트
                 db_tasks.append(update_plot(pid, {'growth_stage': new_stage, 'planted_at': now_iso, 'last_watered_at': now_iso, 'quality': 5}))
 
         if total_xp > 0:
@@ -509,7 +507,9 @@ class Farm(commands.Cog):
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
 
-            planted_plots_res = await supabase.table('farm_plots').select('*, farms(user_id)').eq('state', 'planted').execute()
+            # ▼▼▼ [핵심 수정] INNER JOIN을 사용하여 유효한 농장의 밭만 가져옵니다. ▼▼▼
+            planted_plots_res = await supabase.table('farm_plots').select('*, farms!inner(user_id)').eq('state', 'planted').execute()
+            
             if not (planted_plots_res and planted_plots_res.data):
                 logger.info("업데이트할 작물이 없습니다.")
                 return
@@ -520,13 +520,11 @@ class Farm(commands.Cog):
             owner_ids = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
             
             item_info_tasks = [get_farmable_item_info(name) for name in item_names]
-            # [✅ 최종 수정] 각 유저의 능력을 개별적으로, 캐시를 사용하여 불러옵니다.
             abilities_tasks = [get_user_abilities(uid) for uid in owner_ids]
 
             item_info_results, abilities_results = await asyncio.gather(asyncio.gather(*item_info_tasks), asyncio.gather(*abilities_tasks))
             
             item_info_map = {info['item_name']: info for info in item_info_results if info}
-            # [✅ 최종 수정] 결과를 맵 형태로 재구성합니다.
             owner_abilities_map = {uid: set(abilities) for uid, abilities in zip(owner_ids, abilities_results)}
 
             plots_to_update_db = []
