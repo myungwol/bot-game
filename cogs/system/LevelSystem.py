@@ -1,10 +1,5 @@
 # cogs/systems/LevelSystem.py
 
-# [핵심] 이 코드는 요청하신대로 다음 기능을 모두 수행합니다:
-# 1. '상태 확인' 버튼을 누르면, 레벨 정보를 채널에 모두가 볼 수 있는 '일반 메시지'로 전송합니다.
-# 2. 레벨 정보 메시지를 보낸 직후, 기존 패널을 삭제하고 새로운 챔피언 보드 패널을 '재생성'합니다.
-# 3. '랭킹 확인' 버튼은 이전과 동일하게 개인에게만 보이는 임시 메시지로 응답합니다.
-
 import discord
 from discord.ext import commands, tasks
 from discord import ui
@@ -297,9 +292,8 @@ class LevelPanelView(ui.View):
     @ui.button(label="상태 확인", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
     async def check_level_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
-            # 1. 상호작용을 지연시켜 추가 작업을 위한 시간을 확보합니다.
-            #    ephemeral=True를 사용하여 '봇이 생각 중...' 메시지는 클릭한 유저에게만 보이게 합니다.
-            await interaction.response.defer(ephemeral=True)
+            # 1. 즉시 임시 응답을 보내 상호작용이 실패하지 않도록 합니다.
+            await interaction.response.send_message("요청을 처리하는 중입니다...", ephemeral=True)
 
             # 2. 유저의 레벨 정보 임베드를 생성합니다.
             level_embed = await build_level_embed(interaction.user)
@@ -310,17 +304,14 @@ class LevelPanelView(ui.View):
             # 4. 메인 패널(챔피언 보드)을 재생성하는 함수를 호출합니다.
             await self.cog.regenerate_panel(interaction.channel, panel_key=self.cog.panel_key)
 
-            # 5. 모든 작업이 완료되었음을 유저에게 알립니다.
-            #    이 메시지는 defer된 상호작용에 대한 최종 응답 역할을 합니다.
-            await interaction.followup.send("✅ 레벨 정보를 채널에 표시하고 패널을 새로고침했습니다.", ephemeral=True)
+            # 5. 모든 작업이 완료되었으므로, 처음에 보냈던 임시 메시지를 삭제합니다.
+            await interaction.delete_original_response()
 
         except Exception as e:
             logger.error(f"개인 레벨 확인 및 패널 재생성 중 오류 발생 (유저: {interaction.user.id}): {e}", exc_info=True)
             error_message = "❌ 상태 정보를 불러오는 중 오류가 발생했습니다."
-            if not interaction.response.is_done():
-                await interaction.response.send_message(error_message, ephemeral=True)
-            else:
-                await interaction.followup.send(error_message, ephemeral=True)
+            # delete_original_response()가 실패할 수도 있으므로 edit으로 처리
+            await interaction.edit_original_response(content=error_message)
 
 
     @ui.button(label="랭킹 확인", style=discord.ButtonStyle.secondary, emoji="👑", custom_id="show_ranking_button")
