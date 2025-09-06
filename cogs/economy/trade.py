@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 
 from utils.database import (
     get_inventory, get_wallet, get_item_database, get_config, supabase,
-    save_panel_id, get_panel_id, get_embed_from_db, update_wallet, update_inventory
+    save_panel_id, get_panel_id, get_embed_from_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -174,7 +174,7 @@ class TradeView(ui.View):
         self.offers[user_id]["ready"] = not self.offers[user_id]["ready"]
         
         if self.offers[self.initiator.id]["ready"] and self.offers[self.partner.id]["ready"]:
-            await self.process_trade(interaction)
+            await self.process_trade()
         else:
             await self.update_ui()
 
@@ -184,9 +184,9 @@ class TradeView(ui.View):
             await self.message.channel.send(f"{interaction.user.mention}님이 거래를 취소했습니다.", delete_after=10)
         await self.on_timeout()
 
-    async def process_trade(self, interaction: discord.Interaction):
+    async def process_trade(self):
         for item in self.children: item.disabled = True
-        await self.message.edit(content="**거래 확정! 처리 중...**", view=self)
+        await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=None)
         
         user1, user2 = self.initiator, self.partner
         offer1, offer2 = self.offers[user1.id], self.offers[user2.id]
@@ -219,6 +219,7 @@ class TradeView(ui.View):
         if not (hasattr(res, 'data') and res.data is True):
              return await self.fail_trade("데이터베이스 처리 중 오류가 발생했습니다.")
         
+        log_channel = self.message.channel
         if self.message: await self.message.delete()
         
         log_embed_data = await get_embed_from_db("log_trade_success")
@@ -231,8 +232,7 @@ class TradeView(ui.View):
             offer2_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer2['items'].items()] + ([f"💰 {offer2['coins']:,}{self.currency_icon}"] if offer2['coins'] > 0 else [])) or "없음"
             log_embed.add_field(name=f"{user1.display_name} 제공", value=offer1_str, inline=True)
             log_embed.add_field(name=f"{user2.display_name} 제공", value=offer2_str, inline=True)
-
-            await self.cog.regenerate_panel(interaction.channel, last_log=log_embed)
+            await self.cog.regenerate_panel(log_channel, last_log=log_embed)
         self.stop()
     
     async def fail_trade(self, reason: str):
@@ -274,8 +274,11 @@ class MailComposeView(ui.View):
     async def update_view(self, interaction: discord.Interaction, new_message=False):
         embed = await self.build_embed()
         if new_message:
-            await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
-            self.message = await interaction.original_response()
+            if interaction.response.is_done():
+                self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
+            else:
+                await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+                self.message = await interaction.original_response()
         else:
             await interaction.response.edit_message(embed=embed, view=self)
 
@@ -374,14 +377,23 @@ class MailboxView(ui.View):
 
     async def update_view(self, interaction: discord.Interaction, new_message=False):
         embed = await self.build_embed()
-        self.build_components()
+        await self.build_components()
         
+        target = interaction.edit_original_response
         if new_message:
-            await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+            if interaction.response.is_done():
+                target = interaction.followup.send
+            else:
+                target = interaction.response.send_message
+        
+        kwargs = {'embed': embed, 'view': self}
+        if new_message:
+            kwargs['ephemeral'] = True
+            
+        message = await target(**kwargs)
+        if new_message and not self.message:
             self.message = await interaction.original_response()
-        else:
-            await interaction.response.edit_message(embed=embed, view=self)
-    
+
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"📫 {self.user.display_name}의 우편함", color=0x964B00)
         res = await supabase.table('mails').select('*, mail_attachments(*)', count='exact').eq('recipient_id', str(self.user.id)).is_('claimed_at', None).order('sent_at', desc=True).range(self.page * 5, self.page * 5 + 4).execute()
@@ -399,18 +411,17 @@ class MailboxView(ui.View):
 
                 attachments = mail['mail_attachments']
                 att_str = [f"📦 {att['item_name']}: {att['quantity']}개" for att in attachments if not att['is_coin']]
-                field_value = (f"> **메시지:** {mail['message']}\n" if mail['message'] else "") + "**첨부파일:**\n" + ("\n".join(att_str) if att_str else "없음")
+                field_value = (f"> **메시지:** {mail['message']}\n" if mail['message'] else "") + "**첨부 아이템:**\n" + ("\n".join(att_str) if att_str else "없음")
                 embed.add_field(name=f"FROM: {sender_name} ({discord.utils.format_dt(datetime.fromisoformat(mail['sent_at']), 'R')})", value=field_value, inline=False)
         return embed
 
-    def build_components(self):
+    async def build_components(self):
         self.clear_items()
         mail_options = [ discord.SelectOption(label=f"보낸사람: {getattr(self.cog.bot.get_user(int(m['sender_id'])), 'display_name', m['sender_id'])}", value=str(m['id'])) for m in self.mails_on_page ]
         if mail_options:
             claim_select = ui.Select(placeholder="받을 편지 선택 (1개)", options=mail_options)
             claim_select.callback = self.claim_mail
             self.add_item(claim_select)
-            
             delete_select = ui.Select(placeholder="삭제할 편지 선택 (1개)", options=mail_options)
             delete_select.callback = self.delete_mail
             self.add_item(delete_select)
@@ -456,7 +467,7 @@ class MailboxView(ui.View):
             recipient = interaction.guild.get_member(recipient_id)
             if not recipient or recipient.bot or recipient.id == self.user.id:
                 return await select_interaction.response.send_message("잘못된 상대입니다.", ephemeral=True, delete_after=5)
-            await self.message.delete()
+            if self.message: await self.message.delete()
             compose_view = MailComposeView(self.cog, self.user, recipient)
             await compose_view.start(select_interaction)
         user_select.callback = callback
