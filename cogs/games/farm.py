@@ -375,7 +375,11 @@ class FarmUIView(ui.View):
                 if not info.get('is_tree'): 
                     plots_to_reset.append(p['id'])
                 else:
-                    trees_to_update[p['id']] = info.get('regrowth_days', 3)
+                    # [수정] 나무의 재성장 로직을 명확하게 수정
+                    max_stage = info.get('max_growth_stage', 3)
+                    regrowth = info.get('regrowth_days', 3)
+                    new_growth_stage = max(0, max_stage - regrowth)
+                    trees_to_update[p['id']] = new_growth_stage
         
         if not harvested:
             await interaction.followup.send("ℹ️ 수확할 수 있는 작물이 없습니다.", ephemeral=True); return
@@ -398,8 +402,9 @@ class FarmUIView(ui.View):
             db_tasks.append(clear_plots_db(plots_to_reset))
         if trees_to_update:
             now_iso = datetime.now(timezone.utc).isoformat()
-            for pid in trees_to_update:
-                db_tasks.append(update_plot(pid, {'growth_stage': 2, 'planted_at': now_iso, 'last_watered_at': now_iso, 'quality': 5}))
+            for pid, new_stage in trees_to_update.items():
+                # [수정] 수정된 재성장 로직에 따라 DB 업데이트
+                db_tasks.append(update_plot(pid, {'growth_stage': new_stage, 'planted_at': now_iso, 'last_watered_at': now_iso, 'quality': 5}))
 
         if total_xp > 0:
             db_tasks.append(supabase.rpc('add_xp', {'p_user_id': owner.id, 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute())
