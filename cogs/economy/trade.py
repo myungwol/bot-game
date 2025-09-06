@@ -189,11 +189,14 @@ class TradeView(ui.View):
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=None)
         
         user1, user2 = self.initiator, self.partner
-        offer1, offer2 = self.offers[user1.id], self.offers[user2.id] # Fixed the bug here
+        
+        # ▼▼▼▼▼ [핵심 수정] 버그가 수정된 올바른 코드입니다. ▼▼▼▼▼
+        offer1, offer2 = self.offers[user1.id], self.offers[user2.id]
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+        
         commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
 
         try:
-            # Prepare data in the most compatible format
             p_offer1 = {"items": [{"name": str(k), "qty": int(v)} for k, v in offer1['items'].items()], "coins": int(offer1['coins'])}
             p_offer2 = {"items": [{"name": str(k), "qty": int(v)} for k, v in offer2['items'].items()], "coins": int(offer2['coins'])}
             
@@ -207,21 +210,30 @@ class TradeView(ui.View):
 
             res = await supabase.rpc('process_trade', params_to_send).execute()
 
-            # The new DB function ALWAYS returns a valid response, so we just check its content.
             response_data = res.data[0] if isinstance(res.data, list) and res.data else res.data
             
-            if isinstance(response_data, dict) and response_data.get('success'):
-                # SUCCESS! The rest of the function will now execute.
-                pass
-            else:
-                # The DB function returned a failure message. Show it to the user.
+            if not (isinstance(response_data, dict) and response_data.get('success')):
                 error_message = response_data.get('message', '알 수 없는 DB 오류') if isinstance(response_data, dict) else 'DB 응답 형식 오류'
                 return await self.fail_trade(error_message)
 
+        except APIError as e:
+            try:
+                error_details = e.__dict__.get('details')
+                if isinstance(error_details, bytes):
+                    details_str = error_details.decode('utf-8', errors='ignore')
+                    real_error_data = json.loads(details_str)
+                    user_facing_message = real_error_data.get('message', '알 수 없는 거래 서버 오류입니다.')
+                else:
+                    user_facing_message = "거래 서버로부터 상세 오류 정보를 받지 못했습니다."
+                
+                logger.error(f"거래 처리 중 파싱된 APIError: {user_facing_message}")
+                return await self.fail_trade(user_facing_message)
+            except Exception as parse_error:
+                logger.error(f"APIError 파싱 실패: {parse_error}", exc_info=True)
+                return await self.fail_trade("거래 서버와 통신 중 알 수 없는 오류가 발생했습니다.")
         except Exception as e:
-            # This will now only catch network errors or unexpected Python-level exceptions.
-            logger.error(f"거래 처리 중 파이썬 레벨에서 예외 발생: {e}", exc_info=True)
-            return await self.fail_trade("거래 서버와 통신 중 오류가 발생했습니다.")
+            logger.error(f"거래 처리 중 예외 발생: {e}", exc_info=True)
+            return await self.fail_trade("알 수 없는 오류가 발생했습니다.")
         
         # --- SUCCESS LOGIC ---
         log_channel = self.message.channel
