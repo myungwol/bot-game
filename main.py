@@ -58,7 +58,7 @@ class MyBot(commands.Bot):
             "DiceGame", "SlotMachine", "RPSGame",
             "DailyCheck", "Quests", "Farm", "PanelUpdater",
             "WorldSystem", "EconomyCore", "LevelSystem",
-            "Mining", "Blacksmith"
+            "Mining", "Blacksmith", "Trade" # <--- 이 부분을 추가하세요.
         ]
         
         registered_views_count = 0
