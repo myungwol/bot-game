@@ -240,7 +240,7 @@ class Blacksmith(commands.Cog):
                 return
 
             completed_upgrades = response.data
-            user_ids_to_delete = []
+            ids_to_delete = [item['id'] for item in completed_upgrades]
 
             for upgrade in completed_upgrades:
                 user_id = int(upgrade['user_id'])
@@ -257,11 +257,9 @@ class Blacksmith(commands.Cog):
                     await user.send(f"🎉 **{target_tool}** 업그레이드가 완료되었습니다! 인벤토리를 확인해주세요.")
                 except discord.Forbidden:
                     logger.warning(f"유저(ID: {user_id})에게 DM을 보낼 수 없습니다.")
-
-                user_ids_to_delete.append(user_id)
             
-            if user_ids_to_delete:
-                await supabase.table('blacksmith_upgrades').delete().in_('user_id', [str(uid) for uid in user_ids_to_delete]).execute()
+            if ids_to_delete:
+                await supabase.table('blacksmith_upgrades').delete().in_('id', ids_to_delete).execute()
 
         except Exception as e:
             logger.error(f"완료된 업그레이드 확인 중 오류: {e}", exc_info=True)
@@ -277,9 +275,8 @@ class Blacksmith(commands.Cog):
     async def start_upgrade(self, interaction: discord.Interaction, target_tool: str):
         recipe = UPGRADE_RECIPES.get(target_tool)
         if not recipe:
-            await interaction.response.send_message("❌ 잘못된 업그레이드 정보입니다.", ephemeral=True, delete_after=5)
-            return
-
+            return await interaction.response.send_message("❌ 잘못된 업그레이드 정보입니다.", ephemeral=True, delete_after=5)
+            
         user_id = interaction.user.id
         
         # 1. 중복 업그레이드 확인
@@ -294,21 +291,19 @@ class Blacksmith(commands.Cog):
             get_inventory(interaction.user)
         )
 
-        gear_key = next((k for k, v in {"pickaxe":"곡괭이", "hoe":"괭이", "watering_can":"물뿌리개"}.items() if v in target_tool), None)
+        gear_key_map = {"낚싯대": "rod", "괭이": "hoe", "물뿌리개": "watering_can", "곡괭이": "pickaxe"}
+        gear_key = next((db_key for display_name, db_key in gear_key_map.items() if display_name in target_tool), None)
+        
         if not gear_key or gear.get(gear_key) != recipe['requires_tool']:
-            await interaction.response.send_message(f"❌ 이 업그레이드를 하려면 먼저 **{recipe['requires_tool']}**(을)를 장착해야 합니다.", ephemeral=True, delete_after=10)
-            return
+            return await interaction.response.send_message(f"❌ 이 업그레이드를 하려면 먼저 **{recipe['requires_tool']}**(을)를 장착해야 합니다.", ephemeral=True, delete_after=10)
 
         for item, qty in recipe['requires_items'].items():
             if inventory.get(item, 0) < qty:
-                await interaction.response.send_message(f"❌ 재료가 부족합니다: {item} {qty}개 필요", ephemeral=True, delete_after=5)
-                return
+                return await interaction.response.send_message(f"❌ 재료가 부족합니다: {item} {qty}개 필요", ephemeral=True, delete_after=5)
         
         if wallet.get('balance', 0) < recipe['requires_coins']:
-            await interaction.response.send_message("❌ 코인이 부족합니다.", ephemeral=True, delete_after=5)
-            return
+            return await interaction.response.send_message("❌ 코인이 부족합니다.", ephemeral=True, delete_after=5)
             
-        # 3. 확인 절차
         view = ConfirmationView(user_id)
         await interaction.response.send_message(f"**{target_tool}**(으)로 업그레이드를 시작하시겠습니까?\n"
                                                 f"**소모 재료:** {recipe['requires_tool']}, {', '.join([f'{k} {v}개' for k,v in recipe['requires_items'].items()])}, {recipe['requires_coins']:,} 코인\n"
@@ -316,21 +311,19 @@ class Blacksmith(commands.Cog):
                                                 view=view, ephemeral=True)
         await view.wait()
 
-        if not view.value:
-            await interaction.edit_original_response(content="업그레이드가 취소되었습니다.", view=None)
-            return
+        if view.value is not True:
+            return await interaction.edit_original_response(content="업그레이드가 취소되었습니다.", view=None)
 
-        # 4. 업그레이드 시작 (DB 작업)
         try:
-            # 재료 소모
-            tasks = [update_wallet(interaction.user, -recipe['requires_coins'])]
+            tasks = [
+                update_wallet(interaction.user, -recipe['requires_coins']),
+                set_user_gear(user_id, **{gear_key: "맨손"})
+            ]
             for item, qty in recipe['requires_items'].items():
                 tasks.append(update_inventory(user_id, item, -qty))
             
             await asyncio.gather(*tasks)
-            await set_user_gear(user_id, **{gear_key: "맨손"}) # 장착 해제
 
-            # DB에 업그레이드 기록
             completion_time = datetime.now(timezone.utc) + timedelta(hours=24)
             await supabase.table('blacksmith_upgrades').insert({
                 "user_id": str(user_id),
@@ -339,12 +332,15 @@ class Blacksmith(commands.Cog):
             }).execute()
 
             await interaction.edit_original_response(content="✅ 업그레이드를 시작했습니다! 24시간 후에 완료됩니다.", view=None)
+            
+            final_view = BlacksmithToolSelectView(interaction.user, self)
+            await final_view.start(interaction)
 
         except Exception as e:
             logger.error(f"업그레이드 시작 중 DB 오류: {e}", exc_info=True)
-            # TODO: 재료 롤백 로직 추가 필요
             await interaction.edit_original_response(content="❌ 업그레이드를 시작하는 중 오류가 발생했습니다. 재료가 소모되었을 수 있으니 관리자에게 문의하세요.", view=None)
-
+    
+    # ▼▼▼ [핵심 수정] 아래에 register_persistent_views 함수를 추가하세요. ▼▼▼
     async def register_persistent_views(self):
         self.bot.add_view(BlacksmithPanelView(self))
         logger.info("✅ 대장간의 영구 View가 성공적으로 등록되었습니다.")
