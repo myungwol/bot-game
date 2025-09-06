@@ -1,4 +1,3 @@
-# cogs/economy/blacksmith.py
 
 import discord
 from discord.ext import commands, tasks
@@ -16,6 +15,29 @@ from utils.database import (
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
+
+# ▼▼▼ [핵심 수정] 남은 시간을 보기 좋게 변환하는 헬퍼 함수 추가 ▼▼▼
+def format_timedelta(delta: timedelta) -> str:
+    """timedelta 객체를 'X일 Y시간 Z분 W초 남음' 형식의 문자열로 변환합니다."""
+    total_seconds = int(delta.total_seconds())
+    if total_seconds <= 0:
+        return "완료됨"
+    
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    parts = []
+    if days > 0:
+        parts.append(f"{days}일")
+    if hours > 0:
+        parts.append(f"{hours}시간")
+    if minutes > 0:
+        parts.append(f"{minutes}분")
+    if seconds > 0:
+        parts.append(f"{seconds}초")
+        
+    return " ".join(parts) + " 남음" if parts else "곧 완료됨"
 
 # 업그레이드 레시피 정의
 UPGRADE_RECIPES = {
@@ -98,14 +120,20 @@ class BlacksmithUpgradeView(ui.View):
             self.cog.get_user_upgrade_status(self.user.id)
         )
         
+        # ▼▼▼ [핵심 수정] 남은 시간 표시 로직 변경 ▼▼▼
         if upgrade_status:
+            completion_time = datetime.fromisoformat(upgrade_status['completion_timestamp'])
+            now = datetime.now(timezone.utc)
+            remaining_time = completion_time - now
+            remaining_str = format_timedelta(remaining_time)
+
             embed.description = (
                 f"현재 **{upgrade_status['target_tool_name']}**(으)로 업그레이드 진행 중입니다.\n"
-                f"완료 시간: {discord.utils.format_dt(datetime.fromisoformat(upgrade_status['completion_timestamp']), style='R')}"
+                f"남은 시간: **{remaining_str}**"
             )
             return embed
 
-        gear_key_map = {"낚싯대": "rod", "괭이": "hoe", "물뿌리개": "watering_can", "곡괭이": "pickaxe"}
+        gear_key_map = {"낚싯대": "rod", "곡괭이": "pickaxe", "괭이": "hoe", "물뿌리개": "watering_can"}
         current_tool = gear.get(gear_key_map.get(self.tool_type, "pickaxe"), "맨손")
         
         embed.description = f"**현재 장착 도구:** `{current_tool}`\n**보유 코인:** `{wallet.get('balance', 0):,}`{self.currency_icon}"
@@ -120,12 +148,10 @@ class BlacksmithUpgradeView(ui.View):
         else:
             for target, recipe in possible_upgrades.items():
                 materials_list = []
-                has_materials = True
                 for item, qty in recipe['requires_items'].items():
                     owned = inventory.get(item, 0)
                     emoji = "✅" if owned >= qty else "❌"
                     materials_list.append(f"> {emoji} {item}: {owned}/{qty}")
-                    if owned < qty: has_materials = False
                 
                 coin_emoji = "✅" if wallet.get('balance', 0) >= recipe['requires_coins'] else "❌"
                 
@@ -178,12 +204,18 @@ class BlacksmithToolSelectView(ui.View):
     async def start(self, interaction: discord.Interaction):
         embed = discord.Embed(title="🛠️ 대장간", description="업그레이드할 도구의 종류를 선택해주세요.", color=0x964B00)
         
-        # Check upgrade status
         upgrade_status = await self.cog.get_user_upgrade_status(self.user.id)
+        
+        # ▼▼▼ [핵심 수정] 남은 시간 표시 로직 변경 ▼▼▼
         if upgrade_status:
+            completion_time = datetime.fromisoformat(upgrade_status['completion_timestamp'])
+            now = datetime.now(timezone.utc)
+            remaining_time = completion_time - now
+            remaining_str = format_timedelta(remaining_time)
+            
             embed.description = (
                 f"현재 **{upgrade_status['target_tool_name']}**(으)로 업그레이드 진행 중입니다.\n"
-                f"완료 시간: {discord.utils.format_dt(datetime.fromisoformat(upgrade_status['completion_timestamp']), style='R')}"
+                f"남은 시간: **{remaining_str}**"
             )
         
         self.build_components(upgrade_status is not None)
