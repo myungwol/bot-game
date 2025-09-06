@@ -342,15 +342,15 @@ class MailComposeView(ui.View):
         p_attachments = [{"item_name": name, "quantity": qty} for name, qty in self.attachments["items"].items()]
         await interaction.response.defer()
 
-        # ▼▼▼▼▼▼ [핵심 수정] 이 부분을 아래 코드로 교체해주세요. ▼▼▼▼▼▼
+        # ▼▼▼▼▼▼ [핵심 수정] ensure_ascii=False 를 추가해주세요. ▼▼▼▼▼▼
         res = await supabase.rpc('send_mail_with_attachments', {
             'p_sender_id': str(self.user.id),
             'p_recipient_id': str(self.recipient.id),
             'p_message': self.message_content,
-            'p_attachments': json.dumps(p_attachments),
+            'p_attachments': json.dumps(p_attachments, ensure_ascii=False),
             'p_shipping_fee': shipping_fee
         }).execute()
-        # ▲▲▲▲▲▲ [핵심 수정] 여기까지 교체 ▲▲▲▲▲▲
+        # ▲▲▲▲▲▲ [핵심 수정] 여기까지 ▲▲▲▲▲▲
         
         if not (hasattr(res, 'data') and res.data is True):
             return await interaction.followup.send("우편 발송에 실패했습니다. 재고나 잔액이 부족할 수 있습니다.", ephemeral=True)
