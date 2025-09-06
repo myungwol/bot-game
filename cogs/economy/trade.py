@@ -64,13 +64,14 @@ class TradeView(ui.View):
         self.cog = cog
         self.initiator = initiator
         self.partner = partner
-        self.trade_id = f"{initiator.id}-{partner.id}"
+        self.trade_id = f"{min(initiator.id, partner.id)}-{max(initiator.id, partner.id)}"
         self.offers = {
             initiator.id: {"items": {}, "coins": 0, "ready": False},
             partner.id: {"items": {}, "coins": 0, "ready": False}
         }
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.commission_percent = get_config("TRADE_COMMISSION_PERCENT", {}).get("value", 5)
+        self.message: Optional[discord.Message] = None
 
     async def start(self, interaction: discord.Interaction):
         self.cog.active_trades[self.trade_id] = self
@@ -83,7 +84,6 @@ class TradeView(ui.View):
             await interaction.response.send_message("거래 당사자만 이용할 수 있습니다.", ephemeral=True, delete_after=5)
             return False
         if self.offers[self.initiator.id]["ready"] and self.offers[self.partner.id]["ready"]:
-            # 둘 다 준비 완료 상태면 거래 완료 전까지 상호작용 비활성화
             return False
         return True
         
@@ -150,7 +150,12 @@ class TradeView(ui.View):
             if modal.quantity is not None:
                 self.offers[user_id]["items"][item_name] = self.offers[user_id]["items"].get(item_name, 0) + modal.quantity
                 await self.update_ui(interaction)
+            
+            try:
                 await select_interaction.delete_original_response()
+            except discord.NotFound:
+                pass
+
 
         item_select.callback = select_callback
         select_view.add_item(item_select)
@@ -185,9 +190,9 @@ class TradeView(ui.View):
 
     @ui.button(label="취소", style=discord.ButtonStyle.danger, emoji="✖️")
     async def cancel_button(self, interaction: discord.Interaction, button: ui.Button):
-        await self.on_timeout()
         if self.message:
             await self.message.channel.send(f"{interaction.user.mention}님이 거래를 취소했습니다.", delete_after=10)
+        await self.on_timeout()
 
     async def process_trade(self, interaction: discord.Interaction):
         for item in self.children: item.disabled = True
@@ -198,7 +203,6 @@ class TradeView(ui.View):
         
         commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
         
-        # 유효성 재검사
         wallet1, inv1 = await asyncio.gather(get_wallet(user1.id), get_inventory(user1))
         wallet2, inv2 = await asyncio.gather(get_wallet(user2.id), get_inventory(user2))
 
@@ -214,7 +218,6 @@ class TradeView(ui.View):
             if inv2.get(name, 0) < qty:
                 return await self.fail_trade(interaction, f"{user2.mention}님의 '{name}' 아이템이 부족합니다.")
 
-        # DB 함수 호출
         p_offer1 = {"items": [{"name": k, "qty": v} for k, v in offer1['items'].items()], "coins": offer1['coins']}
         p_offer2 = {"items": [{"name": k, "qty": v} for k, v in offer2['items'].items()], "coins": offer2['coins']}
         
@@ -224,24 +227,20 @@ class TradeView(ui.View):
             'p_commission_fee': commission
         }).execute()
         
-        if not (res.data and res.data is True):
+        if not (hasattr(res, 'data') and res.data is True):
              return await self.fail_trade(interaction, "데이터베이스 처리 중 오류가 발생했습니다.")
         
-        await self.message.delete()
+        if self.message: await self.message.delete()
         
-        # 거래 로그 생성
         log_embed_data = await get_embed_from_db("log_trade_success")
         if log_embed_data:
             log_embed = format_embed_from_db(
                 log_embed_data,
-                user1_mention=user1.mention,
-                user2_mention=user2.mention,
-                commission=commission,
-                currency_icon=self.currency_icon
+                user1_mention=user1.mention, user2_mention=user2.mention,
+                commission=commission, currency_icon=self.currency_icon
             )
-            # Add fields for each user's offer
-            offer1_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer1['items'].items()] + [f"💰 {offer1['coins']:,}{self.currency_icon}"]) or "없음"
-            offer2_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer2['items'].items()] + [f"💰 {offer2['coins']:,}{self.currency_icon}"]) or "없음"
+            offer1_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer1['items'].items()] + ([f"💰 {offer1['coins']:,}{self.currency_icon}"] if offer1['coins'] > 0 else [])) or "없음"
+            offer2_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer2['items'].items()] + ([f"💰 {offer2['coins']:,}{self.currency_icon}"] if offer2['coins'] > 0 else [])) or "없음"
             log_embed.add_field(name=f"{user1.display_name} 제공", value=offer1_str, inline=True)
             log_embed.add_field(name=f"{user2.display_name} 제공", value=offer2_str, inline=True)
 
@@ -250,8 +249,8 @@ class TradeView(ui.View):
         self.stop()
     
     async def fail_trade(self, interaction: discord.Interaction, reason: str):
-        await self.message.delete()
-        await interaction.channel.send(f"交易失敗: {reason}", delete_after=10)
+        if self.message: await self.message.delete()
+        await interaction.channel.send(f"❌ 거래 실패: {reason}", delete_after=10)
         self.stop()
 
     async def on_timeout(self):
@@ -261,90 +260,52 @@ class TradeView(ui.View):
                 await self.message.edit(content="시간이 초과되어 거래가 취소되었습니다.", view=None, embed=None)
                 await asyncio.sleep(10)
                 await self.message.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
+            except (discord.NotFound, discord.Forbidden): pass
     
     def stop(self):
-        self.cog.active_trades.pop(self.trade_id, None)
+        if self.trade_id in self.cog.active_trades:
+            self.cog.active_trades.pop(self.trade_id)
         super().stop()
 
 
 class MailboxView(ui.View):
+    # This feature is complex and will be added in a future update.
+    # For now, it will be a placeholder.
     def __init__(self, cog: 'Trade', user: discord.Member):
         super().__init__(timeout=180)
         self.cog = cog
         self.user = user
-        self.page = 0
 
     async def start(self, interaction: discord.Interaction):
-        await self.update_view(interaction, new_message=True)
+        embed = discord.Embed(title=f"📫 {self.user.display_name}의 우편함", description="우편함 기능은 현재 준비 중입니다.", color=0x964B00)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    async def update_view(self, interaction: discord.Interaction, new_message=False):
-        embed = await self.build_embed()
-        if new_message:
-            await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
-            self.message = await interaction.original_response()
-        else:
-            await interaction.response.edit_message(embed=embed, view=self)
-    
-    async def build_embed(self) -> discord.Embed:
-        embed = discord.Embed(title=f"{self.user.display_name}의 우편함", color=0x964B00)
-        res = await supabase.table('mails').select('*, mail_attachments(*)', count='exact').eq('recipient_id', str(self.user.id)).order('sent_at', desc=True).range(self.page * 5, self.page * 5 + 4).execute()
-        
-        if not res.data:
-            embed.description = "받은 편지가 없습니다."
-            return embed
-            
-        embed.set_footer(text=f"페이지 {self.page + 1} / {((res.count - 1) // 5) + 1}")
-        
-        for mail in res.data:
-            sender = await self.cog.bot.fetch_user(int(mail['sender_id']))
-            
-            attachments = mail['mail_attachments']
-            att_str = []
-            for att in attachments:
-                if att['is_coin']:
-                    att_str.append(f"💰 {att['quantity']:,}{get_config('CURRENCY_ICON', '🪙')}")
-                else:
-                    att_str.append(f"📦 {att['item_name']}: {att['quantity']}개")
-
-            embed.add_field(
-                name=f"FROM: {sender.display_name} ({discord.utils.format_dt(datetime.fromisoformat(mail['sent_at']), 'R')})",
-                value=f"**첨부파일:**\n" + "\n".join(att_str) if att_str else "첨부파일 없음",
-                inline=False
-            )
-        return embed
-    
-    @ui.button(label="편지 보내기", style=discord.ButtonStyle.success, emoji="✉️")
-    async def send_mail_button(self, interaction: discord.Interaction, button: ui.Button):
-        # Implement send mail logic here
-        pass # To be implemented
-
-    @ui.button(label="받기/삭제", style=discord.ButtonStyle.primary, emoji="📬")
-    async def claim_delete_button(self, interaction: discord.Interaction, button: ui.Button):
-        # Implement claim/delete logic here
-        pass # To be implemented
-
-    @ui.button(label="◀", style=discord.ButtonStyle.secondary)
-    async def prev_page(self, interaction: discord.Interaction, button: ui.Button):
-        if self.page > 0:
-            self.page -= 1
-            await self.update_view(interaction)
-
-    @ui.button(label="▶", style=discord.ButtonStyle.secondary)
-    async def next_page(self, interaction: discord.Interaction, button: ui.Button):
-        res = await supabase.table('mails').select('id', count='exact').eq('recipient_id', str(self.user.id)).execute()
-        if (self.page + 1) * 5 < res.count:
-            self.page += 1
-            await self.update_view(interaction)
 
 class TradePanelView(ui.View):
     def __init__(self, cog_instance: 'Trade'):
         super().__init__(timeout=None)
         self.cog = cog_instance
 
-    @ui.button(label="1:1 거래하기", style=discord.ButtonStyle.success, emoji="🤝")
-    async def direct_trade_button(self, interaction: discord.Interaction, button: ui.Button):
+        # ▼▼▼ [핵심 수정] 아래 버튼들을 직접 생성하고 custom_id를 할당합니다. ▼▼▼
+        trade_button = ui.Button(
+            label="1:1 거래하기",
+            style=discord.ButtonStyle.success,
+            emoji="🤝",
+            custom_id="trade_panel_direct_trade"
+        )
+        trade_button.callback = self.direct_trade_button
+        self.add_item(trade_button)
+
+        mailbox_button = ui.Button(
+            label="우편함",
+            style=discord.ButtonStyle.primary,
+            emoji="📫",
+            custom_id="trade_panel_mailbox"
+        )
+        mailbox_button.callback = self.mailbox_button
+        self.add_item(mailbox_button)
+
+    async def direct_trade_button(self, interaction: discord.Interaction):
         view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="거래할 상대를 선택하세요.")
 
@@ -360,7 +321,10 @@ class TradePanelView(ui.View):
             if trade_id in self.cog.active_trades:
                  return await select_interaction.response.send_message("상대방 또는 본인이 이미 다른 거래에 참여 중입니다.", ephemeral=True, delete_after=5)
 
-            await select_interaction.message.delete()
+            try:
+                await select_interaction.message.delete()
+            except (discord.NotFound, discord.Forbidden): pass
+            
             trade_view = TradeView(self.cog, initiator, partner)
             await trade_view.start(select_interaction)
 
@@ -368,8 +332,7 @@ class TradePanelView(ui.View):
         view.add_item(user_select)
         await interaction.response.send_message("누구와 거래하시겠습니까?", view=view, ephemeral=True)
 
-    @ui.button(label="우편함", style=discord.ButtonStyle.primary, emoji="📫")
-    async def mailbox_button(self, interaction: discord.Interaction, button: ui.Button):
+    async def mailbox_button(self, interaction: discord.Interaction):
         mailbox_view = MailboxView(self.cog, interaction.user)
         await mailbox_view.start(interaction)
         
@@ -377,7 +340,6 @@ class Trade(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_trades: Dict[str, TradeView] = {}
-        self.user_locks: Dict[int, asyncio.Lock] = {}
 
     async def cog_load(self):
         self.bot.loop.create_task(self.cleanup_stale_trades())
@@ -391,7 +353,8 @@ class Trade(commands.Cog):
                 if view.is_finished()
             ]
             for tid in stale_trades:
-                self.active_trades.pop(tid, None)
+                if tid in self.active_trades:
+                    self.active_trades.pop(tid)
 
     async def register_persistent_views(self):
         self.bot.add_view(TradePanelView(self))
