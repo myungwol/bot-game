@@ -194,16 +194,25 @@ class TradeView(ui.View):
         p_offer1 = {"items": [{"name": k, "qty": v} for k, v in offer1['items'].items()], "coins": offer1['coins']}
         p_offer2 = {"items": [{"name": k, "qty": v} for k, v in offer2['items'].items()], "coins": offer2['coins']}
         
+        # ▼▼▼▼▼▼ [핵심 수정] 아래 로깅 코드를 추가해주세요. ▼▼▼▼▼▼
+        params_to_send = {
+            'p_user1_id': str(user1.id),
+            'p_user2_id': str(user2.id),
+            'p_user1_offer': json.dumps(p_offer1),
+            'p_user2_offer': json.dumps(p_offer2),
+            'p_commission_fee': commission
+        }
+        logger.info(f"--- [TRADE DEBUG] Attempting to call 'process_trade' RPC ---")
+        logger.info(f"Parameters being sent: {params_to_send}")
+        logger.info(f"Data types: user1_id={type(params_to_send['p_user1_id'])}, "
+                    f"user2_id={type(params_to_send['p_user2_id'])}, "
+                    f"offer1={type(params_to_send['p_user1_offer'])}, "
+                    f"offer2={type(params_to_send['p_user2_offer'])}, "
+                    f"commission={type(params_to_send['p_commission_fee'])}")
+        # ▲▲▲▲▲▲ [핵심 수정] 여기까지 추가 ▲▲▲▲▲▲
+
         try:
-            # ▼▼▼▼▼▼ [핵심 수정] 이 부분을 아래 코드로 교체해주세요. ▼▼▼▼▼▼
-            res = await supabase.rpc('process_trade', {
-                'p_user1_id': str(user1.id),
-                'p_user2_id': str(user2.id),
-                'p_user1_offer': json.dumps(p_offer1),
-                'p_user2_offer': json.dumps(p_offer2),
-                'p_commission_fee': commission
-            }).execute()
-            # ▲▲▲▲▲▲ [핵심 수정] 여기까지 교체 ▲▲▲▲▲▲
+            res = await supabase.rpc('process_trade', params_to_send).execute()
 
             if not (hasattr(res, 'data') and res.data and res.data.get('success')):
                 error_message = res.data.get('message', '알 수 없는 DB 오류') if (hasattr(res, 'data') and res.data) else 'DB 응답 없음'
