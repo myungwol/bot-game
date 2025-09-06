@@ -189,7 +189,7 @@ class TradeView(ui.View):
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=None)
         
         user1, user2 = self.initiator, self.partner
-        offer1, offer2 = self.offers[user1.id], self.offers[user1.id]
+        offer1, offer2 = self.offers[user1.id], self.offers[user2.id]
         commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
 
         p_offer1 = {
