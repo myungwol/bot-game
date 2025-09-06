@@ -1,4 +1,4 @@
-# cogs/economy/trade.py
+# bot-game/cogs/economy/trade.py
 
 import discord
 from discord.ext import commands
@@ -9,6 +9,7 @@ import math
 from typing import Optional, Dict, List, Any
 from datetime import datetime, timezone, timedelta
 from postgrest.exceptions import APIError
+import json  # <<< 이 라인을 추가해주세요.
 
 from utils.database import (
     get_inventory, get_wallet, get_item_database, get_config, supabase,
@@ -196,7 +197,8 @@ class TradeView(ui.View):
         try:
             res = await supabase.rpc('process_trade', {
                 'p_user1_id': str(user1.id), 'p_user2_id': str(user2.id),
-                'p_user1_offer': p_offer1, 'p_user2_offer': p_offer2,
+                'p_user1_offer': json.dumps(p_offer1),      # <<< 수정된 부분
+                'p_user2_offer': json.dumps(p_offer2),      # <<< 수정된 부분
                 'p_commission_fee': commission
             }).execute()
 
