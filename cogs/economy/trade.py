@@ -124,13 +124,11 @@ class TradeView(ui.View):
         user_id = interaction.user.id
         if self.offers[user_id]["ready"]:
             return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
-
         inventory = await get_inventory(interaction.user)
         item_db = get_item_database()
         tradeable_items = { name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category') in TRADEABLE_CATEGORIES }
         if not tradeable_items:
             return await interaction.response.send_message("거래 가능한 아이템이 없습니다.", ephemeral=True, delete_after=5)
-
         options = [ discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in tradeable_items.items() ]
         
         select_view = ui.View(timeout=180)
@@ -143,7 +141,7 @@ class TradeView(ui.View):
             await select_interaction.response.send_modal(modal)
             await modal.wait()
             if modal.quantity is not None:
-                self.offers[user_id]["items"][item_name] = self.offers[user_id]["items"].get(item_name, 0) + modal.quantity
+                self.offers[user_id]["items"][item_name] = modal.quantity
                 await self.update_ui()
             try: await select_interaction.delete_original_response()
             except discord.NotFound: pass
@@ -157,7 +155,6 @@ class TradeView(ui.View):
         user_id = interaction.user.id
         if self.offers[user_id]["ready"]:
             return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
-
         wallet = await get_wallet(user_id)
         max_coins = wallet.get('balance', 0)
         modal = CoinInputModal("거래 코인 입력", max_coins)
@@ -202,7 +199,7 @@ class TradeView(ui.View):
         }).execute()
         
         if not (hasattr(res, 'data') and res.data and res.data.get('success')):
-            error_message = res.data.get('message', '알 수 없는 데이터베이스 오류입니다.') if hasattr(res, 'data') and res.data else '데이터베이스 응답이 없습니다.'
+            error_message = res.data.get('message', '알 수 없는 DB 오류') if (hasattr(res, 'data') and res.data) else 'DB 응답 없음'
             return await self.fail_trade(error_message)
         
         log_channel = self.message.channel
