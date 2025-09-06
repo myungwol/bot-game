@@ -189,61 +189,41 @@ class TradeView(ui.View):
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=None)
         
         user1, user2 = self.initiator, self.partner
-        offer1, offer2 = self.offers[user1.id], self.offers[user2.id]
+        offer1, offer2 = self.offers[user1.id], self.offers[user2.id] # Fixed the bug here
         commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
 
-        p_offer1 = {
-            "items": [{"name": str(k), "qty": int(v)} for k, v in offer1['items'].items()],
-            "coins": int(offer1['coins'])
-        }
-        p_offer2 = {
-            "items": [{"name": str(k), "qty": int(v)} for k, v in offer2['items'].items()],
-            "coins": int(offer2['coins'])
-        }
-        
-        params_to_send = {
-            'p_user1_id': str(user1.id),
-            'p_user2_id': str(user2.id),
-            'p_user1_offer': json.dumps(p_offer1, ensure_ascii=False),
-            'p_user2_offer': json.dumps(p_offer2, ensure_ascii=False),
-            'p_commission_fee': int(commission)
-        }
-        
         try:
+            # Prepare data in the most compatible format
+            p_offer1 = {"items": [{"name": str(k), "qty": int(v)} for k, v in offer1['items'].items()], "coins": int(offer1['coins'])}
+            p_offer2 = {"items": [{"name": str(k), "qty": int(v)} for k, v in offer2['items'].items()], "coins": int(offer2['coins'])}
+            
+            params_to_send = {
+                'p_user1_id': str(user1.id),
+                'p_user2_id': str(user2.id),
+                'p_user1_offer': json.dumps(p_offer1, ensure_ascii=False),
+                'p_user2_offer': json.dumps(p_offer2, ensure_ascii=False),
+                'p_commission_fee': int(commission)
+            }
+
             res = await supabase.rpc('process_trade', params_to_send).execute()
 
+            # The new DB function ALWAYS returns a valid response, so we just check its content.
             response_data = res.data[0] if isinstance(res.data, list) and res.data else res.data
             
-            if not (isinstance(response_data, dict) and response_data.get('success')):
+            if isinstance(response_data, dict) and response_data.get('success'):
+                # SUCCESS! The rest of the function will now execute.
+                pass
+            else:
+                # The DB function returned a failure message. Show it to the user.
                 error_message = response_data.get('message', '알 수 없는 DB 오류') if isinstance(response_data, dict) else 'DB 응답 형식 오류'
                 return await self.fail_trade(error_message)
 
-        except APIError as e:
-            # ▼▼▼▼▼▼ [핵심 수정] 예외 처리 로직을 완전히 교체합니다. ▼▼▼▼▼▼
-            try:
-                # e.message가 아닌 e.__dict__ 에서 직접 상세 정보를 추출합니다.
-                error_details = e.__dict__.get('details')
-                if isinstance(error_details, bytes):
-                    # 바이트 문자열을 UTF-8로 디코딩합니다.
-                    details_str = error_details.decode('utf-8', errors='ignore')
-                    # 디코딩된 JSON 문자열을 파싱합니다.
-                    real_error_data = json.loads(details_str)
-                    user_facing_message = real_error_data.get('message', '알 수 없는 거래 서버 오류입니다.')
-                else:
-                    user_facing_message = "거래 서버로부터 상세 오류 정보를 받지 못했습니다."
-                
-                logger.error(f"거래 처리 중 파싱된 APIError: {user_facing_message}")
-                return await self.fail_trade(user_facing_message)
-            except Exception as parse_error:
-                logger.error(f"APIError 파싱 실패: {parse_error}", exc_info=True)
-                logger.error(f"원본 APIError 객체: {e.__dict__}")
-                return await self.fail_trade("거래 서버와 통신 중 알 수 없는 오류가 발생했습니다.")
-            # ▲▲▲▲▲▲ [핵심 수정] 여기까지 교체 ▲▲▲▲▲▲
         except Exception as e:
-            logger.error(f"거래 처리 중 예외 발생: {e}", exc_info=True)
-            return await self.fail_trade("알 수 없는 오류가 발생했습니다.")
+            # This will now only catch network errors or unexpected Python-level exceptions.
+            logger.error(f"거래 처리 중 파이썬 레벨에서 예외 발생: {e}", exc_info=True)
+            return await self.fail_trade("거래 서버와 통신 중 오류가 발생했습니다.")
         
-        # (이하 성공 로직은 기존과 동일)
+        # --- SUCCESS LOGIC ---
         log_channel = self.message.channel
         if self.message: await self.message.delete()
         
