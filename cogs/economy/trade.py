@@ -8,6 +8,7 @@ import asyncio
 import math
 from typing import Optional, Dict, List, Any
 from datetime import datetime, timezone, timedelta
+from postgrest.exceptions import APIError
 
 from utils.database import (
     get_inventory, get_wallet, get_item_database, get_config, supabase,
@@ -192,15 +193,23 @@ class TradeView(ui.View):
         p_offer1 = {"items": [{"name": k, "qty": v} for k, v in offer1['items'].items()], "coins": offer1['coins']}
         p_offer2 = {"items": [{"name": k, "qty": v} for k, v in offer2['items'].items()], "coins": offer2['coins']}
         
-        res = await supabase.rpc('process_trade', {
-            'p_user1_id': str(user1.id), 'p_user2_id': str(user2.id),
-            'p_user1_offer': p_offer1, 'p_user2_offer': p_offer2,
-            'p_commission_fee': commission
-        }).execute()
-        
-        if not (hasattr(res, 'data') and res.data and res.data.get('success')):
-            error_message = res.data.get('message', '알 수 없는 DB 오류') if (hasattr(res, 'data') and res.data) else 'DB 응답 없음'
-            return await self.fail_trade(error_message)
+        try:
+            res = await supabase.rpc('process_trade', {
+                'p_user1_id': str(user1.id), 'p_user2_id': str(user2.id),
+                'p_user1_offer': p_offer1, 'p_user2_offer': p_offer2,
+                'p_commission_fee': commission
+            }).execute()
+
+            if not (hasattr(res, 'data') and res.data and res.data.get('success')):
+                error_message = res.data.get('message', '알 수 없는 DB 오류') if (hasattr(res, 'data') and res.data) else 'DB 응답 없음'
+                return await self.fail_trade(error_message)
+
+        except APIError as e:
+            logger.error(f"거래 처리 중 APIError 발생: {e.message}")
+            return await self.fail_trade(f"거래 서버 통신 오류가 발생했습니다. (APIError)")
+        except Exception as e:
+            logger.error(f"거래 처리 중 예외 발생: {e}", exc_info=True)
+            return await self.fail_trade(f"알 수 없는 오류가 발생했습니다.")
         
         log_channel = self.message.channel
         if self.message: await self.message.delete()
