@@ -21,7 +21,6 @@ from utils.game_config_defaults import GAME_CONFIG
 logger = logging.getLogger(__name__)
 
 KST = timezone(timedelta(hours=9))
-# [✅ 최종 수정] 매주 월요일 -> 매일 자정 5분으로 변경
 KST_MIDNIGHT_UPDATE = dt_time(hour=0, minute=5, tzinfo=KST)
 
 def create_xp_bar(current_xp: int, required_xp: int, length: int = 10) -> str:
@@ -305,7 +304,7 @@ class LevelPanelView(ui.View):
 class LevelSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.panel_key = "panel_champion_board"
+        self.panel_key = "panel_level_check"
         self.channel_id_key = "level_check_panel_channel_id"
         logger.info("LevelSystem Cog (게임봇)가 성공적으로 초기화되었습니다.")
     
@@ -324,7 +323,7 @@ class LevelSystem(commands.Cog):
                 logger.warning("레벨/챔피언 패널 채널이 설정되지 않아 자동 업데이트를 건너뜁니다.")
                 return
             
-            await self.regenerate_panel(channel)
+            await self.regenerate_panel(channel, panel_key=self.panel_key)
             logger.info("[LevelSystem] 챔피언 보드 패널을 성공적으로 새로고침했습니다.")
         except Exception as e:
             logger.error(f"챔피언 패널 업데이트 중 오류: {e}", exc_info=True)
@@ -430,9 +429,8 @@ class LevelSystem(commands.Cog):
         except Exception as e:
             logger.error(f"관리자 요청으로 레벨/XP 업데이트 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
 
-    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_champion_board") -> bool:
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_level_check") -> bool:
         try:
-            # [✅ 최종 수정] 다른 파일들과의 일관성을 위해 panel_key에서 접두사를 제거
             panel_name = panel_key.replace("panel_", "")
             panel_info = get_panel_id(panel_name)
             
@@ -451,7 +449,6 @@ class LevelSystem(commands.Cog):
             embed = await self._build_champion_embed()
             message = await channel.send(embed=embed, view=LevelPanelView(self))
 
-            # [✅ 최종 수정] 접두사가 제거된 이름으로 DB에 저장
             await save_panel_id(panel_name, message.id, channel.id)
             
             logger.info(f"✅ '{panel_key}' 패널을 #{channel.name} 에 재설치했습니다.")
