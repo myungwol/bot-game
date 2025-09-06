@@ -105,7 +105,7 @@ class BlacksmithUpgradeView(ui.View):
             )
             return embed
 
-        gear_key_map = {"곡괭이": "pickaxe", "괭이": "hoe", "물뿌리개": "watering_can"}
+        gear_key_map = {"낚싯대": "rod", "괭이": "hoe", "물뿌리개": "watering_can", "곡괭이": "pickaxe"}
         current_tool = gear.get(gear_key_map.get(self.tool_type, "pickaxe"), "맨손")
         
         embed.description = f"**현재 장착 도구:** `{current_tool}`\n**보유 코인:** `{wallet.get('balance', 0):,}`{self.currency_icon}"
