@@ -78,7 +78,8 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
                     display_name = source_map[source_key]
                     aggregated_xp[display_name] += log['xp_earned']
         
-        details = [f"> {display_name}: `{amount:,} XP`" for display_name, amount in aggregated_xp.items() if amount > 0]
+        # [핵심 수정] 획득 경험치가 0인 항목도 표시되도록 'if amount > 0' 조건을 제거합니다.
+        details = [f"> {display_name}: `{amount:,} XP`" for display_name, amount in aggregated_xp.items()]
         xp_details_text = "\n".join(details)
         
         xp_bar = create_xp_bar(xp_in_current_level, required_xp_for_this_level)
@@ -351,6 +352,7 @@ class LevelSystem(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def _build_champion_embed(self) -> discord.Embed:
+        # [핵심 수정] categories 딕셔너리에 'mining' 항목을 추가합니다.
         categories = {
             "level": {"column": "xp", "name": "종합 레벨", "unit": "XP", "table": "user_levels"},
             "voice": {"column": "voice_minutes", "name": "음성채팅", "unit": "분", "table": "total_stats"},
@@ -369,7 +371,12 @@ class LevelSystem(commands.Cog):
 
         champion_data = {}
         category_keys = list(categories.keys())
-        guild = self.bot.get_guild(int(get_config("SERVER_ID")))
+        server_id = get_config("SERVER_ID")
+        if not server_id:
+            logger.error("SERVER_ID가 설정되지 않아 챔피언 보드 멤버를 찾을 수 없습니다.")
+            return discord.Embed(title="오류", description="SERVER_ID가 설정되지 않았습니다.")
+            
+        guild = self.bot.get_guild(int(server_id))
 
         for i, res in enumerate(results):
             key = category_keys[i]
