@@ -191,44 +191,42 @@ class TradeView(ui.View):
         offer1, offer2 = self.offers[user1.id], self.offers[user2.id]
         commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
 
-        # ▼▼▼▼▼▼ [핵심 수정] 모든 숫자 값을 int()로 명시적 변환 ▼▼▼▼▼▼
-        p_offer1 = {
-            "items": [{"name": k, "qty": int(v)} for k, v in offer1['items'].items()],
-            "coins": int(offer1['coins'])
-        }
-        p_offer2 = {
-            "items": [{"name": k, "qty": int(v)} for k, v in offer2['items'].items()],
-            "coins": int(offer2['coins'])
-        }
-        
-        params_to_send = {
-            'p_user1_id': str(user1.id),
-            'p_user2_id': str(user2.id),
-            'p_user1_offer': p_offer1, # json.dumps 제거
-            'p_user2_offer': p_offer2, # json.dumps 제거
-            'p_commission_fee': int(commission)
-        }
-
-        # 상세 디버깅 로그
-        logger.info("--- [TRADE DEBUG] Final attempt to call 'process_trade' RPC ---")
-        logger.info(f"Parameters (Python Dict): {params_to_send}")
-        if p_offer1['items']:
-            logger.info(f"Offer1 Item[0] types: name={type(p_offer1['items'][0]['name'])}, qty={type(p_offer1['items'][0]['qty'])}")
-        logger.info(f"Offer1 Coins type: {type(p_offer1['coins'])}")
-        # ▲▲▲▲▲▲ [핵심 수정] 여기까지 ▲▲▲▲▲▲
-        
         try:
+            # 1. Python 딕셔너리를 가장 안전한 형태로 만듭니다. (모든 숫자 int로 변환)
+            p_offer1 = {
+                "items": [{"name": str(k), "qty": int(v)} for k, v in offer1['items'].items()],
+                "coins": int(offer1['coins'])
+            }
+            p_offer2 = {
+                "items": [{"name": str(k), "qty": int(v)} for k, v in offer2['items'].items()],
+                "coins": int(offer2['coins'])
+            }
+
+            # 2. json.dumps를 사용하여 완벽한 JSON '문자열'로 변환합니다. (ensure_ascii=False 필수)
+            p_offer1_json_str = json.dumps(p_offer1, ensure_ascii=False)
+            p_offer2_json_str = json.dumps(p_offer2, ensure_ascii=False)
+            
+            # 3. RPC 함수에는 이 JSON 문자열을 그대로 전달합니다.
+            params_to_send = {
+                'p_user1_id': str(user1.id),
+                'p_user2_id': str(user2.id),
+                'p_user1_offer': p_offer1_json_str,
+                'p_user2_offer': p_offer2_json_str,
+                'p_commission_fee': int(commission)
+            }
+            
+            logger.info(f"--- [TRADE FINAL ATTEMPT] Calling RPC with pre-serialized JSON strings ---")
+            logger.info(f"Final Parameters: {params_to_send}")
+
             res = await supabase.rpc('process_trade', params_to_send).execute()
 
             if not (hasattr(res, 'data') and res.data and res.data.get('success')):
                 error_message = res.data.get('message', '알 수 없는 DB 오류') if (hasattr(res, 'data') and res.data) else 'DB 응답 없음'
                 return await self.fail_trade(error_message)
 
-        except APIError as e:
-            logger.error(f"거래 처리 중 APIError 발생: {e.message}")
-            return await self.fail_trade(f"거래 서버 통신 오류가 발생했습니다. (APIError)")
         except Exception as e:
-            logger.error(f"거래 처리 중 예외 발생: {e}", exc_info=True)
+            # APIError를 포함한 모든 예외를 여기서 처리합니다.
+            logger.error(f"거래 처리 중 최종 단계에서 예외 발생: {e}", exc_info=True)
             return await self.fail_trade(f"알 수 없는 오류가 발생했습니다.")
         
         log_channel = self.message.channel
@@ -345,36 +343,41 @@ class MailComposeView(ui.View):
         if wallet.get('balance', 0) < shipping_fee:
             return await interaction.response.send_message(f"코인이 부족합니다. (배송비: {shipping_fee:,}{self.currency_icon})", ephemeral=True)
             
-        # ▼▼▼▼▼▼ [핵심 수정] 모든 숫자 값을 int()로 명시적 변환 ▼▼▼▼▼▼
-        p_attachments = [{"item_name": name, "quantity": int(qty)} for name, qty in self.attachments["items"].items()]
         await interaction.response.defer()
-        res = await supabase.rpc('send_mail_with_attachments', {
-            'p_sender_id': str(self.user.id),
-            'p_recipient_id': str(self.recipient.id),
-            'p_message': self.message_content,
-            'p_attachments': p_attachments, # json.dumps 제거
-            'p_shipping_fee': int(shipping_fee)
-        }).execute()
-        # ▲▲▲▲▲▲ [핵심 수정] 여기까지 ▲▲▲▲▲▲
-        
-        if not (hasattr(res, 'data') and res.data is True):
-            return await interaction.followup.send("우편 발송에 실패했습니다. 재고나 잔액이 부족할 수 있습니다.", ephemeral=True)
-            
-        await interaction.edit_original_response(content="✅ 우편을 성공적으로 보냈습니다.", view=None, embed=None)
-        
-        try:
-            dm_embed_data = await get_embed_from_db("dm_new_mail")
-            if dm_embed_data:
-                dm_embed = format_embed_from_db(dm_embed_data, sender_name=self.user.display_name)
-                await self.recipient.send(embed=dm_embed)
-        except (discord.Forbidden, discord.HTTPException):
-            logger.warning(f"{self.recipient.id}에게 우편 도착 DM을 보낼 수 없습니다.")
-        self.stop()
 
-    @ui.button(label="취소", style=discord.ButtonStyle.danger)
-    async def cancel_button(self, interaction: discord.Interaction, button: ui.Button):
-        if self.message: await self.message.delete()
-        self.stop()
+        try:
+            # 1. Python 딕셔너리를 가장 안전한 형태로 만듭니다.
+            p_attachments = [{"item_name": str(name), "quantity": int(qty)} for name, qty in self.attachments["items"].items()]
+            
+            # 2. json.dumps를 사용하여 완벽한 JSON '문자열'로 변환합니다.
+            p_attachments_json_str = json.dumps(p_attachments, ensure_ascii=False)
+
+            # 3. RPC 함수에는 이 JSON 문자열을 그대로 전달합니다.
+            res = await supabase.rpc('send_mail_with_attachments', {
+                'p_sender_id': str(self.user.id),
+                'p_recipient_id': str(self.recipient.id),
+                'p_message': self.message_content,
+                'p_attachments': p_attachments_json_str,
+                'p_shipping_fee': int(shipping_fee)
+            }).execute()
+        
+            if not (hasattr(res, 'data') and res.data is True):
+                return await interaction.followup.send("우편 발송에 실패했습니다. 재고나 잔액이 부족할 수 있습니다.", ephemeral=True)
+            
+            await interaction.edit_original_response(content="✅ 우편을 성공적으로 보냈습니다.", view=None, embed=None)
+            
+            try:
+                dm_embed_data = await get_embed_from_db("dm_new_mail")
+                if dm_embed_data:
+                    dm_embed = format_embed_from_db(dm_embed_data, sender_name=self.user.display_name)
+                    await self.recipient.send(embed=dm_embed)
+            except (discord.Forbidden, discord.HTTPException):
+                logger.warning(f"{self.recipient.id}에게 우편 도착 DM을 보낼 수 없습니다.")
+            self.stop()
+
+        except Exception as e:
+            logger.error(f"우편 발송 중 최종 단계에서 예외 발생: {e}", exc_info=True)
+            await interaction.followup.send("우편 발송 중 오류가 발생했습니다.", ephemeral=True)
 
 class MailboxView(ui.View):
     def __init__(self, cog: 'Trade', user: discord.Member):
