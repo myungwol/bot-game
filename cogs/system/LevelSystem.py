@@ -16,7 +16,6 @@ from utils.database import (
     get_embed_from_db, log_activity
 )
 from utils.helpers import format_embed_from_db, calculate_xp_for_level
-from utils.game_config_defaults import GAME_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +63,8 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
             'chat': '💬 채팅', 
             'voice': '🎙️ 음성채팅', 
             'fishing_catch': '🎣 낚시', 
-            'farm_harvest': '🌾 농사', 
+            'farm_harvest': '🌾 농사',
+            'mining': '⛏️ 채광',
             'quest': '📜 퀘스트',
             'admin': '⚙️ 관리자'
         }
@@ -78,7 +78,7 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
                     display_name = source_map[source_key]
                     aggregated_xp[display_name] += log['xp_earned']
         
-        details = [f"> {display_name}: `{amount:,} XP`" for display_name, amount in aggregated_xp.items()]
+        details = [f"> {display_name}: `{amount:,} XP`" for display_name, amount in aggregated_xp.items() if amount > 0]
         xp_details_text = "\n".join(details)
         
         xp_bar = create_xp_bar(xp_in_current_level, required_xp_for_this_level)
@@ -113,12 +113,14 @@ class RankingView(ui.View):
 
         self.highlight_user_id: Optional[int] = None
 
+        # [핵심 수정] category_map에 'mining' 추가
         self.category_map = {
             "level": {"column": "xp", "name": "레벨", "unit": "XP"},
             "voice": {"column": "voice_minutes", "name": "음성채팅", "unit": "분"},
             "chat": {"column": "chat_count", "name": "채팅", "unit": "회"},
             "fishing": {"column": "fishing_count", "name": "낚시", "unit": "마리"},
             "harvest": {"column": "harvest_count", "name": "수확", "unit": "회"},
+            "mining": {"column": "mining_count", "name": "채광", "unit": "회"},
         }
         
         self.period_map = {
@@ -142,7 +144,8 @@ class RankingView(ui.View):
 
     def build_components(self):
         self.clear_items()
-
+        
+        # [핵심 수정] category_options에 'mining' 추가
         category_options = [
             discord.SelectOption(label=info["name"], value=key, emoji=e)
             for key, info, e in [
@@ -151,6 +154,7 @@ class RankingView(ui.View):
                 ("chat", self.category_map["chat"], "💬"),
                 ("fishing", self.category_map["fishing"], "🎣"),
                 ("harvest", self.category_map["harvest"], "🌾"),
+                ("mining", self.category_map["mining"], "⛏️"),
             ]
         ]
         category_select = ui.Select(
@@ -333,12 +337,14 @@ class LevelSystem(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def _build_champion_embed(self) -> discord.Embed:
+        # [핵심 수정] categories에 'mining' 추가
         categories = {
             "level": {"column": "xp", "name": "종합 레벨", "unit": "XP", "table": "user_levels"},
             "voice": {"column": "voice_minutes", "name": "음성채팅", "unit": "분", "table": "total_stats"},
             "chat": {"column": "chat_count", "name": "채팅", "unit": "회", "table": "total_stats"},
             "fishing": {"column": "fishing_count", "name": "낚시", "unit": "마리", "table": "total_stats"},
             "harvest": {"column": "harvest_count", "name": "수확", "unit": "회", "table": "total_stats"},
+            "mining": {"column": "mining_count", "name": "채광", "unit": "회", "table": "total_stats"},
         }
         
         tasks = []
@@ -370,7 +376,6 @@ class LevelSystem(commands.Cog):
             return discord.Embed(title="오류", description="챔피언 보드 템플릿을 찾을 수 없습니다.")
 
         return format_embed_from_db(embed_template, **champion_data)
-
 
     async def register_persistent_views(self):
         self.bot.add_view(LevelPanelView(self))
