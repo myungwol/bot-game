@@ -1,5 +1,10 @@
 # cogs/systems/LevelSystem.py
 
+# [핵심] 이 코드는 요청하신대로 다음 기능을 모두 수행합니다:
+# 1. '상태 확인' 버튼을 누르면, 레벨 정보를 채널에 모두가 볼 수 있는 '일반 메시지'로 전송합니다.
+# 2. 레벨 정보 메시지를 보낸 직후, 기존 패널을 삭제하고 새로운 챔피언 보드 패널을 '재생성'합니다.
+# 3. '랭킹 확인' 버튼은 이전과 동일하게 개인에게만 보이는 임시 메시지로 응답합니다.
+
 import discord
 from discord.ext import commands, tasks
 from discord import ui
@@ -113,7 +118,6 @@ class RankingView(ui.View):
 
         self.highlight_user_id: Optional[int] = None
 
-        # [핵심 수정] category_map에 'mining' 추가
         self.category_map = {
             "level": {"column": "xp", "name": "레벨", "unit": "XP"},
             "voice": {"column": "voice_minutes", "name": "음성채팅", "unit": "분"},
@@ -144,8 +148,7 @@ class RankingView(ui.View):
 
     def build_components(self):
         self.clear_items()
-        
-        # [핵심 수정] category_options에 'mining' 추가
+
         category_options = [
             discord.SelectOption(label=info["name"], value=key, emoji=e)
             for key, info, e in [
@@ -290,14 +293,34 @@ class LevelPanelView(ui.View):
         super().__init__(timeout=None)
         self.cog = cog_instance
 
+    # ▼▼▼ [핵심 수정] 아래 check_level_button 함수 전체를 교체합니다. ▼▼▼
     @ui.button(label="상태 확인", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
     async def check_level_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
-            await interaction.response.send_message(embed=await build_level_embed(interaction.user), ephemeral=True)
+            # 1. 상호작용을 지연시켜 추가 작업을 위한 시간을 확보합니다.
+            #    ephemeral=True를 사용하여 '봇이 생각 중...' 메시지는 클릭한 유저에게만 보이게 합니다.
+            await interaction.response.defer(ephemeral=True)
+
+            # 2. 유저의 레벨 정보 임베드를 생성합니다.
+            level_embed = await build_level_embed(interaction.user)
+            
+            # 3. 생성된 임베드를 채널에 모두가 볼 수 있는 '일반 메시지'로 전송합니다.
+            await interaction.channel.send(embed=level_embed)
+
+            # 4. 메인 패널(챔피언 보드)을 재생성하는 함수를 호출합니다.
+            await self.cog.regenerate_panel(interaction.channel, panel_key=self.cog.panel_key)
+
+            # 5. 모든 작업이 완료되었음을 유저에게 알립니다.
+            #    이 메시지는 defer된 상호작용에 대한 최종 응답 역할을 합니다.
+            await interaction.followup.send("✅ 레벨 정보를 채널에 표시하고 패널을 새로고침했습니다.", ephemeral=True)
+
         except Exception as e:
-            logger.error(f"개인 레벨 확인 중 오류 발생 (유저: {interaction.user.id}): {e}", exc_info=True)
+            logger.error(f"개인 레벨 확인 및 패널 재생성 중 오류 발생 (유저: {interaction.user.id}): {e}", exc_info=True)
+            error_message = "❌ 상태 정보를 불러오는 중 오류가 발생했습니다."
             if not interaction.response.is_done():
-                await interaction.response.send_message("❌ 상태 정보를 불러오는 중 오류가 발생했습니다.", ephemeral=True)
+                await interaction.response.send_message(error_message, ephemeral=True)
+            else:
+                await interaction.followup.send(error_message, ephemeral=True)
 
 
     @ui.button(label="랭킹 확인", style=discord.ButtonStyle.secondary, emoji="👑", custom_id="show_ranking_button")
@@ -337,7 +360,6 @@ class LevelSystem(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def _build_champion_embed(self) -> discord.Embed:
-        # [핵심 수정] categories에 'mining' 추가
         categories = {
             "level": {"column": "xp", "name": "종합 레벨", "unit": "XP", "table": "user_levels"},
             "voice": {"column": "voice_minutes", "name": "음성채팅", "unit": "분", "table": "total_stats"},
