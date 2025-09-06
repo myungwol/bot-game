@@ -9,7 +9,8 @@ import math
 from typing import Optional, Dict, List, Any
 from datetime import datetime, timezone, timedelta
 from postgrest.exceptions import APIError
-import json  # <<< 이 라인을 추가해주세요.
+import json
+import ast # <<< 이 라인을 추가해주세요.
 
 from utils.database import (
     get_inventory, get_wallet, get_item_database, get_config, supabase,
@@ -191,44 +192,53 @@ class TradeView(ui.View):
         offer1, offer2 = self.offers[user1.id], self.offers[user2.id]
         commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
 
+        p_offer1 = {
+            "items": [{"name": str(k), "qty": int(v)} for k, v in offer1['items'].items()],
+            "coins": int(offer1['coins'])
+        }
+        p_offer2 = {
+            "items": [{"name": str(k), "qty": int(v)} for k, v in offer2['items'].items()],
+            "coins": int(offer2['coins'])
+        }
+        
+        params_to_send = {
+            'p_user1_id': str(user1.id),
+            'p_user2_id': str(user2.id),
+            'p_user1_offer': json.dumps(p_offer1, ensure_ascii=False),
+            'p_user2_offer': json.dumps(p_offer2, ensure_ascii=False),
+            'p_commission_fee': int(commission)
+        }
+        
         try:
-            # 1. Python 딕셔너리를 가장 안전한 형태로 만듭니다. (모든 숫자 int로 변환)
-            p_offer1 = {
-                "items": [{"name": str(k), "qty": int(v)} for k, v in offer1['items'].items()],
-                "coins": int(offer1['coins'])
-            }
-            p_offer2 = {
-                "items": [{"name": str(k), "qty": int(v)} for k, v in offer2['items'].items()],
-                "coins": int(offer2['coins'])
-            }
-
-            # 2. json.dumps를 사용하여 완벽한 JSON '문자열'로 변환합니다. (ensure_ascii=False 필수)
-            p_offer1_json_str = json.dumps(p_offer1, ensure_ascii=False)
-            p_offer2_json_str = json.dumps(p_offer2, ensure_ascii=False)
-            
-            # 3. RPC 함수에는 이 JSON 문자열을 그대로 전달합니다.
-            params_to_send = {
-                'p_user1_id': str(user1.id),
-                'p_user2_id': str(user2.id),
-                'p_user1_offer': p_offer1_json_str,
-                'p_user2_offer': p_offer2_json_str,
-                'p_commission_fee': int(commission)
-            }
-            
-            logger.info(f"--- [TRADE FINAL ATTEMPT] Calling RPC with pre-serialized JSON strings ---")
-            logger.info(f"Final Parameters: {params_to_send}")
-
             res = await supabase.rpc('process_trade', params_to_send).execute()
 
-            if not (hasattr(res, 'data') and res.data and res.data.get('success')):
-                error_message = res.data.get('message', '알 수 없는 DB 오류') if (hasattr(res, 'data') and res.data) else 'DB 응답 없음'
+            # 응답 데이터를 직접 확인하여 성공 여부 판단
+            # supabase-py v1에서는 res.data가 리스트일 수 있음
+            response_data = res.data[0] if isinstance(res.data, list) and res.data else res.data
+            
+            if not (isinstance(response_data, dict) and response_data.get('success')):
+                error_message = response_data.get('message', '알 수 없는 DB 오류') if isinstance(response_data, dict) else 'DB 응답 형식 오류'
                 return await self.fail_trade(error_message)
 
+        except APIError as e:
+            # APIError 발생 시, details에서 실제 에러 메시지를 파싱
+            try:
+                error_dict_str = str(e.message)
+                error_dict = ast.literal_eval(error_dict_str)
+                details_bytes = error_dict.get('details', b'{}')
+                details_str = details_bytes.decode('utf-8', errors='ignore')
+                real_error_data = json.loads(details_str)
+                user_facing_message = real_error_data.get('message', '알 수 없는 거래 서버 오류입니다.')
+                logger.error(f"거래 처리 중 파싱된 APIError: {user_facing_message}")
+                return await self.fail_trade(user_facing_message)
+            except Exception as parse_error:
+                logger.error(f"APIError 파싱 실패: {parse_error}", exc_info=True)
+                return await self.fail_trade("거래 서버와 통신 중 알 수 없는 오류가 발생했습니다.")
         except Exception as e:
-            # APIError를 포함한 모든 예외를 여기서 처리합니다.
-            logger.error(f"거래 처리 중 최종 단계에서 예외 발생: {e}", exc_info=True)
-            return await self.fail_trade(f"알 수 없는 오류가 발생했습니다.")
+            logger.error(f"거래 처리 중 예외 발생: {e}", exc_info=True)
+            return await self.fail_trade("알 수 없는 오류가 발생했습니다.")
         
+        # (이하 성공 로직은 기존과 동일)
         log_channel = self.message.channel
         if self.message: await self.message.delete()
         
