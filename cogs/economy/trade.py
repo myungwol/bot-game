@@ -195,12 +195,15 @@ class TradeView(ui.View):
         p_offer2 = {"items": [{"name": k, "qty": v} for k, v in offer2['items'].items()], "coins": offer2['coins']}
         
         try:
+            # ▼▼▼▼▼▼ [핵심 수정] 이 부분을 아래 코드로 교체해주세요. ▼▼▼▼▼▼
             res = await supabase.rpc('process_trade', {
-                'p_user1_id': str(user1.id), 'p_user2_id': str(user2.id),
-                'p_user1_offer': json.dumps(p_offer1),      # <<< 수정된 부분
-                'p_user2_offer': json.dumps(p_offer2),      # <<< 수정된 부분
+                'p_user1_id': str(user1.id),
+                'p_user2_id': str(user2.id),
+                'p_user1_offer': json.dumps(p_offer1),
+                'p_user2_offer': json.dumps(p_offer2),
                 'p_commission_fee': commission
             }).execute()
+            # ▲▲▲▲▲▲ [핵심 수정] 여기까지 교체 ▲▲▲▲▲▲
 
             if not (hasattr(res, 'data') and res.data and res.data.get('success')):
                 error_message = res.data.get('message', '알 수 없는 DB 오류') if (hasattr(res, 'data') and res.data) else 'DB 응답 없음'
@@ -329,11 +332,16 @@ class MailComposeView(ui.View):
             
         p_attachments = [{"item_name": name, "quantity": qty} for name, qty in self.attachments["items"].items()]
         await interaction.response.defer()
+
+        # ▼▼▼▼▼▼ [핵심 수정] 이 부분을 아래 코드로 교체해주세요. ▼▼▼▼▼▼
         res = await supabase.rpc('send_mail_with_attachments', {
-            'p_sender_id': str(self.user.id), 'p_recipient_id': str(self.recipient.id),
-            'p_message': self.message_content, 'p_attachments': p_attachments,
+            'p_sender_id': str(self.user.id),
+            'p_recipient_id': str(self.recipient.id),
+            'p_message': self.message_content,
+            'p_attachments': json.dumps(p_attachments),
             'p_shipping_fee': shipping_fee
         }).execute()
+        # ▲▲▲▲▲▲ [핵심 수정] 여기까지 교체 ▲▲▲▲▲▲
         
         if not (hasattr(res, 'data') and res.data is True):
             return await interaction.followup.send("우편 발송에 실패했습니다. 재고나 잔액이 부족할 수 있습니다.", ephemeral=True)
