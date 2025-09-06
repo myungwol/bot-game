@@ -1,4 +1,5 @@
 # cogs/games/mining.py
+
 import discord
 from discord.ext import commands, tasks
 from discord import ui
@@ -12,7 +13,7 @@ from datetime import timedelta
 from utils.database import (
     get_inventory, update_inventory, get_user_gear, BARE_HANDS,
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
-    log_activity, get_user_abilities
+    log_activity, get_user_abilities, supabase
 )
 from utils.helpers import format_embed_from_db
 
@@ -38,6 +39,13 @@ ORE_DATA = {
     "다이아몬드": {"weight": 2,  "image_url": "https://saewayvzcyzueviasftu.supabase.co/storage/v1/object/public/game_assets/diamond.jpg"}
 }
 
+ORE_XP_MAP = {
+    "구리 광석": 10,
+    "철 광석": 15,
+    "금 광석": 30,
+    "다이아몬드": 75
+}
+
 class MiningGameView(ui.View):
     def __init__(self, cog_instance: 'Mining', user: discord.Member, thread: discord.Thread, pickaxe: str, user_abilities: List[str], duration: int, duration_doubled: bool):
         super().__init__(timeout=duration)
@@ -54,7 +62,7 @@ class MiningGameView(ui.View):
         self.time_reduction = 3 if 'mine_time_down_1' in self.user_abilities else 0
         self.can_double_yield = 'mine_double_yield_2' in self.user_abilities
 
-        self.state = "idle" # 상태: idle, discovered, mining
+        self.state = "idle"
         self.discovered_ore: Optional[str] = None
         self.last_result_text: Optional[str] = None
         
@@ -139,7 +147,7 @@ class MiningGameView(ui.View):
                 self.state = "discovered"
                 button.label = "다시 찾아보기"
                 button.emoji = "🔍"
-            else: # 광석 발견
+            else:
                 self.state = "discovered"
                 button.label = "채굴하기"; button.style = discord.ButtonStyle.primary; button.emoji = "⛏️"
             
@@ -177,11 +185,18 @@ class MiningGameView(ui.View):
                 if self.is_finished() or self.user.id not in self.cog.active_sessions: return
 
                 quantity = 2 if self.can_double_yield and random.random() < 0.20 else 1
+                xp_earned = ORE_XP_MAP.get(self.discovered_ore, 0) * quantity
+
                 await update_inventory(self.user.id, self.discovered_ore, quantity)
-                await log_activity(self.user.id, 'mining', amount=quantity)
+                await log_activity(self.user.id, 'mining', amount=quantity, xp_earned=xp_earned)
                 
-                self.last_result_text = f"✅ **{self.discovered_ore}** {quantity}개를 획득했습니다!"
+                self.last_result_text = f"✅ **{self.discovered_ore}** {quantity}개를 획득했습니다! (`+{xp_earned} XP`)"
                 if quantity > 1: self.last_result_text += f"\n\n✨ **풍부한 광맥** 능력으로 광석을 2개 획득했습니다!"
+                
+                if xp_earned > 0:
+                    res = await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': xp_earned, 'p_source': 'mining'}).execute()
+                    if res.data and (level_cog := self.cog.bot.get_cog("LevelSystem")):
+                        await level_cog.handle_level_up_event(self.user, res.data)
                 
                 self.state = "idle"
                 embed = self.build_embed()
