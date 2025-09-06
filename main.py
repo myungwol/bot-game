@@ -52,13 +52,13 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         await self.load_all_extensions()
         
-        # ▼▼▼ [핵심 수정] 아래 리스트에 'Mining'을 추가하세요. ▼▼▼
+        # ▼▼▼ [핵심 수정] 아래 리스트에 'Blacksmith'를 추가하세요. ▼▼▼
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
             "DiceGame", "SlotMachine", "RPSGame",
             "DailyCheck", "Quests", "Farm", "PanelUpdater",
             "WorldSystem", "EconomyCore", "LevelSystem",
-            "Mining" 
+            "Mining", "Blacksmith"
         ]
         
         registered_views_count = 0
