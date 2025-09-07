@@ -76,7 +76,6 @@ class TradeView(ui.View):
             partner.id: {"items": {}, "coins": 0, "ready": False}
         }
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
-        self.commission_percent = get_config("TRADE_COMMISSION_PERCENT", {}).get("value", 5)
         self.message: Optional[discord.Message] = None
 
     async def start(self, interaction: discord.Interaction):
@@ -108,8 +107,7 @@ class TradeView(ui.View):
                 value="\n".join(field_value) if field_value else "제안 없음",
                 inline=True
             )
-        commission = int((self.offers[self.initiator.id]['coins'] + self.offers[self.partner.id]['coins']) * (self.commission_percent / 100))
-        embed.set_footer(text=f"거래세 ({self.commission_percent}%): {commission:,}{self.currency_icon} | 5분 후 만료")
+        embed.set_footer(text="5분 후 만료됩니다.")
         return embed
 
     async def update_ui(self):
@@ -210,13 +208,14 @@ class TradeView(ui.View):
 
             # 2. 모든 확인 통과 후, 실제 데이터베이스 업데이트 실행
             tasks = []
-            commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
             
-            # 코인 이동
-            user1_coin_change = offer2['coins'] - offer1['coins'] - math.ceil(commission / 2.0)
-            user2_coin_change = offer1['coins'] - offer2['coins'] - math.floor(commission / 2.0)
-            tasks.append(update_wallet(user1, int(user1_coin_change)))
-            tasks.append(update_wallet(user2, int(user2_coin_change)))
+            # 코인 이동 (수수료 없음)
+            user1_coin_change = offer2['coins'] - offer1['coins']
+            user2_coin_change = offer1['coins'] - offer2['coins']
+            if user1_coin_change != 0:
+                tasks.append(update_wallet(user1, int(user1_coin_change)))
+            if user2_coin_change != 0:
+                tasks.append(update_wallet(user2, int(user2_coin_change)))
 
             # 아이템 이동 (User1 -> User2)
             for item, qty in offer1['items'].items():
@@ -228,7 +227,8 @@ class TradeView(ui.View):
                 tasks.append(update_inventory(user2.id, item, -qty))
                 tasks.append(update_inventory(user1.id, item, qty))
 
-            await asyncio.gather(*tasks)
+            if tasks:
+                await asyncio.gather(*tasks)
 
         except Exception as e:
             logger.error(f"거래 처리 중 예외 발생: {e}", exc_info=True)
@@ -240,9 +240,10 @@ class TradeView(ui.View):
         
         log_embed_data = await get_embed_from_db("log_trade_success")
         if log_embed_data:
+            # 로그에서는 commission을 0으로 표시
             log_embed = format_embed_from_db(
                 log_embed_data, user1_mention=user1.mention, user2_mention=user2.mention,
-                commission=commission, currency_icon=self.currency_icon
+                commission=0, currency_icon=self.currency_icon
             )
             offer1_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer1['items'].items()] + ([f"💰 {offer1['coins']:,}{self.currency_icon}"] if offer1['coins'] > 0 else [])) or "없음"
             offer2_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer2['items'].items()] + ([f"💰 {offer2['coins']:,}{self.currency_icon}"] if offer2['coins'] > 0 else [])) or "없음"
@@ -280,8 +281,8 @@ class MailComposeView(ui.View):
         self.message_content = ""
         self.attachments = {"items": {}}
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
-        self.base_fee = get_config("MAIL_SHIPPING_FEE_BASE", {}).get("value", 50)
-        self.fee_per_stack = get_config("MAIL_SHIPPING_FEE_PER_STACK", {}).get("value", 10)
+        # [수수료 수정] 고정 수수료 50으로 변경
+        self.shipping_fee = 50
         self.message: Optional[discord.WebhookMessage] = None
 
     async def start(self, interaction: discord.Interaction):
@@ -301,8 +302,8 @@ class MailComposeView(ui.View):
         att_str = [f"ㄴ {name}: {qty}개" for name, qty in self.attachments["items"].items()]
         embed.add_field(name="첨부 아이템", value="\n".join(att_str) if att_str else "없음", inline=False)
         embed.add_field(name="메시지", value=f"```{self.message_content}```" if self.message_content else "메시지 없음", inline=False)
-        shipping_fee = self.base_fee + (len(self.attachments["items"]) * self.fee_per_stack)
-        embed.set_footer(text=f"배송비: {shipping_fee:,}{self.currency_icon}")
+        # [수수료 수정] 푸터에 고정 수수료 표시
+        embed.set_footer(text=f"배송비: {self.shipping_fee:,}{self.currency_icon}")
         return embed
 
     @ui.button(label="아이템 첨부", style=discord.ButtonStyle.secondary, emoji="📦")
@@ -344,10 +345,10 @@ class MailComposeView(ui.View):
 
     @ui.button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀")
     async def send_button(self, interaction: discord.Interaction, button: ui.Button):
-        shipping_fee = self.base_fee + (len(self.attachments["items"]) * self.fee_per_stack)
+        # [수수료 수정] 고정 수수료로 잔액 확인
         wallet = await get_wallet(self.user.id)
-        if wallet.get('balance', 0) < shipping_fee:
-            return await interaction.response.send_message(f"코인이 부족합니다. (배송비: {shipping_fee:,}{self.currency_icon})", ephemeral=True)
+        if wallet.get('balance', 0) < self.shipping_fee:
+            return await interaction.response.send_message(f"코인이 부족합니다. (배송비: {self.shipping_fee:,}{self.currency_icon})", ephemeral=True)
             
         await interaction.response.defer()
 
@@ -355,12 +356,13 @@ class MailComposeView(ui.View):
             p_attachments = [{"item_name": str(name), "quantity": int(qty)} for name, qty in self.attachments["items"].items()]
             p_attachments_json_str = json.dumps(p_attachments, ensure_ascii=False)
 
+            # [수수료 수정] RPC 함수에 고정 수수료 전달
             res = await supabase.rpc('send_mail_with_attachments', {
                 'p_sender_id': str(self.user.id),
                 'p_recipient_id': str(self.recipient.id),
                 'p_message': self.message_content,
                 'p_attachments': p_attachments_json_str,
-                'p_shipping_fee': int(shipping_fee)
+                'p_shipping_fee': self.shipping_fee
             }).execute()
         
             if not (hasattr(res, 'data') and res.data is True):
@@ -446,8 +448,9 @@ class MailboxView(ui.View):
         send_button.callback = self.send_mail
         self.add_item(send_button)
 
-        res_future = asyncio.run_coroutine_threadsafe(supabase.table('mails').select('id', count='exact').eq('recipient_id', str(self.user.id)).is_('claimed_at', None).execute(), self.cog.bot.loop)
-        total_mails = res_future.result().count or 0
+        # [버그 수정] 블로킹 호출을 비동기 호출로 변경
+        res = await supabase.table('mails').select('id', count='exact').eq('recipient_id', str(self.user.id)).is_('claimed_at', None).execute()
+        total_mails = res.count or 0
 
         prev_button = ui.Button(label="◀", style=discord.ButtonStyle.secondary, disabled=self.page == 0)
         prev_button.callback = self.prev_page_callback
@@ -510,19 +513,32 @@ class TradePanelView(ui.View):
         self.add_item(mailbox_button)
 
     async def direct_trade_button(self, interaction: discord.Interaction):
+        initiator = interaction.user
+        
+        # [수수료 수정] 거래 시작 시 수수료 확인 및 차감
+        trade_fee = 50
+        wallet = await get_wallet(initiator.id)
+        if wallet.get('balance', 0) < trade_fee:
+            return await interaction.response.send_message(f"❌ 거래를 시작하려면 수수료 {trade_fee}{self.cog.currency_icon}가 필요합니다.", ephemeral=True, delete_after=5)
+
         view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="거래할 상대를 선택하세요.")
         async def select_callback(select_interaction: discord.Interaction):
             partner_id = int(select_interaction.data['values'][0])
             partner = interaction.guild.get_member(partner_id)
-            initiator = interaction.user
             if not partner or partner.bot or partner.id == initiator.id:
                 return await select_interaction.response.send_message("잘못된 상대입니다.", ephemeral=True, delete_after=5)
             trade_id = f"{min(initiator.id, partner.id)}-{max(initiator.id, partner.id)}"
             if trade_id in self.cog.active_trades:
                  return await select_interaction.response.send_message("상대방 또는 본인이 이미 다른 거래에 참여 중입니다.", ephemeral=True, delete_after=5)
-            try: await select_interaction.message.delete()
+            
+            # 수수료 선차감
+            await update_wallet(initiator, -trade_fee)
+            await select_interaction.response.send_message(f"거래 수수료 {trade_fee}{self.cog.currency_icon}를 지불하고 거래를 시작합니다.", ephemeral=True, delete_after=5)
+
+            try: await interaction.delete_original_response()
             except discord.NotFound: pass
+            
             trade_view = TradeView(self.cog, initiator, partner)
             await trade_view.start(select_interaction)
         user_select.callback = select_callback
