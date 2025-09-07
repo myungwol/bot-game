@@ -10,7 +10,6 @@ from typing import Optional, Dict, List, Any
 from datetime import datetime, timezone, timedelta
 from postgrest.exceptions import APIError
 import json
-import ast # <<< 이 라인을 추가해주세요.
 
 from utils.database import (
     get_inventory, get_wallet, get_item_database, get_config, supabase,
@@ -184,32 +183,34 @@ class TradeView(ui.View):
             await self.message.channel.send(f"{interaction.user.mention}님이 거래를 취소했습니다.", delete_after=10)
         await self.on_timeout()
 
+    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+    # [핵심 수정] process_trade 함수 전체를 아래 코드로 교체합니다.
+    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
     async def process_trade(self):
-        for item in self.children: item.disabled = True
+        for item in self.children:
+            item.disabled = True
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=None)
         
         user1, user2 = self.initiator, self.partner
-        
-        # ▼▼▼▼▼ [핵심 수정] 버그가 수정된 올바른 코드입니다. ▼▼▼▼▼
         offer1, offer2 = self.offers[user1.id], self.offers[user2.id]
-        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
-        
         commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
 
         try:
+            # 1. Python 딕셔너리를 그대로 준비 (json.dumps 제거)
             p_offer1 = {"items": [{"name": str(k), "qty": int(v)} for k, v in offer1['items'].items()], "coins": int(offer1['coins'])}
             p_offer2 = {"items": [{"name": str(k), "qty": int(v)} for k, v in offer2['items'].items()], "coins": int(offer2['coins'])}
             
             params_to_send = {
                 'p_user1_id': str(user1.id),
                 'p_user2_id': str(user2.id),
-                'p_user1_offer': json.dumps(p_offer1, ensure_ascii=False),
-                'p_user2_offer': json.dumps(p_offer2, ensure_ascii=False),
+                'p_user1_offer': p_offer1, # 딕셔너리 그대로 전달
+                'p_user2_offer': p_offer2, # 딕셔너리 그대로 전달
                 'p_commission_fee': int(commission)
             }
 
             res = await supabase.rpc('process_trade', params_to_send).execute()
-
+            
+            # API 응답 구조가 단순 'true'가 아닐 수 있으므로 유연하게 처리
             response_data = res.data[0] if isinstance(res.data, list) and res.data else res.data
             
             if not (isinstance(response_data, dict) and response_data.get('success')):
@@ -217,20 +218,10 @@ class TradeView(ui.View):
                 return await self.fail_trade(error_message)
 
         except APIError as e:
-            try:
-                error_details = e.__dict__.get('details')
-                if isinstance(error_details, bytes):
-                    details_str = error_details.decode('utf-8', errors='ignore')
-                    real_error_data = json.loads(details_str)
-                    user_facing_message = real_error_data.get('message', '알 수 없는 거래 서버 오류입니다.')
-                else:
-                    user_facing_message = "거래 서버로부터 상세 오류 정보를 받지 못했습니다."
-                
-                logger.error(f"거래 처리 중 파싱된 APIError: {user_facing_message}")
-                return await self.fail_trade(user_facing_message)
-            except Exception as parse_error:
-                logger.error(f"APIError 파싱 실패: {parse_error}", exc_info=True)
-                return await self.fail_trade("거래 서버와 통신 중 알 수 없는 오류가 발생했습니다.")
+            # 2. 오류 처리 로직을 e.message로 단순화
+            user_facing_message = e.message or "데이터베이스 처리 중 오류가 발생했습니다."
+            logger.error(f"거래 처리 중 APIError: {user_facing_message}")
+            return await self.fail_trade(user_facing_message)
         except Exception as e:
             logger.error(f"거래 처리 중 예외 발생: {e}", exc_info=True)
             return await self.fail_trade("알 수 없는 오류가 발생했습니다.")
@@ -251,6 +242,9 @@ class TradeView(ui.View):
             log_embed.add_field(name=f"{user2.display_name} 제공", value=offer2_str, inline=True)
             await self.cog.regenerate_panel(log_channel, last_log=log_embed)
         self.stop()
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+    # [핵심 수정] 위 코드로 함수 전체를 교체합니다.
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
     
     async def fail_trade(self, reason: str):
         if self.message:
