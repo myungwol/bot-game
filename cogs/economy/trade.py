@@ -457,31 +457,33 @@ class MailboxView(ui.View):
         self.selected_mail_ids: List[str] = []
 
     async def start(self, interaction: discord.Interaction):
-        await self.update_view(interaction, new_message=True)
+        await interaction.response.defer(ephemeral=True)
+        embed = await self.build_embed()
+        await self.build_components()
+        self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
-    # ▼▼▼ [핵심 수정] update_view 로직을 수정하여 안정성을 높입니다. ▼▼▼
-    async def update_view(self, interaction: discord.Interaction, new_message=False):
+    # ▼▼▼ [핵심 수정] update_view 로직을 수정합니다. ▼▼▼
+    async def update_view(self, interaction: discord.Interaction):
+        # 상호작용에 응답하여 "생각 중..." 상태를 표시하거나, 이미 응답했다면 그냥 넘어갑니다.
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+
+        # self.message가 설정되지 않았다면 (예: 봇 재시작), 오류를 방지합니다.
+        if not self.message:
+            logger.error("MailboxView 업데이트가 요청되었지만 self.message가 설정되지 않았습니다.")
+            await interaction.followup.send("오류: UI를 찾을 수 없습니다. 우편함을 다시 열어주세요.", ephemeral=True, delete_after=5)
+            return
+
         embed = await self.build_embed()
         await self.build_components()
         
-        kwargs = {'embed': embed, 'view': self}
+        try:
+            await self.message.edit(embed=embed, view=self)
+        except (discord.NotFound, discord.Forbidden) as e:
+            logger.warning(f"MailboxView 메시지(ID: {self.message.id})를 수정할 수 없습니다: {e}")
+            await interaction.followup.send("오류: UI가 만료되었거나 찾을 수 없습니다. 우편함을 다시 열어주세요.", ephemeral=True, delete_after=5)
+            self.stop()
 
-        if new_message:
-            kwargs['ephemeral'] = True
-            target = interaction.response.send_message if not interaction.response.is_done() else interaction.followup.send
-            message = await target(**kwargs)
-            if not self.message:
-                self.message = message if message else await interaction.original_response()
-        else:
-            if self.message:
-                try:
-                    await self.message.edit(**kwargs)
-                except (discord.NotFound, discord.Forbidden) as e:
-                    logger.warning(f"MailboxView 메시지를 수정할 수 없습니다: {e}")
-                    await interaction.followup.send("UI를 업데이트할 수 없습니다. 우편함을 다시 열어주세요.", ephemeral=True, delete_after=5)
-            else:
-                logger.error("MailboxView 업데이트가 요청되었지만 self.message가 설정되지 않았습니다.")
-                await interaction.followup.send("오류: UI를 찾을 수 없습니다. 우편함을 다시 열어주세요.", ephemeral=True, delete_after=5)
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"📫 {self.user.display_name}의 우편함", color=0x964B00)
@@ -571,7 +573,7 @@ class MailboxView(ui.View):
                     total_items[item['name']] = total_items.get(item['name'], 0) + item['qty']
 
         if claimed_count > 0:
-            item_summary = "\n".join([f"ㄴ {item['name']}: {item['qty']}개" for item, qty in total_items.items()])
+            item_summary = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in total_items.items()])
             await interaction.followup.send(f"{claimed_count}개의 우편을 수령했습니다!\n\n**총 받은 아이템:**\n{item_summary or '없음'}", ephemeral=True, delete_after=10)
         else:
             await interaction.followup.send("우편 수령에 실패했습니다.", ephemeral=True, delete_after=5)
