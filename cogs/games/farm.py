@@ -583,11 +583,27 @@ class Farm(commands.Cog):
     async def before_daily_crop_update(self):
         await self.bot.wait_until_ready()
 
+    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+    # [핵심 수정] farm_ui_updater_task 함수 전체를 아래 코드로 교체합니다.
+    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
     @tasks.loop(seconds=5.0)
     async def farm_ui_updater_task(self):
+        response = None
+        # Supabase와의 간헐적인 연결 오류에 대응하기 위해 재시도 로직 추가
+        for attempt in range(3):
+            try:
+                response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', 'farm_ui_update_request_%').execute()
+                break # 성공 시 루프 탈출
+            except Exception as e:
+                if attempt < 2: # 마지막 시도가 아니라면
+                    logger.warning(f"농장 UI 업데이트 요청 조회 중 오류 발생 (시도 {attempt + 1}/3), 2초 후 재시도합니다: {e}")
+                    await asyncio.sleep(2)
+                else:
+                    logger.error(f"농장 UI 업데이트 루프 중 오류 (다음 루프에서 재시도합니다): {e}", exc_info=True)
+                    return # 3번 실패 시 이번 루프는 종료
+
+        # 기존 로직은 response를 성공적으로 받아왔다고 가정하고 진행
         try:
-            response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', 'farm_ui_update_request_%').execute()
-            
             if not response or not response.data: 
                 return
             
@@ -613,7 +629,11 @@ class Farm(commands.Cog):
                 await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
 
         except Exception as e:
-            logger.error(f"농장 UI 업데이트 루프 중 오류 (다음 루프에서 재시도합니다): {e}", exc_info=True)
+            # 이 블록은 DB 조회 이후의 로직에서 발생하는 오류를 처리
+            logger.error(f"농장 UI 업데이트 처리 로직 중 오류 발생: {e}", exc_info=True)
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+    # [핵심 수정] 위 코드로 함수 전체를 교체합니다.
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
     @farm_ui_updater_task.before_loop
     async def before_farm_ui_updater_task(self):
