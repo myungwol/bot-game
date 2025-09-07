@@ -462,13 +462,10 @@ class MailboxView(ui.View):
         await self.build_components()
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
-    # ▼▼▼ [핵심 수정] update_view 로직을 수정합니다. ▼▼▼
     async def update_view(self, interaction: discord.Interaction):
-        # 상호작용에 응답하여 "생각 중..." 상태를 표시하거나, 이미 응답했다면 그냥 넘어갑니다.
         if not interaction.response.is_done():
             await interaction.response.defer()
 
-        # self.message가 설정되지 않았다면 (예: 봇 재시작), 오류를 방지합니다.
         if not self.message:
             logger.error("MailboxView 업데이트가 요청되었지만 self.message가 설정되지 않았습니다.")
             await interaction.followup.send("오류: UI를 찾을 수 없습니다. 우편함을 다시 열어주세요.", ephemeral=True, delete_after=5)
@@ -483,7 +480,6 @@ class MailboxView(ui.View):
             logger.warning(f"MailboxView 메시지(ID: {self.message.id})를 수정할 수 없습니다: {e}")
             await interaction.followup.send("오류: UI가 만료되었거나 찾을 수 없습니다. 우편함을 다시 열어주세요.", ephemeral=True, delete_after=5)
             self.stop()
-
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"📫 {self.user.display_name}의 우편함", color=0x964B00)
@@ -563,20 +559,39 @@ class MailboxView(ui.View):
         
         claimed_count = 0
         total_items: Dict[str, int] = {}
+        failed_count = 0
 
         for mail_id_str in self.selected_mail_ids:
             mail_id = int(mail_id_str)
-            res = await supabase.rpc('claim_mail', {'p_mail_id': mail_id, 'p_recipient_id': str(self.user.id)}).execute()
-            if hasattr(res, 'data') and res.data and res.data.get('success'):
-                claimed_count += 1
-                for item in res.data.get('items', []):
-                    total_items[item['name']] = total_items.get(item['name'], 0) + item['qty']
+            try:
+                res = await supabase.rpc('claim_mail', {'p_mail_id': mail_id, 'p_recipient_id': str(self.user.id)}).execute()
+                if hasattr(res, 'data') and res.data and res.data.get('success'):
+                    claimed_count += 1
+                    for item in res.data.get('items', []):
+                        total_items[item['name']] = total_items.get(item['name'], 0) + item['qty']
+                else:
+                    failed_count += 1
+                    if hasattr(res, 'data') and res.data and res.data.get('message'):
+                        logger.warning(f"Mail claim failed for mail_id {mail_id}: {res.data['message']}")
+            except APIError as e:
+                if "JSON could not be generated" in str(e.message):
+                    logger.warning(f"Handled known JSON decoding APIError for mail_id {mail_id}. Assuming claim failed.")
+                    failed_count += 1
+                else:
+                    logger.error(f"An unexpected APIError occurred while claiming mail_id {mail_id}: {e}", exc_info=True)
+                    failed_count += 1
+            except Exception as e:
+                logger.error(f"A generic exception occurred while claiming mail_id {mail_id}: {e}", exc_info=True)
+                failed_count += 1
 
         if claimed_count > 0:
             item_summary = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in total_items.items()])
-            await interaction.followup.send(f"{claimed_count}개의 우편을 수령했습니다!\n\n**총 받은 아이템:**\n{item_summary or '없음'}", ephemeral=True, delete_after=10)
+            success_message = f"{claimed_count}개의 우편을 수령했습니다!\n\n**총 받은 아이템:**\n{item_summary or '없음'}"
+            if failed_count > 0:
+                success_message += f"\n\n(주의: {failed_count}개의 우편 수령에 실패했습니다.)"
+            await interaction.followup.send(success_message, ephemeral=True, delete_after=10)
         else:
-            await interaction.followup.send("우편 수령에 실패했습니다.", ephemeral=True, delete_after=5)
+            await interaction.followup.send("우편 수령에 실패했습니다. 다시 시도해주세요.", ephemeral=True, delete_after=5)
         
         self.selected_mail_ids.clear()
         await self.update_view(interaction)
