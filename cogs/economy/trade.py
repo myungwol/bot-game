@@ -481,6 +481,7 @@ class MailboxView(ui.View):
             await interaction.followup.send("오류: UI가 만료되었거나 찾을 수 없습니다. 우편함을 다시 열어주세요.", ephemeral=True, delete_after=5)
             self.stop()
 
+
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"📫 {self.user.display_name}의 우편함", color=0x964B00)
         res = await supabase.table('mails').select('*, mail_attachments(*)', count='exact').eq('recipient_id', str(self.user.id)).is_('claimed_at', None).order('sent_at', desc=True).range(self.page * 5, self.page * 5 + 4).execute()
@@ -554,44 +555,64 @@ class MailboxView(ui.View):
         self.selected_mail_ids = interaction.data['values']
         await self.update_view(interaction)
 
+    # ▼▼▼ [핵심 수정] claim_selected_mails 함수를 전면 수정합니다. ▼▼▼
     async def claim_selected_mails(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
         claimed_count = 0
-        total_items: Dict[str, int] = {}
         failed_count = 0
+        total_items: Dict[str, int] = {}
+        db_tasks = []
 
-        for mail_id_str in self.selected_mail_ids:
-            mail_id = int(mail_id_str)
-            try:
-                res = await supabase.rpc('claim_mail', {'p_mail_id': mail_id, 'p_recipient_id': str(self.user.id)}).execute()
-                if hasattr(res, 'data') and res.data and res.data.get('success'):
-                    claimed_count += 1
-                    for item in res.data.get('items', []):
-                        total_items[item['name']] = total_items.get(item['name'], 0) + item['qty']
-                else:
-                    failed_count += 1
-                    if hasattr(res, 'data') and res.data and res.data.get('message'):
-                        logger.warning(f"Mail claim failed for mail_id {mail_id}: {res.data['message']}")
-            except APIError as e:
-                if "JSON could not be generated" in str(e.message):
-                    logger.warning(f"Handled known JSON decoding APIError for mail_id {mail_id}. Assuming claim failed.")
-                    failed_count += 1
-                else:
-                    logger.error(f"An unexpected APIError occurred while claiming mail_id {mail_id}: {e}", exc_info=True)
-                    failed_count += 1
-            except Exception as e:
-                logger.error(f"A generic exception occurred while claiming mail_id {mail_id}: {e}", exc_info=True)
-                failed_count += 1
+        # 1. 첨부 파일 정보 가져오기
+        attachments_res = await supabase.table('mail_attachments').select('*').in_('mail_id', [int(mid) for mid in self.selected_mail_ids]).execute()
+        if not attachments_res.data:
+            await interaction.followup.send("선택한 우편에 첨부파일이 없거나 오류가 발생했습니다.", ephemeral=True)
+            return
 
+        # 2. 아이템 및 코인 지급 작업 목록 생성
+        for att in attachments_res.data:
+            total_items[att['item_name']] = total_items.get(att['item_name'], 0) + att['quantity']
+        
+        for item_name, qty in total_items.items():
+            db_tasks.append(update_inventory(self.user.id, item_name, qty))
+        
+        # 3. DB 작업 실행
+        try:
+            if db_tasks:
+                await asyncio.gather(*db_tasks)
+            
+            # 4. 성공한 메일 상태 업데이트
+            now_iso = datetime.now(timezone.utc).isoformat()
+            mail_ids_to_update = [int(mid) for mid in self.selected_mail_ids]
+            await supabase.table('mails').update({'claimed_at': now_iso}).in_('id', mail_ids_to_update).execute()
+            claimed_count = len(mail_ids_to_update)
+
+        except Exception as e:
+            logger.error(f"우편 일괄 수령 중 DB 작업 오류: {e}", exc_info=True)
+            await interaction.followup.send("우편을 수령하는 중 오류가 발생했습니다.", ephemeral=True)
+            # (선택적) 롤백 로직을 여기에 추가할 수 있습니다.
+            return
+        
+        # 5. 결과 메시지 전송
         if claimed_count > 0:
             item_summary = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in total_items.items()])
             success_message = f"{claimed_count}개의 우편을 수령했습니다!\n\n**총 받은 아이템:**\n{item_summary or '없음'}"
             if failed_count > 0:
                 success_message += f"\n\n(주의: {failed_count}개의 우편 수령에 실패했습니다.)"
-            await interaction.followup.send(success_message, ephemeral=True, delete_after=10)
+            
+            msg = await interaction.followup.send(success_message, ephemeral=True)
+            # ▼▼▼ [핵심 수정] delete_after를 사용하기 위한 비동기 작업 생성 ▼▼▼
+            async def delete_msg_after(delay, message):
+                await asyncio.sleep(delay)
+                try:
+                    await message.delete()
+                except discord.NotFound:
+                    pass
+            self.cog.bot.loop.create_task(delete_msg_after(10, msg))
+
         else:
-            await interaction.followup.send("우편 수령에 실패했습니다. 다시 시도해주세요.", ephemeral=True, delete_after=5)
+            await interaction.followup.send("우편 수령에 실패했습니다. 다시 시도해주세요.", ephemeral=True)
         
         self.selected_mail_ids.clear()
         await self.update_view(interaction)
