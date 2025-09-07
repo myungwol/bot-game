@@ -1,4 +1,4 @@
-# bot-game/cogs/economy/core.py
+# cogs/economy/core.py
 
 import discord
 from discord.ext import commands, tasks
@@ -339,6 +339,7 @@ class EconomyCore(commands.Cog):
     async def before_monthly_whale_reset(self):
         await self.bot.wait_until_ready()
 
+    # ▼▼▼ [핵심 수정] 이 함수 전체를 아래 코드로 교체해주세요. ▼▼▼
     @tasks.loop(time=KST_MIDNIGHT_AGGREGATE)
     async def update_market_prices(self):
         logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
@@ -352,8 +353,8 @@ class EconomyCore(commands.Cog):
             # 아이템 가격 변동
             for name, data in item_db.items():
                 if data.get('volatility', 0) > 0:
-                    old_price = data['current_price']
-                    new_price = self._calculate_new_price(old_price, data['volatility'], data['min_price'], data['max_price'])
+                    old_price = data.get('current_price', data.get('price', 0))
+                    new_price = self._calculate_new_price(old_price, data['volatility'], data.get('min_price'), data.get('max_price'))
                     if new_price != old_price:
                         items_to_update.append({'name': name, 'current_price': new_price})
                         if abs((new_price - old_price) / old_price) > 0.25: # 25% 이상 변동 시 공지
@@ -365,7 +366,7 @@ class EconomyCore(commands.Cog):
             for fish in loot_db:
                 if fish.get('volatility', 0) > 0 and 'id' in fish:
                     old_price = fish.get('current_base_value', fish.get('base_value', 0))
-                    new_price = self._calculate_new_price(old_price, fish['volatility'], fish['min_price'], fish['max_price'])
+                    new_price = self._calculate_new_price(old_price, fish['volatility'], fish.get('min_price'), fish.get('max_price'))
                     if new_price != old_price:
                         fish_to_update.append({'id': fish['id'], 'current_base_value': new_price})
                         if abs((new_price - old_price) / old_price) > 0.20: # 20% 이상 변동 시 공지
