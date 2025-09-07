@@ -196,21 +196,23 @@ class TradeView(ui.View):
         commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
 
         try:
-            # 1. Python 딕셔너리를 그대로 준비 (json.dumps 제거)
+            # 1. Python 딕셔너리를 JSON '문자열'로 변환합니다.
             p_offer1 = {"items": [{"name": str(k), "qty": int(v)} for k, v in offer1['items'].items()], "coins": int(offer1['coins'])}
             p_offer2 = {"items": [{"name": str(k), "qty": int(v)} for k, v in offer2['items'].items()], "coins": int(offer2['coins'])}
+            
+            p_offer1_str = json.dumps(p_offer1, ensure_ascii=False)
+            p_offer2_str = json.dumps(p_offer2, ensure_ascii=False)
             
             params_to_send = {
                 'p_user1_id': str(user1.id),
                 'p_user2_id': str(user2.id),
-                'p_user1_offer': p_offer1, # 딕셔너리 그대로 전달
-                'p_user2_offer': p_offer2, # 딕셔너리 그대로 전달
+                'p_user1_offer': p_offer1_str, # JSON 문자열 전달
+                'p_user2_offer': p_offer2_str, # JSON 문자열 전달
                 'p_commission_fee': int(commission)
             }
 
             res = await supabase.rpc('process_trade', params_to_send).execute()
             
-            # API 응답 구조가 단순 'true'가 아닐 수 있으므로 유연하게 처리
             response_data = res.data[0] if isinstance(res.data, list) and res.data else res.data
             
             if not (isinstance(response_data, dict) and response_data.get('success')):
@@ -218,7 +220,7 @@ class TradeView(ui.View):
                 return await self.fail_trade(error_message)
 
         except APIError as e:
-            # 2. 오류 처리 로직을 e.message로 단순화
+            # 2. 오류 처리 로직은 e.message를 사용하도록 유지합니다.
             user_facing_message = e.message or "데이터베이스 처리 중 오류가 발생했습니다."
             logger.error(f"거래 처리 중 APIError: {user_facing_message}")
             return await self.fail_trade(user_facing_message)
