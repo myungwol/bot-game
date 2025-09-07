@@ -360,10 +360,11 @@ class MailComposeView(ui.View):
         try:
             p_attachments = [{"item_name": str(name), "quantity": int(qty)} for name, qty in self.attachments["items"].items()]
             p_attachments_json_str = json.dumps(p_attachments, ensure_ascii=False)
-
+            
+            # ▼▼▼ [핵심 수정] 사용자 ID를 문자열로 변환하여 전달합니다. ▼▼▼
             res = await supabase.rpc('send_mail_with_attachments', {
-                'p_sender_id': self.user.id,
-                'p_recipient_id': self.recipient.id,
+                'p_sender_id': str(self.user.id),
+                'p_recipient_id': str(self.recipient.id),
                 'p_message': self.message_content,
                 'p_attachments': p_attachments_json_str,
                 'p_shipping_fee': self.shipping_fee
