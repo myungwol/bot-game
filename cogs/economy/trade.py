@@ -348,33 +348,68 @@ class MailComposeView(ui.View):
         if modal.message is not None:
             self.message_content = modal.message
             await self.refresh_ui()
-
+            
+    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+    # [핵심 수정] send_button 함수 전체를 아래 코드로 교체합니다.
+    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
     @ui.button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀")
     async def send_button(self, interaction: discord.Interaction, button: ui.Button):
-        wallet = await get_wallet(self.user.id)
-        if wallet.get('balance', 0) < self.shipping_fee:
-            return await interaction.response.send_message(f"코인이 부족합니다. (배송비: {self.shipping_fee:,}{self.currency_icon})", ephemeral=True)
-            
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
 
         try:
-            p_attachments = [{"item_name": str(name), "quantity": int(qty)} for name, qty in self.attachments["items"].items()]
-            p_attachments_json_str = json.dumps(p_attachments, ensure_ascii=False)
+            # 1. 모든 필요 데이터 수집 및 유효성 검사
+            wallet, inventory = await asyncio.gather(
+                get_wallet(self.user.id),
+                get_inventory(self.user)
+            )
+
+            if wallet.get('balance', 0) < self.shipping_fee:
+                return await interaction.followup.send(f"코인이 부족합니다. (배송비: {self.shipping_fee:,}{self.currency_icon})", ephemeral=True)
+
+            for item_name, quantity in self.attachments["items"].items():
+                if inventory.get(item_name, 0) < quantity:
+                    return await interaction.followup.send(f"아이템 재고가 부족합니다: '{item_name}'", ephemeral=True)
             
-            # ▼▼▼ [핵심 수정] 사용자 ID를 문자열로 변환하여 전달합니다. ▼▼▼
-            res = await supabase.rpc('send_mail_with_attachments', {
-                'p_sender_id': str(self.user.id),
-                'p_recipient_id': str(self.recipient.id),
-                'p_message': self.message_content,
-                'p_attachments': p_attachments_json_str,
-                'p_shipping_fee': self.shipping_fee
-            }).execute()
-        
-            if not (hasattr(res, 'data') and res.data is True):
-                return await interaction.followup.send("우편 발송에 실패했습니다. 재고나 잔액이 부족할 수 있습니다.", ephemeral=True)
+            # 2. 모든 검사 통과 후, 발송자로부터 비용 차감
+            db_tasks = [update_wallet(self.user, -self.shipping_fee)]
+            for item_name, quantity in self.attachments["items"].items():
+                db_tasks.append(update_inventory(self.user.id, item_name, -quantity))
             
+            await asyncio.gather(*db_tasks)
+
+            # 3. 메일 레코드 생성
+            mail_insert_res = await supabase.table('mails').insert({
+                "sender_id": str(self.user.id),
+                "recipient_id": str(self.recipient.id),
+                "message": self.message_content
+            }).select('id').single().execute()
+
+            if not mail_insert_res.data:
+                logger.error("메일 레코드 생성 실패. 환불을 시도합니다.")
+                refund_tasks = [update_wallet(self.user, self.shipping_fee)]
+                for item_name, quantity in self.attachments["items"].items():
+                    refund_tasks.append(update_inventory(self.user.id, item_name, quantity))
+                await asyncio.gather(*refund_tasks)
+                return await interaction.followup.send("우편 발송에 실패했습니다 (메일 생성 오류). 비용이 환불되었습니다.", ephemeral=True)
+
+            new_mail_id = mail_insert_res.data['id']
+
+            # 4. 첨부 파일 레코드 생성
+            if self.attachments["items"]:
+                attachments_to_insert = [
+                    {
+                        "mail_id": new_mail_id,
+                        "item_name": name,
+                        "quantity": qty,
+                        "is_coin": False
+                    } for name, qty in self.attachments["items"].items()
+                ]
+                await supabase.table('mail_attachments').insert(attachments_to_insert).execute()
+            
+            # 5. 최종 성공 처리
             await interaction.edit_original_response(content="✅ 우편을 성공적으로 보냈습니다.", view=None, embed=None)
             
+            # 6. 수신자에게 DM 발송
             try:
                 dm_embed_data = await get_embed_from_db("dm_new_mail")
                 if dm_embed_data:
@@ -382,11 +417,13 @@ class MailComposeView(ui.View):
                     await self.recipient.send(embed=dm_embed)
             except (discord.Forbidden, discord.HTTPException):
                 logger.warning(f"{self.recipient.id}에게 우편 도착 DM을 보낼 수 없습니다.")
+            
             self.stop()
 
         except Exception as e:
             logger.error(f"우편 발송 중 최종 단계에서 예외 발생: {e}", exc_info=True)
-            await interaction.followup.send("우편 발송 중 오류가 발생했습니다.", ephemeral=True)
+            await interaction.followup.send("우편 발송 중 오류가 발생했습니다. 관리자에게 문의하여 재료가 소모되었는지 확인해주세요.", ephemeral=True)
+            self.stop()
 
 class MailboxView(ui.View):
     def __init__(self, cog: 'Trade', user: discord.Member):
