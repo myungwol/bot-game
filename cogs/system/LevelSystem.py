@@ -1,4 +1,4 @@
-# cogs/systems/LevelSystem.py
+# cogs/system/LevelSystem.py
 
 import discord
 from discord.ext import commands, tasks
@@ -78,7 +78,6 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
                     display_name = source_map[source_key]
                     aggregated_xp[display_name] += log['xp_earned']
         
-        # [핵심 수정] 획득 경험치가 0인 항목도 표시되도록 'if amount > 0' 조건을 제거합니다.
         details = [f"> {display_name}: `{amount:,} XP`" for display_name, amount in aggregated_xp.items()]
         xp_details_text = "\n".join(details)
         
@@ -289,31 +288,18 @@ class LevelPanelView(ui.View):
         super().__init__(timeout=None)
         self.cog = cog_instance
 
-    # ▼▼▼ [핵심 수정] 아래 check_level_button 함수 전체를 교체합니다. ▼▼▼
     @ui.button(label="상태 확인", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
     async def check_level_button(self, interaction: discord.Interaction, button: ui.Button):
         try:
-            # 1. 즉시 임시 응답을 보내 상호작용이 실패하지 않도록 합니다.
             await interaction.response.send_message("요청을 처리하는 중입니다...", ephemeral=True)
-
-            # 2. 유저의 레벨 정보 임베드를 생성합니다.
             level_embed = await build_level_embed(interaction.user)
-            
-            # 3. 생성된 임베드를 채널에 모두가 볼 수 있는 '일반 메시지'로 전송합니다.
             await interaction.channel.send(embed=level_embed)
-
-            # 4. 메인 패널(챔피언 보드)을 재생성하는 함수를 호출합니다.
             await self.cog.regenerate_panel(interaction.channel, panel_key=self.cog.panel_key)
-
-            # 5. 모든 작업이 완료되었으므로, 처음에 보냈던 임시 메시지를 삭제합니다.
             await interaction.delete_original_response()
-
         except Exception as e:
             logger.error(f"개인 레벨 확인 및 패널 재생성 중 오류 발생 (유저: {interaction.user.id}): {e}", exc_info=True)
             error_message = "❌ 상태 정보를 불러오는 중 오류가 발생했습니다."
-            # delete_original_response()가 실패할 수도 있으므로 edit으로 처리
             await interaction.edit_original_response(content=error_message)
-
 
     @ui.button(label="랭킹 확인", style=discord.ButtonStyle.secondary, emoji="👑", custom_id="show_ranking_button")
     async def show_ranking_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -352,7 +338,6 @@ class LevelSystem(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def _build_champion_embed(self) -> discord.Embed:
-        # [핵심 수정] categories 딕셔너리에 'mining' 항목을 추가합니다.
         categories = {
             "level": {"column": "xp", "name": "종합 레벨", "unit": "XP", "table": "user_levels"},
             "voice": {"column": "voice_minutes", "name": "음성채팅", "unit": "분", "table": "total_stats"},
@@ -404,6 +389,7 @@ class LevelSystem(commands.Cog):
     async def load_configs(self):
         pass
     
+    # ▼▼▼ [핵심 수정] 이 함수 전체를 아래 코드로 교체해주세요. ▼▼▼
     async def handle_level_up_event(self, user: discord.Member, result_data: List[Dict]):
         if not result_data or not result_data[0].get('leveled_up'): return
         
@@ -418,7 +404,9 @@ class LevelSystem(commands.Cog):
         await handler_cog.update_tier_role(user, new_level)
         logger.info(f"{user.name}님의 등급 역할 업데이트를 요청했습니다.")
 
-        job_advancement_levels = GAME_CONFIG.get("JOB_ADVANCEMENT_LEVELS", [50, 100])
+        # GAME_CONFIG를 get_config 함수로 불러오도록 수정합니다.
+        game_config = get_config("GAME_CONFIG", {})
+        job_advancement_levels = game_config.get("JOB_ADVANCEMENT_LEVELS", [50, 100])
         
         if new_level in job_advancement_levels:
             await handler_cog.start_advancement_process(user, new_level)
