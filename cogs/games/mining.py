@@ -117,7 +117,6 @@ class MiningGameView(ui.View):
 
     @ui.button(label="광석 찾기", style=discord.ButtonStyle.secondary, emoji="🔍", custom_id="mine_action_button")
     async def action_button(self, interaction: discord.Interaction, button: ui.Button):
-        # ▼▼▼ [핵심 수정] 모든 작업 시작 전에 세션 유효성 검사 ▼▼▼
         if self.user.id not in self.cog.active_sessions:
             button.disabled = True
             await interaction.response.edit_message(content="이미 만료된 광산입니다.", view=self, embed=None)
