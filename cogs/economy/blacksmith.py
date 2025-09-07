@@ -12,7 +12,7 @@ from utils.database import (
     get_inventory, update_inventory, get_user_gear, set_user_gear,
     get_wallet, update_wallet, supabase, get_config,
     save_panel_id, get_panel_id, get_embed_from_db,
-    get_id # get_id를 import 합니다.
+    get_id
 )
 from utils.helpers import format_embed_from_db
 
@@ -278,7 +278,6 @@ class Blacksmith(commands.Cog):
 
                 await update_inventory(user_id, target_tool, 1)
                 
-                # ▼▼▼ [핵심 수정] 채널 알림 로직 추가 ▼▼▼
                 log_channel_id = get_id("log_blacksmith_channel_id")
                 if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
                     try:
@@ -317,7 +316,6 @@ class Blacksmith(commands.Cog):
         
         if await self.get_user_upgrade_status(user_id):
             await interaction.response.send_message("❌ 이미 다른 도구를 업그레이드하는 중입니다.", ephemeral=True, delete_after=5)
-            # ▼▼▼ [핵심 수정] 업그레이드 시도 후 뷰가 사라지는 것을 방지하기 위해 뷰를 다시 로드합니다. ▼▼▼
             tool_type = next((tt for tt in ["낚싯대", "괭이", "물뿌리개", "곡괭이"] if tt in target_tool), None)
             if tool_type:
                 current_view = BlacksmithUpgradeView(interaction.user, self, tool_type)
@@ -331,7 +329,15 @@ class Blacksmith(commands.Cog):
         )
 
         gear_key_map = {"낚싯대": "rod", "괭이": "hoe", "물뿌리개": "watering_can", "곡괭이": "pickaxe"}
-        gear_key = next((db_key for display_name, db_key in gear_key_map.items() if display_name in target_tool), None)
+        
+        # ▼▼▼ [핵심 수정] 도구 타입 매칭 로직 변경 ▼▼▼
+        # 가장 긴 이름부터 확인하여 '곡괭이'가 '괭이'로 잘못 인식되는 문제를 해결합니다.
+        sorted_tool_types = sorted(gear_key_map.keys(), key=len, reverse=True)
+        gear_key = None
+        for tool_type in sorted_tool_types:
+            if tool_type in target_tool:
+                gear_key = gear_key_map[tool_type]
+                break
         
         if not gear_key or gear.get(gear_key) != recipe['requires_tool']:
             return await interaction.response.send_message(f"❌ 이 업그레이드를 하려면 먼저 **{recipe['requires_tool']}**(을)를 장착해야 합니다.", ephemeral=True, delete_after=10)
@@ -357,7 +363,6 @@ class Blacksmith(commands.Cog):
             tasks = [
                 update_wallet(interaction.user, -recipe['requires_coins']),
                 set_user_gear(user_id, **{gear_key: "맨손"}),
-                # ▼▼▼ [핵심 수정] 기존 도구를 인벤토리에서 제거하는 로직을 추가합니다. ▼▼▼
                 update_inventory(user_id, recipe['requires_tool'], -1)
             ]
             for item, qty in recipe['requires_items'].items():
@@ -372,7 +377,6 @@ class Blacksmith(commands.Cog):
                 "completion_timestamp": completion_time.isoformat()
             }).execute()
             
-            # ▼▼▼ [핵심 수정] 성공 메시지를 보낸 후, 뷰를 새로고침하여 현재 상태를 보여줍니다. ▼▼▼
             await interaction.edit_original_response(content="✅ 업그레이드를 시작했습니다! 24시간 후에 완료됩니다.", view=None)
             
             final_view = BlacksmithToolSelectView(interaction.user, self)
