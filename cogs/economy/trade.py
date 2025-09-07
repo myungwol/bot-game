@@ -240,7 +240,6 @@ class TradeView(ui.View):
         
         log_embed_data = await get_embed_from_db("log_trade_success")
         if log_embed_data:
-            # 로그에서는 commission을 0으로 표시
             log_embed = format_embed_from_db(
                 log_embed_data, user1_mention=user1.mention, user2_mention=user2.mention,
                 commission=0, currency_icon=self.currency_icon
@@ -254,14 +253,27 @@ class TradeView(ui.View):
     
     async def fail_trade(self, reason: str):
         if self.message:
+            # 거래 실패 시, 신청자에게 수수료를 환불합니다.
+            if self.initiator:
+                trade_fee = 50
+                await update_wallet(self.initiator, trade_fee)
+                reason += f"\n(거래 수수료 {trade_fee}{self.currency_icon} 환불됨)"
+            
             await self.message.channel.send(f"❌ 거래 실패: {reason}", delete_after=10)
             await self.message.delete()
         self.stop()
 
     async def on_timeout(self):
+        if self.is_finished(): return
         self.stop()
         if self.message:
             try:
+                # 거래 시간 초과 시, 신청자에게 수수료를 환불합니다.
+                if self.initiator:
+                    trade_fee = 50
+                    await update_wallet(self.initiator, trade_fee)
+                    await self.message.channel.send(f"{self.initiator.mention}님의 거래가 시간 초과로 취소되어 수수료 {trade_fee}{self.currency_icon}를 환불해드렸습니다.", delete_after=10)
+                
                 await self.message.edit(content="시간이 초과되어 거래가 취소되었습니다.", view=None, embed=None)
                 await asyncio.sleep(10)
                 await self.message.delete()
@@ -281,7 +293,6 @@ class MailComposeView(ui.View):
         self.message_content = ""
         self.attachments = {"items": {}}
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
-        # [수수료 수정] 고정 수수료 50으로 변경
         self.shipping_fee = 50
         self.message: Optional[discord.WebhookMessage] = None
 
@@ -302,7 +313,6 @@ class MailComposeView(ui.View):
         att_str = [f"ㄴ {name}: {qty}개" for name, qty in self.attachments["items"].items()]
         embed.add_field(name="첨부 아이템", value="\n".join(att_str) if att_str else "없음", inline=False)
         embed.add_field(name="메시지", value=f"```{self.message_content}```" if self.message_content else "메시지 없음", inline=False)
-        # [수수료 수정] 푸터에 고정 수수료 표시
         embed.set_footer(text=f"배송비: {self.shipping_fee:,}{self.currency_icon}")
         return embed
 
@@ -345,7 +355,6 @@ class MailComposeView(ui.View):
 
     @ui.button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀")
     async def send_button(self, interaction: discord.Interaction, button: ui.Button):
-        # [수수료 수정] 고정 수수료로 잔액 확인
         wallet = await get_wallet(self.user.id)
         if wallet.get('balance', 0) < self.shipping_fee:
             return await interaction.response.send_message(f"코인이 부족합니다. (배송비: {self.shipping_fee:,}{self.currency_icon})", ephemeral=True)
@@ -356,7 +365,6 @@ class MailComposeView(ui.View):
             p_attachments = [{"item_name": str(name), "quantity": int(qty)} for name, qty in self.attachments["items"].items()]
             p_attachments_json_str = json.dumps(p_attachments, ensure_ascii=False)
 
-            # [수수료 수정] RPC 함수에 고정 수수료 전달
             res = await supabase.rpc('send_mail_with_attachments', {
                 'p_sender_id': str(self.user.id),
                 'p_recipient_id': str(self.recipient.id),
@@ -447,7 +455,7 @@ class MailboxView(ui.View):
         send_button = ui.Button(label="편지 보내기", style=discord.ButtonStyle.success, emoji="✉️")
         send_button.callback = self.send_mail
         self.add_item(send_button)
-
+        
         # [버그 수정] 블로킹 호출을 비동기 호출로 변경
         res = await supabase.table('mails').select('id', count='exact').eq('recipient_id', str(self.user.id)).is_('claimed_at', None).execute()
         total_mails = res.count or 0
@@ -479,6 +487,7 @@ class MailboxView(ui.View):
         await self.update_view(interaction)
         
     async def send_mail(self, interaction: discord.Interaction):
+        # [버그 수정] 'view' 변수가 정의되지 않았던 문제를 해결합니다.
         select_view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="편지를 보낼 상대를 선택하세요.")
         async def callback(select_interaction: discord.Interaction):
@@ -491,7 +500,7 @@ class MailboxView(ui.View):
             await compose_view.start(select_interaction)
         user_select.callback = callback
         select_view.add_item(user_select)
-        await interaction.response.send_message("누구에게 편지를 보내시겠습니까?", view=view, ephemeral=True)
+        await interaction.response.send_message("누구에게 편지를 보내시겠습니까?", view=select_view, ephemeral=True)
     
     async def prev_page_callback(self, interaction: discord.Interaction):
         self.page -= 1
@@ -515,7 +524,6 @@ class TradePanelView(ui.View):
     async def direct_trade_button(self, interaction: discord.Interaction):
         initiator = interaction.user
         
-        # [수수료 수정] 거래 시작 시 수수료 확인 및 차감
         trade_fee = 50
         wallet = await get_wallet(initiator.id)
         if wallet.get('balance', 0) < trade_fee:
@@ -532,7 +540,6 @@ class TradePanelView(ui.View):
             if trade_id in self.cog.active_trades:
                  return await select_interaction.response.send_message("상대방 또는 본인이 이미 다른 거래에 참여 중입니다.", ephemeral=True, delete_after=5)
             
-            # 수수료 선차감
             await update_wallet(initiator, -trade_fee)
             await select_interaction.response.send_message(f"거래 수수료 {trade_fee}{self.cog.currency_icon}를 지불하고 거래를 시작합니다.", ephemeral=True, delete_after=5)
 
@@ -553,9 +560,14 @@ class Trade(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_trades: Dict[str, TradeView] = {}
+        # [버그 수정] cog 자체에 currency_icon 속성을 추가하여 하위 View에서 접근할 수 있도록 합니다.
+        self.currency_icon = "🪙" 
 
     async def cog_load(self):
         self.bot.loop.create_task(self.cleanup_stale_trades())
+        # [버그 수정] cog 로드 시 DB에서 최신 아이콘 정보를 가져옵니다.
+        game_config = get_config("GAME_CONFIG", {})
+        self.currency_icon = game_config.get("CURRENCY_ICON", "🪙")
 
     async def cleanup_stale_trades(self):
         await self.bot.wait_until_ready()
