@@ -14,7 +14,7 @@ from utils.database import (
     get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
     save_config_to_db, get_all_user_stats, log_activity, get_cooldown, set_cooldown,
     get_user_gear, load_all_data_from_db, ensure_user_gear_exists,
-    load_bot_configs_from_db, delete_config_from_db
+    load_bot_configs_from_db, delete_config_from_db, get_item_database, get_fishing_loot
 )
 from utils.helpers import format_embed_from_db
 
@@ -339,43 +339,53 @@ class EconomyCore(commands.Cog):
     async def before_monthly_whale_reset(self):
         await self.bot.wait_until_ready()
 
-    # ▼▼▼ [핵심 수정] update_market_prices 함수 전체를 교체합니다. ▼▼▼
     @tasks.loop(time=KST_MIDNIGHT_AGGREGATE)
     async def update_market_prices(self):
         logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
         try:
-            # 1. DB 함수를 호출하여 모든 가격을 업데이트하고, 변동폭이 큰 항목들을 받아옵니다.
-            response = await supabase.rpc('update_all_market_prices').execute()
+            item_db = get_item_database()
+            loot_db = get_fishing_loot()
             
-            if not (response and response.data):
-                logger.info("[시장] 가격 변동이 없거나 DB 함수 호출에 실패했습니다.")
-                await save_config_to_db("market_fluctuations", [])
-            else:
-                announcements = []
-                for item in response.data:
-                    item_type = item.get('item_type', 'item')
-                    name = item.get('item_name', 'N/A')
-                    old_price = item.get('old_price', 0)
-                    new_price = item.get('new_price', 0)
-                    
-                    if item_type == 'fish':
-                        status = "풍어 📈" if new_price > old_price else "흉어 📉"
-                        announcement_text = f" - {name} (기본 가치): `{old_price}` → `{new_price}`{self.currency_icon} ({status})"
-                    else:
-                        status = "폭등 📈" if new_price > old_price else "폭락 📉"
-                        announcement_text = f" - {name}: `{old_price}` → `{new_price}`{self.currency_icon} ({status})"
-                    announcements.append(announcement_text)
-                
-                # 2. bot_configs에 변동 내역을 저장하여 다른 Cog에서 참조할 수 있도록 합니다.
-                await save_config_to_db("market_fluctuations", announcements)
-                
-                # 3. 변동폭이 큰 항목이 있다면 로그 채널에 공지합니다.
-                if announcements and (log_channel_id := get_id("market_log_channel_id")):
-                    if log_channel := self.bot.get_channel(log_channel_id):
-                        embed = discord.Embed(title="📢 오늘의 주요 시세 변동 정보", description="\n".join(announcements), color=0xFEE75C)
-                        await log_channel.send(embed=embed)
+            items_to_update = []
+            announcements = []
 
-            # 4. 상점 Cog를 찾아 패널을 새로고침하여 최신 가격 정보를 표시하도록 합니다.
+            # 아이템 가격 변동
+            for name, data in item_db.items():
+                if data.get('volatility', 0) > 0:
+                    old_price = data['current_price']
+                    new_price = self._calculate_new_price(old_price, data['volatility'], data['min_price'], data['max_price'])
+                    if new_price != old_price:
+                        items_to_update.append({'name': name, 'current_price': new_price})
+                        if abs((new_price - old_price) / old_price) > 0.25: # 25% 이상 변동 시 공지
+                            status = "폭등 📈" if new_price > old_price else "폭락 📉"
+                            announcements.append(f" - {name}: `{old_price}` → `{new_price}`{self.currency_icon} ({status})")
+
+            # 물고기 가격 변동
+            fish_to_update = []
+            for fish in loot_db:
+                if fish.get('volatility', 0) > 0 and 'id' in fish:
+                    old_price = fish.get('current_base_value', fish.get('base_value', 0))
+                    new_price = self._calculate_new_price(old_price, fish['volatility'], fish['min_price'], fish['max_price'])
+                    if new_price != old_price:
+                        fish_to_update.append({'id': fish['id'], 'current_base_value': new_price})
+                        if abs((new_price - old_price) / old_price) > 0.20: # 20% 이상 변동 시 공지
+                            status = "풍어 📈" if new_price > old_price else "흉어 📉"
+                            announcements.append(f" - {fish['name']} (기본 가치): `{old_price}` → `{new_price}`{self.currency_icon} ({status})")
+            
+            # DB 업데이트
+            if items_to_update:
+                await supabase.table('items').upsert(items_to_update).execute()
+            if fish_to_update:
+                await supabase.table('fishing_loots').upsert(fish_to_update).execute()
+
+            # 공지 및 패널 업데이트
+            await save_config_to_db("market_fluctuations", announcements)
+            
+            if announcements and (log_channel_id := get_id("market_log_channel_id")):
+                if log_channel := self.bot.get_channel(log_channel_id):
+                    embed = discord.Embed(title="📢 오늘의 주요 시세 변동 정보", description="\n".join(announcements), color=0xFEE75C)
+                    await log_channel.send(embed=embed)
+            
             if commerce_cog := self.bot.get_cog("Commerce"):
                 if commerce_channel_id := get_id("commerce_panel_channel_id"):
                     if channel := self.bot.get_channel(commerce_channel_id):
