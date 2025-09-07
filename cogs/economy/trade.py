@@ -102,9 +102,9 @@ class TradeView(ui.View):
             if offer["coins"] > 0:
                 field_value.append(f"💰 {offer['coins']:,}{self.currency_icon}")
             status = "✅ 준비 완료" if offer["ready"] else "⏳ 준비 중"
-            # ▼▼▼ [핵심 수정] display_name을 mention으로 변경합니다. ▼▼▼
+            # ▼▼▼ [핵심 수정] 필드 이름에는 display_name을 사용합니다. ▼▼▼
             embed.add_field(
-                name=f"{user.mention}의 제안 ({status})",
+                name=f"{user.display_name}의 제안 ({status})",
                 value="\n".join(field_value) if field_value else "제안 없음",
                 inline=True
             )
@@ -195,16 +195,16 @@ class TradeView(ui.View):
             user2_wallet, user2_inv = await asyncio.gather(get_wallet(user2.id), get_inventory(user2))
 
             if user1_wallet.get('balance', 0) < offer1['coins']:
-                return await self.fail_trade(f"{user1.mention}님의 코인이 부족합니다.") # display_name -> mention
+                return await self.fail_trade(f"{user1.mention}님의 코인이 부족합니다.")
             if user2_wallet.get('balance', 0) < offer2['coins']:
-                return await self.fail_trade(f"{user2.mention}님의 코인이 부족합니다.") # display_name -> mention
+                return await self.fail_trade(f"{user2.mention}님의 코인이 부족합니다.")
 
             for item, qty in offer1['items'].items():
                 if user1_inv.get(item, 0) < qty:
-                    return await self.fail_trade(f"{user1.mention}님의 '{item}' 재고가 부족합니다.") # display_name -> mention
+                    return await self.fail_trade(f"{user1.mention}님의 '{item}' 재고가 부족합니다.")
             for item, qty in offer2['items'].items():
                 if user2_inv.get(item, 0) < qty:
-                    return await self.fail_trade(f"{user2.mention}님의 '{item}' 재고가 부족합니다.") # display_name -> mention
+                    return await self.fail_trade(f"{user2.mention}님의 '{item}' 재고가 부족합니다.")
 
             tasks = []
             user1_coin_change = offer2['coins'] - offer1['coins']
@@ -240,9 +240,9 @@ class TradeView(ui.View):
             )
             offer1_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer1['items'].items()] + ([f"💰 {offer1['coins']:,}{self.currency_icon}"] if offer1['coins'] > 0 else [])) or "없음"
             offer2_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer2['items'].items()] + ([f"💰 {offer2['coins']:,}{self.currency_icon}"] if offer2['coins'] > 0 else [])) or "없음"
-            # ▼▼▼ [핵심 수정] display_name을 mention으로 변경합니다. ▼▼▼
-            log_embed.add_field(name=f"{user1.mention} 제공", value=offer1_str, inline=True)
-            log_embed.add_field(name=f"{user2.mention} 제공", value=offer2_str, inline=True)
+            # ▼▼▼ [핵심 수정] 필드 이름에는 display_name을 사용합니다. ▼▼▼
+            log_embed.add_field(name=f"{user1.display_name} 제공", value=offer1_str, inline=True)
+            log_embed.add_field(name=f"{user2.display_name} 제공", value=offer2_str, inline=True)
             await self.cog.regenerate_panel(log_channel, last_log=log_embed)
         self.stop()
     
@@ -308,8 +308,8 @@ class MailComposeView(ui.View):
         await self.message.edit(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
-        # ▼▼▼ [핵심 수정] display_name을 mention으로 변경합니다. ▼▼▼
-        embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.mention})", color=0x3498DB)
+        # ▼▼▼ [핵심 수정] 임베드 제목에는 display_name을 사용합니다. ▼▼▼
+        embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
         att_str = [f"ㄴ {name}: {qty}개" for name, qty in self.attachments["items"].items()]
         embed.add_field(name="첨부 아이템", value="\n".join(att_str) if att_str else "없음", inline=False)
         embed.add_field(name="메시지", value=f"```{self.message_content}```" if self.message_content else "메시지 없음", inline=False)
@@ -358,7 +358,6 @@ class MailComposeView(ui.View):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            # 1. 모든 필요 데이터 수집 및 유효성 검사
             wallet, inventory = await asyncio.gather(
                 get_wallet(self.user.id),
                 get_inventory(self.user)
@@ -371,7 +370,6 @@ class MailComposeView(ui.View):
                 if inventory.get(item_name, 0) < quantity:
                     return await interaction.followup.send(f"아이템 재고가 부족합니다: '{item_name}'", ephemeral=True)
             
-            # 2. 모든 검사 통과 후, 발송자로부터 비용 차감
             db_tasks = [update_wallet(self.user, -self.shipping_fee)]
             for item_name, quantity in self.attachments["items"].items():
                 db_tasks.append(update_inventory(self.user.id, item_name, -quantity))
@@ -381,7 +379,6 @@ class MailComposeView(ui.View):
             now = datetime.now(timezone.utc)
             expires_at = now + timedelta(days=30)
             
-            # 3. 메일 레코드 생성
             mail_insert_res = await supabase.table('mails').insert({
                 "sender_id": str(self.user.id),
                 "recipient_id": str(self.recipient.id),
@@ -400,7 +397,6 @@ class MailComposeView(ui.View):
 
             new_mail_id = mail_insert_res.data[0]['id']
 
-            # 4. 첨부 파일 레코드 생성
             if self.attachments["items"]:
                 attachments_to_insert = [
                     {
@@ -412,10 +408,8 @@ class MailComposeView(ui.View):
                 ]
                 await supabase.table('mail_attachments').insert(attachments_to_insert).execute()
             
-            # 5. 최종 성공 처리
             await interaction.edit_original_response(content="✅ 우편을 성공적으로 보냈습니다.", view=None, embed=None)
             
-            # 6. 로그 채널에 알림 전송
             try:
                 log_channel_id = get_id("trade_log_channel_id")
                 if log_channel_id and (log_channel := self.cog.bot.get_channel(log_channel_id)):
@@ -478,13 +472,16 @@ class MailboxView(ui.View):
             for i, mail in enumerate(self.mails_on_page):
                 sender_id_int = int(mail['sender_id'])
                 sender = self.cog.bot.get_user(sender_id_int)
-                # ▼▼▼ [핵심 수정] sender의 display_name 대신 mention을 사용합니다. ▼▼▼
-                sender_mention = sender.mention if sender else f"알 수 없는 유저 ({sender_id_int})"
+                # ▼▼▼ [핵심 수정] 필드 이름에는 display_name을, 내용에는 mention을 사용합니다. ▼▼▼
+                sender_name = sender.display_name if sender else f"알 수 없는 유저 ({sender_id_int})"
+                sender_mention = sender.mention if sender else sender_name
 
                 attachments = mail['mail_attachments']
                 att_str = [f"📦 {att['item_name']}: {att['quantity']}개" for att in attachments if not att['is_coin']]
-                field_value = (f"> **메시지:** {mail['message']}\n" if mail['message'] else "") + "**첨부 아이템:**\n" + ("\n".join(att_str) if att_str else "없음")
-                embed.add_field(name=f"FROM: {sender_mention} ({discord.utils.format_dt(datetime.fromisoformat(mail['sent_at']), 'R')})", value=field_value, inline=False)
+                field_value = (f"**보낸 사람:** {sender_mention}\n" +
+                               (f"> **메시지:** {mail['message']}\n" if mail['message'] else "") +
+                               "**첨부 아이템:**\n" + ("\n".join(att_str) if att_str else "없음"))
+                embed.add_field(name=f"FROM: {sender_name} ({discord.utils.format_dt(datetime.fromisoformat(mail['sent_at']), 'R')})", value=field_value, inline=False)
                 
                 if i < len(self.mails_on_page) - 1:
                     embed.add_field(name="\u200b", value="━━━━━━━━━━━━━━━━━━", inline=False)
@@ -525,7 +522,6 @@ class MailboxView(ui.View):
             return await interaction.followup.send(f"우편 수령에 실패했습니다: {res.data.get('message', '알 수 없는 오류')}", ephemeral=True)
         
         data = res.data
-        # ▼▼▼ [핵심 수정] 보낸 사람을 이름 대신 멘션으로 표시하고, 보낸 사람 ID를 찾습니다. ▼▼▼
         mail_data = next((m for m in self.mails_on_page if m['id'] == mail_id), None)
         sender_mention = f"<@{mail_data['sender_id']}>" if mail_data else f"**{data.get('sender_name', '??')}**"
         
