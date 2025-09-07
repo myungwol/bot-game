@@ -78,11 +78,10 @@ class TradeView(ui.View):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.message: Optional[discord.Message] = None
 
-    async def start(self, interaction: discord.Interaction):
+    async def start_in_channel(self, channel: discord.TextChannel):
         self.cog.active_trades[self.trade_id] = self
         embed = await self.build_embed()
-        await interaction.response.send_message(f"{self.partner.mention}, {self.initiator.mention}님이 1:1 거래를 신청했습니다.", embed=embed, view=self)
-        self.message = await interaction.original_response()
+        self.message = await channel.send(f"{self.partner.mention}, {self.initiator.mention}님이 1:1 거래를 신청했습니다.", embed=embed, view=self)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id not in [self.initiator.id, self.partner.id]:
@@ -253,7 +252,6 @@ class TradeView(ui.View):
     
     async def fail_trade(self, reason: str):
         if self.message:
-            # 거래 실패 시, 신청자에게 수수료를 환불합니다.
             if self.initiator:
                 trade_fee = 50
                 await update_wallet(self.initiator, trade_fee)
@@ -268,7 +266,6 @@ class TradeView(ui.View):
         self.stop()
         if self.message:
             try:
-                # 거래 시간 초과 시, 신청자에게 수수료를 환불합니다.
                 if self.initiator:
                     trade_fee = 50
                     await update_wallet(self.initiator, trade_fee)
@@ -456,7 +453,6 @@ class MailboxView(ui.View):
         send_button.callback = self.send_mail
         self.add_item(send_button)
         
-        # [버그 수정] 블로킹 호출을 비동기 호출로 변경
         res = await supabase.table('mails').select('id', count='exact').eq('recipient_id', str(self.user.id)).is_('claimed_at', None).execute()
         total_mails = res.count or 0
 
@@ -487,7 +483,6 @@ class MailboxView(ui.View):
         await self.update_view(interaction)
         
     async def send_mail(self, interaction: discord.Interaction):
-        # [버그 수정] 'view' 변수가 정의되지 않았던 문제를 해결합니다.
         select_view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="편지를 보낼 상대를 선택하세요.")
         async def callback(select_interaction: discord.Interaction):
@@ -540,14 +535,16 @@ class TradePanelView(ui.View):
             if trade_id in self.cog.active_trades:
                  return await select_interaction.response.send_message("상대방 또는 본인이 이미 다른 거래에 참여 중입니다.", ephemeral=True, delete_after=5)
             
-            await update_wallet(initiator, -trade_fee)
+            # [버그 수정] 응답을 먼저 하고, 그 다음에 시간이 걸릴 수 있는 작업을 수행합니다.
             await select_interaction.response.send_message(f"거래 수수료 {trade_fee}{self.cog.currency_icon}를 지불하고 거래를 시작합니다.", ephemeral=True, delete_after=5)
+            await update_wallet(initiator, -trade_fee)
 
             try: await interaction.delete_original_response()
             except discord.NotFound: pass
             
             trade_view = TradeView(self.cog, initiator, partner)
-            await trade_view.start(select_interaction)
+            # [버그 수정] interaction이 아닌 channel 객체를 전달합니다.
+            await trade_view.start_in_channel(select_interaction.channel)
         user_select.callback = select_callback
         view.add_item(user_select)
         await interaction.response.send_message("누구와 거래하시겠습니까?", view=view, ephemeral=True)
@@ -560,12 +557,10 @@ class Trade(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_trades: Dict[str, TradeView] = {}
-        # [버그 수정] cog 자체에 currency_icon 속성을 추가하여 하위 View에서 접근할 수 있도록 합니다.
         self.currency_icon = "🪙" 
 
     async def cog_load(self):
         self.bot.loop.create_task(self.cleanup_stale_trades())
-        # [버그 수정] cog 로드 시 DB에서 최신 아이콘 정보를 가져옵니다.
         game_config = get_config("GAME_CONFIG", {})
         self.currency_icon = game_config.get("CURRENCY_ICON", "🪙")
 
