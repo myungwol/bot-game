@@ -94,18 +94,24 @@ class TradeView(ui.View):
         
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title="🤝 1:1 거래", color=0x3498DB)
-        for user in [self.initiator, self.partner]:
+        for i, user in enumerate([self.initiator, self.partner]):
             offer = self.offers[user.id]
-            field_value = []
-            if offer["items"]:
-                field_value.extend([f"ㄴ {name}: {qty}개" for name, qty in offer["items"].items()])
-            if offer["coins"] > 0:
-                field_value.append(f"💰 {offer['coins']:,}{self.currency_icon}")
+            
             status = "✅ 준비 완료" if offer["ready"] else "⏳ 준비 중"
-            # ▼▼▼ [핵심 수정] 필드 이름에는 display_name을 사용합니다. ▼▼▼
+            
+            # ▼▼▼ [핵심 수정] 필드 값을 재구성하여 멘션을 내용에 포함합니다. ▼▼▼
+            field_value_parts = [f"**{user.mention}** ({status})"]
+            if offer["items"]:
+                field_value_parts.extend([f"ㄴ {name}: {qty}개" for name, qty in offer["items"].items()])
+            if offer["coins"] > 0:
+                field_value_parts.append(f"💰 {offer['coins']:,}{self.currency_icon}")
+            
+            if len(field_value_parts) == 1: # 멘션과 상태 외에 제안이 없을 경우
+                field_value_parts.append("제안 없음")
+
             embed.add_field(
-                name=f"{user.display_name}의 제안 ({status})",
-                value="\n".join(field_value) if field_value else "제안 없음",
+                name=f"참가자 {i+1}",
+                value="\n".join(field_value_parts),
                 inline=True
             )
         embed.set_footer(text="5분 후 만료됩니다.")
@@ -175,12 +181,12 @@ class TradeView(ui.View):
             await self.process_trade(interaction)
         else:
             await self.update_ui()
-
+    
+    # ▼▼▼ [핵심 수정] 거래 취소 버튼 로직을 수정합니다. ▼▼▼
     @ui.button(label="취소", style=discord.ButtonStyle.danger, emoji="✖️")
     async def cancel_button(self, interaction: discord.Interaction, button: ui.Button):
-        if self.message:
-            await self.message.channel.send(f"{interaction.user.mention}님이 거래를 취소했습니다.", delete_after=10)
-        await self.on_timeout()
+        await interaction.response.send_message("거래를 취소했습니다.", ephemeral=True, delete_after=10)
+        await self.on_timeout(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
         for item in self.children:
@@ -240,7 +246,6 @@ class TradeView(ui.View):
             )
             offer1_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer1['items'].items()] + ([f"💰 {offer1['coins']:,}{self.currency_icon}"] if offer1['coins'] > 0 else [])) or "없음"
             offer2_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer2['items'].items()] + ([f"💰 {offer2['coins']:,}{self.currency_icon}"] if offer2['coins'] > 0 else [])) or "없음"
-            # ▼▼▼ [핵심 수정] 필드 이름에는 display_name을 사용합니다. ▼▼▼
             log_embed.add_field(name=f"{user1.display_name} 제공", value=offer1_str, inline=True)
             log_embed.add_field(name=f"{user2.display_name} 제공", value=offer2_str, inline=True)
             await self.cog.regenerate_panel(log_channel, last_log=log_embed)
@@ -256,18 +261,32 @@ class TradeView(ui.View):
             await self.message.channel.send(f"❌ 거래 실패: {reason}", delete_after=10)
             await self.message.delete()
         self.stop()
-
-    async def on_timeout(self):
+    
+    # ▼▼▼ [핵심 수정] on_timeout 함수를 수정하여 취소 주체를 받도록 합니다. ▼▼▼
+    async def on_timeout(self, cancelled_by: Optional[discord.User] = None):
         if self.is_finished(): return
         self.stop()
         if self.message:
             try:
+                # 거래를 시작한 사람에게만 수수료 환불 알림
                 if self.initiator:
                     trade_fee = 50
                     await update_wallet(self.initiator, trade_fee)
-                    await self.message.channel.send(f"{self.initiator.mention}님의 거래가 시간 초과로 취소되어 수수료 {trade_fee}{self.currency_icon}를 환불해드렸습니다.", delete_after=10)
-                
-                await self.message.edit(content="시간이 초과되어 거래가 취소되었습니다.", view=None, embed=None)
+                    
+                    message_content = ""
+                    if cancelled_by:
+                        if self.initiator.id == cancelled_by.id:
+                             message_content = f"거래를 취소하여 수수료 {trade_fee}{self.currency_icon}를 환불해드렸습니다."
+                    else:
+                        message_content = f"거래가 시간 초과로 취소되어 수수료 {trade_fee}{self.currency_icon}를 환불해드렸습니다."
+                    
+                    if message_content:
+                        try:
+                            await self.initiator.send(message_content)
+                        except discord.Forbidden:
+                            logger.warning(f"{self.initiator.id}에게 거래 취소 DM을 보낼 수 없습니다.")
+
+                await self.message.edit(content="거래가 종료되었습니다.", view=None, embed=None)
                 await asyncio.sleep(10)
                 await self.message.delete()
             except (discord.NotFound, discord.Forbidden): pass
@@ -308,7 +327,6 @@ class MailComposeView(ui.View):
         await self.message.edit(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
-        # ▼▼▼ [핵심 수정] 임베드 제목에는 display_name을 사용합니다. ▼▼▼
         embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
         att_str = [f"ㄴ {name}: {qty}개" for name, qty in self.attachments["items"].items()]
         embed.add_field(name="첨부 아이템", value="\n".join(att_str) if att_str else "없음", inline=False)
@@ -472,7 +490,6 @@ class MailboxView(ui.View):
             for i, mail in enumerate(self.mails_on_page):
                 sender_id_int = int(mail['sender_id'])
                 sender = self.cog.bot.get_user(sender_id_int)
-                # ▼▼▼ [핵심 수정] 필드 이름에는 display_name을, 내용에는 mention을 사용합니다. ▼▼▼
                 sender_name = sender.display_name if sender else f"알 수 없는 유저 ({sender_id_int})"
                 sender_mention = sender.mention if sender else sender_name
 
@@ -525,6 +542,7 @@ class MailboxView(ui.View):
         mail_data = next((m for m in self.mails_on_page if m['id'] == mail_id), None)
         sender_mention = f"<@{mail_data['sender_id']}>" if mail_data else f"**{data.get('sender_name', '??')}**"
         
+        # ▼▼▼ [핵심 수정] 수령 확인 메시지를 ephemeral하게 보냅니다. ▼▼▼
         claimed_items = "\n".join([f"ㄴ {item['name']}: {item['qty']}개" for item in data.get('items', [])])
         await interaction.followup.send(f"{sender_mention}님이 보낸 우편을 수령했습니다!\n\n**받은 아이템:**\n{claimed_items or '없음'}", ephemeral=True, delete_after=10)
 
