@@ -102,8 +102,9 @@ class TradeView(ui.View):
             if offer["coins"] > 0:
                 field_value.append(f"💰 {offer['coins']:,}{self.currency_icon}")
             status = "✅ 준비 완료" if offer["ready"] else "⏳ 준비 중"
+            # ▼▼▼ [핵심 수정] display_name을 mention으로 변경합니다. ▼▼▼
             embed.add_field(
-                name=f"{user.display_name}의 제안 ({status})",
+                name=f"{user.mention}의 제안 ({status})",
                 value="\n".join(field_value) if field_value else "제안 없음",
                 inline=True
             )
@@ -194,16 +195,16 @@ class TradeView(ui.View):
             user2_wallet, user2_inv = await asyncio.gather(get_wallet(user2.id), get_inventory(user2))
 
             if user1_wallet.get('balance', 0) < offer1['coins']:
-                return await self.fail_trade(f"{user1.display_name}님의 코인이 부족합니다.")
+                return await self.fail_trade(f"{user1.mention}님의 코인이 부족합니다.") # display_name -> mention
             if user2_wallet.get('balance', 0) < offer2['coins']:
-                return await self.fail_trade(f"{user2.display_name}님의 코인이 부족합니다.")
+                return await self.fail_trade(f"{user2.mention}님의 코인이 부족합니다.") # display_name -> mention
 
             for item, qty in offer1['items'].items():
                 if user1_inv.get(item, 0) < qty:
-                    return await self.fail_trade(f"{user1.display_name}님의 '{item}' 재고가 부족합니다.")
+                    return await self.fail_trade(f"{user1.mention}님의 '{item}' 재고가 부족합니다.") # display_name -> mention
             for item, qty in offer2['items'].items():
                 if user2_inv.get(item, 0) < qty:
-                    return await self.fail_trade(f"{user2.display_name}님의 '{item}' 재고가 부족합니다.")
+                    return await self.fail_trade(f"{user2.mention}님의 '{item}' 재고가 부족합니다.") # display_name -> mention
 
             tasks = []
             user1_coin_change = offer2['coins'] - offer1['coins']
@@ -239,8 +240,9 @@ class TradeView(ui.View):
             )
             offer1_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer1['items'].items()] + ([f"💰 {offer1['coins']:,}{self.currency_icon}"] if offer1['coins'] > 0 else [])) or "없음"
             offer2_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer2['items'].items()] + ([f"💰 {offer2['coins']:,}{self.currency_icon}"] if offer2['coins'] > 0 else [])) or "없음"
-            log_embed.add_field(name=f"{user1.display_name} 제공", value=offer1_str, inline=True)
-            log_embed.add_field(name=f"{user2.display_name} 제공", value=offer2_str, inline=True)
+            # ▼▼▼ [핵심 수정] display_name을 mention으로 변경합니다. ▼▼▼
+            log_embed.add_field(name=f"{user1.mention} 제공", value=offer1_str, inline=True)
+            log_embed.add_field(name=f"{user2.mention} 제공", value=offer2_str, inline=True)
             await self.cog.regenerate_panel(log_channel, last_log=log_embed)
         self.stop()
     
@@ -306,7 +308,8 @@ class MailComposeView(ui.View):
         await self.message.edit(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
-        embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
+        # ▼▼▼ [핵심 수정] display_name을 mention으로 변경합니다. ▼▼▼
+        embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.mention})", color=0x3498DB)
         att_str = [f"ㄴ {name}: {qty}개" for name, qty in self.attachments["items"].items()]
         embed.add_field(name="첨부 아이템", value="\n".join(att_str) if att_str else "없음", inline=False)
         embed.add_field(name="메시지", value=f"```{self.message_content}```" if self.message_content else "메시지 없음", inline=False)
@@ -474,15 +477,15 @@ class MailboxView(ui.View):
             embed.set_footer(text=f"페이지 {self.page + 1} / {math.ceil(res.count / 5)}")
             for i, mail in enumerate(self.mails_on_page):
                 sender_id_int = int(mail['sender_id'])
-                sender = self.cog.bot.get_user(sender_id_int) or f"알 수 없는 유저 ({sender_id_int})"
-                sender_name = getattr(sender, 'display_name', str(sender))
+                sender = self.cog.bot.get_user(sender_id_int)
+                # ▼▼▼ [핵심 수정] sender의 display_name 대신 mention을 사용합니다. ▼▼▼
+                sender_mention = sender.mention if sender else f"알 수 없는 유저 ({sender_id_int})"
 
                 attachments = mail['mail_attachments']
                 att_str = [f"📦 {att['item_name']}: {att['quantity']}개" for att in attachments if not att['is_coin']]
                 field_value = (f"> **메시지:** {mail['message']}\n" if mail['message'] else "") + "**첨부 아이템:**\n" + ("\n".join(att_str) if att_str else "없음")
-                embed.add_field(name=f"FROM: {sender_name} ({discord.utils.format_dt(datetime.fromisoformat(mail['sent_at']), 'R')})", value=field_value, inline=False)
+                embed.add_field(name=f"FROM: {sender_mention} ({discord.utils.format_dt(datetime.fromisoformat(mail['sent_at']), 'R')})", value=field_value, inline=False)
                 
-                # ▼▼▼ [핵심 수정] 마지막 메일이 아닐 경우에만 구분선을 추가합니다. ▼▼▼
                 if i < len(self.mails_on_page) - 1:
                     embed.add_field(name="\u200b", value="━━━━━━━━━━━━━━━━━━", inline=False)
         return embed
@@ -521,10 +524,13 @@ class MailboxView(ui.View):
         if not (hasattr(res, 'data') and res.data and res.data.get('success')):
             return await interaction.followup.send(f"우편 수령에 실패했습니다: {res.data.get('message', '알 수 없는 오류')}", ephemeral=True)
         
-        # ▼▼▼ [핵심 수정] 수령 확인 메시지를 추가합니다. ▼▼▼
         data = res.data
+        # ▼▼▼ [핵심 수정] 보낸 사람을 이름 대신 멘션으로 표시하고, 보낸 사람 ID를 찾습니다. ▼▼▼
+        mail_data = next((m for m in self.mails_on_page if m['id'] == mail_id), None)
+        sender_mention = f"<@{mail_data['sender_id']}>" if mail_data else f"**{data.get('sender_name', '??')}**"
+        
         claimed_items = "\n".join([f"ㄴ {item['name']}: {item['qty']}개" for item in data.get('items', [])])
-        await interaction.followup.send(f"**{data.get('sender_name', '??')}**님이 보낸 우편을 수령했습니다!\n\n**받은 아이템:**\n{claimed_items or '없음'}", ephemeral=True, delete_after=10)
+        await interaction.followup.send(f"{sender_mention}님이 보낸 우편을 수령했습니다!\n\n**받은 아이템:**\n{claimed_items or '없음'}", ephemeral=True, delete_after=10)
 
         await self.update_view(interaction)
 
@@ -543,11 +549,10 @@ class MailboxView(ui.View):
             if not recipient or recipient.bot or recipient.id == self.user.id:
                 return await select_interaction.response.send_message("잘못된 상대입니다.", ephemeral=True, delete_after=5)
             
-            # ▼▼▼ [핵심 수정] 이전 메시지를 삭제합니다. ▼▼▼
             try:
                 await interaction.delete_original_response()
             except discord.NotFound:
-                pass # 이미 삭제되었을 수 있으므로 무시
+                pass
             
             if self.message: await self.message.delete()
             compose_view = MailComposeView(self.cog, self.user, recipient)
@@ -596,8 +601,7 @@ class TradePanelView(ui.View):
             
             await select_interaction.response.send_message(f"거래 수수료 {trade_fee}{self.cog.currency_icon}를 지불하고 거래를 시작합니다.", ephemeral=True, delete_after=5)
             await update_wallet(initiator, -trade_fee)
-
-            # ▼▼▼ [핵심 수정] 이전 메시지를 삭제합니다. ▼▼▼
+            
             try:
                 await interaction.delete_original_response()
             except discord.NotFound:
