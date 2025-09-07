@@ -183,15 +183,11 @@ class TradeView(ui.View):
             await self.message.channel.send(f"{interaction.user.mention}님이 거래를 취소했습니다.", delete_after=10)
         await self.on_timeout()
 
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-    # [핵심 수정] process_trade 함수 전체를 아래 코드로 교체합니다.
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
     async def process_trade(self, interaction: discord.Interaction):
         for item in self.children:
             item.disabled = True
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=None)
         
-        # 버튼을 누른 사용자와 상대방을 명확히 구분합니다.
         user1 = interaction.user
         user2 = self.partner if user1.id == self.initiator.id else self.initiator
         
@@ -199,18 +195,21 @@ class TradeView(ui.View):
         commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
 
         try:
-            # 데이터베이스 함수에 전달할 Python 딕셔너리를 준비합니다.
-            # json.dumps()는 사용하지 않습니다.
             p_offer1 = {"items": [{"name": str(k), "qty": int(v)} for k, v in offer1['items'].items()], "coins": int(offer1['coins'])}
             p_offer2 = {"items": [{"name": str(k), "qty": int(v)} for k, v in offer2['items'].items()], "coins": int(offer2['coins'])}
             
+            p_offer1_str = json.dumps(p_offer1, ensure_ascii=False)
+            p_offer2_str = json.dumps(p_offer2, ensure_ascii=False)
+            
+            # ▼▼▼ [핵심 수정] 사용자 ID를 str()이 아닌 int 그대로 전달합니다. ▼▼▼
             params_to_send = {
-                'p_user1_id': str(user1.id),
-                'p_user2_id': str(user2.id),
-                'p_user1_offer': p_offer1,
-                'p_user2_offer': p_offer2,
+                'p_user1_id': user1.id,
+                'p_user2_id': user2.id,
+                'p_user1_offer': p_offer1_str,
+                'p_user2_offer': p_offer2_str,
                 'p_commission_fee': int(commission)
             }
+            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
             res = await supabase.rpc('process_trade', params_to_send).execute()
             
@@ -221,7 +220,6 @@ class TradeView(ui.View):
                 return await self.fail_trade(error_message)
 
         except APIError as e:
-            # 오류 발생 시, 데이터베이스가 보내준 상세 메시지를 그대로 사용합니다.
             user_facing_message = e.message or "데이터베이스 처리 중 오류가 발생했습니다."
             logger.error(f"거래 처리 중 APIError: {user_facing_message}")
             return await self.fail_trade(user_facing_message)
@@ -229,7 +227,6 @@ class TradeView(ui.View):
             logger.error(f"거래 처리 중 예외 발생: {e}", exc_info=True)
             return await self.fail_trade("알 수 없는 오류가 발생했습니다.")
         
-        # --- SUCCESS LOGIC ---
         log_channel = self.message.channel
         if self.message: await self.message.delete()
         
@@ -245,9 +242,6 @@ class TradeView(ui.View):
             log_embed.add_field(name=f"{user2.display_name} 제공", value=offer2_str, inline=True)
             await self.cog.regenerate_panel(log_channel, last_log=log_embed)
         self.stop()
-    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
-    # [핵심 수정] 위 코드로 함수 전체를 교체합니다.
-    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
     
     async def fail_trade(self, reason: str):
         if self.message:
@@ -350,13 +344,9 @@ class MailComposeView(ui.View):
         await interaction.response.defer()
 
         try:
-            # 1. Python 딕셔너리를 가장 안전한 형태로 만듭니다.
             p_attachments = [{"item_name": str(name), "quantity": int(qty)} for name, qty in self.attachments["items"].items()]
-            
-            # 2. json.dumps를 사용하여 완벽한 JSON '문자열'로 변환합니다.
             p_attachments_json_str = json.dumps(p_attachments, ensure_ascii=False)
 
-            # 3. RPC 함수에는 이 JSON 문자열을 그대로 전달합니다.
             res = await supabase.rpc('send_mail_with_attachments', {
                 'p_sender_id': str(self.user.id),
                 'p_recipient_id': str(self.recipient.id),
