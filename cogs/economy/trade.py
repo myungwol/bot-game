@@ -14,7 +14,7 @@ import json
 from utils.database import (
     get_inventory, get_wallet, get_item_database, get_config, supabase,
     save_panel_id, get_panel_id, get_embed_from_db, update_inventory, update_wallet,
-    get_id # get_id를 import합니다.
+    get_id
 )
 from utils.helpers import format_embed_from_db
 
@@ -374,9 +374,9 @@ class MailComposeView(ui.View):
                 db_tasks.append(update_inventory(self.user.id, item_name, -quantity))
             
             await asyncio.gather(*db_tasks)
-
+            
             now = datetime.now(timezone.utc)
-            expires_at = now + timedelta(days=30) # 30일 후 만료
+            expires_at = now + timedelta(days=30)
             
             # 3. 메일 레코드 생성
             mail_insert_res = await supabase.table('mails').insert({
@@ -412,7 +412,7 @@ class MailComposeView(ui.View):
             # 5. 최종 성공 처리
             await interaction.edit_original_response(content="✅ 우편을 성공적으로 보냈습니다.", view=None, embed=None)
             
-            # ▼▼▼ [핵심 수정] DM 발송 대신 로그 채널에 알림을 보냅니다. ▼▼▼
+            # 6. 로그 채널에 알림 전송
             try:
                 log_channel_id = get_id("trade_log_channel_id")
                 if log_channel_id and (log_channel := self.cog.bot.get_channel(log_channel_id)):
@@ -423,7 +423,6 @@ class MailComposeView(ui.View):
                             sender_mention=self.user.mention, 
                             recipient_mention=self.recipient.mention
                         )
-                        # content에 받는 사람을 언급해야 실제 알림이 갑니다.
                         await log_channel.send(content=self.recipient.mention, embed=log_embed, allowed_mentions=discord.AllowedMentions(users=True))
             except Exception as e:
                 logger.error(f"우편 발송 로그 알림 전송 실패: {e}", exc_info=True)
@@ -473,7 +472,7 @@ class MailboxView(ui.View):
             embed.description = "받은 편지가 없습니다."
         else:
             embed.set_footer(text=f"페이지 {self.page + 1} / {math.ceil(res.count / 5)}")
-            for mail in self.mails_on_page:
+            for i, mail in enumerate(self.mails_on_page):
                 sender_id_int = int(mail['sender_id'])
                 sender = self.cog.bot.get_user(sender_id_int) or f"알 수 없는 유저 ({sender_id_int})"
                 sender_name = getattr(sender, 'display_name', str(sender))
@@ -482,6 +481,10 @@ class MailboxView(ui.View):
                 att_str = [f"📦 {att['item_name']}: {att['quantity']}개" for att in attachments if not att['is_coin']]
                 field_value = (f"> **메시지:** {mail['message']}\n" if mail['message'] else "") + "**첨부 아이템:**\n" + ("\n".join(att_str) if att_str else "없음")
                 embed.add_field(name=f"FROM: {sender_name} ({discord.utils.format_dt(datetime.fromisoformat(mail['sent_at']), 'R')})", value=field_value, inline=False)
+                
+                # ▼▼▼ [핵심 수정] 마지막 메일이 아닐 경우에만 구분선을 추가합니다. ▼▼▼
+                if i < len(self.mails_on_page) - 1:
+                    embed.add_field(name="\u200b", value="━━━━━━━━━━━━━━━━━━", inline=False)
         return embed
 
     async def build_components(self):
@@ -509,8 +512,7 @@ class MailboxView(ui.View):
         next_button = ui.Button(label="▶", style=discord.ButtonStyle.secondary, disabled=(self.page + 1) * 5 >= total_mails)
         next_button.callback = self.next_page_callback
         self.add_item(next_button)
-    
-    # ▼▼▼ [핵심 수정] claim_mail 함수를 수정합니다. ▼▼▼
+
     async def claim_mail(self, interaction: discord.Interaction):
         mail_id = int(interaction.data['values'][0])
         await interaction.response.defer()
@@ -519,15 +521,17 @@ class MailboxView(ui.View):
         if not (hasattr(res, 'data') and res.data and res.data.get('success')):
             return await interaction.followup.send(f"우편 수령에 실패했습니다: {res.data.get('message', '알 수 없는 오류')}", ephemeral=True)
         
-        # 성공 메시지를 별도로 보내지 않고, 바로 뷰를 업데이트합니다.
+        # ▼▼▼ [핵심 수정] 수령 확인 메시지를 추가합니다. ▼▼▼
+        data = res.data
+        claimed_items = "\n".join([f"ㄴ {item['name']}: {item['qty']}개" for item in data.get('items', [])])
+        await interaction.followup.send(f"**{data.get('sender_name', '??')}**님이 보낸 우편을 수령했습니다!\n\n**받은 아이템:**\n{claimed_items or '없음'}", ephemeral=True, delete_after=10)
+
         await self.update_view(interaction)
 
-    # ▼▼▼ [핵심 수정] delete_mail 함수를 수정합니다. ▼▼▼
     async def delete_mail(self, interaction: discord.Interaction):
         mail_id = int(interaction.data['values'][0])
         await interaction.response.defer()
         await supabase.table('mails').delete().eq('id', mail_id).eq('recipient_id', str(self.user.id)).execute()
-        # 삭제 성공 메시지를 보내지 않고, 바로 뷰를 업데이트합니다.
         await self.update_view(interaction)
         
     async def send_mail(self, interaction: discord.Interaction):
@@ -538,6 +542,13 @@ class MailboxView(ui.View):
             recipient = interaction.guild.get_member(recipient_id)
             if not recipient or recipient.bot or recipient.id == self.user.id:
                 return await select_interaction.response.send_message("잘못된 상대입니다.", ephemeral=True, delete_after=5)
+            
+            # ▼▼▼ [핵심 수정] 이전 메시지를 삭제합니다. ▼▼▼
+            try:
+                await interaction.delete_original_response()
+            except discord.NotFound:
+                pass # 이미 삭제되었을 수 있으므로 무시
+            
             if self.message: await self.message.delete()
             compose_view = MailComposeView(self.cog, self.user, recipient)
             await compose_view.start(select_interaction)
@@ -586,8 +597,11 @@ class TradePanelView(ui.View):
             await select_interaction.response.send_message(f"거래 수수료 {trade_fee}{self.cog.currency_icon}를 지불하고 거래를 시작합니다.", ephemeral=True, delete_after=5)
             await update_wallet(initiator, -trade_fee)
 
-            try: await interaction.delete_original_response()
-            except discord.NotFound: pass
+            # ▼▼▼ [핵심 수정] 이전 메시지를 삭제합니다. ▼▼▼
+            try:
+                await interaction.delete_original_response()
+            except discord.NotFound:
+                pass
             
             trade_view = TradeView(self.cog, initiator, partner)
             await trade_view.start_in_channel(select_interaction.channel)
