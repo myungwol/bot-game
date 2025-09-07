@@ -1,3 +1,4 @@
+# cogs/games/blacksmith.py
 
 import discord
 from discord.ext import commands, tasks
@@ -10,15 +11,14 @@ from datetime import datetime, timezone, timedelta
 from utils.database import (
     get_inventory, update_inventory, get_user_gear, set_user_gear,
     get_wallet, update_wallet, supabase, get_config,
-    save_panel_id, get_panel_id, get_embed_from_db
+    save_panel_id, get_panel_id, get_embed_from_db,
+    get_id # get_id를 import 합니다.
 )
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# ▼▼▼ [핵심 수정] 남은 시간을 보기 좋게 변환하는 헬퍼 함수 추가 ▼▼▼
 def format_timedelta(delta: timedelta) -> str:
-    """timedelta 객체를 'X일 Y시간 Z분 W초 남음' 형식의 문자열로 변환합니다."""
     total_seconds = int(delta.total_seconds())
     if total_seconds <= 0:
         return "완료됨"
@@ -39,7 +39,6 @@ def format_timedelta(delta: timedelta) -> str:
         
     return " ".join(parts) + " 남음" if parts else "곧 완료됨"
 
-# 업그레이드 레시피 정의
 UPGRADE_RECIPES = {
     # 낚싯대
     "구리 낚싯대":   {"requires_tool": "나무 낚싯대", "requires_items": {"구리 광석": 25}, "requires_coins": 2500},
@@ -96,7 +95,7 @@ class BlacksmithUpgradeView(ui.View):
         super().__init__(timeout=180)
         self.user = user
         self.cog = cog
-        self.tool_type = tool_type # "곡괭이", "괭이", "물뿌리개"
+        self.tool_type = tool_type
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
 
     async def start(self, interaction: discord.Interaction):
@@ -120,7 +119,6 @@ class BlacksmithUpgradeView(ui.View):
             self.cog.get_user_upgrade_status(self.user.id)
         )
         
-        # ▼▼▼ [핵심 수정] 남은 시간 표시 로직 변경 ▼▼▼
         if upgrade_status:
             completion_time = datetime.fromisoformat(upgrade_status['completion_timestamp'])
             now = datetime.now(timezone.utc)
@@ -172,7 +170,6 @@ class BlacksmithUpgradeView(ui.View):
         back_button.callback = self.on_back
         self.add_item(back_button)
 
-        # 업그레이드 버튼 추가 로직
         select = ui.Select(placeholder="업그레이드할 도구를 선택하세요...")
         options = []
         for target, recipe in UPGRADE_RECIPES.items():
@@ -187,10 +184,7 @@ class BlacksmithUpgradeView(ui.View):
     async def on_upgrade_select(self, interaction: discord.Interaction):
         target_tool = interaction.data['values'][0]
         await self.cog.start_upgrade(interaction, target_tool)
-        # Refresh the view after attempting an upgrade
-        await self.update_view(interaction)
-
-
+        
     async def on_back(self, interaction: discord.Interaction):
         tool_select_view = BlacksmithToolSelectView(self.user, self.cog)
         await tool_select_view.start(interaction)
@@ -206,7 +200,6 @@ class BlacksmithToolSelectView(ui.View):
         
         upgrade_status = await self.cog.get_user_upgrade_status(self.user.id)
         
-        # ▼▼▼ [핵심 수정] 남은 시간 표시 로직 변경 ▼▼▼
         if upgrade_status:
             completion_time = datetime.fromisoformat(upgrade_status['completion_timestamp'])
             now = datetime.now(timezone.utc)
@@ -285,6 +278,17 @@ class Blacksmith(commands.Cog):
 
                 await update_inventory(user_id, target_tool, 1)
                 
+                # ▼▼▼ [핵심 수정] 채널 알림 로직 추가 ▼▼▼
+                log_channel_id = get_id("log_blacksmith_channel_id")
+                if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
+                    try:
+                        embed_data = await get_embed_from_db("log_blacksmith_complete")
+                        if embed_data:
+                            log_embed = format_embed_from_db(embed_data, user_mention=user.mention, tool_name=target_tool)
+                            await log_channel.send(embed=log_embed)
+                    except Exception as e:
+                        logger.error(f"대장간 완료 로그 채널 메시지 전송 실패: {e}", exc_info=True)
+
                 try:
                     await user.send(f"🎉 **{target_tool}** 업그레이드가 완료되었습니다! 인벤토리를 확인해주세요.")
                 except discord.Forbidden:
@@ -311,12 +315,15 @@ class Blacksmith(commands.Cog):
             
         user_id = interaction.user.id
         
-        # 1. 중복 업그레이드 확인
         if await self.get_user_upgrade_status(user_id):
             await interaction.response.send_message("❌ 이미 다른 도구를 업그레이드하는 중입니다.", ephemeral=True, delete_after=5)
+            # ▼▼▼ [핵심 수정] 업그레이드 시도 후 뷰가 사라지는 것을 방지하기 위해 뷰를 다시 로드합니다. ▼▼▼
+            tool_type = next((tt for tt in ["낚싯대", "괭이", "물뿌리개", "곡괭이"] if tt in target_tool), None)
+            if tool_type:
+                current_view = BlacksmithUpgradeView(interaction.user, self, tool_type)
+                await current_view.start(interaction)
             return
 
-        # 2. 재료 및 비용 확인
         gear, wallet, inventory = await asyncio.gather(
             get_user_gear(interaction.user),
             get_wallet(user_id),
@@ -349,7 +356,9 @@ class Blacksmith(commands.Cog):
         try:
             tasks = [
                 update_wallet(interaction.user, -recipe['requires_coins']),
-                set_user_gear(user_id, **{gear_key: "맨손"})
+                set_user_gear(user_id, **{gear_key: "맨손"}),
+                # ▼▼▼ [핵심 수정] 기존 도구를 인벤토리에서 제거하는 로직을 추가합니다. ▼▼▼
+                update_inventory(user_id, recipe['requires_tool'], -1)
             ]
             for item, qty in recipe['requires_items'].items():
                 tasks.append(update_inventory(user_id, item, -qty))
@@ -362,7 +371,8 @@ class Blacksmith(commands.Cog):
                 "target_tool_name": target_tool,
                 "completion_timestamp": completion_time.isoformat()
             }).execute()
-
+            
+            # ▼▼▼ [핵심 수정] 성공 메시지를 보낸 후, 뷰를 새로고침하여 현재 상태를 보여줍니다. ▼▼▼
             await interaction.edit_original_response(content="✅ 업그레이드를 시작했습니다! 24시간 후에 완료됩니다.", view=None)
             
             final_view = BlacksmithToolSelectView(interaction.user, self)
@@ -372,7 +382,6 @@ class Blacksmith(commands.Cog):
             logger.error(f"업그레이드 시작 중 DB 오류: {e}", exc_info=True)
             await interaction.edit_original_response(content="❌ 업그레이드를 시작하는 중 오류가 발생했습니다. 재료가 소모되었을 수 있으니 관리자에게 문의하세요.", view=None)
     
-    # ▼▼▼ [핵심 수정] 아래에 register_persistent_views 함수를 추가하세요. ▼▼▼
     async def register_persistent_views(self):
         self.bot.add_view(BlacksmithPanelView(self))
         logger.info("✅ 대장간의 영구 View가 성공적으로 등록되었습니다.")
