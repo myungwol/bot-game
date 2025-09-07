@@ -13,7 +13,7 @@ import json
 
 from utils.database import (
     get_inventory, get_wallet, get_item_database, get_config, supabase,
-    save_panel_id, get_panel_id, get_embed_from_db
+    save_panel_id, get_panel_id, get_embed_from_db, update_inventory, update_wallet
 )
 from utils.helpers import format_embed_from_db
 
@@ -187,46 +187,54 @@ class TradeView(ui.View):
         for item in self.children:
             item.disabled = True
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=None)
-        
-        user1 = interaction.user
-        user2 = self.partner if user1.id == self.initiator.id else self.initiator
-        
+
+        user1, user2 = self.initiator, self.partner
         offer1, offer2 = self.offers[user1.id], self.offers[user2.id]
-        commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
 
         try:
-            p_offer1 = {"items": [{"name": str(k), "qty": int(v)} for k, v in offer1['items'].items()], "coins": int(offer1['coins'])}
-            p_offer2 = {"items": [{"name": str(k), "qty": int(v)} for k, v in offer2['items'].items()], "coins": int(offer2['coins'])}
-            
-            p_offer1_str = json.dumps(p_offer1, ensure_ascii=False)
-            p_offer2_str = json.dumps(p_offer2, ensure_ascii=False)
-            
-            # ▼▼▼ [핵심 수정] 사용자 ID를 str()이 아닌 int 그대로 전달합니다. ▼▼▼
-            params_to_send = {
-                'p_user1_id': user1.id,
-                'p_user2_id': user2.id,
-                'p_user1_offer': p_offer1_str,
-                'p_user2_offer': p_offer2_str,
-                'p_commission_fee': int(commission)
-            }
-            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+            # 1. 거래 전 최종 재고 및 잔액 확인 (Pre-flight check)
+            user1_wallet, user1_inv = await asyncio.gather(get_wallet(user1.id), get_inventory(user1))
+            user2_wallet, user2_inv = await asyncio.gather(get_wallet(user2.id), get_inventory(user2))
 
-            res = await supabase.rpc('process_trade', params_to_send).execute()
-            
-            response_data = res.data[0] if isinstance(res.data, list) and res.data else res.data
-            
-            if not (isinstance(response_data, dict) and response_data.get('success')):
-                error_message = response_data.get('message', '알 수 없는 DB 오류') if isinstance(response_data, dict) else 'DB 응답 형식 오류'
-                return await self.fail_trade(error_message)
+            if user1_wallet.get('balance', 0) < offer1['coins']:
+                return await self.fail_trade(f"{user1.display_name}님의 코인이 부족합니다.")
+            if user2_wallet.get('balance', 0) < offer2['coins']:
+                return await self.fail_trade(f"{user2.display_name}님의 코인이 부족합니다.")
 
-        except APIError as e:
-            user_facing_message = e.message or "데이터베이스 처리 중 오류가 발생했습니다."
-            logger.error(f"거래 처리 중 APIError: {user_facing_message}")
-            return await self.fail_trade(user_facing_message)
+            for item, qty in offer1['items'].items():
+                if user1_inv.get(item, 0) < qty:
+                    return await self.fail_trade(f"{user1.display_name}님의 '{item}' 재고가 부족합니다.")
+            for item, qty in offer2['items'].items():
+                if user2_inv.get(item, 0) < qty:
+                    return await self.fail_trade(f"{user2.display_name}님의 '{item}' 재고가 부족합니다.")
+
+            # 2. 모든 확인 통과 후, 실제 데이터베이스 업데이트 실행
+            tasks = []
+            commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
+            
+            # 코인 이동
+            user1_coin_change = offer2['coins'] - offer1['coins'] - math.ceil(commission / 2.0)
+            user2_coin_change = offer1['coins'] - offer2['coins'] - math.floor(commission / 2.0)
+            tasks.append(update_wallet(user1, int(user1_coin_change)))
+            tasks.append(update_wallet(user2, int(user2_coin_change)))
+
+            # 아이템 이동 (User1 -> User2)
+            for item, qty in offer1['items'].items():
+                tasks.append(update_inventory(user1.id, item, -qty))
+                tasks.append(update_inventory(user2.id, item, qty))
+
+            # 아이템 이동 (User2 -> User1)
+            for item, qty in offer2['items'].items():
+                tasks.append(update_inventory(user2.id, item, -qty))
+                tasks.append(update_inventory(user1.id, item, qty))
+
+            await asyncio.gather(*tasks)
+
         except Exception as e:
             logger.error(f"거래 처리 중 예외 발생: {e}", exc_info=True)
-            return await self.fail_trade("알 수 없는 오류가 발생했습니다.")
-        
+            return await self.fail_trade("알 수 없는 오류가 발생했습니다. 관리자에게 문의하세요.")
+
+        # 3. 성공 로그 기록
         log_channel = self.message.channel
         if self.message: await self.message.delete()
         
