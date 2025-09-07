@@ -173,7 +173,7 @@ class TradeView(ui.View):
         self.offers[user_id]["ready"] = not self.offers[user_id]["ready"]
         
         if self.offers[self.initiator.id]["ready"] and self.offers[self.partner.id]["ready"]:
-            await self.process_trade()
+            await self.process_trade(interaction)
         else:
             await self.update_ui()
 
@@ -186,28 +186,29 @@ class TradeView(ui.View):
     # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
     # [핵심 수정] process_trade 함수 전체를 아래 코드로 교체합니다.
     # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-    async def process_trade(self):
+    async def process_trade(self, interaction: discord.Interaction):
         for item in self.children:
             item.disabled = True
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=None)
         
-        user1, user2 = self.initiator, self.partner
+        # 버튼을 누른 사용자와 상대방을 명확히 구분합니다.
+        user1 = interaction.user
+        user2 = self.partner if user1.id == self.initiator.id else self.initiator
+        
         offer1, offer2 = self.offers[user1.id], self.offers[user2.id]
         commission = int((offer1['coins'] + offer2['coins']) * (self.commission_percent / 100))
 
         try:
-            # 1. Python 딕셔너리를 JSON '문자열'로 변환합니다.
+            # 데이터베이스 함수에 전달할 Python 딕셔너리를 준비합니다.
+            # json.dumps()는 사용하지 않습니다.
             p_offer1 = {"items": [{"name": str(k), "qty": int(v)} for k, v in offer1['items'].items()], "coins": int(offer1['coins'])}
             p_offer2 = {"items": [{"name": str(k), "qty": int(v)} for k, v in offer2['items'].items()], "coins": int(offer2['coins'])}
-            
-            p_offer1_str = json.dumps(p_offer1, ensure_ascii=False)
-            p_offer2_str = json.dumps(p_offer2, ensure_ascii=False)
             
             params_to_send = {
                 'p_user1_id': str(user1.id),
                 'p_user2_id': str(user2.id),
-                'p_user1_offer': p_offer1_str, # JSON 문자열 전달
-                'p_user2_offer': p_offer2_str, # JSON 문자열 전달
+                'p_user1_offer': p_offer1,
+                'p_user2_offer': p_offer2,
                 'p_commission_fee': int(commission)
             }
 
@@ -220,7 +221,7 @@ class TradeView(ui.View):
                 return await self.fail_trade(error_message)
 
         except APIError as e:
-            # 2. 오류 처리 로직은 e.message를 사용하도록 유지합니다.
+            # 오류 발생 시, 데이터베이스가 보내준 상세 메시지를 그대로 사용합니다.
             user_facing_message = e.message or "데이터베이스 처리 중 오류가 발생했습니다."
             logger.error(f"거래 처리 중 APIError: {user_facing_message}")
             return await self.fail_trade(user_facing_message)
