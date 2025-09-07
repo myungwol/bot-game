@@ -459,20 +459,29 @@ class MailboxView(ui.View):
     async def start(self, interaction: discord.Interaction):
         await self.update_view(interaction, new_message=True)
 
+    # ▼▼▼ [핵심 수정] update_view 로직을 수정하여 안정성을 높입니다. ▼▼▼
     async def update_view(self, interaction: discord.Interaction, new_message=False):
         embed = await self.build_embed()
         await self.build_components()
         
-        target = interaction.edit_original_response
-        if new_message:
-            target = interaction.response.send_message if not interaction.response.is_done() else interaction.followup.send
-        
         kwargs = {'embed': embed, 'view': self}
-        if new_message: kwargs['ephemeral'] = True
-        
-        message = await target(**kwargs)
-        if new_message and not self.message:
-            self.message = await interaction.original_response()
+
+        if new_message:
+            kwargs['ephemeral'] = True
+            target = interaction.response.send_message if not interaction.response.is_done() else interaction.followup.send
+            message = await target(**kwargs)
+            if not self.message:
+                self.message = message if message else await interaction.original_response()
+        else:
+            if self.message:
+                try:
+                    await self.message.edit(**kwargs)
+                except (discord.NotFound, discord.Forbidden) as e:
+                    logger.warning(f"MailboxView 메시지를 수정할 수 없습니다: {e}")
+                    await interaction.followup.send("UI를 업데이트할 수 없습니다. 우편함을 다시 열어주세요.", ephemeral=True, delete_after=5)
+            else:
+                logger.error("MailboxView 업데이트가 요청되었지만 self.message가 설정되지 않았습니다.")
+                await interaction.followup.send("오류: UI를 찾을 수 없습니다. 우편함을 다시 열어주세요.", ephemeral=True, delete_after=5)
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"📫 {self.user.display_name}의 우편함", color=0x964B00)
@@ -521,7 +530,6 @@ class MailboxView(ui.View):
             select.callback = self.on_mail_select
             self.add_item(select)
 
-        # ▼▼▼ [핵심 수정] 일괄 처리 버튼 추가 ▼▼▼
         claim_all_button = ui.Button(label="선택한 우편 모두 받기", style=discord.ButtonStyle.success, emoji="📥", disabled=not self.selected_mail_ids, row=1)
         claim_all_button.callback = self.claim_selected_mails
         self.add_item(claim_all_button)
@@ -563,7 +571,7 @@ class MailboxView(ui.View):
                     total_items[item['name']] = total_items.get(item['name'], 0) + item['qty']
 
         if claimed_count > 0:
-            item_summary = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in total_items.items()])
+            item_summary = "\n".join([f"ㄴ {item['name']}: {item['qty']}개" for item, qty in total_items.items()])
             await interaction.followup.send(f"{claimed_count}개의 우편을 수령했습니다!\n\n**총 받은 아이템:**\n{item_summary or '없음'}", ephemeral=True, delete_after=10)
         else:
             await interaction.followup.send("우편 수령에 실패했습니다.", ephemeral=True, delete_after=5)
