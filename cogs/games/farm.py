@@ -500,6 +500,7 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 농장 관련 영구 View가 정상적으로 등록되었습니다.")
         
+    # ▼▼▼ [핵심 수정] 이 함수 전체를 아래 코드로 교체해주세요. ▼▼▼
     @tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("일일 작물 상태 업데이트 시작...")
@@ -531,9 +532,11 @@ class Farm(commands.Cog):
             yesterday_jst_midnight = today_jst_midnight - timedelta(days=1)
 
             for plot in all_plots:
-                # ▼▼▼ [핵심 수정] update_payload를 plot.copy()로 초기화하고 farms 키를 제거합니다. ▼▼▼
-                update_payload = plot.copy()
-                update_payload.pop('farms', None)
+                update_payload = {
+                    'id': plot['id'],
+                    'state': plot['state'],
+                    'growth_stage': plot['growth_stage']
+                }
                 
                 owner_id = plot.get('farms', {}).get('user_id')
                 item_info = item_info_map.get(plot['planted_item_name'])
