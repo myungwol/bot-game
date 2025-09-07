@@ -303,7 +303,15 @@ class MailComposeView(ui.View):
             self.message = await target(embed=embed, view=self, ephemeral=True)
             if not isinstance(self.message, discord.WebhookMessage): self.message = await interaction.original_response()
         else:
-            await interaction.response.edit_message(embed=embed, view=self)
+            # [버그 수정] 응답이 이미 끝난 상호작용이므로, 저장된 메시지를 직접 수정합니다.
+            if self.message:
+                await self.message.edit(embed=embed, view=self)
+
+    # [핵심 수정] UI를 새로고침하는 전용 함수를 만듭니다.
+    async def refresh_ui(self):
+        if self.is_finished() or not self.message: return
+        embed = await self.build_embed()
+        await self.message.edit(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
@@ -333,7 +341,8 @@ class MailComposeView(ui.View):
             await modal.wait()
             if modal.quantity is not None:
                 self.attachments["items"][item_name] = self.attachments["items"].get(item_name, 0) + modal.quantity
-                await self.update_view(interaction)
+                # [버그 수정] interaction 대신 refresh_ui()를 호출합니다.
+                await self.refresh_ui()
             try: await select_interaction.delete_original_response()
             except discord.NotFound: pass
 
@@ -348,7 +357,8 @@ class MailComposeView(ui.View):
         await modal.wait()
         if modal.message is not None:
             self.message_content = modal.message
-            await self.update_view(interaction)
+            # [버그 수정] interaction 대신 refresh_ui()를 호출합니다.
+            await self.refresh_ui()
 
     @ui.button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀")
     async def send_button(self, interaction: discord.Interaction, button: ui.Button):
