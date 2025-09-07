@@ -374,11 +374,17 @@ class MailComposeView(ui.View):
             
             await asyncio.gather(*db_tasks)
 
+            # ▼▼▼ [핵심 수정] expires_at 필드를 추가합니다. ▼▼▼
+            now = datetime.now(timezone.utc)
+            expires_at = now + timedelta(days=30) # 30일 후 만료
+            
             # 3. 메일 레코드 생성
             mail_insert_res = await supabase.table('mails').insert({
                 "sender_id": str(self.user.id),
                 "recipient_id": str(self.recipient.id),
-                "message": self.message_content
+                "message": self.message_content,
+                "sent_at": now.isoformat(),
+                "expires_at": expires_at.isoformat()
             }).execute()
 
             if not (mail_insert_res and mail_insert_res.data):
