@@ -99,14 +99,13 @@ class TradeView(ui.View):
             
             status = "✅ 준비 완료" if offer["ready"] else "⏳ 준비 중"
             
-            # ▼▼▼ [핵심 수정] 필드 값을 재구성하여 멘션을 내용에 포함합니다. ▼▼▼
             field_value_parts = [f"**{user.mention}** ({status})"]
             if offer["items"]:
                 field_value_parts.extend([f"ㄴ {name}: {qty}개" for name, qty in offer["items"].items()])
             if offer["coins"] > 0:
                 field_value_parts.append(f"💰 {offer['coins']:,}{self.currency_icon}")
             
-            if len(field_value_parts) == 1: # 멘션과 상태 외에 제안이 없을 경우
+            if len(field_value_parts) == 1:
                 field_value_parts.append("제안 없음")
 
             embed.add_field(
@@ -181,8 +180,7 @@ class TradeView(ui.View):
             await self.process_trade(interaction)
         else:
             await self.update_ui()
-    
-    # ▼▼▼ [핵심 수정] 거래 취소 버튼 로직을 수정합니다. ▼▼▼
+
     @ui.button(label="취소", style=discord.ButtonStyle.danger, emoji="✖️")
     async def cancel_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.send_message("거래를 취소했습니다.", ephemeral=True, delete_after=10)
@@ -261,14 +259,12 @@ class TradeView(ui.View):
             await self.message.channel.send(f"❌ 거래 실패: {reason}", delete_after=10)
             await self.message.delete()
         self.stop()
-    
-    # ▼▼▼ [핵심 수정] on_timeout 함수를 수정하여 취소 주체를 받도록 합니다. ▼▼▼
+
     async def on_timeout(self, cancelled_by: Optional[discord.User] = None):
         if self.is_finished(): return
         self.stop()
         if self.message:
             try:
-                # 거래를 시작한 사람에게만 수수료 환불 알림
                 if self.initiator:
                     trade_fee = 50
                     await update_wallet(self.initiator, trade_fee)
@@ -458,6 +454,7 @@ class MailboxView(ui.View):
         self.mails_on_page: List[Dict] = []
         self.message: Optional[discord.WebhookMessage] = None
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
+        self.selected_mail_ids: List[str] = []
 
     async def start(self, interaction: discord.Interaction):
         await self.update_view(interaction, new_message=True)
@@ -506,52 +503,81 @@ class MailboxView(ui.View):
 
     async def build_components(self):
         self.clear_items()
-        mail_options = [ discord.SelectOption(label=f"보낸사람: {getattr(self.cog.bot.get_user(int(m['sender_id'])), 'display_name', m['sender_id'])}", value=str(m['id'])) for m in self.mails_on_page ]
-        if mail_options:
-            claim_select = ui.Select(placeholder="받을 편지 선택 (1개)", options=mail_options)
-            claim_select.callback = self.claim_mail
-            self.add_item(claim_select)
-            
-            delete_select = ui.Select(placeholder="삭제할 편지 선택 (1개)", options=mail_options)
-            delete_select.callback = self.delete_mail
-            self.add_item(delete_select)
+        
+        mail_options = [
+            discord.SelectOption(
+                label=f"보낸사람: {getattr(self.cog.bot.get_user(int(m['sender_id'])), 'display_name', m['sender_id'])}",
+                value=str(m['id']),
+                default=(str(m['id']) in self.selected_mail_ids)
+            ) for m in self.mails_on_page
+        ]
 
-        send_button = ui.Button(label="편지 보내기", style=discord.ButtonStyle.success, emoji="✉️")
+        if mail_options:
+            select = ui.Select(
+                placeholder="처리할 우편을 선택하세요 (여러 개 선택 가능)",
+                options=mail_options,
+                max_values=len(mail_options)
+            )
+            select.callback = self.on_mail_select
+            self.add_item(select)
+
+        # ▼▼▼ [핵심 수정] 일괄 처리 버튼 추가 ▼▼▼
+        claim_all_button = ui.Button(label="선택한 우편 모두 받기", style=discord.ButtonStyle.success, emoji="📥", disabled=not self.selected_mail_ids, row=1)
+        claim_all_button.callback = self.claim_selected_mails
+        self.add_item(claim_all_button)
+
+        delete_all_button = ui.Button(label="선택한 우편 모두 삭제", style=discord.ButtonStyle.danger, emoji="🗑️", disabled=not self.selected_mail_ids, row=1)
+        delete_all_button.callback = self.delete_selected_mails
+        self.add_item(delete_all_button)
+
+        send_button = ui.Button(label="편지 보내기", style=discord.ButtonStyle.success, emoji="✉️", row=2)
         send_button.callback = self.send_mail
         self.add_item(send_button)
         
         res = await supabase.table('mails').select('id', count='exact').eq('recipient_id', str(self.user.id)).is_('claimed_at', None).execute()
         total_mails = res.count or 0
 
-        prev_button = ui.Button(label="◀", style=discord.ButtonStyle.secondary, disabled=self.page == 0)
+        prev_button = ui.Button(label="◀", style=discord.ButtonStyle.secondary, disabled=self.page == 0, row=2)
         prev_button.callback = self.prev_page_callback
         self.add_item(prev_button)
-        next_button = ui.Button(label="▶", style=discord.ButtonStyle.secondary, disabled=(self.page + 1) * 5 >= total_mails)
+        next_button = ui.Button(label="▶", style=discord.ButtonStyle.secondary, disabled=(self.page + 1) * 5 >= total_mails, row=2)
         next_button.callback = self.next_page_callback
         self.add_item(next_button)
 
-    async def claim_mail(self, interaction: discord.Interaction):
-        mail_id = int(interaction.data['values'][0])
-        await interaction.response.defer()
-        res = await supabase.rpc('claim_mail', {'p_mail_id': mail_id, 'p_recipient_id': str(self.user.id)}).execute()
-        
-        if not (hasattr(res, 'data') and res.data and res.data.get('success')):
-            return await interaction.followup.send(f"우편 수령에 실패했습니다: {res.data.get('message', '알 수 없는 오류')}", ephemeral=True)
-        
-        data = res.data
-        mail_data = next((m for m in self.mails_on_page if m['id'] == mail_id), None)
-        sender_mention = f"<@{mail_data['sender_id']}>" if mail_data else f"**{data.get('sender_name', '??')}**"
-        
-        # ▼▼▼ [핵심 수정] 수령 확인 메시지를 ephemeral하게 보냅니다. ▼▼▼
-        claimed_items = "\n".join([f"ㄴ {item['name']}: {item['qty']}개" for item in data.get('items', [])])
-        await interaction.followup.send(f"{sender_mention}님이 보낸 우편을 수령했습니다!\n\n**받은 아이템:**\n{claimed_items or '없음'}", ephemeral=True, delete_after=10)
-
+    async def on_mail_select(self, interaction: discord.Interaction):
+        self.selected_mail_ids = interaction.data['values']
         await self.update_view(interaction)
 
-    async def delete_mail(self, interaction: discord.Interaction):
-        mail_id = int(interaction.data['values'][0])
-        await interaction.response.defer()
-        await supabase.table('mails').delete().eq('id', mail_id).eq('recipient_id', str(self.user.id)).execute()
+    async def claim_selected_mails(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        claimed_count = 0
+        total_items: Dict[str, int] = {}
+
+        for mail_id_str in self.selected_mail_ids:
+            mail_id = int(mail_id_str)
+            res = await supabase.rpc('claim_mail', {'p_mail_id': mail_id, 'p_recipient_id': str(self.user.id)}).execute()
+            if hasattr(res, 'data') and res.data and res.data.get('success'):
+                claimed_count += 1
+                for item in res.data.get('items', []):
+                    total_items[item['name']] = total_items.get(item['name'], 0) + item['qty']
+
+        if claimed_count > 0:
+            item_summary = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in total_items.items()])
+            await interaction.followup.send(f"{claimed_count}개의 우편을 수령했습니다!\n\n**총 받은 아이템:**\n{item_summary or '없음'}", ephemeral=True, delete_after=10)
+        else:
+            await interaction.followup.send("우편 수령에 실패했습니다.", ephemeral=True, delete_after=5)
+        
+        self.selected_mail_ids.clear()
+        await self.update_view(interaction)
+
+    async def delete_selected_mails(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        mail_ids_to_delete = [int(mid) for mid in self.selected_mail_ids]
+        
+        await supabase.table('mails').delete().in_('id', mail_ids_to_delete).eq('recipient_id', str(self.user.id)).execute()
+        
+        self.selected_mail_ids.clear()
         await self.update_view(interaction)
         
     async def send_mail(self, interaction: discord.Interaction):
