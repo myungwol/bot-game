@@ -13,7 +13,8 @@ import json
 
 from utils.database import (
     get_inventory, get_wallet, get_item_database, get_config, supabase,
-    save_panel_id, get_panel_id, get_embed_from_db, update_inventory, update_wallet
+    save_panel_id, get_panel_id, get_embed_from_db, update_inventory, update_wallet,
+    get_id # get_id를 import합니다.
 )
 from utils.helpers import format_embed_from_db
 
@@ -374,7 +375,6 @@ class MailComposeView(ui.View):
             
             await asyncio.gather(*db_tasks)
 
-            # ▼▼▼ [핵심 수정] expires_at 필드를 추가합니다. ▼▼▼
             now = datetime.now(timezone.utc)
             expires_at = now + timedelta(days=30) # 30일 후 만료
             
@@ -412,14 +412,21 @@ class MailComposeView(ui.View):
             # 5. 최종 성공 처리
             await interaction.edit_original_response(content="✅ 우편을 성공적으로 보냈습니다.", view=None, embed=None)
             
-            # 6. 수신자에게 DM 발송
+            # ▼▼▼ [핵심 수정] DM 발송 대신 로그 채널에 알림을 보냅니다. ▼▼▼
             try:
-                dm_embed_data = await get_embed_from_db("dm_new_mail")
-                if dm_embed_data:
-                    dm_embed = format_embed_from_db(dm_embed_data, sender_name=self.user.display_name)
-                    await self.recipient.send(embed=dm_embed)
-            except (discord.Forbidden, discord.HTTPException):
-                logger.warning(f"{self.recipient.id}에게 우편 도착 DM을 보낼 수 없습니다.")
+                log_channel_id = get_id("trade_log_channel_id")
+                if log_channel_id and (log_channel := self.cog.bot.get_channel(log_channel_id)):
+                    embed_data = await get_embed_from_db("log_new_mail")
+                    if embed_data:
+                        log_embed = format_embed_from_db(
+                            embed_data, 
+                            sender_mention=self.user.mention, 
+                            recipient_mention=self.recipient.mention
+                        )
+                        # content에 받는 사람을 언급해야 실제 알림이 갑니다.
+                        await log_channel.send(content=self.recipient.mention, embed=log_embed, allowed_mentions=discord.AllowedMentions(users=True))
+            except Exception as e:
+                logger.error(f"우편 발송 로그 알림 전송 실패: {e}", exc_info=True)
             
             self.stop()
 
@@ -502,7 +509,8 @@ class MailboxView(ui.View):
         next_button = ui.Button(label="▶", style=discord.ButtonStyle.secondary, disabled=(self.page + 1) * 5 >= total_mails)
         next_button.callback = self.next_page_callback
         self.add_item(next_button)
-
+    
+    # ▼▼▼ [핵심 수정] claim_mail 함수를 수정합니다. ▼▼▼
     async def claim_mail(self, interaction: discord.Interaction):
         mail_id = int(interaction.data['values'][0])
         await interaction.response.defer()
@@ -510,16 +518,16 @@ class MailboxView(ui.View):
         
         if not (hasattr(res, 'data') and res.data and res.data.get('success')):
             return await interaction.followup.send(f"우편 수령에 실패했습니다: {res.data.get('message', '알 수 없는 오류')}", ephemeral=True)
-        data = res.data
-        claimed_items = "\n".join([f"ㄴ {item['name']}: {item['qty']}개" for item in data.get('items', [])])
-        await interaction.followup.send(f"**{data.get('sender_name', '??')}**님이 보낸 우편을 수령했습니다!\n\n**받은 아이템:**\n{claimed_items or '없음'}", ephemeral=True)
+        
+        # 성공 메시지를 별도로 보내지 않고, 바로 뷰를 업데이트합니다.
         await self.update_view(interaction)
 
+    # ▼▼▼ [핵심 수정] delete_mail 함수를 수정합니다. ▼▼▼
     async def delete_mail(self, interaction: discord.Interaction):
         mail_id = int(interaction.data['values'][0])
         await interaction.response.defer()
         await supabase.table('mails').delete().eq('id', mail_id).eq('recipient_id', str(self.user.id)).execute()
-        await interaction.followup.send("선택한 우편을 삭제했습니다.", ephemeral=True, delete_after=5)
+        # 삭제 성공 메시지를 보내지 않고, 바로 뷰를 업데이트합니다.
         await self.update_view(interaction)
         
     async def send_mail(self, interaction: discord.Interaction):
