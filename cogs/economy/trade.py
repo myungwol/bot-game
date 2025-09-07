@@ -348,10 +348,7 @@ class MailComposeView(ui.View):
         if modal.message is not None:
             self.message_content = modal.message
             await self.refresh_ui()
-            
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-    # [핵심 수정] send_button 함수 전체를 아래 코드로 교체합니다.
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+
     @ui.button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀")
     async def send_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -382,9 +379,9 @@ class MailComposeView(ui.View):
                 "sender_id": str(self.user.id),
                 "recipient_id": str(self.recipient.id),
                 "message": self.message_content
-            }).select('id').single().execute()
+            }).execute()
 
-            if not mail_insert_res.data:
+            if not (mail_insert_res and mail_insert_res.data):
                 logger.error("메일 레코드 생성 실패. 환불을 시도합니다.")
                 refund_tasks = [update_wallet(self.user, self.shipping_fee)]
                 for item_name, quantity in self.attachments["items"].items():
@@ -392,7 +389,7 @@ class MailComposeView(ui.View):
                 await asyncio.gather(*refund_tasks)
                 return await interaction.followup.send("우편 발송에 실패했습니다 (메일 생성 오류). 비용이 환불되었습니다.", ephemeral=True)
 
-            new_mail_id = mail_insert_res.data['id']
+            new_mail_id = mail_insert_res.data[0]['id']
 
             # 4. 첨부 파일 레코드 생성
             if self.attachments["items"]:
