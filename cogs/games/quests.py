@@ -21,6 +21,22 @@ logger = logging.getLogger(__name__)
 
 KST = timezone(timedelta(hours=9))
 
+# ▼▼▼ [핵심 수정] 주간 퀘스트 기간을 정확히 계산하는 헬퍼 함수 추가 ▼▼▼
+def get_current_week_start_end_utc() -> (str, str):
+    """현재 KST 기준의 주(월요일 시작)의 시작과 끝 시간을 UTC ISO 형식으로 반환합니다."""
+    now_kst = datetime.now(KST)
+    # 월요일(0) ~ 일요일(6)
+    start_of_week_kst = now_kst - timedelta(days=now_kst.weekday())
+    start_of_week_kst = start_of_week_kst.replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    end_of_week_kst = start_of_week_kst + timedelta(days=7)
+    
+    # Supabase는 UTC 시간을 사용하므로 변환
+    start_of_week_utc = start_of_week_kst.astimezone(timezone.utc).isoformat()
+    end_of_week_utc = end_of_week_kst.astimezone(timezone.utc).isoformat()
+    
+    return start_of_week_utc, end_of_week_utc
+
 QUEST_REWARDS = {
     "daily": {
         "attendance": {"coin": 10, "xp": 5},
@@ -131,13 +147,51 @@ class QuestView(ui.View):
         await self.update_components()
         await interaction.edit_original_response(embed=embed, view=self)
 
+    # ▼▼▼ [핵심 수정] 주간 진행도를 실시간으로 계산하는 메소드 추가 ▼▼▼
+    async def _get_weekly_progress(self) -> Dict[str, int]:
+        """현재 주의 활동량을 user_activities 테이블에서 직접 집계합니다."""
+        start_utc, end_utc = get_current_week_start_end_utc()
+        
+        # 각 활동별로 데이터를 병렬로 가져옵니다.
+        attendance_task = supabase.rpc('count_activity_in_range', {
+            'p_user_id': str(self.user.id),
+            'p_activity_type': 'daily_check_in',
+            'p_start_time': start_utc,
+            'p_end_time': end_utc
+        }).execute()
+        
+        voice_task = supabase.rpc('sum_activity_in_range', {
+            'p_user_id': str(self.user.id),
+            'p_activity_type': 'voice',
+            'p_start_time': start_utc,
+            'p_end_time': end_utc
+        }).execute()
+
+        fishing_task = supabase.rpc('sum_activity_in_range', {
+            'p_user_id': str(self.user.id),
+            'p_activity_type': 'fishing_catch',
+            'p_start_time': start_utc,
+            'p_end_time': end_utc
+        }).execute()
+        
+        att_res, voice_res, fish_res = await asyncio.gather(attendance_task, voice_task, fishing_task)
+
+        return {
+            "check_in_count": att_res.data if att_res.data is not None else 0,
+            "voice_minutes": voice_res.data if voice_res.data is not None else 0,
+            "fishing_count": fish_res.data if fish_res.data is not None else 0
+        }
+
     async def build_embed(self) -> discord.Embed:
-        summary = await get_all_user_stats(self.user.id)
+        if self.current_tab == "daily":
+            summary = await get_all_user_stats(self.user.id)
+            stats_to_show = summary.get("daily", {})
+        else: # 주간 탭
+            stats_to_show = await self._get_weekly_progress()
         
         embed = discord.Embed(color=0x2ECC71)
         embed.set_author(name=f"{self.user.display_name}님의 퀘스트", icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
         
-        stats_to_show = summary.get(self.current_tab, {})
         quests_to_show = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
         rewards = QUEST_REWARDS[self.current_tab]
 
@@ -177,8 +231,12 @@ class QuestView(ui.View):
             return
 
         quests_to_check = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
-        summary = await get_all_user_stats(self.user.id)
-        stats_to_check = summary.get(self.current_tab, {})
+        
+        if self.current_tab == "daily":
+            summary = await get_all_user_stats(self.user.id)
+            stats_to_check = summary.get("daily", {})
+        else:
+            stats_to_check = await self._get_weekly_progress()
         
         progress_key_map = {"attendance": "check_in_count", "voice": "voice_minutes", "fishing": "fishing_count"}
 
@@ -196,7 +254,7 @@ class QuestView(ui.View):
         already_claimed = await get_cooldown(self.user.id, cooldown_key) > 0
 
         if already_claimed:
-            claim_button.label = "오늘의 보상을 받았습니다"
+            claim_button.label = "오늘의 보상을 받았습니다" if self.current_tab == "daily" else "이번 주 보상을 받았습니다"
             claim_button.style = discord.ButtonStyle.secondary
             claim_button.disabled = True
         elif all_quests_complete:
