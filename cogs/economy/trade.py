@@ -424,9 +424,7 @@ class MailComposeView(ui.View):
             
             await interaction.edit_original_response(content="✅ 우편을 성공적으로 보냈습니다.", view=None, embed=None)
             
-            # ▼▼▼ [핵심 수정] 알림 전송 및 패널 재생성 로직 ▼▼▼
             try:
-                # 거래소 패널이 있는 채널을 가져옵니다.
                 panel_channel_id = get_id("trade_panel_channel_id")
                 if panel_channel_id and (panel_channel := self.cog.bot.get_channel(panel_channel_id)):
                     embed_data = await get_embed_from_db("log_new_mail")
@@ -436,14 +434,13 @@ class MailComposeView(ui.View):
                             sender_mention=self.user.mention, 
                             recipient_mention=self.recipient.mention
                         )
-                        # 알림 메시지를 먼저 보냅니다.
                         await panel_channel.send(
                             content=self.recipient.mention, 
                             embed=log_embed, 
-                            allowed_mentions=discord.AllowedMentions(users=True)
+                            allowed_mentions=discord.AllowedMentions(users=True),
+                            delete_after=60.0
                         )
                     
-                    # 그 다음, 패널을 재생성합니다.
                     await self.cog.regenerate_panel(panel_channel)
             except Exception as e:
                 logger.error(f"우편 발송 후 패널 알림/재생성 실패: {e}", exc_info=True)
@@ -564,43 +561,38 @@ class MailboxView(ui.View):
     async def on_mail_select(self, interaction: discord.Interaction):
         self.selected_mail_ids = interaction.data['values']
         await self.update_view(interaction)
-    
-    # ▼▼▼ [핵심 수정] claim_selected_mails 함수를 전면 수정합니다. ▼▼▼
+
     async def claim_selected_mails(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
         claimed_count = 0
         total_items: Dict[str, int] = {}
-        
+        db_tasks = []
+
         mail_ids_to_process = [int(mid) for mid in self.selected_mail_ids]
         
-        # 1. 첨부 파일 정보 가져오기
         attachments_res = await supabase.table('mail_attachments').select('*').in_('mail_id', mail_ids_to_process).execute()
         
-        # 2. 아이템 지급 작업 목록 생성
         if attachments_res.data:
             for att in attachments_res.data:
                 total_items[att['item_name']] = total_items.get(att['item_name'], 0) + att['quantity']
-        
-        db_tasks = [update_inventory(self.user.id, item_name, qty) for item_name, qty in total_items.items()]
+            
+            for item_name, qty in total_items.items():
+                db_tasks.append(update_inventory(self.user.id, item_name, qty))
         
         try:
-            # 3. DB 작업 실행
             if db_tasks:
                 await asyncio.gather(*db_tasks)
             
-            # 4. 성공한 메일 상태 업데이트
             now_iso = datetime.now(timezone.utc).isoformat()
             await supabase.table('mails').update({'claimed_at': now_iso}).in_('id', mail_ids_to_process).execute()
             claimed_count = len(mail_ids_to_process)
 
         except Exception as e:
             logger.error(f"우편 일괄 수령 중 DB 작업 오류: {e}", exc_info=True)
-            # (선택적) 롤백 로직을 여기에 추가할 수 있습니다.
             await interaction.followup.send("우편을 수령하는 중 오류가 발생했습니다.", ephemeral=True)
             return
-
-        # 5. 결과 메시지 전송
+        
         if claimed_count > 0:
             item_summary = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in total_items.items()])
             success_message = f"{claimed_count}개의 우편을 수령했습니다!\n\n**총 받은 아이템:**\n{item_summary or '없음'}"
@@ -612,9 +604,10 @@ class MailboxView(ui.View):
                 try: await message.delete()
                 except discord.NotFound: pass
             self.cog.bot.loop.create_task(delete_msg_after(10, msg))
+
         else:
             await interaction.followup.send("수령할 우편이 없거나 오류가 발생했습니다.", ephemeral=True)
-
+        
         self.selected_mail_ids.clear()
         await self.update_view(interaction)
 
@@ -646,7 +639,7 @@ class MailboxView(ui.View):
             await compose_view.start(select_interaction)
         user_select.callback = callback
         select_view.add_item(user_select)
-        await interaction.response.send_message("누구에게 편지를 보내시겠습니까?", view=view, ephemeral=True)
+        await interaction.response.send_message("누구에게 편지를 보내시겠습니까?", view=select_view, ephemeral=True)
     
     async def prev_page_callback(self, interaction: discord.Interaction):
         self.page -= 1
