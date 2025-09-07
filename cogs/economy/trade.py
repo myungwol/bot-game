@@ -189,7 +189,6 @@ class TradeView(ui.View):
         offer1, offer2 = self.offers[user1.id], self.offers[user2.id]
 
         try:
-            # 1. 거래 전 최종 재고 및 잔액 확인 (Pre-flight check)
             user1_wallet, user1_inv = await asyncio.gather(get_wallet(user1.id), get_inventory(user1))
             user2_wallet, user2_inv = await asyncio.gather(get_wallet(user2.id), get_inventory(user2))
 
@@ -205,10 +204,7 @@ class TradeView(ui.View):
                 if user2_inv.get(item, 0) < qty:
                     return await self.fail_trade(f"{user2.display_name}님의 '{item}' 재고가 부족합니다.")
 
-            # 2. 모든 확인 통과 후, 실제 데이터베이스 업데이트 실행
             tasks = []
-            
-            # 코인 이동 (수수료 없음)
             user1_coin_change = offer2['coins'] - offer1['coins']
             user2_coin_change = offer1['coins'] - offer2['coins']
             if user1_coin_change != 0:
@@ -216,12 +212,10 @@ class TradeView(ui.View):
             if user2_coin_change != 0:
                 tasks.append(update_wallet(user2, int(user2_coin_change)))
 
-            # 아이템 이동 (User1 -> User2)
             for item, qty in offer1['items'].items():
                 tasks.append(update_inventory(user1.id, item, -qty))
                 tasks.append(update_inventory(user2.id, item, qty))
 
-            # 아이템 이동 (User2 -> User1)
             for item, qty in offer2['items'].items():
                 tasks.append(update_inventory(user2.id, item, -qty))
                 tasks.append(update_inventory(user1.id, item, qty))
@@ -233,7 +227,6 @@ class TradeView(ui.View):
             logger.error(f"거래 처리 중 예외 발생: {e}", exc_info=True)
             return await self.fail_trade("알 수 없는 오류가 발생했습니다. 관리자에게 문의하세요.")
 
-        # 3. 성공 로그 기록
         log_channel = self.message.channel
         if self.message: await self.message.delete()
         
@@ -303,11 +296,9 @@ class MailComposeView(ui.View):
             self.message = await target(embed=embed, view=self, ephemeral=True)
             if not isinstance(self.message, discord.WebhookMessage): self.message = await interaction.original_response()
         else:
-            # [버그 수정] 응답이 이미 끝난 상호작용이므로, 저장된 메시지를 직접 수정합니다.
             if self.message:
                 await self.message.edit(embed=embed, view=self)
 
-    # [핵심 수정] UI를 새로고침하는 전용 함수를 만듭니다.
     async def refresh_ui(self):
         if self.is_finished() or not self.message: return
         embed = await self.build_embed()
@@ -341,7 +332,6 @@ class MailComposeView(ui.View):
             await modal.wait()
             if modal.quantity is not None:
                 self.attachments["items"][item_name] = self.attachments["items"].get(item_name, 0) + modal.quantity
-                # [버그 수정] interaction 대신 refresh_ui()를 호출합니다.
                 await self.refresh_ui()
             try: await select_interaction.delete_original_response()
             except discord.NotFound: pass
@@ -357,7 +347,6 @@ class MailComposeView(ui.View):
         await modal.wait()
         if modal.message is not None:
             self.message_content = modal.message
-            # [버그 수정] interaction 대신 refresh_ui()를 호출합니다.
             await self.refresh_ui()
 
     @ui.button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀")
@@ -373,8 +362,8 @@ class MailComposeView(ui.View):
             p_attachments_json_str = json.dumps(p_attachments, ensure_ascii=False)
 
             res = await supabase.rpc('send_mail_with_attachments', {
-                'p_sender_id': str(self.user.id),
-                'p_recipient_id': str(self.recipient.id),
+                'p_sender_id': self.user.id,
+                'p_recipient_id': self.recipient.id,
                 'p_message': self.message_content,
                 'p_attachments': p_attachments_json_str,
                 'p_shipping_fee': self.shipping_fee
@@ -545,7 +534,6 @@ class TradePanelView(ui.View):
             if trade_id in self.cog.active_trades:
                  return await select_interaction.response.send_message("상대방 또는 본인이 이미 다른 거래에 참여 중입니다.", ephemeral=True, delete_after=5)
             
-            # [버그 수정] 응답을 먼저 하고, 그 다음에 시간이 걸릴 수 있는 작업을 수행합니다.
             await select_interaction.response.send_message(f"거래 수수료 {trade_fee}{self.cog.currency_icon}를 지불하고 거래를 시작합니다.", ephemeral=True, delete_after=5)
             await update_wallet(initiator, -trade_fee)
 
@@ -553,7 +541,6 @@ class TradePanelView(ui.View):
             except discord.NotFound: pass
             
             trade_view = TradeView(self.cog, initiator, partner)
-            # [버그 수정] interaction이 아닌 channel 객체를 전달합니다.
             await trade_view.start_in_channel(select_interaction.channel)
         user_select.callback = select_callback
         view.add_item(user_select)
