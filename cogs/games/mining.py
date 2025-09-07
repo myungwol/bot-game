@@ -8,7 +8,7 @@ import asyncio
 import time
 import random
 from typing import Optional, Dict, List
-from datetime import timedelta
+from datetime import datetime, timezone, timedelta
 
 from utils.database import (
     get_inventory, update_inventory, get_user_gear, BARE_HANDS,
@@ -47,14 +47,15 @@ ORE_XP_MAP = {
 }
 
 class MiningGameView(ui.View):
-    def __init__(self, cog_instance: 'Mining', user: discord.Member, thread: discord.Thread, pickaxe: str, user_abilities: List[str], duration: int, duration_doubled: bool):
-        super().__init__(timeout=duration)
+    def __init__(self, cog_instance: 'Mining', user: discord.Member, thread: discord.Thread, pickaxe: str, user_abilities: List[str], duration: int, end_time: datetime, duration_doubled: bool):
+        super().__init__(timeout=duration + 5) # 타임아웃을 넉넉하게 설정
         self.cog = cog_instance
         self.user = user
         self.thread = thread
         self.pickaxe = pickaxe
         self.user_abilities = user_abilities
         self.duration_doubled = duration_doubled
+        self.end_time = end_time # Cog로부터 만료 시간 직접 받기
         
         self.luck_bonus = PICKAXE_LUCK_BONUS.get(pickaxe, 1.0)
         if 'mine_rare_up_2' in self.user_abilities: self.luck_bonus += 0.5
@@ -66,25 +67,11 @@ class MiningGameView(ui.View):
         self.discovered_ore: Optional[str] = None
         self.last_result_text: Optional[str] = None
         
-        self.end_time = discord.utils.utcnow() + timedelta(seconds=duration)
-        self.warning_task: Optional[asyncio.Task] = None
         self.on_cooldown = False
 
-    async def start(self):
-        if self.timeout is not None and self.timeout > 60:
-            self.warning_task = asyncio.create_task(self.send_warning())
-
-    async def send_warning(self):
-        try:
-            await asyncio.sleep(self.timeout - 60)
-            if not self.is_finished() and self.thread:
-                await self.thread.send("⚠️ 곧 광산이 닫힙니다...", delete_after=60)
-        except asyncio.CancelledError:
-            pass
-
     def stop(self):
-        if self.warning_task and not self.warning_task.done():
-            self.warning_task.cancel()
+        # ▼▼▼ [핵심 수정] 올바른 세션에서 제거하도록 수정 (이전의 복사/붙여넣기 오류 수정) ▼▼▼
+        self.cog.active_sessions.pop(self.user.id, None)
         super().stop()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -207,7 +194,7 @@ class MiningGameView(ui.View):
                 except discord.NotFound: self.stop()
 
     async def on_timeout(self):
-        await self.cog.close_mine_session(self.user.id, self.thread, "시간이 다 되어")
+        # 타임아웃은 중앙 루프에서 처리하므로 이 함수는 비워두거나 최소한의 정리만 수행
         self.stop()
 
 class MiningPanelView(ui.View):
@@ -223,6 +210,46 @@ class Mining(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_sessions: Dict[int, Dict] = {}
+        # ▼▼▼ [핵심 수정] check_expired_mines 루프를 시작합니다. ▼▼▼
+        self.check_expired_mines.start()
+
+    # ▼▼▼ [핵심 수정] Cog가 언로드될 때 루프를 멈추도록 합니다. ▼▼▼
+    def cog_unload(self):
+        self.check_expired_mines.cancel()
+
+    # ▼▼▼ [핵심 수정] 만료된 광산을 확인하고 처리하는 중앙 관리 루프를 추가합니다. ▼▼▼
+    @tasks.loop(seconds=20.0)
+    async def check_expired_mines(self):
+        now = datetime.now(timezone.utc)
+        
+        # 동시성 문제를 피하기 위해 세션 딕셔너리의 복사본을 순회합니다.
+        for user_id, session_data in list(self.active_sessions.items()):
+            end_time = session_data.get('end_time')
+            if not end_time:
+                continue
+
+            # 만료 시간 확인
+            if now >= end_time:
+                thread = self.bot.get_channel(session_data['thread_id'])
+                await self.close_mine_session(user_id, thread, "시간이 다 되어")
+                continue # 다음 세션으로 넘어감
+
+            # 1분 전 알림 확인
+            warning_sent = session_data.get('warning_sent', False)
+            if not warning_sent and (end_time - timedelta(minutes=1)) <= now:
+                thread = self.bot.get_channel(session_data['thread_id'])
+                if thread:
+                    try:
+                        await thread.send("⚠️ 1분 후 광산이 닫힙니다...", delete_after=60)
+                        # 알림을 보냈다고 기록하여 중복 전송을 방지합니다.
+                        self.active_sessions[user_id]['warning_sent'] = True
+                    except (discord.Forbidden, discord.HTTPException) as e:
+                        logger.warning(f"광산 1분 전 알림 전송 실패 (스레드 ID: {thread.id}): {e}")
+
+    @check_expired_mines.before_loop
+    async def before_check_expired_mines(self):
+        await self.bot.wait_until_ready()
+
 
     async def handle_enter_mine(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -270,15 +297,21 @@ class Mining(commands.Cog):
         if duration_doubled:
             duration *= 2
         
-        view = MiningGameView(self, user, thread, pickaxe, user_abilities, duration, duration_doubled)
+        # ▼▼▼ [핵심 수정] 세션 데이터에 end_time과 warning_sent 플래그를 추가합니다. ▼▼▼
+        end_time = datetime.now(timezone.utc) + timedelta(seconds=duration)
+        self.active_sessions[user.id] = {
+            "thread_id": thread.id,
+            "end_time": end_time,
+            "warning_sent": False
+        }
+        
+        view = MiningGameView(self, user, thread, pickaxe, user_abilities, duration, end_time, duration_doubled)
         
         embed = view.build_embed()
         embed.title = f"⛏️ {user.display_name}님의 광산 채굴"
         
         await thread.send(embed=embed, view=view)
-        await view.start()
         
-        self.active_sessions[user.id] = {"thread_id": thread.id}
         await interaction.followup.send(f"광산에 입장했습니다! {thread.mention}", ephemeral=True)
 
     async def close_mine_session(self, user_id: int, thread: Optional[discord.Thread], reason: str):
