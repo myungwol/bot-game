@@ -57,7 +57,6 @@ class MiningGameView(ui.View):
         self.duration_doubled = duration_doubled
         self.end_time = end_time
         
-        # ▼▼▼ [핵심 수정] 채굴 기록을 위한 변수를 추가합니다. ▼▼▼
         self.mined_ores: Dict[str, int] = {}
         
         self.luck_bonus = PICKAXE_LUCK_BONUS.get(pickaxe, 1.0)
@@ -72,6 +71,8 @@ class MiningGameView(ui.View):
         self.message: Optional[discord.Message] = None
         self.on_cooldown = False
 
+        # ▼▼▼ [핵심 수정] UI 업데이트 경쟁 상태를 막기 위한 잠금(Lock)을 추가합니다. ▼▼▼
+        self.ui_lock = asyncio.Lock()
         self.ui_update_task = self.cog.bot.loop.create_task(self.ui_updater())
 
     def stop(self):
@@ -81,15 +82,17 @@ class MiningGameView(ui.View):
 
     async def ui_updater(self):
         while not self.is_finished():
-            try:
-                if self.message and self.state == "idle":
-                    embed = self.build_embed()
-                    await self.message.edit(embed=embed)
-            except (discord.NotFound, discord.Forbidden):
-                self.stop()
-                break
-            except Exception as e:
-                logger.error(f"Mining UI 업데이트 중 오류: {e}", exc_info=True)
+            async with self.ui_lock:
+                try:
+                    # 잠금을 획득했을 때만 UI 업데이트 시도
+                    if self.message and self.state == "idle":
+                        embed = self.build_embed()
+                        await self.message.edit(embed=embed)
+                except (discord.NotFound, discord.Forbidden):
+                    self.stop()
+                    break
+                except Exception as e:
+                    logger.error(f"Mining UI 업데이트 중 오류: {e}", exc_info=True)
             
             await asyncio.sleep(10)
 
@@ -101,6 +104,14 @@ class MiningGameView(ui.View):
             await interaction.response.send_message("본인만 채굴할 수 있습니다.", ephemeral=True, delete_after=5)
             return False
         return True
+        
+    # ▼▼▼ [핵심 수정] View에서 발생하는 모든 오류를 잡아내는 핸들러를 추가합니다. ▼▼▼
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: ui.Item[Any]) -> None:
+        logger.error(f"MiningGameView에서 오류 발생 (Item: {item.custom_id}): {error}", exc_info=True)
+        if interaction.response.is_done():
+            await interaction.followup.send("처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
+        else:
+            await interaction.response.send_message("처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
 
     def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", color=0x607D8B)
@@ -139,88 +150,93 @@ class MiningGameView(ui.View):
 
     @ui.button(label="광석 찾기", style=discord.ButtonStyle.secondary, emoji="🔍", custom_id="mine_action_button")
     async def action_button(self, interaction: discord.Interaction, button: ui.Button):
-        if self.user.id not in self.cog.active_sessions:
-            button.disabled = True
-            await interaction.response.edit_message(content="이미 만료된 광산입니다.", view=self, embed=None)
-            return
-        
-        if self.state == "idle":
-            self.last_result_text = None
-            button.disabled = True; button.label = "탐색 중..."
-            embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", description="더 깊이 들어가서 찾아보자...", color=0x607D8B)
-            await interaction.response.edit_message(embed=embed, view=self)
-            
-            ores = list(ORE_DATA.keys())
-            original_weights = [data['weight'] for data in ORE_DATA.values()]
-            new_weights = [w * self.luck_bonus if o != "꽝" else w for o, w in zip(ores, original_weights)]
-            self.discovered_ore = random.choices(ores, weights=new_weights, k=1)[0]
-            
-            if self.discovered_ore == "꽝":
-                self.state = "discovered"
-                button.label = "다시 찾아보기"
-                button.emoji = "🔍"
-            else:
-                self.state = "discovered"
-                button.label = "채굴하기"; button.style = discord.ButtonStyle.primary; button.emoji = "⛏️"
-            
-            embed = self.build_embed()
-            button.disabled = False
-            await interaction.edit_original_response(embed=embed, view=self)
-
-        elif self.state == "discovered":
-            if self.discovered_ore == "꽝":
-                self.on_cooldown = True
+        # ▼▼▼ [핵심 수정] 버튼 클릭 시 UI 잠금을 획득하여 경쟁 상태를 방지합니다. ▼▼▼
+        async with self.ui_lock:
+            if self.user.id not in self.cog.active_sessions:
                 button.disabled = True
-                await interaction.response.edit_message(view=self)
-                cooldown = MINING_COOLDOWN_SECONDS - self.time_reduction
-                await asyncio.sleep(cooldown)
-                self.on_cooldown = False
-                if self.is_finished() or self.user.id not in self.cog.active_sessions: return
-                
-                self.state = "idle"
-                self.last_result_text = "### 아무것도 발견하지 못했다..."
-                button.label = "광석 찾기"
-                button.emoji = "🔍"
-                button.disabled = False
-                embed = self.build_embed()
-                await interaction.edit_original_response(embed=embed, view=self)
-
-            else: # 채굴하기
-                self.state = "mining"
-                button.disabled = True
-                mining_duration = max(3, MINING_COOLDOWN_SECONDS - self.time_reduction)
-                button.label = f"채굴 중... ({mining_duration}초)"
-                embed = self.build_embed()
+                await interaction.response.edit_message(content="이미 만료된 광산입니다.", view=self, embed=None)
+                return
+            
+            # --- "광석 찾기" 로직 ---
+            if self.state == "idle":
+                self.last_result_text = None
+                button.disabled = True; button.label = "탐색 중..."
+                embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", description="더 깊이 들어가서 찾아보자...", color=0x607D8B)
                 await interaction.response.edit_message(embed=embed, view=self)
-
-                await asyncio.sleep(mining_duration)
-                if self.is_finished() or self.user.id not in self.cog.active_sessions: return
-
-                quantity = 2 if self.can_double_yield and random.random() < 0.20 else 1
-                xp_earned = ORE_XP_MAP.get(self.discovered_ore, 0) * quantity
-
-                # ▼▼▼ [핵심 수정] 채굴 기록을 self.mined_ores에 저장합니다. ▼▼▼
-                self.mined_ores[self.discovered_ore] = self.mined_ores.get(self.discovered_ore, 0) + quantity
-
-                await update_inventory(self.user.id, self.discovered_ore, quantity)
-                await log_activity(self.user.id, 'mining', amount=quantity, xp_earned=xp_earned)
                 
-                self.last_result_text = f"✅ **{self.discovered_ore}** {quantity}개를 획득했습니다! (`+{xp_earned} XP`)"
-                if quantity > 1: self.last_result_text += f"\n\n✨ **풍부한 광맥** 능력으로 광석을 2개 획득했습니다!"
+                # ▼▼▼ [핵심 수정] try...finally 구문으로 감싸 안정성을 높입니다. ▼▼▼
+                try:
+                    await asyncio.sleep(1) # 디스코드 UI가 업데이트될 시간을 줍니다.
+                    ores = list(ORE_DATA.keys())
+                    original_weights = [data['weight'] for data in ORE_DATA.values()]
+                    new_weights = [w * self.luck_bonus if o != "꽝" else w for o, w in zip(ores, original_weights)]
+                    self.discovered_ore = random.choices(ores, weights=new_weights, k=1)[0]
+                    
+                    if self.discovered_ore == "꽝":
+                        self.state = "discovered"
+                        button.label = "다시 찾아보기"; button.emoji = "🔍"
+                    else:
+                        self.state = "discovered"
+                        button.label = "채굴하기"; button.style = discord.ButtonStyle.primary; button.emoji = "⛏️"
                 
-                if xp_earned > 0:
-                    res = await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': xp_earned, 'p_source': 'mining'}).execute()
-                    if res.data and (level_cog := self.cog.bot.get_cog("LevelSystem")):
-                        await level_cog.handle_level_up_event(self.user, res.data)
-                
-                self.state = "idle"
-                embed = self.build_embed()
-                button.label = "광석 찾기"; button.style = discord.ButtonStyle.secondary; button.emoji = "🔍"
-                button.disabled = False
-                
-                try: await interaction.edit_original_response(embed=embed, view=self)
-                except discord.NotFound: self.stop()
+                finally:
+                    # 어떤 경우에도 버튼을 다시 활성화하고 UI를 업데이트합니다.
+                    embed = self.build_embed()
+                    button.disabled = False
+                    await interaction.edit_original_response(embed=embed, view=self)
 
+            # --- "채굴하기" 또는 "다시 찾아보기" 로직 ---
+            elif self.state == "discovered":
+                if self.discovered_ore == "꽝":
+                    self.on_cooldown = True
+                    button.disabled = True
+                    await interaction.response.edit_message(view=self)
+                    cooldown = MINING_COOLDOWN_SECONDS - self.time_reduction
+                    await asyncio.sleep(cooldown)
+                    self.on_cooldown = False
+                    if self.is_finished() or self.user.id not in self.cog.active_sessions: return
+                    
+                    self.state = "idle"
+                    self.last_result_text = "### 아무것도 발견하지 못했다..."
+                    button.label = "광석 찾기"; button.emoji = "🔍"
+                    button.disabled = False
+                    embed = self.build_embed()
+                    await interaction.edit_original_response(embed=embed, view=self)
+
+                else: # 채굴하기
+                    self.state = "mining"
+                    button.disabled = True
+                    mining_duration = max(3, MINING_COOLDOWN_SECONDS - self.time_reduction)
+                    button.label = f"채굴 중... ({mining_duration}초)"
+                    embed = self.build_embed()
+                    await interaction.response.edit_message(embed=embed, view=self)
+
+                    await asyncio.sleep(mining_duration)
+                    if self.is_finished() or self.user.id not in self.cog.active_sessions: return
+
+                    quantity = 2 if self.can_double_yield and random.random() < 0.20 else 1
+                    xp_earned = ORE_XP_MAP.get(self.discovered_ore, 0) * quantity
+
+                    self.mined_ores[self.discovered_ore] = self.mined_ores.get(self.discovered_ore, 0) + quantity
+                    await update_inventory(self.user.id, self.discovered_ore, quantity)
+                    await log_activity(self.user.id, 'mining', amount=quantity, xp_earned=xp_earned)
+                    
+                    self.last_result_text = f"✅ **{self.discovered_ore}** {quantity}개를 획득했습니다! (`+{xp_earned} XP`)"
+                    if quantity > 1: self.last_result_text += f"\n\n✨ **풍부한 광맥** 능력으로 광석을 2개 획득했습니다!"
+                    
+                    if xp_earned > 0:
+                        res = await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': xp_earned, 'p_source': 'mining'}).execute()
+                        if res.data and (level_cog := self.cog.bot.get_cog("LevelSystem")):
+                            await level_cog.handle_level_up_event(self.user, res.data)
+                    
+                    self.state = "idle"
+                    embed = self.build_embed()
+                    button.label = "광석 찾기"; button.style = discord.ButtonStyle.secondary; button.emoji = "🔍"
+                    button.disabled = False
+                    
+                    try: await interaction.edit_original_response(embed=embed, view=self)
+                    except discord.NotFound: self.stop()
+                        
     async def on_timeout(self):
         self.stop()
 
