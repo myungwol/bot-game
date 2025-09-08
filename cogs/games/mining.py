@@ -363,7 +363,6 @@ class Mining(commands.Cog):
         
         logger.info(f"{user_id}의 광산 세션을 '{reason}' 이유로 종료합니다.")
 
-        # ▼▼▼ [핵심 수정] 세션 타이머 태스크를 안전하게 취소합니다. ▼▼▼
         if session_task := session_data.get("session_task"):
             if not session_task.done():
                 session_task.cancel()
@@ -373,8 +372,20 @@ class Mining(commands.Cog):
                 await thread.send(f"**광산이 닫혔습니다.** ({reason})")
                 await asyncio.sleep(10)
                 await thread.delete()
-            except (discord.NotFound, discord.Forbidden) as e:
-                logger.warning(f"광산 스레드(ID: {thread.id}) 삭제/메시지 전송 실패: {e}")
+                logger.info(f"광산 스레드(ID: {thread.id})를 성공적으로 삭제했습니다.")
+            except discord.Forbidden as e:
+                # ▼▼▼ [핵심 수정] 어떤 권한이 없는지 정확히 로깅합니다. ▼▼▼
+                logger.error(f"권한 부족으로 스레드(ID: {thread.id}) 삭제 실패. '스레드 관리' 권한이 있는지 확인해주세요. 상세 오류: {e}")
+                # 권한이 없을 때 스레드를 잠그고 보관 처리
+                try:
+                    await thread.edit(locked=True, archived=True, reason="권한 부족으로 인한 자동 보관 처리")
+                    logger.info(f"권한 부족으로 스레드(ID: {thread.id})를 잠금 및 보관 처리했습니다.")
+                except Exception as archive_e:
+                    logger.error(f"스레드 잠금/보관 처리 중 추가 오류 발생: {archive_e}", exc_info=True)
+            except discord.NotFound:
+                logger.warning(f"삭제하려던 스레드(ID: {thread.id})를 찾을 수 없습니다. 이미 삭제되었을 수 있습니다.")
+            except Exception as e:
+                logger.error(f"광산 스레드(ID: {thread.id}) 처리 중 예기치 않은 오류 발생: {e}", exc_info=True)
 
     async def register_persistent_views(self):
         self.bot.add_view(MiningPanelView(self))
