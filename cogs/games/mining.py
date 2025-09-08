@@ -15,7 +15,8 @@ from utils.database import (
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
     log_activity, get_user_abilities, supabase
 )
-from utils.helpers import format_embed_from_db
+# ▼▼▼ [핵심 수정] 새로 추가한 헬퍼 함수를 import 합니다. ▼▼▼
+from utils.helpers import format_embed_from_db, format_timedelta_minutes_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +48,9 @@ ORE_XP_MAP = {
 }
 
 class MiningGameView(ui.View):
+    # ▼▼▼ [핵심 수정] __init__ 메소드를 아래 내용으로 수정합니다. ▼▼▼
     def __init__(self, cog_instance: 'Mining', user: discord.Member, thread: discord.Thread, pickaxe: str, user_abilities: List[str], duration: int, end_time: datetime, duration_doubled: bool):
-        super().__init__(timeout=duration + 5)
+        super().__init__(timeout=duration + 10) # 타임아웃을 넉넉하게 설정
         self.cog = cog_instance
         self.user = user
         self.thread = thread
@@ -66,12 +68,30 @@ class MiningGameView(ui.View):
         self.state = "idle"
         self.discovered_ore: Optional[str] = None
         self.last_result_text: Optional[str] = None
-        
+        self.message: Optional[discord.Message] = None
         self.on_cooldown = False
 
+        self.ui_update_task = self.cog.bot.loop.create_task(self.ui_updater())
+
+    # ▼▼▼ [핵심 수정] stop 메소드를 아래 내용으로 수정합니다. ▼▼▼
     def stop(self):
-        self.cog.active_sessions.pop(self.user.id, None)
+        self.ui_update_task.cancel()
+        # 세션 종료는 Mining Cog의 close_mine_session에서 처리
         super().stop()
+
+    # ▼▼▼ [핵심 수정] UI를 주기적으로 업데이트하는 루프를 추가합니다. ▼▼▼
+    async def ui_updater(self):
+        while not self.is_finished():
+            try:
+                if self.message and self.state == "idle": # 'idle' 상태일 때만 남은 시간 갱신
+                    embed = self.build_embed()
+                    await self.message.edit(embed=embed)
+            except (discord.NotFound, discord.Forbidden):
+                self.stop() # 메시지를 찾을 수 없으면 뷰 중지
+            except Exception as e:
+                logger.error(f"Mining UI 업데이트 중 오류: {e}", exc_info=True)
+
+            await asyncio.sleep(2) # 2초마다 업데이트
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.on_cooldown:
@@ -90,7 +110,10 @@ class MiningGameView(ui.View):
             if self.last_result_text:
                 description_parts.append(f"## 채굴 결과\n{self.last_result_text}")
             
-            description_parts.append(f"광산 닫힘: {discord.utils.format_dt(self.end_time, style='R')}")
+            # ▼▼▼ [핵심 수정] 남은 시간을 상세하게 표시하도록 변경합니다. ▼▼▼
+            remaining_time = self.end_time - datetime.now(timezone.utc)
+            description_parts.append(f"광산 닫힘까지: **{format_timedelta_minutes_seconds(remaining_time)}**")
+
             active_abilities = []
             if self.duration_doubled: active_abilities.append("> ✨ 집중 탐사 (시간 2배)")
             if self.time_reduction > 0: active_abilities.append("> ⚡ 신속한 채굴 (쿨타임 감소)")
@@ -197,7 +220,9 @@ class MiningGameView(ui.View):
                 except discord.NotFound: self.stop()
 
     async def on_timeout(self):
+        # 타임아웃 자체는 Cog의 close_mine_session에서 처리하므로 여기서는 뷰만 중지
         self.stop()
+
 
 class MiningPanelView(ui.View):
     def __init__(self, cog_instance: 'Mining'):
@@ -212,39 +237,31 @@ class Mining(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_sessions: Dict[int, Dict] = {}
-        self.check_expired_mines.start()
+        # ▼▼▼ [핵심 수정] 기존 루프는 안전장치로 남겨두되, 주기를 늘립니다. ▼▼▼
+        self.check_stale_sessions.start()
 
     def cog_unload(self):
-        self.check_expired_mines.cancel()
+        # ▼▼▼ [핵심 수정] 루프 이름을 변경합니다. ▼▼▼
+        self.check_stale_sessions.cancel()
 
-    @tasks.loop(seconds=20.0)
-    async def check_expired_mines(self):
+    # ▼▼▼ [핵심 수정] 루프 이름을 변경하고 주기를 늘립니다. (60초) ▼▼▼
+    @tasks.loop(seconds=60.0)
+    async def check_stale_sessions(self):
         now = datetime.now(timezone.utc)
-        
-        for user_id, session_data in list(self.active_sessions.items()):
-            end_time = session_data.get('end_time')
-            if not end_time:
-                continue
-
-            if now >= end_time:
+        stale_user_ids = [
+            uid for uid, session in self.active_sessions.items()
+            if now >= session.get('end_time', now)
+        ]
+        for user_id in stale_user_ids:
+            session_data = self.active_sessions.get(user_id)
+            if session_data:
+                logger.warning(f"오래된 광산 세션(유저: {user_id})을 안전장치 루프를 통해 종료합니다.")
                 thread = self.bot.get_channel(session_data['thread_id'])
                 await self.close_mine_session(user_id, thread, "시간이 다 되어")
-                continue
-
-            warning_sent = session_data.get('warning_sent', False)
-            if not warning_sent and (end_time - timedelta(minutes=1)) <= now:
-                thread = self.bot.get_channel(session_data['thread_id'])
-                if thread:
-                    try:
-                        await thread.send("⚠️ 1분 후 광산이 닫힙니다...", delete_after=60)
-                        self.active_sessions[user_id]['warning_sent'] = True
-                    except (discord.Forbidden, discord.HTTPException) as e:
-                        logger.warning(f"광산 1분 전 알림 전송 실패 (스레드 ID: {thread.id}): {e}")
-
-    @check_expired_mines.before_loop
-    async def before_check_expired_mines(self):
+    
+    @check_stale_sessions.before_loop
+    async def before_check_stale_sessions(self):
         await self.bot.wait_until_ready()
-
 
     async def handle_enter_mine(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -293,10 +310,14 @@ class Mining(commands.Cog):
             duration *= 2
         
         end_time = datetime.now(timezone.utc) + timedelta(seconds=duration)
+        
+        # ▼▼▼ [핵심 수정] session_task를 생성하고 active_sessions에 저장합니다. ▼▼▼
+        session_task = self.bot.loop.create_task(self.mine_session_timer(user.id, thread, duration))
+        
         self.active_sessions[user.id] = {
             "thread_id": thread.id,
             "end_time": end_time,
-            "warning_sent": False
+            "session_task": session_task
         }
         
         view = MiningGameView(self, user, thread, pickaxe, user_abilities, duration, end_time, duration_doubled)
@@ -304,15 +325,48 @@ class Mining(commands.Cog):
         embed = view.build_embed()
         embed.title = f"⛏️ {user.display_name}님의 광산 채굴"
         
-        await thread.send(embed=embed, view=view)
+        message = await thread.send(embed=embed, view=view)
+        view.message = message # view에 메시지 객체 저장
         
         await interaction.followup.send(f"광산에 입장했습니다! {thread.mention}", ephemeral=True)
 
+    # ▼▼▼ [핵심 수정] 각 세션을 관리하는 타이머 함수를 추가합니다. ▼▼▼
+    async def mine_session_timer(self, user_id: int, thread: discord.Thread, duration: int):
+        try:
+            # 1분 전 알림
+            if duration > 60:
+                await asyncio.sleep(duration - 60)
+                if user_id in self.active_sessions: # 아직 세션이 유효한지 확인
+                    try:
+                        await thread.send("⚠️ 1분 후 광산이 닫힙니다...", delete_after=59)
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+                else: return # 세션이 이미 종료됨
+                await asyncio.sleep(60)
+            else:
+                await asyncio.sleep(duration)
+            
+            # 최종 종료
+            if user_id in self.active_sessions:
+                 await self.close_mine_session(user_id, thread, "시간이 다 되어")
+
+        except asyncio.CancelledError:
+            # 태스크가 취소된 경우 (예: 수동 종료)
+            pass
+        except Exception as e:
+            logger.error(f"광산 세션 타이머(유저: {user_id}) 중 오류: {e}", exc_info=True)
+
     async def close_mine_session(self, user_id: int, thread: Optional[discord.Thread], reason: str):
-        if user_id not in self.active_sessions:
+        session_data = self.active_sessions.pop(user_id, None)
+        if not session_data:
             return
+        
         logger.info(f"{user_id}의 광산 세션을 '{reason}' 이유로 종료합니다.")
-        self.active_sessions.pop(user_id, None)
+
+        # ▼▼▼ [핵심 수정] 세션 타이머 태스크를 안전하게 취소합니다. ▼▼▼
+        if session_task := session_data.get("session_task"):
+            if not session_task.done():
+                session_task.cancel()
 
         if thread:
             try:
