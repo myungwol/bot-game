@@ -7,7 +7,7 @@ import logging
 import asyncio
 import time
 import random
-import json # json 라이브러리 추가
+import json
 from typing import Optional, Dict, List, Any
 from datetime import datetime, timezone, timedelta
 
@@ -55,10 +55,9 @@ class MiningGameView(ui.View):
         self.pickaxe = pickaxe
         self.end_time = end_time
         self.duration_doubled = duration_doubled
+        self.mined_ores: Dict[str, int] = {}
         
         self.luck_bonus = PICKAXE_LUCK_BONUS.get(pickaxe, 1.0)
-        user_abilities = [] # DB 전환으로 인해 __init__에서 바로 가져올 필요 없어짐
-        
         self.time_reduction = 0
         self.can_double_yield = False
 
@@ -71,7 +70,7 @@ class MiningGameView(ui.View):
         self.ui_lock = asyncio.Lock()
         self.ui_update_task = self.cog.bot.loop.create_task(self.ui_updater())
         self.initial_load_task = self.cog.bot.loop.create_task(self.load_initial_data())
-        
+
     async def load_initial_data(self):
         user_abilities = await get_user_abilities(self.user.id)
         if 'mine_time_down_1' in user_abilities: self.time_reduction = 3
@@ -79,10 +78,8 @@ class MiningGameView(ui.View):
         if 'mine_rare_up_2' in user_abilities: self.luck_bonus += 0.5
 
     def stop(self):
-        if hasattr(self, 'ui_update_task') and not self.ui_update_task.done():
-            self.ui_update_task.cancel()
-        if hasattr(self, 'initial_load_task') and not self.initial_load_task.done():
-            self.initial_load_task.cancel()
+        if hasattr(self, 'ui_update_task') and not self.ui_update_task.done(): self.ui_update_task.cancel()
+        if hasattr(self, 'initial_load_task') and not self.initial_load_task.done(): self.initial_load_task.cancel()
         super().stop()
 
     async def ui_updater(self):
@@ -92,10 +89,8 @@ class MiningGameView(ui.View):
                     if self.message and self.state == "idle":
                         embed = self.build_embed()
                         await self.message.edit(embed=embed)
-                except (discord.NotFound, discord.Forbidden):
-                    self.stop(); break
-                except Exception as e:
-                    logger.error(f"Mining UI 업데이트 중 오류: {e}", exc_info=True)
+                except (discord.NotFound, discord.Forbidden): self.stop(); break
+                except Exception as e: logger.error(f"Mining UI 업데이트 중 오류: {e}", exc_info=True)
             await asyncio.sleep(10)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -104,28 +99,24 @@ class MiningGameView(ui.View):
         if interaction.user.id != self.user.id:
             await interaction.response.send_message("본인만 채굴할 수 있습니다.", ephemeral=True, delete_after=5); return False
         
-        # DB에서 세션이 유효한지 확인
-        res = await supabase.table('mining_sessions').select('user_id').eq('user_id', str(self.user.id)).maybe_single().execute()
-        if not (res and res.data):
-            if self.message:
-                await self.message.edit(content="만료된 광산입니다.", view=None, embed=None)
+        # 실시간 세션 확인은 메모리에서, 딜레이를 막기 위해
+        if self.user.id not in self.cog.active_sessions:
+            if self.message: await self.message.edit(content="만료된 광산입니다.", view=None, embed=None)
             self.stop()
             return False
         return True
         
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: ui.Item[Any]) -> None:
         logger.error(f"MiningGameView에서 오류 발생 (Item: {item.custom_id}): {error}", exc_info=True)
-        if interaction.response.is_done():
-            await interaction.followup.send("처리 중 오류가 발생했습니다.", ephemeral=True, delete_after=5)
-        else:
-            await interaction.response.send_message("처리 중 오류가 발생했습니다.", ephemeral=True, delete_after=5)
+        if interaction.response.is_done(): await interaction.followup.send("처리 중 오류가 발생했습니다.", ephemeral=True, delete_after=5)
+        else: await interaction.response.send_message("처리 중 오류가 발생했습니다.", ephemeral=True, delete_after=5)
 
     def build_embed(self) -> discord.Embed:
+        # ... (이 메소드는 변경 없음)
         embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", color=0x607D8B)
         if self.state == "idle":
             description_parts = ["## 앞으로 나아가 광물을 찾아보자"]
-            if self.last_result_text:
-                description_parts.append(f"## 채굴 결과\n{self.last_result_text}")
+            if self.last_result_text: description_parts.append(f"## 채굴 결과\n{self.last_result_text}")
             remaining_time = self.end_time - datetime.now(timezone.utc)
             description_parts.append(f"광산 닫힘까지: **{format_timedelta_minutes_seconds(remaining_time)}**")
             active_abilities = []
@@ -133,8 +124,7 @@ class MiningGameView(ui.View):
             if self.time_reduction > 0: active_abilities.append("> ⚡ 신속한 채굴 (쿨타임 감소)")
             if self.can_double_yield: active_abilities.append("> 💰 풍부한 광맥 (수량 2배 확률)")
             if 'mine_rare_up_2' in self.cog.active_abilities_cache.get(self.user.id, []): active_abilities.append("> 💎 노다지 발견 (희귀 광물 확률 증가)")
-            if active_abilities:
-                description_parts.append(f"**--- 활성화된 능력 ---**\n" + "\n".join(active_abilities))
+            if active_abilities: description_parts.append(f"**--- 활성화된 능력 ---**\n" + "\n".join(active_abilities))
             description_parts.append(f"**사용 중인 장비:** {self.pickaxe}")
             embed.description = "\n\n".join(description_parts)
         elif self.state == "discovered":
@@ -148,112 +138,70 @@ class MiningGameView(ui.View):
 
     @ui.button(label="광석 찾기", style=discord.ButtonStyle.secondary, emoji="🔍", custom_id="mine_action_button")
     async def action_button(self, interaction: discord.Interaction, button: ui.Button):
+        # ... (이 메소드는 변경 없음)
         async with self.ui_lock:
-            # --- "광석 찾기" 로직 ---
             if self.state == "idle":
                 self.last_result_text = None
                 button.disabled = True; button.label = "탐색 중..."
-                embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", description="더 깊이 들어가서 찾아보자...", color=0x607D8B)
-                await interaction.response.edit_message(embed=embed, view=self)
-                
+                await interaction.response.edit_message(embed=self.build_embed(), view=self)
                 try:
                     await asyncio.sleep(1)
                     ores = list(ORE_DATA.keys())
                     original_weights = [data['weight'] for data in ORE_DATA.values()]
                     new_weights = [w * self.luck_bonus if o != "꽝" else w for o, w in zip(ores, original_weights)]
                     self.discovered_ore = random.choices(ores, weights=new_weights, k=1)[0]
-                    
-                    if self.discovered_ore == "꽝":
-                        self.state = "discovered"
-                        button.label = "다시 찾아보기"; button.emoji = "🔍"
-                    else:
-                        self.state = "discovered"
-                        button.label = "채굴하기"; button.style = discord.ButtonStyle.primary; button.emoji = "⛏️"
-                
+                    if self.discovered_ore == "꽝": self.state = "discovered"; button.label = "다시 찾아보기"; button.emoji = "🔍"
+                    else: self.state = "discovered"; button.label = "채굴하기"; button.style = discord.ButtonStyle.primary; button.emoji = "⛏️"
                 finally:
-                    embed = self.build_embed()
                     button.disabled = False
-                    await interaction.edit_original_response(embed=embed, view=self)
-
-            # --- "채굴하기" 또는 "다시 찾아보기" 로직 ---
+                    await interaction.edit_original_response(embed=self.build_embed(), view=self)
             elif self.state == "discovered":
                 if self.discovered_ore == "꽝":
-                    self.on_cooldown = True
-                    button.disabled = True
+                    self.on_cooldown = True; button.disabled = True
                     await interaction.response.edit_message(view=self)
-                    cooldown = MINING_COOLDOWN_SECONDS - self.time_reduction
-                    await asyncio.sleep(cooldown)
+                    await asyncio.sleep(MINING_COOLDOWN_SECONDS - self.time_reduction)
                     self.on_cooldown = False
-                    
-                    # interaction_check에서 세션 유효성을 검사하므로 여기서 추가 확인 불필요
                     if self.is_finished(): return
-                    
-                    self.state = "idle"
-                    self.last_result_text = "### 아무것도 발견하지 못했다..."
-                    button.label = "광석 찾기"; button.emoji = "🔍"
-                    button.disabled = False
-                    embed = self.build_embed()
-                    await interaction.edit_original_response(embed=embed, view=self)
-
+                    self.state = "idle"; self.last_result_text = "### 아무것도 발견하지 못했다..."
+                    button.label = "광석 찾기"; button.emoji = "🔍"; button.disabled = False
+                    await interaction.edit_original_response(embed=self.build_embed(), view=self)
                 else: # 채굴하기
-                    self.state = "mining"
-                    button.disabled = True
+                    self.state = "mining"; button.disabled = True
                     mining_duration = max(3, MINING_COOLDOWN_SECONDS - self.time_reduction)
                     button.label = f"채굴 중... ({mining_duration}초)"
-                    embed = self.build_embed()
-                    await interaction.response.edit_message(embed=embed, view=self)
-
+                    await interaction.response.edit_message(embed=self.build_embed(), view=self)
                     await asyncio.sleep(mining_duration)
-
                     if self.is_finished(): return
-
                     quantity = 2 if self.can_double_yield and random.random() < 0.20 else 1
                     xp_earned = ORE_XP_MAP.get(self.discovered_ore, 0) * quantity
-                    
-                    # DB에 채굴 기록 업데이트
+                    self.mined_ores[self.discovered_ore] = self.mined_ores.get(self.discovered_ore, 0) + quantity
                     await supabase.rpc('increment_mined_ore', {'p_user_id': str(self.user.id), 'p_ore_name': self.discovered_ore, 'p_quantity': quantity}).execute()
                     await update_inventory(self.user.id, self.discovered_ore, quantity)
                     await log_activity(self.user.id, 'mining', amount=quantity, xp_earned=xp_earned)
-                    
                     self.last_result_text = f"✅ **{self.discovered_ore}** {quantity}개를 획득했습니다! (`+{xp_earned} XP`)"
                     if quantity > 1: self.last_result_text += f"\n\n✨ **풍부한 광맥** 능력으로 광석을 2개 획득했습니다!"
-                    
                     if xp_earned > 0:
                         res = await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': xp_earned, 'p_source': 'mining'}).execute()
                         if res.data and (level_cog := self.cog.bot.get_cog("LevelSystem")):
                             await level_cog.handle_level_up_event(self.user, res.data)
-                    
                     self.state = "idle"
-                    embed = self.build_embed()
-                    button.label = "광석 찾기"; button.style = discord.ButtonStyle.secondary; button.emoji = "🔍"
-                    button.disabled = False
-                    
-                    try: await interaction.edit_original_response(embed=embed, view=self)
+                    button.label = "광석 찾기"; button.style = discord.ButtonStyle.secondary; button.emoji = "🔍"; button.disabled = False
+                    try: await interaction.edit_original_response(embed=self.build_embed(), view=self)
                     except discord.NotFound: self.stop()
-                        
-    async def on_timeout(self):
-        self.stop()
 
-class MiningPanelView(ui.View):
-    def __init__(self, cog_instance: 'Mining'):
-        super().__init__(timeout=None)
-        self.cog = cog_instance
-
-    @ui.button(label="입장하기", style=discord.ButtonStyle.secondary, emoji="⛏️", custom_id="enter_mine")
-    async def enter_mine_button(self, interaction: discord.Interaction, button: ui.Button):
-        await self.cog.handle_enter_mine(interaction)
 
 class Mining(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.active_views: Dict[int, MiningGameView] = {}
+        # ▼▼▼ [핵심 수정] active_sessions를 다시 사용합니다. ▼▼▼
+        self.active_sessions: Dict[int, Dict] = {}
         self.active_abilities_cache: Dict[int, List[str]] = {}
         self.check_expired_mines_from_db.start()
 
     def cog_unload(self):
         self.check_expired_mines_from_db.cancel()
 
-    @tasks.loop(seconds=15.0)
+    @tasks.loop(minutes=1) # 주기를 1분으로 늘려 안전장치 역할만 하도록 함
     async def check_expired_mines_from_db(self):
         now = datetime.now(timezone.utc)
         res = await supabase.table('mining_sessions').select('*').lte('end_time', now.isoformat()).execute()
@@ -261,7 +209,11 @@ class Mining(commands.Cog):
             return
         
         for session in res.data:
-            await self.close_mine_session(session)
+            user_id = int(session['user_id'])
+            # ▼▼▼ [핵심 수정] 메모리에 없는 세션만 DB 루프가 처리 (봇 재시작 복구용) ▼▼▼
+            if user_id not in self.active_sessions:
+                logger.warning(f"DB에서 방치된 광산 세션(유저: {user_id})을 발견하여 안전장치로 종료합니다.")
+                await self.close_mine_session(user_id)
 
     @check_expired_mines_from_db.before_loop
     async def before_check_expired_mines(self):
@@ -271,28 +223,24 @@ class Mining(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         user = interaction.user
 
-        res = await supabase.table('mining_sessions').select('*').eq('user_id', str(user.id)).maybe_single().execute()
-        if res and res.data:
-            if thread := self.bot.get_channel(int(res.data['thread_id'])):
+        if user.id in self.active_sessions:
+            thread_id = self.active_sessions[user.id].get("thread_id")
+            if thread := self.bot.get_channel(thread_id):
                 await interaction.followup.send(f"이미 광산에 입장해 있습니다. {thread.mention}", ephemeral=True)
-            else:
-                await self.close_mine_session(res.data)
-                await interaction.followup.send("이전 광산 정보를 찾을 수 없어 초기화했습니다. 다시 시도해주세요.", ephemeral=True)
+            else: # 메모리엔 있는데 스레드가 없는 비정상 상황
+                await self.close_mine_session(user.id)
+                await interaction.followup.send("이전 광산 정보를 강제 초기화했습니다. 다시 시도해주세요.", ephemeral=True)
             return
 
         inventory, gear, user_abilities = await asyncio.gather(get_inventory(user), get_user_gear(user), get_user_abilities(user.id))
         self.active_abilities_cache[user.id] = user_abilities
         
-        if inventory.get(MINING_PASS_NAME, 0) < 1:
-            return await interaction.followup.send(f"'{MINING_PASS_NAME}'이 부족합니다.", ephemeral=True)
+        if inventory.get(MINING_PASS_NAME, 0) < 1: return await interaction.followup.send(f"'{MINING_PASS_NAME}'이 부족합니다.", ephemeral=True)
         pickaxe = gear.get('pickaxe', BARE_HANDS)
-        if pickaxe == BARE_HANDS:
-            return await interaction.followup.send("❌ 곡괭이를 장착해야 합니다.", ephemeral=True)
+        if pickaxe == BARE_HANDS: return await interaction.followup.send("❌ 곡괭이를 장착해야 합니다.", ephemeral=True)
 
-        try:
-            thread = await interaction.channel.create_thread(name=f"⛏️｜{user.display_name}의 광산", type=discord.ChannelType.private_thread)
-        except Exception as e:
-            return await interaction.followup.send("❌ 광산을 여는 데 실패했습니다.", ephemeral=True)
+        try: thread = await interaction.channel.create_thread(name=f"⛏️｜{user.display_name}의 광산", type=discord.ChannelType.private_thread)
+        except Exception: return await interaction.followup.send("❌ 광산을 여는 데 실패했습니다.", ephemeral=True)
         
         await update_inventory(user.id, MINING_PASS_NAME, -1)
         await thread.add_user(user)
@@ -302,84 +250,95 @@ class Mining(commands.Cog):
         if duration_doubled: duration *= 2
         end_time = datetime.now(timezone.utc) + timedelta(seconds=duration)
         
-        await supabase.table('mining_sessions').insert({
-            "user_id": str(user.id), "thread_id": str(thread.id), "end_time": end_time.isoformat(), "pickaxe_name": pickaxe
-        }).execute()
+        await supabase.table('mining_sessions').upsert({
+            "user_id": str(user.id), "thread_id": str(thread.id), "end_time": end_time.isoformat(), "pickaxe_name": pickaxe, "mined_ores_json": "{}"
+        }, on_conflict="user_id").execute()
         
         view = MiningGameView(self, user, pickaxe, duration, end_time, duration_doubled)
-        self.active_views[user.id] = view
         
+        # ▼▼▼ [핵심 수정] 인-메모리 타이머(asyncio.Task)를 다시 생성하고 저장합니다. ▼▼▼
+        session_task = self.bot.loop.create_task(self.mine_session_timer(user.id, thread, duration))
+        self.active_sessions[user.id] = {"thread_id": thread.id, "view": view, "task": session_task}
+
         embed = view.build_embed()
         message = await thread.send(embed=embed, view=view)
         view.message = message
         
         await interaction.followup.send(f"광산에 입장했습니다! {thread.mention}", ephemeral=True)
 
-    async def close_mine_session(self, session_data: Dict):
-        user_id_str = session_data['user_id']
-        user_id = int(user_id_str)
+    # ▼▼▼ [핵심 수정] 인-메모리 타이머 함수를 다시 추가합니다. ▼▼▼
+    async def mine_session_timer(self, user_id: int, thread: discord.Thread, duration: int):
+        try:
+            if duration > 60:
+                await asyncio.sleep(duration - 60)
+                if user_id in self.active_sessions: # 세션이 유효한지 확인
+                    try: await thread.send("⚠️ 1분 후 광산이 닫힙니다...", delete_after=59)
+                    except (discord.Forbidden, discord.HTTPException): pass
+                else: return # 세션이 그 사이에 닫힘
+                await asyncio.sleep(60)
+            else:
+                await asyncio.sleep(duration)
+            
+            # 시간이 다 되면 종료 함수 호출
+            if user_id in self.active_sessions:
+                 await self.close_mine_session(user_id)
+        except asyncio.CancelledError: pass
+            
+    async def close_mine_session(self, user_id: int):
+        # DB에서 최신 세션 정보를 가져와 처리
+        res = await supabase.table('mining_sessions').select('*').eq('user_id', str(user_id)).maybe_single().execute()
+        session_data = res.data if res and res.data else None
+
+        if not session_data:
+            logger.warning(f"[{user_id}] 종료할 광산 세션이 DB에 없습니다. 이미 처리되었을 수 있습니다.")
+            return
+
         thread_id = int(session_data['thread_id'])
         
         logger.info(f"[{user_id}] 광산 세션(스레드: {thread_id}) 종료 시작.")
         
-        # DB에서 세션 삭제 먼저 시도
-        await supabase.table('mining_sessions').delete().eq('user_id', user_id_str).execute()
-        
-        if view := self.active_views.pop(user_id, None):
-            view.stop()
+        # 메모리와 DB 모두에서 세션 정보 정리
+        if in_memory_session := self.active_sessions.pop(user_id, None):
+            if task := in_memory_session.get("task"): task.cancel()
+            if view := in_memory_session.get("view"): view.stop()
+        await supabase.table('mining_sessions').delete().eq('user_id', str(user_id)).execute()
 
+        # ... (이하 로그 생성 및 패널 재생성, 스레드 삭제 로직은 이전과 동일)
         user = self.bot.get_user(user_id)
         if user:
             mined_ores = session_data.get('mined_ores_json', {})
             mined_ores_text = "\n".join([f"> {ore}: {qty}개" for ore, qty in mined_ores.items()]) or "> 채굴한 광물이 없습니다."
-            
-            embed = discord.Embed(title="⛏️ 광산 탐사 결과", description=f"{user.mention}님의 탐사가 종료되었습니다.", color=0x607D8B)
-            embed.add_field(name="사용한 장비", value=f"`{session_data.get('pickaxe_name', '알 수 없음')}`", inline=True)
-            embed.add_field(name="채굴한 광물", value=mined_ores_text, inline=False)
-            if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
+            embed_data = await get_embed_from_db("log_mining_result") or {"title": "⛏️ 광산 탐사 결과", "color": 0x607D8B}
+            log_embed = format_embed_from_db(embed_data, user_mention=user.mention, pickaxe_name=session_data.get('pickaxe_name'), mined_ores=mined_ores_text)
+            if user.display_avatar: log_embed.set_thumbnail(url=user.display_avatar.url)
             
             panel_channel_id = get_id("mining_panel_channel_id")
             if panel_channel_id and (panel_channel := self.bot.get_channel(panel_channel_id)):
-                await self.regenerate_panel(panel_channel, last_log=embed)
+                await self.regenerate_panel(panel_channel, last_log=log_embed)
         
         try:
             thread = self.bot.get_channel(thread_id) or await self.bot.fetch_channel(thread_id)
+            await thread.add_user(self.bot.user)
             await thread.send("**광산이 닫혔습니다.**", delete_after=10)
             await asyncio.sleep(1)
             await thread.delete()
-            logger.info(f"[{user_id}] 스레드(ID: {thread_id})를 성공적으로 삭제했습니다.")
-        except (discord.NotFound, discord.Forbidden):
-             logger.warning(f"[{user_id}] 스레드(ID: {thread_id})를 삭제할 수 없거나 이미 없습니다.")
-        except Exception as e:
-            logger.error(f"[{user_id}] 스레드 처리 중 예기치 않은 오류 발생: {e}", exc_info=True)
-            
-    async def register_persistent_views(self):
-        self.bot.add_view(MiningPanelView(self))
+        except (discord.NotFound, discord.Forbidden): pass
 
-    # ▼▼▼ [핵심 수정] regenerate_panel 함수가 last_log를 받도록 수정합니다. ▼▼▼
+    # ... (regenerate_panel, setup 함수는 그대로)
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_mining", last_log: Optional[discord.Embed] = None):
         if last_log:
-            try:
-                await channel.send(embed=last_log)
-            except discord.HTTPException as e:
-                logger.error(f"광산 로그 전송 실패: {e}")
-
+            try: await channel.send(embed=last_log)
+            except discord.HTTPException as e: logger.error(f"광산 로그 전송 실패: {e}")
         if panel_info := get_panel_id(panel_key):
             try:
                 if old_channel := self.bot.get_channel(panel_info['channel_id']):
                     msg = await old_channel.fetch_message(panel_info['message_id'])
                     await msg.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
-
+            except (discord.NotFound, discord.Forbidden): pass
         embed_data = await get_embed_from_db(panel_key)
-        if not embed_data:
-            logger.error(f"DB에서 '{panel_key}' 임베드를 찾을 수 없어 패널을 생성할 수 없습니다.")
-            return
-
+        if not embed_data: return logger.error(f"DB에서 '{panel_key}' 임베드를 찾을 수 없습니다.")
         embed = discord.Embed.from_dict(embed_data)
         view = MiningPanelView(self)
-
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
