@@ -148,13 +148,7 @@ class MiningGameView(ui.View):
 
     @ui.button(label="광석 찾기", style=discord.ButtonStyle.secondary, emoji="🔍", custom_id="mine_action_button")
     async def action_button(self, interaction: discord.Interaction, button: ui.Button):
-        # ▼▼▼ [핵심 수정] 버튼 클릭 시 UI 잠금을 획득하여 경쟁 상태를 방지합니다. ▼▼▼
         async with self.ui_lock:
-            if self.user.id not in self.cog.active_sessions:
-                button.disabled = True
-                await interaction.response.edit_message(content="이미 만료된 광산입니다.", view=self, embed=None)
-                return
-            
             # --- "광석 찾기" 로직 ---
             if self.state == "idle":
                 self.last_result_text = None
@@ -162,9 +156,8 @@ class MiningGameView(ui.View):
                 embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", description="더 깊이 들어가서 찾아보자...", color=0x607D8B)
                 await interaction.response.edit_message(embed=embed, view=self)
                 
-                # ▼▼▼ [핵심 수정] try...finally 구문으로 감싸 안정성을 높입니다. ▼▼▼
                 try:
-                    await asyncio.sleep(1) # 디스코드 UI가 업데이트될 시간을 줍니다.
+                    await asyncio.sleep(1)
                     ores = list(ORE_DATA.keys())
                     original_weights = [data['weight'] for data in ORE_DATA.values()]
                     new_weights = [w * self.luck_bonus if o != "꽝" else w for o, w in zip(ores, original_weights)]
@@ -178,7 +171,6 @@ class MiningGameView(ui.View):
                         button.label = "채굴하기"; button.style = discord.ButtonStyle.primary; button.emoji = "⛏️"
                 
                 finally:
-                    # 어떤 경우에도 버튼을 다시 활성화하고 UI를 업데이트합니다.
                     embed = self.build_embed()
                     button.disabled = False
                     await interaction.edit_original_response(embed=embed, view=self)
@@ -192,7 +184,9 @@ class MiningGameView(ui.View):
                     cooldown = MINING_COOLDOWN_SECONDS - self.time_reduction
                     await asyncio.sleep(cooldown)
                     self.on_cooldown = False
-                    if self.is_finished() or self.user.id not in self.cog.active_sessions: return
+                    
+                    # interaction_check에서 세션 유효성을 검사하므로 여기서 추가 확인 불필요
+                    if self.is_finished(): return
                     
                     self.state = "idle"
                     self.last_result_text = "### 아무것도 발견하지 못했다..."
@@ -210,12 +204,14 @@ class MiningGameView(ui.View):
                     await interaction.response.edit_message(embed=embed, view=self)
 
                     await asyncio.sleep(mining_duration)
-                    if self.is_finished() or self.user.id not in self.cog.active_sessions: return
+
+                    if self.is_finished(): return
 
                     quantity = 2 if self.can_double_yield and random.random() < 0.20 else 1
                     xp_earned = ORE_XP_MAP.get(self.discovered_ore, 0) * quantity
+                    
+                    # DB에 채굴 기록 업데이트
                     await supabase.rpc('increment_mined_ore', {'p_user_id': str(self.user.id), 'p_ore_name': self.discovered_ore, 'p_quantity': quantity}).execute()
-                    self.mined_ores[self.discovered_ore] = self.mined_ores.get(self.discovered_ore, 0) + quantity
                     await update_inventory(self.user.id, self.discovered_ore, quantity)
                     await log_activity(self.user.id, 'mining', amount=quantity, xp_earned=xp_earned)
                     
