@@ -3,6 +3,7 @@ import discord
 import copy
 import logging
 from typing import Any, Dict
+from datetime import datetime, timezone, timedelta # ◀ timedelta 추가
 
 logger = logging.getLogger(__name__)
 
@@ -50,3 +51,13 @@ def calculate_xp_for_level(level: int) -> int:
         total_xp += xp_for_this_level
         
     return total_xp
+
+# ▼▼▼ [핵심 수정] 아래 함수를 파일 맨 끝에 추가해주세요. ▼▼▼
+def format_timedelta_minutes_seconds(delta: timedelta) -> str:
+    """timedelta를 'N분 M초' 형식의 문자열로 변환합니다."""
+    total_seconds = int(delta.total_seconds())
+    if total_seconds < 0:
+        return "종료됨"
+    minutes, seconds = divmod(total_seconds, 60)
+    return f"{minutes}분 {seconds}초"
+# ▲▲▲ [핵심 수정] ▲▲▲
