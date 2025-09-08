@@ -269,18 +269,53 @@ class Mining(commands.Cog):
             if thread := self.bot.get_channel(thread_id):
                 await interaction.followup.send(f"이미 광산에 입장해 있습니다. {thread.mention}", ephemeral=True)
             else:
-                await self.close_mine_session(user.id, "오류로 인한 강제 종료")
+                await self.close_mine_session(user.id, "오류로 인한 강제 종료", self.active_sessions.get(user.id, {}))
                 await interaction.followup.send("이전 광산 정보를 찾을 수 없어 초기화했습니다. 다시 시도해주세요.", ephemeral=True)
             return
 
+        inventory, gear, user_abilities = await asyncio.gather(
+            get_inventory(user),
+            get_user_gear(user),
+            get_user_abilities(user.id)
+        )
+
+        if inventory.get(MINING_PASS_NAME, 0) < 1:
+            await interaction.followup.send(f"'{MINING_PASS_NAME}'이 부족합니다. 상점에서 구매해주세요.", ephemeral=True)
+            return
+
+        pickaxe = gear.get('pickaxe', BARE_HANDS)
+        if pickaxe == BARE_HANDS:
+            await interaction.followup.send("❌ 곡괭이를 장착해야 광산에 입장할 수 있습니다.\n상점에서 구매 후 프로필에서 장착해주세요.", ephemeral=True)
+            return
+
+        # 1. 스레드 생성을 먼저 시도합니다.
+        try:
+            thread = await interaction.channel.create_thread(
+                name=f"⛏️｜{user.display_name}의 광산", type=discord.ChannelType.private_thread, invitable=False
+            )
+        except Exception as e:
+            logger.error(f"광산 스레드 생성 실패: {e}", exc_info=True)
+            await interaction.followup.send("❌ 광산을 여는 데 실패했습니다. 채널 권한을 확인해주세요.", ephemeral=True)
+            return # 스레드 생성 실패 시 여기서 함수를 종료합니다.
+
+        # 2. 스레드 생성이 성공한 후에만 재화를 소모합니다.
+        await update_inventory(user.id, MINING_PASS_NAME, -1)
+        await thread.add_user(user)
+        
+        duration = DEFAULT_MINE_DURATION_SECONDS
+        duration_doubled = 'mine_duration_up_1' in user_abilities and random.random() < 0.15
+        if duration_doubled:
+            duration *= 2
+        
+        end_time = datetime.now(timezone.utc) + timedelta(seconds=duration)
+        
         view = MiningGameView(self, user, thread, pickaxe, user_abilities, duration, end_time, duration_doubled)
         
-        # ▼▼▼ [핵심 수정] active_sessions에 view 객체를 저장합니다. ▼▼▼
         self.active_sessions[user.id] = {
             "thread_id": thread.id,
             "end_time": end_time,
             "session_task": self.bot.loop.create_task(self.mine_session_timer(user.id, duration)),
-            "view": view  # view 객체 저장
+            "view": view
         }
         
         embed = view.build_embed()
