@@ -57,6 +57,9 @@ class MiningGameView(ui.View):
         self.duration_doubled = duration_doubled
         self.end_time = end_time
         
+        # ▼▼▼ [핵심 수정] 채굴 기록을 위한 변수를 추가합니다. ▼▼▼
+        self.mined_ores: Dict[str, int] = {}
+        
         self.luck_bonus = PICKAXE_LUCK_BONUS.get(pickaxe, 1.0)
         if 'mine_rare_up_2' in self.user_abilities: self.luck_bonus += 0.5
         
@@ -182,7 +185,7 @@ class MiningGameView(ui.View):
                 embed = self.build_embed()
                 await interaction.edit_original_response(embed=embed, view=self)
 
-            else:
+            else: # 채굴하기
                 self.state = "mining"
                 button.disabled = True
                 mining_duration = max(3, MINING_COOLDOWN_SECONDS - self.time_reduction)
@@ -195,6 +198,9 @@ class MiningGameView(ui.View):
 
                 quantity = 2 if self.can_double_yield and random.random() < 0.20 else 1
                 xp_earned = ORE_XP_MAP.get(self.discovered_ore, 0) * quantity
+
+                # ▼▼▼ [핵심 수정] 채굴 기록을 self.mined_ores에 저장합니다. ▼▼▼
+                self.mined_ores[self.discovered_ore] = self.mined_ores.get(self.discovered_ore, 0) + quantity
 
                 await update_inventory(self.user.id, self.discovered_ore, quantity)
                 await log_activity(self.user.id, 'mining', amount=quantity, xp_earned=xp_earned)
@@ -244,10 +250,11 @@ class Mining(commands.Cog):
             if now >= session.get('end_time', now)
         ]
         for user_id in stale_user_ids:
+            # ▼▼▼ [핵심 수정] session_data를 직접 전달하도록 변경합니다. ▼▼▼
             session_data = self.active_sessions.get(user_id)
             if session_data:
                 logger.warning(f"오래된 광산 세션(유저: {user_id})을 안전장치 루프를 통해 종료합니다.")
-                await self.close_mine_session(user_id, "시간 초과 (안전장치)")
+                await self.close_mine_session(user_id, "시간 초과 (안전장치)", session_data)
     
     @check_stale_sessions.before_loop
     async def before_check_stale_sessions(self):
@@ -266,50 +273,15 @@ class Mining(commands.Cog):
                 await interaction.followup.send("이전 광산 정보를 찾을 수 없어 초기화했습니다. 다시 시도해주세요.", ephemeral=True)
             return
 
-        inventory, gear, user_abilities = await asyncio.gather(
-            get_inventory(user),
-            get_user_gear(user),
-            get_user_abilities(user.id)
-        )
-
-        if inventory.get(MINING_PASS_NAME, 0) < 1:
-            await interaction.followup.send(f"'{MINING_PASS_NAME}'이 부족합니다. 상점에서 구매해주세요.", ephemeral=True)
-            return
-
-        pickaxe = gear.get('pickaxe', BARE_HANDS)
-        if pickaxe == BARE_HANDS:
-            await interaction.followup.send("❌ 곡괭이를 장착해야 광산에 입장할 수 있습니다.\n상점에서 구매 후 프로필에서 장착해주세요.", ephemeral=True)
-            return
-
-        await update_inventory(user.id, MINING_PASS_NAME, -1)
-
-        try:
-            thread = await interaction.channel.create_thread(
-                name=f"⛏️｜{user.display_name}의 광산", type=discord.ChannelType.private_thread, invitable=False
-            )
-            await thread.add_user(user)
-        except Exception as e:
-            logger.error(f"광산 스레드 생성 실패: {e}", exc_info=True)
-            await interaction.followup.send("❌ 광산을 여는 데 실패했습니다. 채널 권한을 확인해주세요.", ephemeral=True)
-            await update_inventory(user.id, MINING_PASS_NAME, 1)
-            return
+        view = MiningGameView(self, user, thread, pickaxe, user_abilities, duration, end_time, duration_doubled)
         
-        duration = DEFAULT_MINE_DURATION_SECONDS
-        duration_doubled = 'mine_duration_up_1' in user_abilities and random.random() < 0.15
-        if duration_doubled:
-            duration *= 2
-        
-        end_time = datetime.now(timezone.utc) + timedelta(seconds=duration)
-        
-        session_task = self.bot.loop.create_task(self.mine_session_timer(user.id, duration))
-        
+        # ▼▼▼ [핵심 수정] active_sessions에 view 객체를 저장합니다. ▼▼▼
         self.active_sessions[user.id] = {
             "thread_id": thread.id,
             "end_time": end_time,
-            "session_task": session_task
+            "session_task": self.bot.loop.create_task(self.mine_session_timer(user.id, duration)),
+            "view": view  # view 객체 저장
         }
-        
-        view = MiningGameView(self, user, thread, pickaxe, user_abilities, duration, end_time, duration_doubled)
         
         embed = view.build_embed()
         embed.title = f"⛏️ {user.display_name}님의 광산 채굴"
@@ -319,7 +291,9 @@ class Mining(commands.Cog):
         
         await interaction.followup.send(f"광산에 입장했습니다! {thread.mention}", ephemeral=True)
 
+
     async def mine_session_timer(self, user_id: int, duration: int):
+        # ... (1분 전 알림 로직은 그대로) ...
         try:
             if duration > 60:
                 await asyncio.sleep(duration - 60)
@@ -332,19 +306,22 @@ class Mining(commands.Cog):
             else:
                 await asyncio.sleep(duration)
             
-            if user_id in self.active_sessions:
-                 await self.close_mine_session(user_id, "시간이 다 되어")
+            # ▼▼▼ [핵심 수정] session_data를 찾아서 전달합니다. ▼▼▼
+            if session_data := self.active_sessions.get(user_id):
+                 await self.close_mine_session(user_id, "시간이 다 되어", session_data)
 
         except asyncio.CancelledError:
             pass
         except Exception as e:
             logger.error(f"광산 세션 타이머(유저: {user_id}) 중 오류: {e}", exc_info=True)
             
-    # ▼▼▼ [핵심 수정] 함수 시그니처와 내부 로직이 변경되었습니다. ▼▼▼
-    async def close_mine_session(self, user_id: int, reason: str):
-        session_data = self.active_sessions.pop(user_id, None)
-        if not session_data:
-            return
+    # ▼▼▼ [핵심 수정] 함수 시그니처와 내부 로직 전체를 변경합니다. ▼▼▼
+    async def close_mine_session(self, user_id: int, reason: str, session_data: Dict):
+        # session_data가 pop 되기 전에 먼저 가져옵니다.
+        view: Optional[MiningGameView] = session_data.get("view")
+        thread_id = session_data.get("thread_id")
+
+        self.active_sessions.pop(user_id, None)
         
         logger.info(f"[{user_id}] 광산 세션을 '{reason}' 이유로 종료 시작.")
 
@@ -352,7 +329,6 @@ class Mining(commands.Cog):
             if not session_task.done():
                 session_task.cancel()
 
-        thread_id = session_data.get("thread_id")
         if not thread_id:
             logger.error(f"[{user_id}] 세션 데이터에 thread_id가 없어 스레드를 종료할 수 없습니다.")
             return
@@ -361,43 +337,65 @@ class Mining(commands.Cog):
         try:
             thread = self.bot.get_channel(thread_id) or await self.bot.fetch_channel(thread_id)
             logger.info(f"[{user_id}] 스레드 객체(ID: {thread_id})를 성공적으로 찾았습니다.")
-        except discord.NotFound:
-            logger.warning(f"[{user_id}] 종료할 스레드(ID: {thread_id})를 찾을 수 없습니다. 이미 삭제되었을 수 있습니다.")
+        except (discord.NotFound, discord.Forbidden, Exception) as e:
+            logger.error(f"[{user_id}] 스레드(ID: {thread_id})를 가져오는 중 오류 발생: {e}", exc_info=True)
             return
-        except discord.Forbidden:
-            logger.error(f"[{user_id}] 스레드 정보(ID: {thread_id})를 가져올 권한이 없습니다. 이 문제는 서버 관리자가 해결해야 합니다.")
-            return
-        except Exception as e:
-            logger.error(f"[{user_id}] 스레드(ID: {thread_id})를 가져오는 중 예기치 않은 오류 발생: {e}", exc_info=True)
-            return
+
+        # --- 로그 생성 및 패널 재생성 ---
+        log_embed = None
+        user = self.bot.get_user(user_id)
+        if user and view:
+            mined_ores_text = "\n".join([f"> {ore}: {qty}개" for ore, qty in view.mined_ores.items()]) or "> 채굴한 광물이 없습니다."
+            
+            embed_data = await get_embed_from_db("log_mining_result") # DB에 새 템플릿 필요
+            if not embed_data: # 임시 기본 템플릿
+                embed_data = {
+                    "title": "⛏️ 광산 탐사 결과",
+                    "color": 0x607D8B
+                }
+
+            log_embed = format_embed_from_db(
+                embed_data,
+                user_mention=user.mention,
+                pickaxe_name=view.pickaxe,
+                mined_ores=mined_ores_text
+            )
+            if user.display_avatar:
+                log_embed.set_thumbnail(url=user.display_avatar.url)
+        
+        panel_channel_id = get_id("mining_panel_channel_id")
+        if panel_channel_id and (panel_channel := self.bot.get_channel(panel_channel_id)):
+            await self.regenerate_panel(panel_channel, panel_key="panel_mining", last_log=log_embed)
+        # --- 로그 생성 종료 ---
 
         try:
-            # 멤버십 보장을 위해 봇 스스로를 추가 시도
             await thread.add_user(self.bot.user)
             await thread.send(f"**광산이 닫혔습니다.** ({reason})", delete_after=10)
-            
-            await asyncio.sleep(0.5) # 메시지 전송 후 아주 짧은 딜레이
-            
-            logger.info(f"[{user_id}] 스레드(ID: {thread.id}) 삭제를 시도합니다...")
+            await asyncio.sleep(0.5)
             await thread.delete()
             logger.info(f"[{user_id}] 스레드(ID: {thread.id})를 성공적으로 삭제했습니다.")
-
-        except discord.Forbidden as e:
-            logger.error(f"[{user_id}] 최종 권한 부족으로 스레드(ID: {thread.id}) 처리 실패. '스레드 관리' 권한을 확인해주세요. 상세 오류: {e}", exc_info=True)
         except Exception as e:
-            logger.error(f"[{user_id}] 스레드 처리(메시지 전송 또는 삭제) 중 예기치 않은 오류 발생: {e}", exc_info=True)
+            logger.error(f"[{user_id}] 스레드 처리 중 예기치 않은 오류 발생: {e}", exc_info=True)
 
 
     async def register_persistent_views(self):
         self.bot.add_view(MiningPanelView(self))
 
-    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_mining"):
+    # ▼▼▼ [핵심 수정] regenerate_panel 함수가 last_log를 받도록 수정합니다. ▼▼▼
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_mining", last_log: Optional[discord.Embed] = None):
+        if last_log:
+            try:
+                await channel.send(embed=last_log)
+            except discord.HTTPException as e:
+                logger.error(f"광산 로그 전송 실패: {e}")
+
         if panel_info := get_panel_id(panel_key):
             try:
                 if old_channel := self.bot.get_channel(panel_info['channel_id']):
                     msg = await old_channel.fetch_message(panel_info['message_id'])
                     await msg.delete()
-            except (discord.NotFound, discord.Forbidden): pass
+            except (discord.NotFound, discord.Forbidden):
+                pass
 
         embed_data = await get_embed_from_db(panel_key)
         if not embed_data:
