@@ -386,7 +386,6 @@ class Mining(commands.Cog):
                 logger.warning(f"삭제하려던 스레드(ID: {thread.id})를 찾을 수 없습니다. 이미 삭제되었을 수 있습니다.")
             except Exception as e:
                 logger.error(f"광산 스레드(ID: {thread.id}) 처리 중 예기치 않은 오류 발생: {e}", exc_info=True)
-
     async def register_persistent_views(self):
         self.bot.add_view(MiningPanelView(self))
 
