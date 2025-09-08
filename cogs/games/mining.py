@@ -48,7 +48,7 @@ ORE_XP_MAP = {
 
 class MiningGameView(ui.View):
     def __init__(self, cog_instance: 'Mining', user: discord.Member, thread: discord.Thread, pickaxe: str, user_abilities: List[str], duration: int, end_time: datetime, duration_doubled: bool):
-        super().__init__(timeout=duration + 10)
+        super().__init__(timeout=duration + 15)
         self.cog = cog_instance
         self.user = user
         self.thread = thread
@@ -72,7 +72,7 @@ class MiningGameView(ui.View):
         self.ui_update_task = self.cog.bot.loop.create_task(self.ui_updater())
 
     def stop(self):
-        if not self.ui_update_task.done():
+        if hasattr(self, 'ui_update_task') and not self.ui_update_task.done():
             self.ui_update_task.cancel()
         super().stop()
 
@@ -247,8 +247,7 @@ class Mining(commands.Cog):
             session_data = self.active_sessions.get(user_id)
             if session_data:
                 logger.warning(f"오래된 광산 세션(유저: {user_id})을 안전장치 루프를 통해 종료합니다.")
-                thread = self.bot.get_channel(session_data['thread_id'])
-                await self.close_mine_session(user_id, thread, "시간이 다 되어")
+                await self.close_mine_session(user_id, "시간 초과 (안전장치)")
     
     @check_stale_sessions.before_loop
     async def before_check_stale_sessions(self):
@@ -263,7 +262,7 @@ class Mining(commands.Cog):
             if thread := self.bot.get_channel(thread_id):
                 await interaction.followup.send(f"이미 광산에 입장해 있습니다. {thread.mention}", ephemeral=True)
             else:
-                await self.close_mine_session(user.id, None, "오류로 인해")
+                await self.close_mine_session(user.id, "오류로 인한 강제 종료")
                 await interaction.followup.send("이전 광산 정보를 찾을 수 없어 초기화했습니다. 다시 시도해주세요.", ephemeral=True)
             return
 
@@ -302,7 +301,7 @@ class Mining(commands.Cog):
         
         end_time = datetime.now(timezone.utc) + timedelta(seconds=duration)
         
-        session_task = self.bot.loop.create_task(self.mine_session_timer(user.id, thread, duration))
+        session_task = self.bot.loop.create_task(self.mine_session_timer(user.id, duration))
         
         self.active_sessions[user.id] = {
             "thread_id": thread.id,
@@ -320,31 +319,29 @@ class Mining(commands.Cog):
         
         await interaction.followup.send(f"광산에 입장했습니다! {thread.mention}", ephemeral=True)
 
-    async def mine_session_timer(self, user_id: int, thread: discord.Thread, duration: int):
+    async def mine_session_timer(self, user_id: int, duration: int):
         try:
             if duration > 60:
                 await asyncio.sleep(duration - 60)
-                if user_id in self.active_sessions:
-                    try:
-                        await thread.send("⚠️ 1분 후 광산이 닫힙니다...", delete_after=59)
-                    except (discord.Forbidden, discord.HTTPException):
-                        pass
+                if session := self.active_sessions.get(user_id):
+                    if thread := self.bot.get_channel(session['thread_id']):
+                        try: await thread.send("⚠️ 1분 후 광산이 닫힙니다...", delete_after=59)
+                        except (discord.Forbidden, discord.HTTPException): pass
                 else: return
                 await asyncio.sleep(60)
             else:
                 await asyncio.sleep(duration)
             
             if user_id in self.active_sessions:
-                 await self.close_mine_session(user_id, thread, "시간이 다 되어")
+                 await self.close_mine_session(user_id, "시간이 다 되어")
 
         except asyncio.CancelledError:
             pass
         except Exception as e:
             logger.error(f"광산 세션 타이머(유저: {user_id}) 중 오류: {e}", exc_info=True)
             
-    # ▼▼▼ [핵심 수정] 상세한 로깅 기능이 추가된 함수입니다. ▼▼▼
-    # ▼▼▼ [핵심 수정] 이 함수 전체를 아래 코드로 교체해주세요. ▼▼▼
-    async def close_mine_session(self, user_id: int, thread_obj_from_timer: Optional[discord.Thread], reason: str):
+    # ▼▼▼ [핵심 수정] 함수 시그니처와 내부 로직이 변경되었습니다. ▼▼▼
+    async def close_mine_session(self, user_id: int, reason: str):
         session_data = self.active_sessions.pop(user_id, None)
         if not session_data:
             return
@@ -362,35 +359,31 @@ class Mining(commands.Cog):
 
         thread = None
         try:
-            # 먼저 캐시에서 찾아보고, 없으면 API를 통해 직접 가져옵니다. (가장 확실한 방법)
             thread = self.bot.get_channel(thread_id) or await self.bot.fetch_channel(thread_id)
             logger.info(f"[{user_id}] 스레드 객체(ID: {thread_id})를 성공적으로 찾았습니다.")
         except discord.NotFound:
             logger.warning(f"[{user_id}] 종료할 스레드(ID: {thread_id})를 찾을 수 없습니다. 이미 삭제되었을 수 있습니다.")
-            return # 스레드가 없으면 더 이상 진행할 필요 없음
+            return
         except discord.Forbidden:
-            logger.error(f"[{user_id}] 스레드 정보(ID: {thread_id})를 가져올 권한이 없습니다.")
+            logger.error(f"[{user_id}] 스레드 정보(ID: {thread_id})를 가져올 권한이 없습니다. 이 문제는 서버 관리자가 해결해야 합니다.")
             return
         except Exception as e:
             logger.error(f"[{user_id}] 스레드(ID: {thread_id})를 가져오는 중 예기치 않은 오류 발생: {e}", exc_info=True)
             return
 
-        # 위에서 thread를 확실히 가져왔으므로, 여기서는 thread가 None이 아님을 보장할 수 있습니다.
         try:
-            await thread.send(f"**광산이 닫혔습니다.** ({reason})")
-            await asyncio.sleep(10)
+            # 멤버십 보장을 위해 봇 스스로를 추가 시도
+            await thread.add_user(self.bot.user)
+            await thread.send(f"**광산이 닫혔습니다.** ({reason})", delete_after=10)
+            
+            await asyncio.sleep(0.5) # 메시지 전송 후 아주 짧은 딜레이
             
             logger.info(f"[{user_id}] 스레드(ID: {thread.id}) 삭제를 시도합니다...")
             await thread.delete()
             logger.info(f"[{user_id}] 스레드(ID: {thread.id})를 성공적으로 삭제했습니다.")
 
         except discord.Forbidden as e:
-            logger.error(f"[{user_id}] 권한 부족으로 스레드(ID: {thread.id}) 삭제 실패. '스레드 관리' 권한을 확인해주세요. 상세 오류: {e}", exc_info=True)
-            try:
-                await thread.edit(locked=True, archived=True, reason="권한 부족으로 인한 자동 보관 처리")
-                logger.info(f"[{user_id}] 권한 부족으로 스레드(ID: {thread.id})를 잠금 및 보관 처리했습니다.")
-            except Exception as archive_e:
-                logger.error(f"[{user_id}] 스레드 잠금/보관 처리 중 추가 오류 발생: {archive_e}", exc_info=True)
+            logger.error(f"[{user_id}] 최종 권한 부족으로 스레드(ID: {thread.id}) 처리 실패. '스레드 관리' 권한을 확인해주세요. 상세 오류: {e}", exc_info=True)
         except Exception as e:
             logger.error(f"[{user_id}] 스레드 처리(메시지 전송 또는 삭제) 중 예기치 않은 오류 발생: {e}", exc_info=True)
 
@@ -404,8 +397,7 @@ class Mining(commands.Cog):
                 if old_channel := self.bot.get_channel(panel_info['channel_id']):
                     msg = await old_channel.fetch_message(panel_info['message_id'])
                     await msg.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
+            except (discord.NotFound, discord.Forbidden): pass
 
         embed_data = await get_embed_from_db(panel_key)
         if not embed_data:
