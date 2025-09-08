@@ -15,7 +15,6 @@ from utils.database import (
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
     log_activity, get_user_abilities, supabase
 )
-# ▼▼▼ [핵심 수정] 새로 추가한 헬퍼 함수를 import 합니다. ▼▼▼
 from utils.helpers import format_embed_from_db, format_timedelta_minutes_seconds
 
 logger = logging.getLogger(__name__)
@@ -48,9 +47,8 @@ ORE_XP_MAP = {
 }
 
 class MiningGameView(ui.View):
-    # ▼▼▼ [핵심 수정] __init__ 메소드를 아래 내용으로 수정합니다. ▼▼▼
     def __init__(self, cog_instance: 'Mining', user: discord.Member, thread: discord.Thread, pickaxe: str, user_abilities: List[str], duration: int, end_time: datetime, duration_doubled: bool):
-        super().__init__(timeout=duration + 10) # 타임아웃을 넉넉하게 설정
+        super().__init__(timeout=duration + 10)
         self.cog = cog_instance
         self.user = user
         self.thread = thread
@@ -73,25 +71,24 @@ class MiningGameView(ui.View):
 
         self.ui_update_task = self.cog.bot.loop.create_task(self.ui_updater())
 
-    # ▼▼▼ [핵심 수정] stop 메소드를 아래 내용으로 수정합니다. ▼▼▼
     def stop(self):
-        self.ui_update_task.cancel()
-        # 세션 종료는 Mining Cog의 close_mine_session에서 처리
+        if not self.ui_update_task.done():
+            self.ui_update_task.cancel()
         super().stop()
 
-    # ▼▼▼ [핵심 수정] UI를 주기적으로 업데이트하는 루프를 추가합니다. ▼▼▼
     async def ui_updater(self):
         while not self.is_finished():
             try:
-                if self.message and self.state == "idle": # 'idle' 상태일 때만 남은 시간 갱신
+                if self.message and self.state == "idle":
                     embed = self.build_embed()
                     await self.message.edit(embed=embed)
             except (discord.NotFound, discord.Forbidden):
-                self.stop() # 메시지를 찾을 수 없으면 뷰 중지
+                self.stop()
+                break
             except Exception as e:
                 logger.error(f"Mining UI 업데이트 중 오류: {e}", exc_info=True)
-
-            await asyncio.sleep(2) # 2초마다 업데이트
+            
+            await asyncio.sleep(10)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.on_cooldown:
@@ -110,7 +107,6 @@ class MiningGameView(ui.View):
             if self.last_result_text:
                 description_parts.append(f"## 채굴 결과\n{self.last_result_text}")
             
-            # ▼▼▼ [핵심 수정] 남은 시간을 상세하게 표시하도록 변경합니다. ▼▼▼
             remaining_time = self.end_time - datetime.now(timezone.utc)
             description_parts.append(f"광산 닫힘까지: **{format_timedelta_minutes_seconds(remaining_time)}**")
 
@@ -186,7 +182,7 @@ class MiningGameView(ui.View):
                 embed = self.build_embed()
                 await interaction.edit_original_response(embed=embed, view=self)
 
-            else: # 채굴하기
+            else:
                 self.state = "mining"
                 button.disabled = True
                 mining_duration = max(3, MINING_COOLDOWN_SECONDS - self.time_reduction)
@@ -220,9 +216,7 @@ class MiningGameView(ui.View):
                 except discord.NotFound: self.stop()
 
     async def on_timeout(self):
-        # 타임아웃 자체는 Cog의 close_mine_session에서 처리하므로 여기서는 뷰만 중지
         self.stop()
-
 
 class MiningPanelView(ui.View):
     def __init__(self, cog_instance: 'Mining'):
@@ -237,14 +231,11 @@ class Mining(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_sessions: Dict[int, Dict] = {}
-        # ▼▼▼ [핵심 수정] 기존 루프는 안전장치로 남겨두되, 주기를 늘립니다. ▼▼▼
         self.check_stale_sessions.start()
 
     def cog_unload(self):
-        # ▼▼▼ [핵심 수정] 루프 이름을 변경합니다. ▼▼▼
         self.check_stale_sessions.cancel()
 
-    # ▼▼▼ [핵심 수정] 루프 이름을 변경하고 주기를 늘립니다. (60초) ▼▼▼
     @tasks.loop(seconds=60.0)
     async def check_stale_sessions(self):
         now = datetime.now(timezone.utc)
@@ -311,7 +302,6 @@ class Mining(commands.Cog):
         
         end_time = datetime.now(timezone.utc) + timedelta(seconds=duration)
         
-        # ▼▼▼ [핵심 수정] session_task를 생성하고 active_sessions에 저장합니다. ▼▼▼
         session_task = self.bot.loop.create_task(self.mine_session_timer(user.id, thread, duration))
         
         self.active_sessions[user.id] = {
@@ -326,36 +316,33 @@ class Mining(commands.Cog):
         embed.title = f"⛏️ {user.display_name}님의 광산 채굴"
         
         message = await thread.send(embed=embed, view=view)
-        view.message = message # view에 메시지 객체 저장
+        view.message = message
         
         await interaction.followup.send(f"광산에 입장했습니다! {thread.mention}", ephemeral=True)
 
-    # ▼▼▼ [핵심 수정] 각 세션을 관리하는 타이머 함수를 추가합니다. ▼▼▼
     async def mine_session_timer(self, user_id: int, thread: discord.Thread, duration: int):
         try:
-            # 1분 전 알림
             if duration > 60:
                 await asyncio.sleep(duration - 60)
-                if user_id in self.active_sessions: # 아직 세션이 유효한지 확인
+                if user_id in self.active_sessions:
                     try:
                         await thread.send("⚠️ 1분 후 광산이 닫힙니다...", delete_after=59)
                     except (discord.Forbidden, discord.HTTPException):
                         pass
-                else: return # 세션이 이미 종료됨
+                else: return
                 await asyncio.sleep(60)
             else:
                 await asyncio.sleep(duration)
             
-            # 최종 종료
             if user_id in self.active_sessions:
                  await self.close_mine_session(user_id, thread, "시간이 다 되어")
 
         except asyncio.CancelledError:
-            # 태스크가 취소된 경우 (예: 수동 종료)
             pass
         except Exception as e:
             logger.error(f"광산 세션 타이머(유저: {user_id}) 중 오류: {e}", exc_info=True)
-
+            
+    # ▼▼▼ [핵심 수정] 상세한 로깅 기능이 추가된 함수입니다. ▼▼▼
     async def close_mine_session(self, user_id: int, thread: Optional[discord.Thread], reason: str):
         session_data = self.active_sessions.pop(user_id, None)
         if not session_data:
@@ -374,9 +361,7 @@ class Mining(commands.Cog):
                 await thread.delete()
                 logger.info(f"광산 스레드(ID: {thread.id})를 성공적으로 삭제했습니다.")
             except discord.Forbidden as e:
-                # ▼▼▼ [핵심 수정] 어떤 권한이 없는지 정확히 로깅합니다. ▼▼▼
-                logger.error(f"권한 부족으로 스레드(ID: {thread.id}) 삭제 실패. '스레드 관리' 권한이 있는지 확인해주세요. 상세 오류: {e}")
-                # 권한이 없을 때 스레드를 잠그고 보관 처리
+                logger.error(f"권한 부족으로 스레드(ID: {thread.id}) 삭제 실패. '스레드 관리' 권한이 있는지 확인해주세요. 상세 오류: {e}", exc_info=True)
                 try:
                     await thread.edit(locked=True, archived=True, reason="권한 부족으로 인한 자동 보관 처리")
                     logger.info(f"권한 부족으로 스레드(ID: {thread.id})를 잠금 및 보관 처리했습니다.")
@@ -386,6 +371,7 @@ class Mining(commands.Cog):
                 logger.warning(f"삭제하려던 스레드(ID: {thread.id})를 찾을 수 없습니다. 이미 삭제되었을 수 있습니다.")
             except Exception as e:
                 logger.error(f"광산 스레드(ID: {thread.id}) 처리 중 예기치 않은 오류 발생: {e}", exc_info=True)
+
     async def register_persistent_views(self):
         self.bot.add_view(MiningPanelView(self))
 
