@@ -359,7 +359,6 @@ class EconomyCore(commands.Cog):
                     old_price = data.get('current_price', data.get('price', 0))
                     new_price = self._calculate_new_price(old_price, data['volatility'], data.get('min_price'), data.get('max_price'))
                     if new_price != old_price:
-                        # ▼▼▼ [핵심 수정] 'category'를 업데이트 payload에 포함시킵니다. ▼▼▼
                         items_to_update.append({'name': name, 'current_price': new_price, 'category': data['category']})
                         if abs((new_price - old_price) / old_price) > 0.25:
                             status = "폭등 📈" if new_price > old_price else "폭락 📉"
@@ -371,7 +370,8 @@ class EconomyCore(commands.Cog):
                     old_price = fish.get('current_base_value', fish.get('base_value', 0))
                     new_price = self._calculate_new_price(old_price, fish['volatility'], fish.get('min_price'), fish.get('max_price'))
                     if new_price != old_price:
-                        fish_to_update.append({'id': fish['id'], 'current_base_value': new_price})
+                        # ▼▼▼ [핵심 수정] 'name'을 업데이트 payload에 포함시킵니다. ▼▼▼
+                        fish_to_update.append({'id': fish['id'], 'name': fish['name'], 'current_base_value': new_price})
                         if abs((new_price - old_price) / old_price) > 0.20:
                             status = "풍어 📈" if new_price > old_price else "흉어 📉"
                             announcements.append(f" - {fish['name']} (기본 가치): `{old_price}` → `{new_price}`{self.currency_icon} ({status})")
