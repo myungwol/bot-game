@@ -52,7 +52,9 @@ class IngredientSelectView(ui.View):
 
     async def start(self, interaction: discord.Interaction):
         await self.build_components()
-        await interaction.response.send_message("추가할 재료를 선택하세요.", view=self, ephemeral=True)
+        # [수정] interaction.response.send_message -> interaction.followup.send
+        # 이미 defer()로 응답했으므로 후속 메시지로 보내야 합니다.
+        await interaction.followup.send("추가할 재료를 선택하세요.", view=self, ephemeral=True)
 
     async def build_components(self):
         self.clear_items()
@@ -95,7 +97,10 @@ class CookingPanelView(ui.View):
     async def _load_context(self, interaction: discord.Interaction) -> bool:
         res = await supabase.table('user_settings').select('user_id').eq('kitchen_thread_id', interaction.channel.id).maybe_single().execute()
         if not (res and res.data):
-            await interaction.response.send_message("이 부엌 정보를 찾을 수 없습니다.", ephemeral=True, delete_after=5)
+            if interaction.response.is_done():
+                await interaction.followup.send("이 부엌 정보를 찾을 수 없습니다.", ephemeral=True, delete_after=5)
+            else:
+                await interaction.response.send_message("이 부엌 정보를 찾을 수 없습니다.", ephemeral=True, delete_after=5)
             return False
         
         owner_id = int(res.data['user_id'])
@@ -103,7 +108,10 @@ class CookingPanelView(ui.View):
             guild = self.cog.bot.get_guild(interaction.guild_id)
             self.user = await guild.fetch_member(owner_id)
         except (discord.NotFound, AttributeError):
-            await interaction.response.send_message("부엌 주인을 찾을 수 없습니다.", ephemeral=True, delete_after=5)
+            if interaction.response.is_done():
+                await interaction.followup.send("부엌 주인을 찾을 수 없습니다.", ephemeral=True, delete_after=5)
+            else:
+                await interaction.response.send_message("부엌 주인을 찾을 수 없습니다.", ephemeral=True, delete_after=5)
             return False
 
         cauldron_res = await supabase.table('cauldrons').select('*').eq('user_id', owner_id).order('slot_number').execute()
@@ -130,10 +138,8 @@ class CookingPanelView(ui.View):
         embed = await self.build_embed()
         
         try:
-            if self.message:
-                await self.message.edit(content=None, embed=embed, view=self)
-            elif interaction and interaction.channel:
-                self.message = await interaction.channel.send(content=None, embed=embed, view=self)
+            target_editor = interaction.edit_original_response if interaction else self.message.edit
+            await target_editor(content=None, embed=embed, view=self)
         except (discord.NotFound, AttributeError, discord.HTTPException) as e:
             logger.warning(f"요리 패널 메시지 수정/생성 실패: {e}")
             if interaction and interaction.channel:
@@ -211,7 +217,11 @@ class CookingPanelView(ui.View):
     async def add_ingredient_prompt(self, interaction: discord.Interaction):
         cauldron = self.get_selected_cauldron()
         if not cauldron or cauldron['state'] not in ['idle', 'adding_ingredients']:
-            return await interaction.response.send_message("❌ 지금은 재료를 추가할 수 없습니다.", ephemeral=True, delete_after=5)
+            if interaction.response.is_done():
+                await interaction.followup.send("❌ 지금은 재료를 추가할 수 없습니다.", ephemeral=True, delete_after=5)
+            else:
+                await interaction.response.send_message("❌ 지금은 재료를 추가할 수 없습니다.", ephemeral=True, delete_after=5)
+            return
         
         view = IngredientSelectView(self)
         await view.start(interaction)
@@ -306,8 +316,10 @@ class CookingPanelView(ui.View):
         if not await self._load_context(interaction): return
         
         if interaction.user.id != self.user.id:
-            return await interaction.response.send_message("부엌 주인만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
+            await interaction.response.send_message("부엌 주인만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
+            return
         
+        # [수정] defer()를 여기서 한 번만 호출하도록 변경
         await interaction.response.defer()
         
         custom_id = interaction.data['custom_id']
