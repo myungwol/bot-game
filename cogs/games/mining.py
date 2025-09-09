@@ -333,7 +333,11 @@ class Mining(commands.Cog):
         embed_data = await get_embed_from_db(panel_key)
         if not embed_data: return logger.error(f"DB에서 '{panel_key}' 임베드를 찾을 수 없습니다.")
         
-        # ▼▼▼ [핵심 수정] MiningPanelView를 self가 아닌 self.cog를 통해 인스턴스화합니다. ▼▼▼
+        # --- FIX START ---
+        # discord.Embed 객체를 생성하는 라인이 누락되어 추가했습니다.
+        embed = format_embed_from_db(embed_data)
+        # --- FIX END ---
+        
         view = MiningPanelView(self)
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key.replace("panel_",""), new_message.id, channel.id)
