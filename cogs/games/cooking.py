@@ -1,4 +1,3 @@
-# bot-game/cogs/games/cooking.py
 import discord
 from discord.ext import commands, tasks
 from discord import ui
@@ -262,7 +261,7 @@ class CookingPanelView(ui.View):
         quantity_to_claim = 1
         double_yield_activated = False
         
-        if 'cook_double_yield_2' in user_abilities and random.random() < 0.15: # 15% 확률
+        if 'cook_double_yield_2' in user_abilities and random.random() < 0.15:
             quantity_to_claim = 2
             double_yield_activated = True
 
@@ -336,16 +335,30 @@ class Cooking(commands.Cog):
     @tasks.loop(minutes=1)
     async def check_completed_cooking(self):
         now = datetime.now(timezone.utc)
-        res = await supabase.table('cauldrons').select('*, user_settings(kitchen_thread_id)').eq('state', 'cooking').lte('cooking_completes_at', now.isoformat()).execute()
-        if not (res and res.data): return
+        
+        # [수정] 쿼리를 두 단계로 분리하여 실행
+        # 1. 완료된 가마솥 정보 가져오기
+        cauldrons_res = await supabase.table('cauldrons').select('*').eq('state', 'cooking').lte('cooking_completes_at', now.isoformat()).execute()
+        if not (cauldrons_res and cauldrons_res.data): return
 
-        for cauldron in res.data:
+        completed_cauldrons = cauldrons_res.data
+        user_ids = list(set(int(c['user_id']) for c in completed_cauldrons))
+
+        # 2. 해당 유저들의 부엌 스레드 ID 정보 가져오기
+        user_settings_res = await supabase.table('user_settings').select('user_id, kitchen_thread_id').in_('user_id', user_ids).execute()
+        
+        thread_id_map = {}
+        if user_settings_res and user_settings_res.data:
+            thread_id_map = {int(setting['user_id']): setting.get('kitchen_thread_id') for setting in user_settings_res.data}
+
+        # 3. 정보 조합하여 알림 처리
+        for cauldron in completed_cauldrons:
             await supabase.table('cauldrons').update({'state': 'ready'}).eq('id', cauldron['id']).execute()
             user_id = int(cauldron['user_id'])
             user = self.bot.get_user(user_id)
             if not user: continue
             
-            thread_id_str = cauldron.get('user_settings', {}).get('kitchen_thread_id')
+            thread_id_str = thread_id_map.get(user_id)
             if thread_id_str and (thread := self.bot.get_channel(int(thread_id_str))):
                 await thread.send(f"{user.mention}, **{cauldron['result_item_name']}** 요리가 완성되었습니다!", allowed_mentions=discord.AllowedMentions(users=True))
             
