@@ -51,6 +51,7 @@ class EconomyCore(commands.Cog):
         self.update_market_prices.start()
         self.monthly_whale_reset.start()
         self.config_reload_checker.start()
+        self.manual_update_checker.start()
 
         self.initial_setup_done = False
 
@@ -123,6 +124,7 @@ class EconomyCore(commands.Cog):
         if self.log_sender_task:
             self.log_sender_task.cancel()
         self.config_reload_checker.cancel()
+        self.manual_update_checker.cancel()
 
     @tasks.loop(seconds=10.0)
     async def config_reload_checker(self):
@@ -407,7 +409,38 @@ class EconomyCore(commands.Cog):
         if min_p is not None: new_price = max(min_p, new_price)
         if max_p is not None: new_price = min(max_p, new_price)
         return new_price
+        
+    @tasks.loop(seconds=15.0)
+    async def manual_update_checker(self):
+        try:
+            response = await supabase.table('bot_configs').select('config_key').eq('config_key', 'manual_update_request').maybe_single().execute()
+            
+            if response and response.data:
+                logger.info("[수동 업데이트] 관리자로부터 수동 업데이트 요청을 감지했습니다.")
+                
+                farm_cog = self.bot.get_cog("Farm")
+                
+                if farm_cog and hasattr(farm_cog, 'daily_crop_update'):
+                    await farm_cog.daily_crop_update()
+                    logger.info("[수동 업데이트] 작물 업데이트를 성공적으로 실행했습니다.")
+                else:
+                    logger.error("[수동 업데이트] Farm Cog를 찾을 수 없거나 daily_crop_update 함수가 없습니다.")
+                
+                # Market update는 자기 자신(EconomyCore)에 있으므로 직접 호출
+                await self.update_market_prices()
+                logger.info("[수동 업데이트] 시세 업데이트를 성공적으로 실행했습니다.")
 
+                await delete_config_from_db("manual_update_request")
+                logger.info("[수동 업데이트] 요청 키를 DB에서 삭제했습니다.")
+
+        except Exception as e:
+            logger.error(f"수동 업데이트 작업 중 오류 발생: {e}", exc_info=True)
+
+    @manual_update_checker.before_loop
+    async def before_manual_update_checker(self):
+        await self.bot.wait_until_ready()
+    # ▲▲▲ 여기까지 추가 ▲▲▲
+    
     @update_market_prices.before_loop
     async def before_update_market_prices(self):
         await self.bot.wait_until_ready()
