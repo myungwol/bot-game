@@ -354,24 +354,34 @@ class EconomyCore(commands.Cog):
             items_to_update = []
             announcements = []
 
+            # 아이템 가격 변동
             for name, data in item_db.items():
                 if data.get('volatility', 0) > 0:
                     old_price = data.get('current_price', data.get('price', 0))
                     new_price = self._calculate_new_price(old_price, data['volatility'], data.get('min_price'), data.get('max_price'))
                     if new_price != old_price:
-                        items_to_update.append({'name': name, 'current_price': new_price, 'category': data['category']})
+                        # 기존 데이터를 복사하고 가격만 업데이트하여 모든 NOT NULL 필드를 유지합니다.
+                        item_update_payload = data.copy()
+                        item_update_payload['name'] = name # 'name'이 key이므로 명시적으로 추가
+                        item_update_payload['current_price'] = new_price
+                        items_to_update.append(item_update_payload)
+
                         if abs((new_price - old_price) / old_price) > 0.25:
                             status = "폭등 📈" if new_price > old_price else "폭락 📉"
                             announcements.append(f" - {name}: `{old_price}` → `{new_price}`{self.currency_icon} ({status})")
 
+            # 물고기 가격 변동
             fish_to_update = []
             for fish in loot_db:
                 if fish.get('volatility', 0) > 0 and 'id' in fish:
                     old_price = fish.get('current_base_value', fish.get('base_value', 0))
                     new_price = self._calculate_new_price(old_price, fish['volatility'], fish.get('min_price'), fish.get('max_price'))
                     if new_price != old_price:
-                        # ▼▼▼ [핵심 수정] 'name'을 업데이트 payload에 포함시킵니다. ▼▼▼
-                        fish_to_update.append({'id': fish['id'], 'name': fish['name'], 'current_base_value': new_price})
+                        # ▼▼▼ [핵심 수정] 기존 fish 객체를 복사하여 필요한 값만 갱신합니다. ▼▼▼
+                        fish_update_payload = fish.copy()
+                        fish_update_payload['current_base_value'] = new_price
+                        fish_to_update.append(fish_update_payload)
+                        
                         if abs((new_price - old_price) / old_price) > 0.20:
                             status = "풍어 📈" if new_price > old_price else "흉어 📉"
                             announcements.append(f" - {fish['name']} (기본 가치): `{old_price}` → `{new_price}`{self.currency_icon} ({status})")
