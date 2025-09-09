@@ -284,6 +284,14 @@ class BuyItemView(ShopViewBase):
         await interaction.response.defer(ephemeral=True)
         wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(self.user))
 
+        if item_name == "가마솥":
+            MAX_CAULDRONS = 5 
+            if inventory.get(item_name, 0) >= MAX_CAULDRONS:
+                error_message = f"❌ 가마솥은 최대 {MAX_CAULDRONS}개까지만 보유할 수 있습니다."
+                msg = await interaction.followup.send(error_message, ephemeral=True)
+                asyncio.create_task(delete_after(msg, 5))
+                return
+                
         if item_data.get('gear_type') == '곡괭이':
             item_db = get_item_database()
             for owned_item_name in inventory.keys():
