@@ -114,19 +114,32 @@ class CookingPanelView(ui.View):
         if self.selected_cauldron_slot is None: return None
         return next((c for c in self.cauldrons if c['slot_number'] == self.selected_cauldron_slot), None)
 
-    async def refresh(self, interaction: discord.Interaction):
+    async def refresh(self, interaction: Optional[discord.Interaction] = None):
+        if interaction and not interaction.response.is_done():
+            await interaction.response.defer()
+
+        if not self.user:
+            logger.error("CookingPanelView refresh: self.user가 설정되지 않았습니다.")
+            return
+
         cauldron_res = await supabase.table('cauldrons').select('*').eq('user_id', self.user.id).order('slot_number').execute()
         self.cauldrons = cauldron_res.data if cauldron_res.data else []
         
         await self.build_components()
         embed = await self.build_embed()
         
-        target_editor = interaction.edit_original_response if not interaction.response.is_done() else self.message.edit
-        
         try:
-            await target_editor(embed=embed, view=self)
-        except (discord.NotFound, AttributeError):
-            self.message = await interaction.channel.send(embed=embed, view=self)
+            if self.message:
+                await self.message.edit(content=None, embed=embed, view=self)
+            elif interaction and interaction.channel:
+                self.message = await interaction.channel.send(content=None, embed=embed, view=self)
+        except (discord.NotFound, AttributeError, discord.HTTPException) as e:
+            logger.warning(f"요리 패널 메시지 수정/생성 실패: {e}")
+            if interaction and interaction.channel:
+                try:
+                    self.message = await interaction.channel.send(content=None, embed=embed, view=self)
+                except Exception as e_inner:
+                    logger.error(f"요리 패널 메시지 재생성 실패: {e_inner}")
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"🍲 {self.user.display_name}의 부엌", color=0xE67E22)
@@ -336,41 +349,46 @@ class Cooking(commands.Cog):
     async def check_completed_cooking(self):
         now = datetime.now(timezone.utc)
         
-        # [수정] 쿼리를 두 단계로 분리하여 실행
-        # 1. 완료된 가마솥 정보 가져오기
-        cauldrons_res = await supabase.table('cauldrons').select('*').eq('state', 'cooking').lte('cooking_completes_at', now.isoformat()).execute()
-        if not (cauldrons_res and cauldrons_res.data): return
+        # [수정] 오류가 발생했던 쿼리를 안전한 2단계 방식으로 변경
+        try:
+            cauldrons_res = await supabase.table('cauldrons').select('*').eq('state', 'cooking').lte('cooking_completes_at', now.isoformat()).execute()
+            if not (cauldrons_res and cauldrons_res.data): return
 
-        completed_cauldrons = cauldrons_res.data
-        user_ids = list(set(int(c['user_id']) for c in completed_cauldrons))
+            completed_cauldrons = cauldrons_res.data
+            user_ids = list(set(int(c['user_id']) for c in completed_cauldrons))
 
-        # 2. 해당 유저들의 부엌 스레드 ID 정보 가져오기
-        user_settings_res = await supabase.table('user_settings').select('user_id, kitchen_thread_id').in_('user_id', user_ids).execute()
-        
-        thread_id_map = {}
-        if user_settings_res and user_settings_res.data:
-            thread_id_map = {int(setting['user_id']): setting.get('kitchen_thread_id') for setting in user_settings_res.data}
+            user_settings_res = await supabase.table('user_settings').select('user_id, kitchen_thread_id').in_('user_id', user_ids).execute()
+            
+            thread_id_map = {}
+            if user_settings_res and user_settings_res.data:
+                thread_id_map = {int(setting['user_id']): setting.get('kitchen_thread_id') for setting in user_settings_res.data}
 
-        # 3. 정보 조합하여 알림 처리
-        for cauldron in completed_cauldrons:
-            await supabase.table('cauldrons').update({'state': 'ready'}).eq('id', cauldron['id']).execute()
-            user_id = int(cauldron['user_id'])
-            user = self.bot.get_user(user_id)
-            if not user: continue
-            
-            thread_id_str = thread_id_map.get(user_id)
-            if thread_id_str and (thread := self.bot.get_channel(int(thread_id_str))):
-                await thread.send(f"{user.mention}, **{cauldron['result_item_name']}** 요리가 완성되었습니다!", allowed_mentions=discord.AllowedMentions(users=True))
-            
-            try: await user.send(f"🍲 **{cauldron['result_item_name']}** 요리가 완성되었습니다! 부엌에서 확인해주세요.")
-            except discord.Forbidden: pass
-            
-            log_channel_id = get_id("log_cooking_complete_channel_id")
-            if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
-                embed_data = await get_embed_from_db("log_cooking_complete")
-                if embed_data:
-                    embed = format_embed_from_db(embed_data, user_mention=user.mention, recipe_name=cauldron['result_item_name'])
-                    await log_channel.send(embed=embed)
+            for cauldron in completed_cauldrons:
+                await supabase.table('cauldrons').update({'state': 'ready'}).eq('id', cauldron['id']).execute()
+                user_id = int(cauldron['user_id'])
+                user = self.bot.get_user(user_id)
+                if not user: continue
+                
+                thread_id_str = thread_id_map.get(user_id)
+                if thread_id_str and (thread := self.bot.get_channel(int(thread_id_str))):
+                    try:
+                        await thread.send(f"{user.mention}, **{cauldron['result_item_name']}** 요리가 완성되었습니다!", allowed_mentions=discord.AllowedMentions(users=True))
+                    except discord.Forbidden:
+                        logger.warning(f"채널 {thread_id_str}에 메시지를 보낼 수 없습니다.")
+                
+                try: 
+                    await user.send(f"🍲 **{cauldron['result_item_name']}** 요리가 완성되었습니다! 부엌에서 확인해주세요.")
+                except discord.Forbidden: pass
+                
+                log_channel_id = get_id("log_cooking_complete_channel_id")
+                if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
+                    embed_data = await get_embed_from_db("log_cooking_complete")
+                    if embed_data:
+                        embed = format_embed_from_db(embed_data, user_mention=user.mention, recipe_name=cauldron['result_item_name'])
+                        await log_channel.send(embed=embed)
+        except Exception as e:
+            logger.error(f"요리 완료 확인 작업 중 오류 발생: {e}", exc_info=True)
+
 
     @check_completed_cooking.before_loop
     async def before_check_completed_cooking(self): await self.bot.wait_until_ready()
