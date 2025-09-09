@@ -308,13 +308,6 @@ class FarmUIView(ui.View):
         view = FarmActionView(self.cog, farm_data, i.user, "uproot", self.farm_owner_id)
         await view.send_initial_message(i)
         
-    async def on_farm_water_click(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        gear = await get_user_gear(interaction.user)
-        can = gear.get('watering_can', BARE_HANDS)
-        if can == BARE_HANDS:
-            await interaction.followup.send("❌ 먼저 상점에서 '물뿌리개'를 구매하고 프로필 화면에서 장착해주세요.", ephemeral=True); return
-        
         power = get_item_database().get(can, {}).get('power', 1)
         today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
         
@@ -347,7 +340,8 @@ class FarmUIView(ui.View):
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
-            await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
+            # 상호작용 객체 대신 메시지 객체를 전달하도록 변경합니다.
+            await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data, message=interaction.message)
         
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -737,40 +731,43 @@ class Farm(commands.Cog):
         embed.description = "\n\n".join(description_parts)
         return embed
         
-    async def update_farm_ui(self, thread: discord.Thread, user: discord.User, farm_data: Dict, force_new: bool = False):
+    async def update_farm_ui(self, thread: discord.Thread, user: discord.User, farm_data: Dict, force_new: bool = False, message: discord.Message = None):
         lock = self.thread_locks.setdefault(thread.id, asyncio.Lock())
         async with lock:
             if not (user and farm_data): return
 
             try:
-                if force_new:
+                # ▼▼▼ [핵심 수정] 상호작용 대신 전달받은 message 객체를 우선적으로 사용합니다. ▼▼▼
+                message_to_edit = message
+                
+                if not message_to_edit:
+                    message_id = farm_data.get("farm_message_id")
+                    if message_id and not force_new:
+                        try:
+                            message_to_edit = await thread.fetch_message(message_id)
+                        except (discord.NotFound, discord.Forbidden):
+                            logger.warning(f"농장 메시지(ID: {message_id})를 찾지 못하여 새로 생성합니다.")
+                            force_new = True # 메시지를 못 찾았으면 새로 만들어야 함
+                
+                if force_new and message_to_edit:
                     try:
-                        async for message in thread.history(limit=50):
-                            if message.author.id == self.bot.user.id and message.type == discord.MessageType.default:
-                                await message.delete()
-                    except (discord.Forbidden, discord.HTTPException) as e:
-                        logger.warning(f"농장 스레드(ID: {thread.id})의 메시지를 정리하는 중 오류 발생: {e}")
-                    farm_data['farm_message_id'] = None
+                        await message_to_edit.delete()
+                    except (discord.NotFound, discord.Forbidden):
+                        pass
+                    message_to_edit = None
 
                 embed = await self.build_farm_embed(farm_data, user)
                 view = FarmUIView(self)
                 
-                message_id = farm_data.get("farm_message_id")
-                
-                if message_id and not force_new:
-                    try:
-                        message = await thread.fetch_message(message_id)
-                        await message.edit(embed=embed, view=view)
-                        return
-                    except (discord.NotFound, discord.Forbidden):
-                        logger.warning(f"농장 메시지(ID: {message_id})를 찾지 못하여 새로 생성합니다.")
-
-                if force_new:
-                    if embed_data := await get_embed_from_db("farm_thread_welcome"):
-                        await thread.send(embed=format_embed_from_db(embed_data, user_name=farm_data.get('name') or user.display_name))
-
-                new_message = await thread.send(embed=embed, view=view)
-                await supabase.table('farms').update({'farm_message_id': new_message.id}).eq('id', farm_data['id']).execute()
+                if message_to_edit:
+                    await message_to_edit.edit(embed=embed, view=view)
+                else:
+                    if force_new:
+                        if embed_data := await get_embed_from_db("farm_thread_welcome"):
+                            await thread.send(embed=format_embed_from_db(embed_data, user_name=farm_data.get('name') or user.display_name))
+                    
+                    new_message = await thread.send(embed=embed, view=view)
+                    await supabase.table('farms').update({'farm_message_id': new_message.id}).eq('id', farm_data['id']).execute()
                 
             except Exception as e:
                 logger.error(f"농장 UI 업데이트 중 오류: {e}", exc_info=True)
