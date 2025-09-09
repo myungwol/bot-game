@@ -108,7 +108,6 @@ class MiningGameView(ui.View):
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: ui.Item[Any]) -> None:
         logger.error(f"MiningGameView에서 오류 발생 (Item: {item.custom_id}): {error}", exc_info=True)
         message_content = "처리 중 오류가 발생했습니다."
-        # --- FIX START: interaction.followup.send에 delete_after 인자 사용 오류 수정 ---
         if interaction.response.is_done():
             try:
                 msg = await interaction.followup.send(message_content, ephemeral=True)
@@ -118,7 +117,6 @@ class MiningGameView(ui.View):
                 pass
         else:
             await interaction.response.send_message(message_content, ephemeral=True, delete_after=5)
-        # --- FIX END ---
 
     def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", color=0x607D8B)
@@ -183,18 +181,27 @@ class MiningGameView(ui.View):
                     
                     self.mined_ores[self.discovered_ore] = self.mined_ores.get(self.discovered_ore, 0) + quantity
                     
-                    # --- FIX START: RPC 호출을 안전한 Python 로직으로 대체 ---
                     try:
                         session_res = await supabase.table('mining_sessions').select('mined_ores_json').eq('user_id', str(self.user.id)).maybe_single().execute()
                         if session_res and session_res.data:
-                            current_ores = session_res.data.get('mined_ores_json') or {}
+                            # --- FIX START: DB에서 가져온 JSON 문자열을 파싱 ---
+                            current_ores_raw = session_res.data.get('mined_ores_json')
+                            current_ores = {}
+                            if isinstance(current_ores_raw, str):
+                                try:
+                                    current_ores = json.loads(current_ores_raw)
+                                except json.JSONDecodeError:
+                                    logger.warning(f"DB의 mined_ores_json이 잘못된 형식의 문자열입니다 (유저: {self.user.id}). 새로 시작합니다.")
+                            elif isinstance(current_ores_raw, dict):
+                                current_ores = current_ores_raw
+                            # --- FIX END ---
+                            
                             current_ores[self.discovered_ore] = current_ores.get(self.discovered_ore, 0) + quantity
                             await supabase.table('mining_sessions').update({'mined_ores_json': current_ores}).eq('user_id', str(self.user.id)).execute()
                         else:
                             logger.warning(f"채굴 중인 유저({self.user.id})의 mining_sessions를 찾을 수 없어 DB 집계가 누락되었습니다.")
                     except Exception as db_error:
                         logger.error(f"광산 채굴량 DB 업데이트 중 오류 발생: {db_error}", exc_info=True)
-                    # --- FIX END ---
 
                     await update_inventory(self.user.id, self.discovered_ore, quantity)
                     await log_activity(self.user.id, 'mining', amount=quantity, xp_earned=xp_earned)
@@ -324,7 +331,14 @@ class Mining(commands.Cog):
 
         user = self.bot.get_user(user_id)
         if user:
-            mined_ores = session_data.get('mined_ores_json', {})
+            mined_ores_raw = session_data.get('mined_ores_json', "{}")
+            mined_ores = {}
+            if isinstance(mined_ores_raw, str):
+                try: mined_ores = json.loads(mined_ores_raw)
+                except json.JSONDecodeError: pass
+            elif isinstance(mined_ores_raw, dict):
+                mined_ores = mined_ores_raw
+
             mined_ores_text = "\n".join([f"> {ore}: {qty}개" for ore, qty in mined_ores.items()]) or "> 채굴한 광물이 없습니다."
             embed_data = await get_embed_from_db("log_mining_result") or {"title": "⛏️ 광산 탐사 결과", "color": 0x607D8B}
             log_embed = format_embed_from_db(embed_data, user_mention=user.mention, pickaxe_name=session_data.get('pickaxe_name'), mined_ores=mined_ores_text)
