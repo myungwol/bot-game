@@ -339,14 +339,14 @@ class Cooking(commands.Cog):
         self.bot = bot
         self.currency_icon = "🪙"
         self.check_completed_cooking.start()
-        self.kitchen_ui_updater.start() # [추가] UI 업데이트 루프 시작
+        self.kitchen_ui_updater.start()
 
     async def cog_load(self):
         self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙")
 
     def cog_unload(self):
         self.check_completed_cooking.cancel()
-        self.kitchen_ui_updater.cancel() # [추가] UI 업데이트 루프 종료
+        self.kitchen_ui_updater.cancel()
 
     @tasks.loop(minutes=1)
     async def check_completed_cooking(self):
@@ -393,7 +393,6 @@ class Cooking(commands.Cog):
     @check_completed_cooking.before_loop
     async def before_check_completed_cooking(self): await self.bot.wait_until_ready()
 
-    # [추가] 상점 구매에 따른 UI 실시간 업데이트를 위한 백그라운드 작업
     @tasks.loop(seconds=5.0)
     async def kitchen_ui_updater(self):
         try:
@@ -401,6 +400,7 @@ class Cooking(commands.Cog):
             if not (res and res.data): return
             
             keys_to_delete = [req['config_key'] for req in res.data]
+            keys_to_delete_tuple = tuple(keys_to_delete)
 
             for req in res.data:
                 try:
@@ -431,8 +431,8 @@ class Cooking(commands.Cog):
                 except Exception as e:
                     logger.error(f"개별 키친 UI 업데이트 중 오류({req['config_key']}): {e}", exc_info=True)
             
-            if keys_to_delete:
-                await delete_config_from_db(keys_to_delete)
+            if keys_to_delete_tuple:
+                await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete_tuple).execute()
         except Exception as e:
             logger.error(f"키친 UI 업데이터 루프 중 오류: {e}", exc_info=True)
 
@@ -522,7 +522,6 @@ class Cooking(commands.Cog):
             message = await thread.send("부엌 로딩 중...")
             panel_view.message = message
             
-            # [수정] 패널 메시지 ID를 DB에 저장
             await supabase.table('user_settings').update({'kitchen_panel_message_id': message.id}).eq('user_id', user.id).execute()
             
             await panel_view.refresh() 
