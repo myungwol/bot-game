@@ -1,12 +1,10 @@
 # cogs/economy/commerce.py
-
 import discord
 from discord.ext import commands
 from discord import ui
 import logging
 import asyncio
 import math
-import time
 from typing import Optional, Dict, List, Any
 
 logger = logging.getLogger(__name__)
@@ -184,19 +182,26 @@ class BuyItemView(ShopViewBase):
             return
 
         try:
+            inventory = await get_inventory(self.user)
+            max_ownable = item_data.get('max_ownable', 999)
+
+            if inventory.get(item_name, 0) >= max_ownable:
+                error_message = f"❌ '{item_name}'은(는) 최대 {max_ownable}개까지만 보유할 수 있습니다."
+                await interaction.response.send_message(error_message, ephemeral=True, delete_after=5)
+                return
+
             if item_data.get('instant_use', False):
                 await self.handle_instant_use_item(interaction, item_name, item_data)
             elif item_data.get('max_ownable', 1) > 1:
-                await self.handle_quantity_purchase(interaction, item_name, item_data)
+                await self.handle_quantity_purchase(interaction, item_name, item_data, inventory)
             else:
-                await self.handle_single_purchase(interaction, item_name, item_data)
+                await self.handle_single_purchase(interaction, item_name, item_data, inventory)
             
-            await self.update_view(interaction)
-
         except Exception as e:
             await self.handle_error(interaction, e, str(e))
 
     async def handle_instant_use_item(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
+        # ... (이 함수는 변경 없음) ...
         await interaction.response.defer(ephemeral=True)
         price = item_data.get('current_price', item_data.get('price', 0))
         wallet = await get_wallet(self.user.id)
@@ -242,79 +247,47 @@ class BuyItemView(ShopViewBase):
         else:
             msg = await interaction.followup.send("❓ 알 수 없는 즉시 사용 아이템입니다.", ephemeral=True)
             asyncio.create_task(delete_after(msg, 5))
+        await self.update_view(interaction)
 
-    async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
+    async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict, inventory: Dict):
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
         price = item_data.get('current_price', item_data.get('price', 0))
-        max_buyable = balance // price if price > 0 else item_data.get('max_ownable', 999)
+        
+        # [수정] 현재 보유량을 고려하여 구매 가능한 최대 수량 계산
+        max_ownable = item_data.get('max_ownable', 999)
+        currently_owned = inventory.get(item_name, 0)
+        can_own_more = max_ownable - currently_owned
+        
+        max_from_balance = balance // price if price > 0 else can_own_more
+        max_buyable = min(can_own_more, max_from_balance)
 
-        if max_buyable == 0:
-            await interaction.response.send_message("❌ 잔액이 부족합니다.", ephemeral=True, delete_after=5)
+        if max_buyable <= 0:
+            await interaction.response.send_message("❌ 잔액이 부족하거나 더 이상 구매할 수 없습니다.", ephemeral=True, delete_after=5)
             return
 
         modal = QuantityModal(f"{item_name} 구매", max_buyable)
         await interaction.response.send_modal(modal)
         await modal.wait()
 
-        if modal.value is None:
-            if interaction.response.is_done():
-                msg = await interaction.followup.send("구매가 취소되었습니다.", ephemeral=True)
-                asyncio.create_task(delete_after(msg, 5))
-            return
+        if modal.value is None: return
 
         quantity, total_price = modal.value, price * modal.value
-        wallet_after_modal = await get_wallet(self.user.id)
-        if wallet_after_modal.get('balance', 0) < total_price:
-            msg = await interaction.followup.send("❌ 잔액이 부족합니다.", ephemeral=True)
-            asyncio.create_task(delete_after(msg, 5))
-            return
-
         await update_inventory(str(self.user.id), item_name, quantity)
         await update_wallet(self.user, -total_price)
 
         new_wallet = await get_wallet(self.user.id)
-        new_balance = new_wallet.get('balance', 0)
-        success_message = f"✅ **{item_name}** {quantity}개를 `{total_price:,}`{self.currency_icon}에 구매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
+        success_message = f"✅ **{item_name}** {quantity}개를 `{total_price:,}`{self.currency_icon}에 구매했습니다.\n(잔액: `{new_wallet.get('balance', 0):,}`{self.currency_icon})"
         
         msg = await interaction.followup.send(success_message, ephemeral=True)
         asyncio.create_task(delete_after(msg, 10))
+        await self.update_view(interaction)
 
-    async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
+    async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict, inventory: Dict):
+        # [수정] inventory를 인자로 받도록 변경, 재호출 방지
         await interaction.response.defer(ephemeral=True)
-        wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(self.user))
-
-        # [수정] 가마솥 구매 시 최대 소유 가능 개수 확인
-        if item_name == "가마솥":
-            MAX_CAULDRONS = 5 
-            if inventory.get(item_name, 0) >= MAX_CAULDRONS:
-                error_message = f"❌ 가마솥은 최대 {MAX_CAULDRONS}개까지만 보유할 수 있습니다."
-                msg = await interaction.followup.send(error_message, ephemeral=True)
-                asyncio.create_task(delete_after(msg, 5))
-                return
-
-        if item_data.get('gear_type') == '곡괭이':
-            item_db = get_item_database()
-            for owned_item_name in inventory.keys():
-                if item_db.get(owned_item_name, {}).get('gear_type') == '곡괭이':
-                    error_message = f"❌ 곡괭이는 하나만 소지할 수 있습니다. (현재 보유: {owned_item_name})"
-                    msg = await interaction.followup.send(error_message, ephemeral=True)
-                    asyncio.create_task(delete_after(msg, 5))
-                    return
-
-        if inventory.get(item_name, 0) > 0 and item_data.get('max_ownable', 1) == 1:
-            error_message = f"❌ '{item_name}'은(는) 이미 보유하고 있습니다. 1개만 가질 수 있습니다."
-            msg = await interaction.followup.send(error_message, ephemeral=True)
-            asyncio.create_task(delete_after(msg, 5))
-            return
-
         total_price = item_data.get('current_price', item_data.get('price', 0))
-        user_balance = wallet.get('balance', 0)
-        if user_balance < total_price:
-            msg = await interaction.followup.send("❌ 잔액이 부족합니다.", ephemeral=True)
-            asyncio.create_task(delete_after(msg, 5))
-            return
-
+        
         await update_inventory(str(self.user.id), item_name, 1)
         await update_wallet(self.user, -total_price)
         
@@ -327,11 +300,11 @@ class BuyItemView(ShopViewBase):
                         logger.error(f"역할 부여 실패: {role.name} 역할을 부여할 권한이 없습니다.")
 
         new_wallet = await get_wallet(self.user.id)
-        new_balance = new_wallet.get('balance', 0)
-        success_message = f"✅ **{item_name}**을(를) `{total_price:,}`{self.currency_icon}에 구매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
+        success_message = f"✅ **{item_name}**을(를) `{total_price:,}`{self.currency_icon}에 구매했습니다.\n(잔액: `{new_wallet.get('balance', 0):,}`{self.currency_icon})"
         
         msg = await interaction.followup.send(success_message, ephemeral=True)
         asyncio.create_task(delete_after(msg, 10))
+        await self.update_view(interaction)
 
     async def back_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
