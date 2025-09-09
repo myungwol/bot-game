@@ -500,10 +500,6 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 농장 관련 영구 View가 정상적으로 등록되었습니다.")
         
-    # ▼▼▼ [핵심 수정] 이 함수 전체를 아래 코드로 교체해주세요. ▼▼▼
-# cogs/games/farm.py
-
-    # ▼▼▼ [핵심 수정] 이 함수 전체를 아래 코드로 교체해주세요. ▼▼▼
     @tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("일일 작물 상태 업데이트 시작...")
@@ -511,7 +507,7 @@ class Farm(commands.Cog):
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
             
-            planted_plots_res = await supabase.table('farm_plots').select('*, farms!inner(user_id)').eq('state', 'planted').execute()
+            planted_plots_res = await supabase.table('farm_plots').select('*, farms!inner(user_id, id)').eq('state', 'planted').execute() # farm_id를 가져오기 위해 farms 테이블 join 수정
             
             if not (planted_plots_res and planted_plots_res.data):
                 logger.info("업데이트할 작물이 없습니다.")
@@ -535,8 +531,10 @@ class Farm(commands.Cog):
             yesterday_jst_midnight = today_jst_midnight - timedelta(days=1)
 
             for plot in all_plots:
+                # ▼▼▼ [핵심 수정] update_payload에 farm_id를 추가합니다. ▼▼▼
                 update_payload = {
                     'id': plot['id'],
+                    'farm_id': plot['farm_id'], # farm_id 추가
                     'state': plot['state'],
                     'growth_stage': plot['growth_stage']
                 }
