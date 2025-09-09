@@ -84,7 +84,10 @@ class IngredientSelectView(ui.View):
         max_qty = inventory.get(item_name, 0)
         modal = IngredientSelectModal(item_name, max_qty, self.parent_view)
         await interaction.response.send_modal(modal)
-        await interaction.delete_original_response()
+        try:
+            await interaction.delete_original_response()
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
 
 class CookingPanelView(ui.View):
@@ -101,14 +104,19 @@ class CookingPanelView(ui.View):
         return next((c for c in self.cauldrons if c['slot_number'] == self.selected_cauldron_slot), None)
 
     async def refresh(self, interaction_or_channel: Any, is_new: bool = False):
+        if is_new:
+            if hasattr(interaction_or_channel, 'user'): self.user = interaction_or_channel.user
+        else: self.user = interaction_or_channel.user
+
         res = await supabase.table('cauldrons').select('*').eq('user_id', self.user.id).order('slot_number').execute()
         self.cauldrons = res.data if res.data else []
         
         embed = await self.build_embed()
-        self.build_components()
+        await self.build_components()
         
         if is_new:
-            self.message = await interaction_or_channel.send(embed=embed, view=self)
+            self.message = await interaction_or_channel.channel.send(embed=embed, view=self)
+            self.cog.active_kitchen_views[self.user.id] = self
         elif self.message:
             interaction: discord.Interaction = interaction_or_channel
             if not interaction.response.is_done():
@@ -146,9 +154,9 @@ class CookingPanelView(ui.View):
             embed.add_field(name="안내", value="관리할 가마솥을 아래 메뉴에서 선택하거나, 새로 설치해주세요.", inline=False)
         return embed
 
-    def build_components(self):
+    async def build_components(self):
         self.clear_items()
-        inventory = asyncio.run_coroutine_threadsafe(get_inventory(self.user), self.cog.bot.loop).result()
+        inventory = await get_inventory(self.user)
         total_cauldrons = inventory.get("가마솥", 0)
         
         cauldron_options = []
@@ -363,9 +371,8 @@ class Cooking(commands.Cog):
             if embed_data: await thread.send(embed=format_embed_from_db(embed_data, user_name=user.display_name))
 
             panel_view = CookingPanelView(self, user)
-            self.active_kitchen_views[user.id] = panel_view
             
-            # 상호작용 객체 대신 채널 객체를 전달하여 is_new 플래그와 함께 호출
+            # 가짜 interaction 객체 생성 대신, 채널 객체를 직접 전달
             await panel_view.refresh(interaction_or_channel=thread, is_new=True)
 
             await interaction.followup.send(f"✅ 당신만의 부엌을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
