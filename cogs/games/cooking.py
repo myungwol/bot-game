@@ -7,11 +7,12 @@ from typing import Optional, Dict, List, Any
 from datetime import datetime, timezone, timedelta
 import json
 import random
+import time
 
 from utils.database import (
     get_inventory, get_wallet, get_item_database, get_config, supabase,
     save_panel_id, get_panel_id, get_embed_from_db, update_inventory,
-    get_id, log_activity, get_user_abilities
+    get_id, log_activity, get_user_abilities, delete_config_from_db, save_config_to_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -338,18 +339,18 @@ class Cooking(commands.Cog):
         self.bot = bot
         self.currency_icon = "🪙"
         self.check_completed_cooking.start()
+        self.kitchen_ui_updater.start() # [추가] UI 업데이트 루프 시작
 
     async def cog_load(self):
         self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙")
 
     def cog_unload(self):
         self.check_completed_cooking.cancel()
+        self.kitchen_ui_updater.cancel() # [추가] UI 업데이트 루프 종료
 
     @tasks.loop(minutes=1)
     async def check_completed_cooking(self):
         now = datetime.now(timezone.utc)
-        
-        # [수정] 오류가 발생했던 쿼리를 안전한 2단계 방식으로 변경
         try:
             cauldrons_res = await supabase.table('cauldrons').select('*').eq('state', 'cooking').lte('cooking_completes_at', now.isoformat()).execute()
             if not (cauldrons_res and cauldrons_res.data): return
@@ -389,9 +390,55 @@ class Cooking(commands.Cog):
         except Exception as e:
             logger.error(f"요리 완료 확인 작업 중 오류 발생: {e}", exc_info=True)
 
-
     @check_completed_cooking.before_loop
     async def before_check_completed_cooking(self): await self.bot.wait_until_ready()
+
+    # [추가] 상점 구매에 따른 UI 실시간 업데이트를 위한 백그라운드 작업
+    @tasks.loop(seconds=5.0)
+    async def kitchen_ui_updater(self):
+        try:
+            res = await supabase.table('bot_configs').select('config_key').like('config_key', 'kitchen_ui_update_request_%').execute()
+            if not (res and res.data): return
+            
+            keys_to_delete = [req['config_key'] for req in res.data]
+
+            for req in res.data:
+                try:
+                    user_id = int(req['config_key'].split('_')[-1])
+                    user = self.bot.get_user(user_id)
+                    if not user: continue
+
+                    settings_res = await supabase.table('user_settings').select('kitchen_thread_id, kitchen_panel_message_id').eq('user_id', user_id).maybe_single().execute()
+                    if not (settings_res and settings_res.data and settings_res.data.get('kitchen_thread_id')):
+                        continue
+                    
+                    thread_id = int(settings_res.data['kitchen_thread_id'])
+                    message_id = settings_res.data.get('kitchen_panel_message_id')
+                    
+                    thread = self.bot.get_channel(thread_id)
+                    if not thread: continue
+
+                    message = None
+                    if message_id:
+                        try:
+                            message = await thread.fetch_message(int(message_id))
+                        except (discord.NotFound, discord.Forbidden):
+                            logger.warning(f"키친 패널 메시지(ID: {message_id})를 찾을 수 없어 새로 생성합니다.")
+                    
+                    panel_view = CookingPanelView(self, user, message)
+                    await panel_view.refresh()
+
+                except Exception as e:
+                    logger.error(f"개별 키친 UI 업데이트 중 오류({req['config_key']}): {e}", exc_info=True)
+            
+            if keys_to_delete:
+                await delete_config_from_db(keys_to_delete)
+        except Exception as e:
+            logger.error(f"키친 UI 업데이터 루프 중 오류: {e}", exc_info=True)
+
+    @kitchen_ui_updater.before_loop
+    async def before_kitchen_ui_updater(self):
+        await self.bot.wait_until_ready()
 
     async def check_and_log_recipe_discovery(self, user: discord.Member, recipe_name: str, ingredients: Dict):
         try:
@@ -474,7 +521,11 @@ class Cooking(commands.Cog):
             panel_view = CookingPanelView(self, user)
             message = await thread.send("부엌 로딩 중...")
             panel_view.message = message
-            await panel_view.refresh(interaction) 
+            
+            # [수정] 패널 메시지 ID를 DB에 저장
+            await supabase.table('user_settings').update({'kitchen_panel_message_id': message.id}).eq('user_id', user.id).execute()
+            
+            await panel_view.refresh() 
 
             await interaction.followup.send(f"✅ 당신만의 부엌을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
 
