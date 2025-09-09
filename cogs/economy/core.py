@@ -345,7 +345,6 @@ class EconomyCore(commands.Cog):
     async def update_market_prices(self):
         logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
         try:
-            # 작업 시작 전 항상 최신 데이터를 DB에서 리로드하여 캐시를 갱신합니다.
             from utils.database import load_game_data_from_db
             await load_game_data_from_db()
 
@@ -355,18 +354,17 @@ class EconomyCore(commands.Cog):
             items_to_update = []
             announcements = []
 
-            # 아이템 가격 변동
             for name, data in item_db.items():
                 if data.get('volatility', 0) > 0:
                     old_price = data.get('current_price', data.get('price', 0))
                     new_price = self._calculate_new_price(old_price, data['volatility'], data.get('min_price'), data.get('max_price'))
                     if new_price != old_price:
-                        items_to_update.append({'name': name, 'current_price': new_price})
-                        if abs((new_price - old_price) / old_price) > 0.25: # 25% 이상 변동 시 공지
+                        # ▼▼▼ [핵심 수정] 'category'를 업데이트 payload에 포함시킵니다. ▼▼▼
+                        items_to_update.append({'name': name, 'current_price': new_price, 'category': data['category']})
+                        if abs((new_price - old_price) / old_price) > 0.25:
                             status = "폭등 📈" if new_price > old_price else "폭락 📉"
                             announcements.append(f" - {name}: `{old_price}` → `{new_price}`{self.currency_icon} ({status})")
 
-            # 물고기 가격 변동
             fish_to_update = []
             for fish in loot_db:
                 if fish.get('volatility', 0) > 0 and 'id' in fish:
@@ -374,17 +372,15 @@ class EconomyCore(commands.Cog):
                     new_price = self._calculate_new_price(old_price, fish['volatility'], fish.get('min_price'), fish.get('max_price'))
                     if new_price != old_price:
                         fish_to_update.append({'id': fish['id'], 'current_base_value': new_price})
-                        if abs((new_price - old_price) / old_price) > 0.20: # 20% 이상 변동 시 공지
+                        if abs((new_price - old_price) / old_price) > 0.20:
                             status = "풍어 📈" if new_price > old_price else "흉어 📉"
                             announcements.append(f" - {fish['name']} (기본 가치): `{old_price}` → `{new_price}`{self.currency_icon} ({status})")
             
-            # DB 업데이트
             if items_to_update:
                 await supabase.table('items').upsert(items_to_update, on_conflict="name").execute()
             if fish_to_update:
                 await supabase.table('fishing_loots').upsert(fish_to_update, on_conflict="id").execute()
 
-            # 공지 및 패널 업데이트
             await save_config_to_db("market_fluctuations", announcements)
             
             if announcements and (log_channel_id := get_id("market_log_channel_id")):
