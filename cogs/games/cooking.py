@@ -116,6 +116,7 @@ class CookingPanelView(ui.View):
         return next((c for c in self.cauldrons if c['slot_number'] == self.selected_cauldron_slot), None)
 
     async def refresh(self, interaction: Optional[discord.Interaction] = None):
+        # [수정] 상호작용 defer 로직을 더 안전하게 변경
         if interaction and not interaction.response.is_done():
             await interaction.response.defer()
 
@@ -130,14 +131,23 @@ class CookingPanelView(ui.View):
         embed = await self.build_embed()
         
         try:
-            target_editor = interaction.edit_original_response if interaction else self.message.edit
-            await target_editor(content=None, embed=embed, view=self)
+            # [핵심 수정] 상호작용의 원본 응답을 수정하는 대신, 항상 self.message 객체를 수정하도록 로직 변경
+            if self.message:
+                await self.message.edit(content=None, embed=embed, view=self)
+            # self.message가 없는 비정상적인 경우, 새로 메시지를 보냄
+            else:
+                channel = interaction.channel if interaction else None
+                if channel:
+                    self.message = await channel.send(content=None, embed=embed, view=self)
+                    # 새로 생성된 메시지 ID를 DB에 저장
+                    await supabase.table('user_settings').update({'kitchen_panel_message_id': self.message.id}).eq('user_id', str(self.user.id)).execute()
         except (discord.NotFound, AttributeError, discord.HTTPException) as e:
             logger.warning(f"요리 패널 메시지 수정/생성 실패: {e}")
             channel = interaction.channel if interaction else self.message.channel if self.message else None
             if channel:
                 try:
                     self.message = await channel.send(content=None, embed=embed, view=self)
+                    await supabase.table('user_settings').update({'kitchen_panel_message_id': self.message.id}).eq('user_id', str(self.user.id)).execute()
                 except Exception as e_inner:
                     logger.error(f"요리 패널 메시지 재생성 실패: {e_inner}")
 
@@ -195,7 +205,7 @@ class CookingPanelView(ui.View):
                 self.add_item(ui.Button(label="요리 시작!", style=discord.ButtonStyle.success, emoji="🔥", custom_id="cooking_panel:start_cooking", row=2, disabled=not cauldron.get('current_ingredients')))
             elif state == 'ready':
                 self.add_item(ui.Button(label="요리 받기", style=discord.ButtonStyle.primary, emoji="🎁", custom_id="cooking_panel:claim_dish", row=1))
-
+        
         for child in self.children:
             if isinstance(child, ui.Button):
                 child.callback = self.dispatch_button_callback
@@ -263,7 +273,9 @@ class CookingPanelView(ui.View):
 
         res = await supabase.table('recipes').select('*').execute()
         recipes = res.data if res.data else []
-        matched_recipe = next((r for r in recipes if r.get('ingredients') and json.loads(r['ingredients']) == ingredients), None)
+        
+        # [핵심 수정] json.loads()를 제거하고 딕셔너리를 직접 비교
+        matched_recipe = next((r for r in recipes if r.get('ingredients') == ingredients), None)
         
         now = datetime.now(timezone.utc)
         cook_time_minutes = matched_recipe['cook_time_minutes'] if matched_recipe else DEFAULT_COOK_TIME_MINUTES
@@ -351,11 +363,10 @@ class Cooking(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.currency_icon = "🪙"
-        self.persistent_views_loaded = False # 재시작 시 뷰 로딩을 한 번만 하도록 플래그 추가
+        self.persistent_views_loaded = False
         self.check_completed_cooking.start()
         self.kitchen_ui_updater.start()
 
-    # [신규] 봇 재시작 시 기존 부엌 패널들을 다시 활성화하는 리스너
     @commands.Cog.listener()
     async def on_ready(self):
         if self.persistent_views_loaded:
@@ -559,7 +570,7 @@ class Cooking(commands.Cog):
             
             await supabase.table('user_settings').update({'kitchen_panel_message_id': message.id}).eq('user_id', str(user.id)).execute()
             
-            # [핵심 수정] interaction 객체를 넘기지 않고 refresh()를 호출
+            # [수정] 상호작용 객체 대신 None을 전달하여 self.message를 기반으로 수정하도록 함
             await panel_view.refresh()
 
             await interaction.followup.send(f"✅ 당신만의 부엌을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
