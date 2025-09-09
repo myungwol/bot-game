@@ -5,6 +5,7 @@ from discord import ui
 import logging
 import asyncio
 import math
+import time
 from typing import Optional, Dict, List, Any
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,8 @@ from utils.database import (
     get_config,
     get_aquarium, get_fishing_loot, sell_fish_from_db,
     save_panel_id, get_panel_id, get_embed_from_db,
-    update_inventory, update_wallet, get_farm_data, expand_farm_db
+    update_inventory, update_wallet, get_farm_data, expand_farm_db,
+    save_config_to_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -178,88 +180,64 @@ class BuyItemView(ShopViewBase):
         item_name = interaction.data['values'][0]
         item_data = get_item_database().get(item_name)
         
-        if not item_data:
-            return
+        if not item_data: return
 
         try:
             inventory = await get_inventory(self.user)
             max_ownable = item_data.get('max_ownable', 999)
 
             if inventory.get(item_name, 0) >= max_ownable:
-                error_message = f"❌ '{item_name}'은(는) 최대 {max_ownable}개까지만 보유할 수 있습니다."
-                await interaction.response.send_message(error_message, ephemeral=True, delete_after=5)
+                await interaction.response.send_message(f"❌ '{item_name}'은(는) 최대 {max_ownable}개까지만 보유할 수 있습니다.", ephemeral=True, delete_after=5)
+                return
+
+            # [수정] 분기 전에 공통 로직 실행
+            price = item_data.get('current_price', item_data.get('price', 0))
+            wallet = await get_wallet(self.user.id)
+            if wallet.get('balance', 0) < price:
+                await interaction.response.send_message("❌ 잔액이 부족합니다.", ephemeral=True, delete_after=5)
                 return
 
             if item_data.get('instant_use', False):
-                await self.handle_instant_use_item(interaction, item_name, item_data)
+                await self.handle_instant_use_item(interaction, item_name, item_data, price, wallet)
             elif item_data.get('max_ownable', 1) > 1:
-                await self.handle_quantity_purchase(interaction, item_name, item_data, inventory)
+                await self.handle_quantity_purchase(interaction, item_name, item_data, inventory, wallet)
             else:
-                await self.handle_single_purchase(interaction, item_name, item_data, inventory)
+                await self.handle_single_purchase(interaction, item_name, item_data, inventory, wallet)
             
         except Exception as e:
             await self.handle_error(interaction, e, str(e))
 
-    async def handle_instant_use_item(self, interaction: discord.Interaction, item_name: str, item_data: Dict):
-        # ... (이 함수는 변경 없음) ...
+    async def handle_instant_use_item(self, interaction: discord.Interaction, item_name: str, item_data: Dict, price: int, wallet: Dict):
         await interaction.response.defer(ephemeral=True)
-        price = item_data.get('current_price', item_data.get('price', 0))
-        wallet = await get_wallet(self.user.id)
-        if wallet.get('balance', 0) < price:
-            msg = await interaction.followup.send("❌ 잔액이 부족합니다.", ephemeral=True)
-            asyncio.create_task(delete_after(msg, 5))
-            return
 
         if item_data.get('effect_type') == 'expand_farm':
             farm_data = await get_farm_data(self.user.id)
-            
             if not farm_data:
-                msg = await interaction.followup.send("❌ 농장을 먼저 만들어주세요.", ephemeral=True)
-                asyncio.create_task(delete_after(msg, 5))
-                return
+                msg = await interaction.followup.send("❌ 농장을 먼저 만들어주세요.", ephemeral=True); asyncio.create_task(delete_after(msg, 5)); return
 
-            farm_id = farm_data['id']
             current_plots = len(farm_data.get('farm_plots', []))
-
             if current_plots >= 25:
-                msg = await interaction.followup.send("❌ 농장이 이미 최대 크기(25칸)입니다.", ephemeral=True)
-                asyncio.create_task(delete_after(msg, 5))
-                return
+                msg = await interaction.followup.send("❌ 농장이 이미 최대 크기(25칸)입니다.", ephemeral=True); asyncio.create_task(delete_after(msg, 5)); return
 
             await update_wallet(self.user, -price)
-            success = await expand_farm_db(farm_id, current_plots)
+            success = await expand_farm_db(farm_data['id'], current_plots)
 
             if success:
-                farm_cog = interaction.client.get_cog("Farm")
-                if farm_cog:
-                    thread_id = farm_data.get('thread_id')
-                    if thread_id and (thread := interaction.client.get_channel(thread_id)):
-                        updated_farm_data = await get_farm_data(self.user.id)
-                        if updated_farm_data:
-                            await farm_cog.update_farm_ui(thread, self.user, updated_farm_data)
-                
                 msg = await interaction.followup.send(f"✅ 농장이 1칸 확장되었습니다! (현재 크기: {current_plots + 1}/25)", ephemeral=True)
                 asyncio.create_task(delete_after(msg, 10))
             else:
-                await update_wallet(self.user, price)
-                msg = await interaction.followup.send("❌ 농장을 확장하는 중 오류가 발생했습니다.", ephemeral=True)
-                asyncio.create_task(delete_after(msg, 5))
+                await update_wallet(self.user, price) # 환불
+                msg = await interaction.followup.send("❌ 농장을 확장하는 중 오류가 발생했습니다.", ephemeral=True); asyncio.create_task(delete_after(msg, 5))
         else:
-            msg = await interaction.followup.send("❓ 알 수 없는 즉시 사용 아이템입니다.", ephemeral=True)
-            asyncio.create_task(delete_after(msg, 5))
+            msg = await interaction.followup.send("❓ 알 수 없는 즉시 사용 아이템입니다.", ephemeral=True); asyncio.create_task(delete_after(msg, 5))
+        
         await self.update_view(interaction)
 
-    async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict, inventory: Dict):
-        wallet = await get_wallet(self.user.id)
-        balance = wallet.get('balance', 0)
+    async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict, inventory: Dict, wallet: Dict):
         price = item_data.get('current_price', item_data.get('price', 0))
-        
-        # [수정] 현재 보유량을 고려하여 구매 가능한 최대 수량 계산
         max_ownable = item_data.get('max_ownable', 999)
-        currently_owned = inventory.get(item_name, 0)
-        can_own_more = max_ownable - currently_owned
-        
-        max_from_balance = balance // price if price > 0 else can_own_more
+        can_own_more = max_ownable - inventory.get(item_name, 0)
+        max_from_balance = wallet.get('balance', 0) // price if price > 0 else can_own_more
         max_buyable = min(can_own_more, max_from_balance)
 
         if max_buyable <= 0:
@@ -276,6 +254,10 @@ class BuyItemView(ShopViewBase):
         await update_inventory(str(self.user.id), item_name, quantity)
         await update_wallet(self.user, -total_price)
 
+        # [추가] 가마솥 구매 시 UI 업데이트 요청
+        if item_name == "가마솥":
+            await save_config_to_db(f"kitchen_ui_update_request_{self.user.id}", time.time())
+
         new_wallet = await get_wallet(self.user.id)
         success_message = f"✅ **{item_name}** {quantity}개를 `{total_price:,}`{self.currency_icon}에 구매했습니다.\n(잔액: `{new_wallet.get('balance', 0):,}`{self.currency_icon})"
         
@@ -283,8 +265,7 @@ class BuyItemView(ShopViewBase):
         asyncio.create_task(delete_after(msg, 10))
         await self.update_view(interaction)
 
-    async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict, inventory: Dict):
-        # [수정] inventory를 인자로 받도록 변경, 재호출 방지
+    async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict, inventory: Dict, wallet: Dict):
         await interaction.response.defer(ephemeral=True)
         total_price = item_data.get('current_price', item_data.get('price', 0))
         
