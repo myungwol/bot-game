@@ -290,24 +290,41 @@ class Cooking(commands.Cog):
     def cog_unload(self):
         self.check_completed_cooking.cancel()
 
+# bot-game/cogs/games/cooking.py
+
     @tasks.loop(minutes=1)
     async def check_completed_cooking(self):
         now = datetime.now(timezone.utc)
-        res = await supabase.table('cauldrons').select('*, user_settings(kitchen_thread_id)').eq('state', 'cooking').lte('cooking_completes_at', now.isoformat()).execute()
-        if not res.data: return
+        # ▼▼▼ [핵심 수정] user_settings와의 직접적인 JOIN을 제거합니다. ▼▼▼
+        res = await supabase.table('cauldrons').select('*').eq('state', 'cooking').lte('cooking_completes_at', now.isoformat()).execute()
+        if not res.data:
+            return
 
         for cauldron in res.data:
             await supabase.table('cauldrons').update({'state': 'ready'}).eq('id', cauldron['id']).execute()
+            
             user_id = int(cauldron['user_id'])
             user = self.bot.get_user(user_id)
-            if not user: continue
-            
-            # UI 즉시 업데이트
-            if (view := self.active_kitchen_views.get(user_id)) and view.message:
-                self.bot.loop.create_task(view.refresh(view.message.channel)) # tương tác giả
+            if not user:
+                continue
 
-            try: await user.send(f"🍲 **{cauldron['result_item_name']}** 요리가 완성되었습니다! 부엌에서 확인해주세요.")
-            except discord.Forbidden: pass
+            # UI 업데이트를 위해 active_kitchen_views에 있는 view를 직접 호출합니다.
+            if (view := self.active_kitchen_views.get(user_id)) and view.message:
+                # 상호작용 객체가 없으므로, 채널 객체를 대신 전달하여 refresh를 시도합니다.
+                # 참고: 이 방식은 완벽하지 않을 수 있으며, 상호작용 기반 UI 업데이트가 더 안정적입니다.
+                self.bot.loop.create_task(view.refresh(interaction=view.message.channel))
+
+            try:
+                await user.send(f"🍲 **{cauldron['result_item_name']}** 요리가 완성되었습니다! 부엌에서 확인해주세요.")
+            except discord.Forbidden:
+                pass
+            
+            log_channel_id = get_id("log_cooking_complete_channel_id")
+            if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
+                embed_data = await get_embed_from_db("log_cooking_complete")
+                if embed_data:
+                    embed = format_embed_from_db(embed_data, user_mention=user.mention, recipe_name=cauldron['result_item_name'])
+                    await log_channel.send(embed=embed)
 
     @check_completed_cooking.before_loop
     async def before_check_completed_cooking(self): await self.bot.wait_until_ready()
