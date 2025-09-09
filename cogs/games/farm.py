@@ -501,6 +501,9 @@ class Farm(commands.Cog):
         logger.info("✅ 농장 관련 영구 View가 정상적으로 등록되었습니다.")
         
     # ▼▼▼ [핵심 수정] 이 함수 전체를 아래 코드로 교체해주세요. ▼▼▼
+# cogs/games/farm.py
+
+    # ▼▼▼ [핵심 수정] 이 함수 전체를 아래 코드로 교체해주세요. ▼▼▼
     @tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("일일 작물 상태 업데이트 시작...")
@@ -572,7 +575,7 @@ class Farm(commands.Cog):
                 plots_to_update_db.append(update_payload)
 
             if plots_to_update_db:
-                await supabase.table('farm_plots').upsert(plots_to_update_db).execute()
+                await supabase.table('farm_plots').upsert(plots_to_update_db, on_conflict="id").execute()
                 logger.info(f"일일 작물 업데이트 완료. {len(plots_to_update_db)}개의 밭이 영향을 받았습니다. UI 업데이트를 요청합니다.")
                 
                 affected_farms = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
