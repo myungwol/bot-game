@@ -107,8 +107,18 @@ class MiningGameView(ui.View):
         
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: ui.Item[Any]) -> None:
         logger.error(f"MiningGameView에서 오류 발생 (Item: {item.custom_id}): {error}", exc_info=True)
-        if interaction.response.is_done(): await interaction.followup.send("처리 중 오류가 발생했습니다.", ephemeral=True, delete_after=5)
-        else: await interaction.response.send_message("처리 중 오류가 발생했습니다.", ephemeral=True, delete_after=5)
+        message_content = "처리 중 오류가 발생했습니다."
+        # --- FIX START: interaction.followup.send에 delete_after 인자 사용 오류 수정 ---
+        if interaction.response.is_done():
+            try:
+                msg = await interaction.followup.send(message_content, ephemeral=True)
+                await asyncio.sleep(5)
+                await msg.delete()
+            except (discord.NotFound, discord.Forbidden):
+                pass
+        else:
+            await interaction.response.send_message(message_content, ephemeral=True, delete_after=5)
+        # --- FIX END ---
 
     def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", color=0x607D8B)
@@ -170,10 +180,25 @@ class MiningGameView(ui.View):
                     if self.is_finished(): return
                     quantity = 2 if self.can_double_yield and random.random() < 0.20 else 1
                     xp_earned = ORE_XP_MAP.get(self.discovered_ore, 0) * quantity
+                    
                     self.mined_ores[self.discovered_ore] = self.mined_ores.get(self.discovered_ore, 0) + quantity
-                    await supabase.rpc('increment_mined_ore', {'p_user_id': str(self.user.id), 'p_ore_name': self.discovered_ore, 'p_quantity': quantity}).execute()
+                    
+                    # --- FIX START: RPC 호출을 안전한 Python 로직으로 대체 ---
+                    try:
+                        session_res = await supabase.table('mining_sessions').select('mined_ores_json').eq('user_id', str(self.user.id)).maybe_single().execute()
+                        if session_res and session_res.data:
+                            current_ores = session_res.data.get('mined_ores_json') or {}
+                            current_ores[self.discovered_ore] = current_ores.get(self.discovered_ore, 0) + quantity
+                            await supabase.table('mining_sessions').update({'mined_ores_json': current_ores}).eq('user_id', str(self.user.id)).execute()
+                        else:
+                            logger.warning(f"채굴 중인 유저({self.user.id})의 mining_sessions를 찾을 수 없어 DB 집계가 누락되었습니다.")
+                    except Exception as db_error:
+                        logger.error(f"광산 채굴량 DB 업데이트 중 오류 발생: {db_error}", exc_info=True)
+                    # --- FIX END ---
+
                     await update_inventory(self.user.id, self.discovered_ore, quantity)
                     await log_activity(self.user.id, 'mining', amount=quantity, xp_earned=xp_earned)
+
                     self.last_result_text = f"✅ **{self.discovered_ore}** {quantity}개를 획득했습니다! (`+{xp_earned} XP`)"
                     if quantity > 1: self.last_result_text += f"\n\n✨ **풍부한 광맥** 능력으로 광석을 2개 획득했습니다!"
                     if xp_earned > 0:
@@ -333,10 +358,7 @@ class Mining(commands.Cog):
         embed_data = await get_embed_from_db(panel_key)
         if not embed_data: return logger.error(f"DB에서 '{panel_key}' 임베드를 찾을 수 없습니다.")
         
-        # --- FIX START ---
-        # discord.Embed 객체를 생성하는 라인이 누락되어 추가했습니다.
         embed = format_embed_from_db(embed_data)
-        # --- FIX END ---
         
         view = MiningPanelView(self)
         new_message = await channel.send(embed=embed, view=view)
