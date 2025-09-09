@@ -5,7 +5,6 @@ from discord.ext import commands, tasks
 from discord import ui
 import logging
 import asyncio
-import json
 from typing import Optional, Dict, List, Any
 from datetime import datetime, timezone, timedelta
 
@@ -23,12 +22,12 @@ MAX_CAULDRONS = 5
 FAILED_DISH_NAME = "정체불명의 요리"
 DEFAULT_COOK_TIME_HOURS = 1
 
+
 class IngredientSelectModal(ui.Modal):
     def __init__(self, item_name: str, max_qty: int, parent_view: 'CookingPanelView'):
         super().__init__(title=f"'{item_name}' 수량 입력")
         self.parent_view = parent_view
         self.item_name = item_name
-        
         self.quantity_input = ui.TextInput(label="수량", placeholder=f"최대 {max_qty}개")
         self.add_item(self.quantity_input)
 
@@ -36,9 +35,7 @@ class IngredientSelectModal(ui.Modal):
         try:
             quantity = int(self.quantity_input.value)
             max_qty = int(self.quantity_input.placeholder.split(' ')[1].replace('개', ''))
-            if not 1 <= quantity <= max_qty:
-                raise ValueError
-            
+            if not 1 <= quantity <= max_qty: raise ValueError
             await self.parent_view.add_ingredient(interaction, self.item_name, quantity)
         except ValueError:
             await interaction.response.send_message(f"1에서 {max_qty} 사이의 숫자를 입력해주세요.", ephemeral=True, delete_after=5)
@@ -60,21 +57,15 @@ class IngredientSelectView(ui.View):
         self.clear_items()
         inventory = await get_inventory(self.user)
         item_db = get_item_database()
-        
         cauldron = self.parent_view.get_selected_cauldron()
-        
-        # ▼▼▼ [핵심 수정] None.keys() 오류를 방지합니다. ▼▼▼
         current_ingredients = (cauldron.get('current_ingredients') or {}).keys() if cauldron else []
-
         cookable_items = {
-            name: qty for name, qty in inventory.items() 
+            name: qty for name, qty in inventory.items()
             if item_db.get(name, {}).get('category') in COOKABLE_CATEGORIES and name not in current_ingredients
         }
-
         if not cookable_items:
             self.add_item(ui.Button(label="요리할 재료가 없습니다.", disabled=True))
             return
-
         options = [discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in cookable_items.items()]
         item_select = ui.Select(placeholder="재료 선택...", options=options[:25])
         item_select.callback = self.on_item_select
@@ -88,12 +79,11 @@ class IngredientSelectView(ui.View):
         await interaction.response.send_modal(modal)
         try:
             await interaction.delete_original_response()
-        except (discord.NotFound, discord.HTTPException):
-            pass
+        except (discord.NotFound, discord.HTTPException): pass
 
 
 class CookingPanelView(ui.View):
-    def __init__(self, cog: 'Cooking', user: discord.Member, message: discord.Message = None):
+    def __init__(self, cog: 'Cooking', user: Optional[discord.Member] = None, message: Optional[discord.Message] = None):
         super().__init__(timeout=None)
         self.cog = cog
         self.user = user
@@ -101,61 +91,50 @@ class CookingPanelView(ui.View):
         self.selected_cauldron_slot: Optional[int] = None
         self.message = message
 
+    async def _load_context(self, interaction: discord.Interaction) -> bool:
+        """상호작용이 발생했을 때, 스레드 ID를 기반으로 소유자 정보를 DB에서 불러와 View를 초기화합니다."""
+        res = await supabase.table('user_settings').select('user_id').eq('kitchen_thread_id', interaction.channel.id).maybe_single().execute()
+        if not (res and res.data):
+            await interaction.response.send_message("이 부엌 정보를 찾을 수 없습니다.", ephemeral=True, delete_after=5)
+            return False
+        
+        owner_id = int(res.data['user_id'])
+        self.user = self.cog.bot.get_user(owner_id)
+        if not self.user:
+            await interaction.response.send_message("부엌 주인을 찾을 수 없습니다.", ephemeral=True, delete_after=5)
+            return False
+
+        cauldron_res = await supabase.table('cauldrons').select('*').eq('user_id', owner_id).order('slot_number').execute()
+        self.cauldrons = cauldron_res.data if cauldron_res.data else []
+        self.message = interaction.message
+        return True
+
     def get_selected_cauldron(self) -> Optional[Dict]:
         if self.selected_cauldron_slot is None: return None
         return next((c for c in self.cauldrons if c['slot_number'] == self.selected_cauldron_slot), None)
 
-    async def refresh(self, interaction_or_channel: Any, is_new: bool = False):
-        if is_new:
-            res = await supabase.table('user_settings').select('user_id').eq('kitchen_thread_id', interaction_or_channel.id).maybe_single().execute()
-            if not (res and res.data): return
-            self.user = self.cog.bot.get_user(res.data['user_id'])
-            if not self.user: return
-        else:
-            self.user = interaction_or_channel.user
-
-        res = await supabase.table('cauldrons').select('*').eq('user_id', self.user.id).order('slot_number').execute()
-        self.cauldrons = res.data if res.data else []
-        
-        embed = await self.build_embed()
+    async def refresh(self, interaction: discord.Interaction):
         await self.build_components()
-        
-        if is_new:
-            thread: discord.Thread = interaction_or_channel
-            self.message = await thread.send(embed=embed, view=self)
-            self.cog.active_kitchen_views[self.user.id] = self
-        elif self.message:
-            interaction: discord.Interaction = interaction_or_channel
-            try:
-                if not interaction.response.is_done():
-                    await interaction.response.edit_message(embed=embed, view=self)
-                else:
-                    await self.message.edit(embed=embed, view=self)
-            except discord.NotFound:
-                logger.warning(f"Cooking Panel(ID: {self.message.id})을 찾을 수 없어 업데이트에 실패했습니다.")
-                self.stop()
-
+        embed = await self.build_embed()
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(embed=embed, view=self)
+        else:
+            await self.message.edit(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"🍲 {self.user.display_name}의 부엌", color=0xE67E22)
         inventory = await get_inventory(self.user)
         total_cauldrons = inventory.get("가마솥", 0)
-        
         embed.description = f"**보유한 가마솥:** {len(self.cauldrons)} / {total_cauldrons} (최대 {MAX_CAULDRONS}개)"
-        
         cauldron = self.get_selected_cauldron()
         if cauldron:
             state_map = {'idle': '대기 중', 'adding_ingredients': '재료 넣는 중', 'cooking': '요리 중', 'ready': '요리 완료'}
             state_str = state_map.get(cauldron['state'], '알 수 없음')
-            
             field_value_parts = [f"**상태:** {state_str}"]
-            
-            # ▼▼▼ [핵심 수정] None.items() 오류를 방지합니다. ▼▼▼
             ingredients = cauldron.get('current_ingredients') or {}
             if ingredients:
                 ing_str = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in ingredients.items()])
                 field_value_parts.append(f"**넣은 재료:**\n{ing_str}")
-
             if cauldron['state'] == 'cooking':
                 completes_at = datetime.fromisoformat(cauldron['cooking_completes_at'].replace('Z', '+00:00'))
                 field_value_parts.append(f"**완료까지:** {discord.utils.format_dt(completes_at, 'R')}")
@@ -171,18 +150,16 @@ class CookingPanelView(ui.View):
         self.clear_items()
         inventory = await get_inventory(self.user)
         total_cauldrons = inventory.get("가마솥", 0)
-        
         cauldron_options = []
         for i in range(1, total_cauldrons + 1):
-             is_installed = any(c['slot_number'] == i for c in self.cauldrons)
-             label = f"솥 #{i}" + ("" if is_installed else " (설치하기)")
-             option = discord.SelectOption(label=label, value=str(i))
-             if self.selected_cauldron_slot == i:
-                 option.default = True
-             cauldron_options.append(option)
+            is_installed = any(c['slot_number'] == i for c in self.cauldrons)
+            label = f"솥 #{i}" + ("" if is_installed else " (설치하기)")
+            option = discord.SelectOption(label=label, value=str(i))
+            if self.selected_cauldron_slot == i: option.default = True
+            cauldron_options.append(option)
         
         if cauldron_options:
-            cauldron_select = ui.Select(placeholder="관리할 가마솥을 선택하세요...", options=cauldron_options)
+            cauldron_select = ui.Select(placeholder="관리할 가마솥을 선택하세요...", options=cauldron_options, custom_id="cooking_panel:select_cauldron")
             cauldron_select.callback = self.on_cauldron_select
             self.add_item(cauldron_select)
 
@@ -190,29 +167,15 @@ class CookingPanelView(ui.View):
         if cauldron:
             state = cauldron['state']
             if state in ['idle', 'adding_ingredients']:
-                self.add_item(ui.Button(label="재료 넣기", emoji="🥕", custom_id="add_ingredient", row=1))
-                self.add_item(ui.Button(label="재료 비우기", emoji="🗑️", custom_id="clear_ingredients", row=1, disabled=not cauldron.get('current_ingredients')))
-                self.add_item(ui.Button(label="요리 시작!", style=discord.ButtonStyle.success, emoji="🔥", custom_id="start_cooking", row=2, disabled=not cauldron.get('current_ingredients')))
+                self.add_item(ui.Button(label="재료 넣기", emoji="🥕", custom_id="cooking_panel:add_ingredient", row=1))
+                self.add_item(ui.Button(label="재료 비우기", emoji="🗑️", custom_id="cooking_panel:clear_ingredients", row=1, disabled=not cauldron.get('current_ingredients')))
+                self.add_item(ui.Button(label="요리 시작!", style=discord.ButtonStyle.success, emoji="🔥", custom_id="cooking_panel:start_cooking", row=2, disabled=not cauldron.get('current_ingredients')))
             elif state == 'ready':
-                self.add_item(ui.Button(label="요리 받기", style=discord.ButtonStyle.primary, emoji="🎁", custom_id="claim_dish", row=1))
-        
-        for item in self.children:
-            if isinstance(item, ui.Button):
-                item.callback = self.dispatch_button
-
-    async def dispatch_button(self, interaction: discord.Interaction):
-        custom_id = interaction.data['custom_id']
-        method_map = {
-            "add_ingredient": self.add_ingredient_prompt,
-            "clear_ingredients": self.clear_ingredients,
-            "start_cooking": self.start_cooking,
-            "claim_dish": self.claim_dish,
-        }
-        if method := method_map.get(custom_id):
-            await method(interaction)
+                self.add_item(ui.Button(label="요리 받기", style=discord.ButtonStyle.primary, emoji="🎁", custom_id="cooking_panel:claim_dish", row=1))
 
     async def on_cauldron_select(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        if not await self._load_context(interaction): return
+        
         slot = int(interaction.data['values'][0])
         is_installed = any(c['slot_number'] == slot for c in self.cauldrons)
         if not is_installed:
@@ -233,23 +196,17 @@ class CookingPanelView(ui.View):
         cauldron = self.get_selected_cauldron()
         current_ingredients = cauldron.get('current_ingredients') or {}
         current_ingredients[item_name] = current_ingredients.get(item_name, 0) + quantity
-
         await supabase.table('cauldrons').update({'state': 'adding_ingredients', 'current_ingredients': current_ingredients}).eq('id', cauldron['id']).execute()
         await self.refresh(interaction)
     
     async def clear_ingredients(self, interaction: discord.Interaction):
-        await interaction.response.defer()
         cauldron = self.get_selected_cauldron()
         await supabase.table('cauldrons').update({'state': 'idle', 'current_ingredients': None}).eq('id', cauldron['id']).execute()
         await self.refresh(interaction)
         
     async def start_cooking(self, interaction: discord.Interaction):
-        await interaction.response.defer()
         cauldron = self.get_selected_cauldron()
-        
-        # ▼▼▼ [핵심 수정] None.items() 오류를 방지합니다. ▼▼▼
         ingredients = cauldron.get('current_ingredients') or {}
-        
         for name, qty in ingredients.items(): await update_inventory(self.user.id, name, -qty)
             
         res = await supabase.table('recipes').select('*').execute()
@@ -257,34 +214,47 @@ class CookingPanelView(ui.View):
         matched_recipe = next((r for r in recipes if r.get('ingredients') == ingredients), None)
         
         now = datetime.now(timezone.utc)
-        if matched_recipe:
-            cook_time = timedelta(days=matched_recipe['cook_time_days'])
-            result_item = matched_recipe['result_item_name']
-        else:
-            cook_time = timedelta(hours=DEFAULT_COOK_TIME_HOURS)
-            result_item = FAILED_DISH_NAME
-            
+        cook_time = timedelta(days=matched_recipe['cook_time_days']) if matched_recipe else timedelta(hours=DEFAULT_COOK_TIME_HOURS)
+        result_item = matched_recipe['result_item_name'] if matched_recipe else FAILED_DISH_NAME
         completes_at = now + cook_time
         await supabase.table('cauldrons').update({
             'state': 'cooking', 'cooking_started_at': now.isoformat(),
             'cooking_completes_at': completes_at.isoformat(), 'result_item_name': result_item
         }).eq('id', cauldron['id']).execute()
-        
         await self.refresh(interaction)
     
     async def claim_dish(self, interaction: discord.Interaction):
-        await interaction.response.defer()
         cauldron = self.get_selected_cauldron()
         result_item = cauldron['result_item_name']
         await update_inventory(self.user.id, result_item, 1)
-
         await supabase.table('cauldrons').update({
             'state': 'idle', 'current_ingredients': None, 'cooking_started_at': None,
             'cooking_completes_at': None, 'result_item_name': None
         }).eq('id', cauldron['id']).execute()
-        
         await interaction.followup.send(f"✅ **{result_item}** 획득!", ephemeral=True, delete_after=10)
         await self.refresh(interaction)
+
+    async def dispatch_button_callback(self, interaction: discord.Interaction):
+        """모든 버튼 상호작용의 진입점"""
+        if not await self._load_context(interaction): return
+        
+        # 권한 확인: 버튼 누른 사람이 주인인지?
+        if interaction.user.id != self.user.id:
+            return await interaction.response.send_message("부엌 주인만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
+        
+        await interaction.response.defer()
+        
+        custom_id = interaction.data['custom_id']
+        action = custom_id.split(':')[-1]
+
+        method_map = {
+            "add_ingredient": self.add_ingredient_prompt,
+            "clear_ingredients": self.clear_ingredients,
+            "start_cooking": self.start_cooking,
+            "claim_dish": self.claim_dish,
+        }
+        if method := method_map.get(action):
+            await method(interaction)
 
 class CookingCreationPanelView(ui.View):
     def __init__(self, cog: 'Cooking'):
@@ -301,7 +271,6 @@ class Cooking(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.currency_icon = "🪙"
-        self.active_kitchen_views: Dict[int, CookingPanelView] = {}
         self.check_completed_cooking.start()
 
     async def cog_load(self):
@@ -309,13 +278,11 @@ class Cooking(commands.Cog):
 
     def cog_unload(self):
         self.check_completed_cooking.cancel()
-        for view in self.active_kitchen_views.values():
-            view.stop()
 
     @tasks.loop(minutes=1)
     async def check_completed_cooking(self):
         now = datetime.now(timezone.utc)
-        res = await supabase.table('cauldrons').select('*').eq('state', 'cooking').lte('cooking_completes_at', now.isoformat()).execute()
+        res = await supabase.table('cauldrons').select('*, user_settings(kitchen_thread_id)').eq('state', 'cooking').lte('cooking_completes_at', now.isoformat()).execute()
         if not (res and res.data): return
 
         for cauldron in res.data:
@@ -324,9 +291,10 @@ class Cooking(commands.Cog):
             user = self.bot.get_user(user_id)
             if not user: continue
             
-            if (view := self.active_kitchen_views.get(user_id)) and view.message:
-                self.bot.loop.create_task(view.refresh(view.message.channel))
-
+            thread_id = cauldron.get('user_settings', {}).get('kitchen_thread_id')
+            if thread_id and (thread := self.bot.get_channel(thread_id)):
+                await thread.send(f"{user.mention}, **{cauldron['result_item_name']}** 요리가 완성되었습니다!", allowed_mentions=discord.AllowedMentions(users=True))
+            
             try: await user.send(f"🍲 **{cauldron['result_item_name']}** 요리가 완성되었습니다! 부엌에서 확인해주세요.")
             except discord.Forbidden: pass
             
@@ -342,6 +310,8 @@ class Cooking(commands.Cog):
 
     async def register_persistent_views(self):
         self.bot.add_view(CookingCreationPanelView(self))
+        # CookingPanelView는 이제 영구적이므로 여기서 등록합니다.
+        self.bot.add_view(CookingPanelView(self))
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_cooking_creation"):
         if panel_info := get_panel_id(panel_key):
@@ -388,7 +358,9 @@ class Cooking(commands.Cog):
             if embed_data: await thread.send(embed=format_embed_from_db(embed_data, user_name=user.display_name))
 
             panel_view = CookingPanelView(self, user)
-            await panel_view.refresh(interaction_or_channel=thread, is_new=True)
+            message = await thread.send("부엌 로딩 중...")
+            panel_view.message = message
+            await panel_view.refresh(interaction)
 
             await interaction.followup.send(f"✅ 당신만의 부엌을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
 
