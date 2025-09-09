@@ -130,7 +130,7 @@ class CookingPanelView(ui.View):
         embed = await self.build_embed()
         
         try:
-            target_editor = interaction.edit_original_response if interaction else self.message.edit
+            target_editor = interaction.edit_original_response if interaction and not interaction.is_expired() else self.message.edit
             await target_editor(content=None, embed=embed, view=self)
         except (discord.NotFound, AttributeError, discord.HTTPException) as e:
             logger.warning(f"요리 패널 메시지 수정/생성 실패: {e}")
@@ -138,6 +138,7 @@ class CookingPanelView(ui.View):
             if channel:
                 try:
                     self.message = await channel.send(content=None, embed=embed, view=self)
+                    await supabase.table('user_settings').update({'kitchen_panel_message_id': self.message.id}).eq('user_id', self.user.id).execute()
                 except Exception as e_inner:
                     logger.error(f"요리 패널 메시지 재생성 실패: {e_inner}")
 
@@ -344,6 +345,8 @@ class Cooking(commands.Cog):
 
     async def cog_load(self):
         self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙")
+        # [추가] 봇이 켜질 때 영속성 뷰를 등록
+        self.register_persistent_views()
 
     def cog_unload(self):
         self.check_completed_cooking.cancel()
@@ -472,9 +475,11 @@ class Cooking(commands.Cog):
         except Exception as e:
             logger.error(f"레시피 발견 처리 중 오류: {e}", exc_info=True)
 
+    # [수정] register_persistent_views 함수 추가
     async def register_persistent_views(self):
         self.bot.add_view(CookingCreationPanelView(self))
         self.bot.add_view(CookingPanelView(self))
+        logger.info("✅ 요리 시스템의 영구 View가 성공적으로 등록되었습니다.")
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_cooking_creation"):
         if panel_info := get_panel_id(panel_key):
@@ -525,7 +530,7 @@ class Cooking(commands.Cog):
             
             await supabase.table('user_settings').update({'kitchen_panel_message_id': message.id}).eq('user_id', user.id).execute()
             
-            await panel_view.refresh(interaction)
+            await panel_view.refresh(interaction) 
 
             await interaction.followup.send(f"✅ 당신만의 부엌을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
 
