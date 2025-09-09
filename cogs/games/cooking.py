@@ -105,8 +105,13 @@ class CookingPanelView(ui.View):
 
     async def refresh(self, interaction_or_channel: Any, is_new: bool = False):
         if is_new:
-            if hasattr(interaction_or_channel, 'user'): self.user = interaction_or_channel.user
-        else: self.user = interaction_or_channel.user
+            # is_new일 때 interaction_or_channel은 thread 객체이므로, user는 따로 찾아야 합니다.
+            res = await supabase.table('user_settings').select('user_id').eq('kitchen_thread_id', interaction_or_channel.id).maybe_single().execute()
+            if not (res and res.data): return
+            self.user = self.cog.bot.get_user(res.data['user_id'])
+            if not self.user: return
+        else:
+            self.user = interaction_or_channel.user
 
         res = await supabase.table('cauldrons').select('*').eq('user_id', self.user.id).order('slot_number').execute()
         self.cauldrons = res.data if res.data else []
@@ -114,8 +119,10 @@ class CookingPanelView(ui.View):
         embed = await self.build_embed()
         await self.build_components()
         
+        # ▼▼▼ [핵심 수정] is_new일 때 thread 객체에서 바로 send를 호출하도록 변경합니다. ▼▼▼
         if is_new:
-            self.message = await interaction_or_channel.channel.send(embed=embed, view=self)
+            thread: discord.Thread = interaction_or_channel
+            self.message = await thread.send(embed=embed, view=self)
             self.cog.active_kitchen_views[self.user.id] = self
         elif self.message:
             interaction: discord.Interaction = interaction_or_channel
@@ -372,7 +379,7 @@ class Cooking(commands.Cog):
 
             panel_view = CookingPanelView(self, user)
             
-            # 가짜 interaction 객체 생성 대신, 채널 객체를 직접 전달
+            # ▼▼▼ [핵심 수정] 이제 interaction 객체 대신 thread 객체를 직접 전달합니다. ▼▼▼
             await panel_view.refresh(interaction_or_channel=thread, is_new=True)
 
             await interaction.followup.send(f"✅ 당신만의 부엌을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
