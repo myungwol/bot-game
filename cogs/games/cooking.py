@@ -62,7 +62,9 @@ class IngredientSelectView(ui.View):
         item_db = get_item_database()
         
         cauldron = self.parent_view.get_selected_cauldron()
-        current_ingredients = cauldron.get('current_ingredients', {}).keys() if cauldron else []
+        
+        # ▼▼▼ [핵심 수정] None.keys() 오류를 방지합니다. ▼▼▼
+        current_ingredients = (cauldron.get('current_ingredients') or {}).keys() if cauldron else []
 
         cookable_items = {
             name: qty for name, qty in inventory.items() 
@@ -105,7 +107,6 @@ class CookingPanelView(ui.View):
 
     async def refresh(self, interaction_or_channel: Any, is_new: bool = False):
         if is_new:
-            # is_new일 때 interaction_or_channel은 thread 객체이므로, user는 따로 찾아야 합니다.
             res = await supabase.table('user_settings').select('user_id').eq('kitchen_thread_id', interaction_or_channel.id).maybe_single().execute()
             if not (res and res.data): return
             self.user = self.cog.bot.get_user(res.data['user_id'])
@@ -119,17 +120,21 @@ class CookingPanelView(ui.View):
         embed = await self.build_embed()
         await self.build_components()
         
-        # ▼▼▼ [핵심 수정] is_new일 때 thread 객체에서 바로 send를 호출하도록 변경합니다. ▼▼▼
         if is_new:
             thread: discord.Thread = interaction_or_channel
             self.message = await thread.send(embed=embed, view=self)
             self.cog.active_kitchen_views[self.user.id] = self
         elif self.message:
             interaction: discord.Interaction = interaction_or_channel
-            if not interaction.response.is_done():
-                await interaction.response.edit_message(embed=embed, view=self)
-            else:
-                await self.message.edit(embed=embed, view=self)
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.edit_message(embed=embed, view=self)
+                else:
+                    await self.message.edit(embed=embed, view=self)
+            except discord.NotFound:
+                logger.warning(f"Cooking Panel(ID: {self.message.id})을 찾을 수 없어 업데이트에 실패했습니다.")
+                self.stop()
+
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"🍲 {self.user.display_name}의 부엌", color=0xE67E22)
@@ -145,7 +150,8 @@ class CookingPanelView(ui.View):
             
             field_value_parts = [f"**상태:** {state_str}"]
             
-            ingredients = cauldron.get('current_ingredients')
+            # ▼▼▼ [핵심 수정] None.items() 오류를 방지합니다. ▼▼▼
+            ingredients = cauldron.get('current_ingredients') or {}
             if ingredients:
                 ing_str = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in ingredients.items()])
                 field_value_parts.append(f"**넣은 재료:**\n{ing_str}")
@@ -240,13 +246,15 @@ class CookingPanelView(ui.View):
     async def start_cooking(self, interaction: discord.Interaction):
         await interaction.response.defer()
         cauldron = self.get_selected_cauldron()
-        ingredients = cauldron.get('current_ingredients')
+        
+        # ▼▼▼ [핵심 수정] None.items() 오류를 방지합니다. ▼▼▼
+        ingredients = cauldron.get('current_ingredients') or {}
         
         for name, qty in ingredients.items(): await update_inventory(self.user.id, name, -qty)
             
         res = await supabase.table('recipes').select('*').execute()
         recipes = res.data if res.data else []
-        matched_recipe = next((r for r in recipes if r['ingredients'] == ingredients), None)
+        matched_recipe = next((r for r in recipes if r.get('ingredients') == ingredients), None)
         
         now = datetime.now(timezone.utc)
         if matched_recipe:
@@ -301,6 +309,8 @@ class Cooking(commands.Cog):
 
     def cog_unload(self):
         self.check_completed_cooking.cancel()
+        for view in self.active_kitchen_views.values():
+            view.stop()
 
     @tasks.loop(minutes=1)
     async def check_completed_cooking(self):
@@ -378,8 +388,6 @@ class Cooking(commands.Cog):
             if embed_data: await thread.send(embed=format_embed_from_db(embed_data, user_name=user.display_name))
 
             panel_view = CookingPanelView(self, user)
-            
-            # ▼▼▼ [핵심 수정] 이제 interaction 객체 대신 thread 객체를 직접 전달합니다. ▼▼▼
             await panel_view.refresh(interaction_or_channel=thread, is_new=True)
 
             await interaction.followup.send(f"✅ 당신만의 부엌을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
