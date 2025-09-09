@@ -339,11 +339,14 @@ class EconomyCore(commands.Cog):
     async def before_monthly_whale_reset(self):
         await self.bot.wait_until_ready()
 
-    # ▼▼▼ [핵심 수정] 이 함수 전체를 아래 코드로 교체해주세요. ▼▼▼
     @tasks.loop(time=KST_MIDNIGHT_AGGREGATE)
     async def update_market_prices(self):
         logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
         try:
+            # 작업 시작 전 항상 최신 데이터를 DB에서 리로드하여 캐시를 갱신합니다.
+            from utils.database import load_game_data_from_db
+            await load_game_data_from_db()
+
             item_db = get_item_database()
             loot_db = get_fishing_loot()
             
@@ -375,9 +378,9 @@ class EconomyCore(commands.Cog):
             
             # DB 업데이트
             if items_to_update:
-                await supabase.table('items').upsert(items_to_update).execute()
+                await supabase.table('items').upsert(items_to_update, on_conflict="name").execute()
             if fish_to_update:
-                await supabase.table('fishing_loots').upsert(fish_to_update).execute()
+                await supabase.table('fishing_loots').upsert(fish_to_update, on_conflict="id").execute()
 
             # 공지 및 패널 업데이트
             await save_config_to_db("market_fluctuations", announcements)
