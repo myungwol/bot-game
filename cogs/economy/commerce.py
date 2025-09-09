@@ -96,7 +96,7 @@ class BuyItemView(ShopViewBase):
         all_ui_strings = get_config("strings", {})
         commerce_strings = all_ui_strings.get("commerce", {})
         
-        category_display_names = { "아이템": "잡화점", "장비": "장비점", "미끼": "미끼가게", "농장_씨앗": "씨앗가게", "농장_도구": "농기구점" }
+        category_display_names = { "아이템": "잡화점", "장비": "장비점", "미끼": "미끼가게", "농장_씨앗": "씨앗가게" }
         display_name = category_display_names.get(self.category, self.category)
         
         description_template = commerce_strings.get("item_view_desc", "현재 소지금: `{balance}`{currency_icon}\n구매하고 싶은 상품을 선택해주세요.")
@@ -179,7 +179,6 @@ class BuyItemView(ShopViewBase):
     async def select_callback(self, interaction: discord.Interaction):
         item_name = interaction.data['values'][0]
         item_data = get_item_database().get(item_name)
-        
         if not item_data: return
 
         try:
@@ -190,7 +189,6 @@ class BuyItemView(ShopViewBase):
                 await interaction.response.send_message(f"❌ '{item_name}'은(는) 최대 {max_ownable}개까지만 보유할 수 있습니다.", ephemeral=True, delete_after=5)
                 return
 
-            # [수정] 분기 전에 공통 로직 실행
             price = item_data.get('current_price', item_data.get('price', 0))
             wallet = await get_wallet(self.user.id)
             if wallet.get('balance', 0) < price:
@@ -199,11 +197,11 @@ class BuyItemView(ShopViewBase):
 
             if item_data.get('instant_use', False):
                 await self.handle_instant_use_item(interaction, item_name, item_data, price, wallet)
-            elif item_data.get('max_ownable', 1) > 1:
+            elif max_ownable > 1:
                 await self.handle_quantity_purchase(interaction, item_name, item_data, inventory, wallet)
             else:
-                await self.handle_single_purchase(interaction, item_name, item_data, inventory, wallet)
-            
+                await self.handle_single_purchase(interaction, item_name, item_data, price)
+
         except Exception as e:
             await self.handle_error(interaction, e, str(e))
 
@@ -226,7 +224,7 @@ class BuyItemView(ShopViewBase):
                 msg = await interaction.followup.send(f"✅ 농장이 1칸 확장되었습니다! (현재 크기: {current_plots + 1}/25)", ephemeral=True)
                 asyncio.create_task(delete_after(msg, 10))
             else:
-                await update_wallet(self.user, price) # 환불
+                await update_wallet(self.user, price)
                 msg = await interaction.followup.send("❌ 농장을 확장하는 중 오류가 발생했습니다.", ephemeral=True); asyncio.create_task(delete_after(msg, 5))
         else:
             msg = await interaction.followup.send("❓ 알 수 없는 즉시 사용 아이템입니다.", ephemeral=True); asyncio.create_task(delete_after(msg, 5))
@@ -254,7 +252,6 @@ class BuyItemView(ShopViewBase):
         await update_inventory(str(self.user.id), item_name, quantity)
         await update_wallet(self.user, -total_price)
 
-        # [추가] 가마솥 구매 시 UI 업데이트 요청
         if item_name == "가마솥":
             await save_config_to_db(f"kitchen_ui_update_request_{self.user.id}", time.time())
 
@@ -265,12 +262,11 @@ class BuyItemView(ShopViewBase):
         asyncio.create_task(delete_after(msg, 10))
         await self.update_view(interaction)
 
-    async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict, inventory: Dict, wallet: Dict):
+    async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict, price: int):
         await interaction.response.defer(ephemeral=True)
-        total_price = item_data.get('current_price', item_data.get('price', 0))
         
         await update_inventory(str(self.user.id), item_name, 1)
-        await update_wallet(self.user, -total_price)
+        await update_wallet(self.user, -price)
         
         if id_key := item_data.get('id_key'):
             if role_id := get_id(id_key):
@@ -281,7 +277,7 @@ class BuyItemView(ShopViewBase):
                         logger.error(f"역할 부여 실패: {role.name} 역할을 부여할 권한이 없습니다.")
 
         new_wallet = await get_wallet(self.user.id)
-        success_message = f"✅ **{item_name}**을(를) `{total_price:,}`{self.currency_icon}에 구매했습니다.\n(잔액: `{new_wallet.get('balance', 0):,}`{self.currency_icon})"
+        success_message = f"✅ **{item_name}**을(를) `{price:,}`{self.currency_icon}에 구매했습니다.\n(잔액: `{new_wallet.get('balance', 0):,}`{self.currency_icon})"
         
         msg = await interaction.followup.send(success_message, ephemeral=True)
         asyncio.create_task(delete_after(msg, 10))
