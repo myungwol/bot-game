@@ -255,13 +255,17 @@ class CookingPanelView(ui.View):
         
         slot = int(interaction.data['values'][0])
         is_installed = any(c['slot_number'] == slot for c in self.cauldrons)
-        if not is_installed:
-            await supabase.table('cauldrons').insert({'user_id': str(self.user.id), 'slot_number': slot, 'state': 'idle'}).execute()
         
-        self.selected_cauldron_slot = slot
-
-        # ▼▼▼ [핵심 수정] 선택한 솥 번호를 DB에 저장합니다. ▼▼▼
-        await save_config_to_db(f"kitchen_state_{self.user.id}", {"selected_slot": slot})
+        # ▼▼▼ [핵심 수정] 가마솥을 '설치'하는 경우에도 DB에 상태를 저장합니다. ▼▼▼
+        if not is_installed:
+            # 새로 설치하는 경우, 이 솥을 기본 선택으로 지정하고 DB에 즉시 저장합니다.
+            await supabase.table('cauldrons').insert({'user_id': str(self.user.id), 'slot_number': slot, 'state': 'idle'}).execute()
+            self.selected_cauldron_slot = slot
+            await save_config_to_db(f"kitchen_state_{self.user.id}", {"selected_slot": slot})
+        else:
+            # 이미 설치된 솥을 선택하는 경우
+            self.selected_cauldron_slot = slot
+            await save_config_to_db(f"kitchen_state_{self.user.id}", {"selected_slot": slot})
         # ▲▲▲ [핵심 수정] ▲▲▲
         
         await self.refresh(interaction)
