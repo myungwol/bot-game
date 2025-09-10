@@ -366,13 +366,14 @@ class FarmUIView(ui.View):
                 harvest_name = info['harvest_item_name']
                 harvested[harvest_name] = harvested.get(harvest_name, 0) + final_yield
                 
-                if not info.get('is_tree'): 
-                    plots_to_reset.append(p['id'])
-                else:
+                # [핵심 수정] is_tree가 명시적으로 True인지 확인하도록 변경
+                if info.get('is_tree') is True:
                     max_stage = info.get('max_growth_stage', 3)
                     regrowth = info.get('regrowth_days', 3)
                     new_growth_stage = max(0, max_stage - regrowth)
                     trees_to_update[p['id']] = new_growth_stage
+                else: 
+                    plots_to_reset.append(p['id'])
         
         if not harvested:
             await interaction.followup.send("ℹ️ 수확할 수 있는 작물이 없습니다.", ephemeral=True); return
@@ -389,7 +390,7 @@ class FarmUIView(ui.View):
 
         db_tasks = []
         for name, quantity in harvested.items():
-            db_tasks.append(update_inventory(owner.id, name, quantity))
+            db_tasks.append(update_inventory(str(owner.id), name, quantity))
         
         if plots_to_reset:
             db_tasks.append(clear_plots_db(plots_to_reset))
@@ -399,7 +400,7 @@ class FarmUIView(ui.View):
                 db_tasks.append(update_plot(pid, {'growth_stage': new_stage, 'planted_at': now_iso, 'last_watered_at': now_iso, 'quality': 5}))
 
         if total_xp > 0:
-            db_tasks.append(supabase.rpc('add_xp', {'p_user_id': owner.id, 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute())
+            db_tasks.append(supabase.rpc('add_xp', {'p_user_id': str(owner.id), 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute())
         
         results = await asyncio.gather(*db_tasks, return_exceptions=True)
         
