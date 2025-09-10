@@ -467,8 +467,19 @@ class Cooking(commands.Cog):
     @kitchen_ui_updater.before_loop
     async def before_kitchen_ui_updater(self): await self.bot.wait_until_ready()
 
-    async def check_and_log_recipe_discovery(self, user: discord.Member, recipe_name: str, ingredients: Dict):
+    async def check_and_log_recipe_discovery(self, user: discord.Member, recipe_name: str, ingredients: Any):
         try:
+            # ▼▼▼ [핵심 수정] 재료 데이터가 문자열일 경우를 대비한 파싱 로직 추가 ▼▼▼
+            parsed_ingredients = {}
+            if isinstance(ingredients, str):
+                try:
+                    parsed_ingredients = json.loads(ingredients)
+                except json.JSONDecodeError:
+                    logger.error(f"레시피 발견 로그 생성 중 재료 정보(JSON) 파싱 실패: {ingredients}")
+                    return 
+            elif isinstance(ingredients, dict):
+                parsed_ingredients = ingredients
+                
             res = await supabase.table('discovered_recipes').select('id').eq('recipe_name', recipe_name).maybe_single().execute()
             if res.data:
                 return
@@ -489,7 +500,8 @@ class Cooking(commands.Cog):
                 logger.warning("DB에서 'log_recipe_discovery' 임베드 템플릿을 찾을 수 없습니다.")
                 return
 
-            ingredients_str = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in ingredients.items()])
+            # 파싱된 데이터를 사용하여 로그 메시지 생성
+            ingredients_str = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in parsed_ingredients.items()])
             user_avatar_url = user.display_avatar.url if user.display_avatar else ""
             
             log_embed = format_embed_from_db(
