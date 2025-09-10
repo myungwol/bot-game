@@ -139,7 +139,6 @@ class FarmActionView(ui.View):
         select.callback = self.on_location_select
         self.add_item(select)
         
-    # ▼▼▼ [핵심 수정] 묘목 즉시 성장 로직 및 알림 기능 추가 ▼▼▼
     async def on_location_select(self, interaction: discord.Interaction):
         await interaction.response.defer()
         
@@ -157,17 +156,11 @@ class FarmActionView(ui.View):
             'growth_stage': 0, 
             'quality': 5, 
             'last_watered_at': now.isoformat() if is_raining else None,
-            'water_count': 1 if is_raining else 0
+            'water_count': 1 if is_raining else 0,
+            'is_regrowing': False
         }
         
-        # 능력 발동 여부 확인
         user_abilities = await get_user_abilities(self.user.id)
-        item_info = await get_farmable_item_info(self.selected_item)
-        instant_growth = False
-        if item_info and 'farm_growth_speed_up_2' in user_abilities and item_info.get('is_tree'):
-            updates_payload['growth_stage'] = item_info.get('max_growth_stage', 3)
-            instant_growth = True
-
         seeds_to_deduct = num_planted
         seeds_saved = 0
         if 'farm_seed_saver_1' in user_abilities:
@@ -195,14 +188,11 @@ class FarmActionView(ui.View):
             followup_message += f"\n✨ 능력 효과로 씨앗 {seeds_saved}개를 절약했습니다!"
         if is_raining:
             followup_message += "\n🌧️ 비가 와서 자동으로 물이 뿌려졌습니다!"
-        if instant_growth:
-            followup_message += "\n\n✨ **성장 속도 UP (대)** 능력 발동! 묘목이 즉시 다 자랐습니다!"
-
+        
         msg = await interaction.followup.send(followup_message, ephemeral=True)
         self.cog.bot.loop.create_task(delete_after(msg, 10))
         
         await interaction.delete_original_response()
-    # ▲▲▲ [핵심 수정] 종료 ▲▲▲
 
     async def _build_uproot_select(self):
         plots = [p for p in self.farm_data['farm_plots'] if p['state'] in ['planted', 'withered']]
@@ -334,6 +324,7 @@ class FarmUIView(ui.View):
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
         await interaction.delete_original_response()
 
+    # ▼▼▼ [핵심 수정] 밭 갈기 순서 보장 로직 추가 ▼▼▼
     async def on_farm_till_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         gear = await get_user_gear(interaction.user)
@@ -346,23 +337,29 @@ class FarmUIView(ui.View):
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
         tilled, plots_to_update_db = 0, []
-        for plot in farm_data['farm_plots']:
+        
+        # 밭을 위치(y좌표, x좌표) 순으로 정렬합니다.
+        sorted_plots = sorted(farm_data['farm_plots'], key=lambda p: (p['pos_y'], p['pos_x']))
+
+        for plot in sorted_plots:
             if plot['state'] == 'default' and tilled < power:
                 plots_to_update_db.append(plot['id'])
                 tilled += 1
+        
         if not tilled:
             msg = await interaction.followup.send("ℹ️ 더 이상 갈 수 있는 밭이 없습니다.", ephemeral=True)
             self.cog.bot.loop.create_task(delete_after(msg, 5))
             return
+            
         await supabase.table('farm_plots').update({'state': 'tilled'}).in_('id', plots_to_update_db).execute()
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
         await interaction.delete_original_response()
+    # ▲▲▲ [핵심 수정] 종료 ▲▲▲
     
     async def on_farm_plant_click(self, i: discord.Interaction): 
-        # 이 함수는 새로운 View를 띄우므로 defer를 여기서 하지 않습니다.
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
         view = FarmActionView(self.cog, farm_data, i.user, "plant_seed", self.farm_owner_id)
@@ -405,7 +402,6 @@ class FarmUIView(ui.View):
         await interaction.delete_original_response()
         
     async def on_farm_uproot_click(self, i: discord.Interaction): 
-        # 이 함수는 새로운 View를 띄우므로 defer를 여기서 하지 않습니다.
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
         view = FarmActionView(self.cog, farm_data, i.user, "uproot", self.farm_owner_id)
@@ -432,7 +428,7 @@ class FarmUIView(ui.View):
                     max_stage = info.get('max_growth_stage', 3)
                     regrowth = info.get('regrowth_days', 1)
                     new_growth_stage = max(0, max_stage - regrowth)
-                    trees_to_update[p['id']] = new_growth_stage
+                    trees_to_update[p['id']] = {'stage': new_growth_stage, 'is_regrowing': True}
                 else: 
                     plots_to_reset.append(p['id'])
         if not harvested:
@@ -452,8 +448,14 @@ class FarmUIView(ui.View):
         if plots_to_reset: db_tasks.append(clear_plots_db(plots_to_reset))
         if trees_to_update:
             now_iso = datetime.now(timezone.utc).isoformat()
-            for pid, new_stage in trees_to_update.items():
-                db_tasks.append(update_plot(pid, {'growth_stage': new_stage, 'planted_at': now_iso, 'last_watered_at': now_iso, 'quality': 5}))
+            for pid, update_data in trees_to_update.items():
+                db_tasks.append(update_plot(pid, {
+                    'growth_stage': update_data['stage'],
+                    'is_regrowing': update_data['is_regrowing'],
+                    'planted_at': now_iso,
+                    'last_watered_at': now_iso,
+                    'quality': 5
+                }))
         if total_xp > 0:
             db_tasks.append(supabase.rpc('add_xp', {'p_user_id': str(owner.id), 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute())
         results = await asyncio.gather(*db_tasks, return_exceptions=True)
@@ -472,7 +474,6 @@ class FarmUIView(ui.View):
                 break
     
     async def on_farm_invite_click(self, i: discord.Interaction):
-        # 이 콜백은 새 View를 띄우므로 defer를 여기서 하지 않습니다.
         view = ui.View(timeout=180)
         select = ui.UserSelect(placeholder="농장에 초대할 유저를 선택하세요...")
         async def cb(si: discord.Interaction):
@@ -488,7 +489,6 @@ class FarmUIView(ui.View):
         await i.response.send_message("누구를 농장에 초대하시겠습니까?", view=view, ephemeral=True)
 
     async def on_farm_share_click(self, i: discord.Interaction):
-        # 이 콜백은 새 View를 띄우므로 defer를 여기서 하지 않습니다.
         view = ui.View(timeout=180)
         select = ui.UserSelect(placeholder="권한을 부여할 유저를 선택하세요...")
         async def cb(si: discord.Interaction):
@@ -504,7 +504,6 @@ class FarmUIView(ui.View):
         await i.response.send_message("누구에게 농장 권한을 주시겠습니까?", view=view, ephemeral=True)
 
     async def on_farm_rename_click(self, i: discord.Interaction): 
-        # 이 콜백은 Modal을 띄우므로 defer를 여기서 하지 않습니다.
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
         await i.response.send_modal(FarmNameModal(self.cog, farm_data))
@@ -546,7 +545,6 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 농장 관련 영구 View가 정상적으로 등록되었습니다.")
         
-    # ▼▼▼ [핵심 수정] 재성장 시 능력 비활성화 로직 추가 ▼▼▼
     @tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("일일 작물 상태 업데이트 시작...")
@@ -578,8 +576,8 @@ class Farm(commands.Cog):
             yesterday_jst_midnight = today_jst_midnight - timedelta(days=1)
 
             for plot in all_plots:
-                update_payload = plot.copy() # 원본 복사
-                del update_payload['farms'] # 관계형 데이터 제거
+                update_payload = plot.copy()
+                del update_payload['farms']
 
                 owner_id = plot.get('farms', {}).get('user_id')
                 item_info = item_info_map.get(plot['planted_item_name'])
@@ -602,18 +600,9 @@ class Farm(commands.Cog):
 
                 if is_watered_today:
                     growth_amount = 1
-                    if 'farm_growth_speed_up_2' in owner_abilities:
-                        is_tree = item_info.get('is_tree', False)
-                        if not is_tree:
-                            growth_amount += 1
-                        else:
-                            planted_at_dt = datetime.fromisoformat(plot['planted_at'].replace('Z', '+00:00'))
-                            time_since_planted = datetime.now(timezone.utc) - planted_at_dt
-                            initial_growth_time = timedelta(hours=item_info.get('growth_time_hours', 999))
-                            is_first_growth = time_since_planted <= initial_growth_time
-                            if is_first_growth:
-                                growth_amount += 1
-
+                    if 'farm_growth_speed_up_2' in owner_abilities and not plot.get('is_regrowing', False):
+                        growth_amount += 1
+                    
                     update_payload['growth_stage'] = min(
                         plot['growth_stage'] + growth_amount,
                         item_info.get('max_growth_stage', 99)
@@ -635,7 +624,6 @@ class Farm(commands.Cog):
 
         except Exception as e:
             logger.error(f"일일 작물 업데이트 중 오류: {e}", exc_info=True)
-    # ▲▲▲ [핵심 수정] 종료 ▲▲▲
             
     @daily_crop_update.before_loop
     async def before_daily_crop_update(self):
@@ -728,11 +716,7 @@ class Farm(commands.Cog):
                                     emoji = info.get('item_emoji', '❓')
                                 else:
                                     if item_type == 'sapling':
-                                        planted_at_dt = datetime.fromisoformat(plot['planted_at'].replace('Z', '+00:00'))
-                                        time_since_planted = datetime.now(timezone.utc) - planted_at_dt
-                                        initial_growth_time = timedelta(hours=info.get('growth_time_hours', 999))
-                                        
-                                        if time_since_planted > initial_growth_time:
+                                        if plot.get('is_regrowing', False):
                                             emoji = '🌳'
                                         else:
                                             emoji = CROP_EMOJI_MAP.get('sapling', {}).get(stage, '🪴')
