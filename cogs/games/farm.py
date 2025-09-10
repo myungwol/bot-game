@@ -139,6 +139,7 @@ class FarmActionView(ui.View):
         select.callback = self.on_location_select
         self.add_item(select)
         
+    # ▼▼▼ [핵심 수정] 묘목 즉시 성장 로직 및 알림 기능 추가 ▼▼▼
     async def on_location_select(self, interaction: discord.Interaction):
         await interaction.response.defer()
         
@@ -159,7 +160,14 @@ class FarmActionView(ui.View):
             'water_count': 1 if is_raining else 0
         }
         
+        # 능력 발동 여부 확인
         user_abilities = await get_user_abilities(self.user.id)
+        item_info = await get_farmable_item_info(self.selected_item)
+        instant_growth = False
+        if item_info and 'farm_growth_speed_up_2' in user_abilities and item_info.get('is_tree'):
+            updates_payload['growth_stage'] = item_info.get('max_growth_stage', 3)
+            instant_growth = True
+
         seeds_to_deduct = num_planted
         seeds_saved = 0
         if 'farm_seed_saver_1' in user_abilities:
@@ -187,13 +195,15 @@ class FarmActionView(ui.View):
             followup_message += f"\n✨ 능력 효과로 씨앗 {seeds_saved}개를 절약했습니다!"
         if is_raining:
             followup_message += "\n🌧️ 비가 와서 자동으로 물이 뿌려졌습니다!"
-        
+        if instant_growth:
+            followup_message += "\n\n✨ **성장 속도 UP (대)** 능력 발동! 묘목이 즉시 다 자랐습니다!"
+
         msg = await interaction.followup.send(followup_message, ephemeral=True)
         self.cog.bot.loop.create_task(delete_after(msg, 10))
         
         await interaction.delete_original_response()
+    # ▲▲▲ [핵심 수정] 종료 ▲▲▲
 
-    # ▼▼▼ [핵심 수정] 밭 정리 UI 생성 로직 변경 ▼▼▼
     async def _build_uproot_select(self):
         plots = [p for p in self.farm_data['farm_plots'] if p['state'] in ['planted', 'withered']]
         if not plots: 
@@ -205,7 +215,6 @@ class FarmActionView(ui.View):
             label = f"{'🥀' if plot['state'] == 'withered' else ''}{name} ({plot['pos_y']+1}행 {plot['pos_x']+1}열)"
             options.append(discord.SelectOption(label=label, value=str(plot['id'])))
         
-        # min_values와 max_values를 추가하여 다중 선택이 가능하도록 변경합니다.
         max_selectable = min(len(options), 25)
         select = ui.Select(
             placeholder="제거할 작물을 여러 개 선택하세요...", 
@@ -217,9 +226,7 @@ class FarmActionView(ui.View):
         select.callback = self.on_uproot_select
         self.add_item(select)
 
-    # ▼▼▼ [핵심 수정] 밭 정리 콜백 함수 로직 변경 ▼▼▼
     async def on_uproot_select(self, interaction: discord.Interaction):
-        # 여러 개의 plot ID를 리스트로 받습니다.
         plot_ids_to_uproot = [int(val) for val in interaction.data['values']]
         count = len(plot_ids_to_uproot)
         
@@ -232,7 +239,6 @@ class FarmActionView(ui.View):
         await view.wait()
         
         if view.value:
-            # 선택된 모든 plot ID를 DB 함수에 전달합니다.
             await clear_plots_db(plot_ids_to_uproot)
             
             updated_farm_data = await get_farm_data(self.farm_owner_id)
@@ -243,7 +249,6 @@ class FarmActionView(ui.View):
             await interaction.edit_original_response(content=f"✅ {count}개의 작물을 제거했습니다.", view=None)
         else:
             await interaction.edit_original_response(content="취소되었습니다.", view=None)
-
     async def cancel_action(self, interaction: discord.Interaction):
         await interaction.response.defer(); await interaction.delete_original_response()
     async def refresh_view(self, interaction: discord.Interaction):
@@ -541,6 +546,7 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 농장 관련 영구 View가 정상적으로 등록되었습니다.")
         
+    # ▼▼▼ [핵심 수정] 재성장 시 능력 비활성화 로직 추가 ▼▼▼
     @tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("일일 작물 상태 업데이트 시작...")
@@ -572,20 +578,9 @@ class Farm(commands.Cog):
             yesterday_jst_midnight = today_jst_midnight - timedelta(days=1)
 
             for plot in all_plots:
-                update_payload = {
-                    'id': plot['id'],
-                    'farm_id': plot['farm_id'],
-                    'pos_x': plot['pos_x'],
-                    'pos_y': plot['pos_y'],
-                    'state': plot['state'],
-                    'planted_item_name': plot['planted_item_name'],
-                    'planted_at': plot['planted_at'],
-                    'growth_stage': plot['growth_stage'],
-                    'quality': plot['quality'],
-                    'last_watered_at': plot['last_watered_at'],
-                    'water_count': plot['water_count']
-                }
-                
+                update_payload = plot.copy() # 원본 복사
+                del update_payload['farms'] # 관계형 데이터 제거
+
                 owner_id = plot.get('farms', {}).get('user_id')
                 item_info = item_info_map.get(plot['planted_item_name'])
                 if not owner_id or not item_info:
@@ -608,8 +603,17 @@ class Farm(commands.Cog):
                 if is_watered_today:
                     growth_amount = 1
                     if 'farm_growth_speed_up_2' in owner_abilities:
-                        growth_amount += 1
-                    
+                        is_tree = item_info.get('is_tree', False)
+                        if not is_tree:
+                            growth_amount += 1
+                        else:
+                            planted_at_dt = datetime.fromisoformat(plot['planted_at'].replace('Z', '+00:00'))
+                            time_since_planted = datetime.now(timezone.utc) - planted_at_dt
+                            initial_growth_time = timedelta(hours=item_info.get('growth_time_hours', 999))
+                            is_first_growth = time_since_planted <= initial_growth_time
+                            if is_first_growth:
+                                growth_amount += 1
+
                     update_payload['growth_stage'] = min(
                         plot['growth_stage'] + growth_amount,
                         item_info.get('max_growth_stage', 99)
@@ -620,7 +624,7 @@ class Farm(commands.Cog):
                 plots_to_update_db.append(update_payload)
 
             if plots_to_update_db:
-                await supabase.table('farm_plots').upsert(plots_to_update_db, on_conflict="id").execute()
+                await supabase.table('farm_plots').upsert(plots_to_update_db).execute()
                 logger.info(f"일일 작물 업데이트 완료. {len(plots_to_update_db)}개의 밭이 영향을 받았습니다. UI 업데이트를 요청합니다.")
                 
                 affected_farms = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
@@ -631,6 +635,7 @@ class Farm(commands.Cog):
 
         except Exception as e:
             logger.error(f"일일 작물 업데이트 중 오류: {e}", exc_info=True)
+    # ▲▲▲ [핵심 수정] 종료 ▲▲▲
             
     @daily_crop_update.before_loop
     async def before_daily_crop_update(self):
