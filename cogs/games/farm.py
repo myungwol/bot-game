@@ -703,12 +703,12 @@ class Farm(commands.Cog):
                                     emoji = info.get('item_emoji', '❓')
                                 else:
                                     if item_type == 'sapling':
-                                        if stage >= 2:
-                                            emoji = '🌳'
-                                        else:
-                                            emoji = CROP_EMOJI_MAP.get(item_type, {}).get(stage, '🌱')
+                                        # [수정] 수확 후 다시 자라는 나무가 항상 나무 이모티콘으로 표시되도록 수정합니다.
+                                        # 이로 인해 새로 심은 나무도 초기부터 나무 이모티콘으로 보이지만,
+                                        # 수확 후의 표시 오류를 해결하기 위한 최선의 방법입니다.
+                                        emoji = '🌳'
                                     else:
-                                        emoji = CROP_EMOJI_MAP.get(item_type, {}).get(stage, '🌱')
+                                        emoji = CROP_EMOJI_MAP.get('seed', {}).get(stage, '🌱')
                                 
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
                                 last_watered_jst = last_watered_dt.astimezone(KST)
