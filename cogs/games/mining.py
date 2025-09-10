@@ -120,11 +120,22 @@ class MiningGameView(ui.View):
 
     def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", color=0x607D8B)
+        
+        # ▼▼▼ [핵심 수정] build_embed 함수 내부의 로직을 아래와 같이 수정합니다. ▼▼▼
         if self.state == "idle":
             description_parts = ["## 앞으로 나아가 광물을 찾아보자"]
             if self.last_result_text: description_parts.append(f"## 채굴 결과\n{self.last_result_text}")
+            
+            # 타이머 로직 수정
             remaining_time = self.end_time - datetime.now(timezone.utc)
-            description_parts.append(f"광산 닫힘까지: **{format_timedelta_minutes_seconds(remaining_time)}**")
+            if remaining_time.total_seconds() > 0:
+                # 남은 시간이 0초 이상일 때, 디스코드 타임스탬프 사용
+                timer_str = f"광산 닫힘까지: **{discord.utils.format_dt(self.end_time, 'R')}**"
+            else:
+                # 시간이 만료되면 헬퍼 함수를 사용하여 "종료됨" 표시
+                timer_str = f"광산 닫힘까지: **{format_timedelta_minutes_seconds(remaining_time)}**"
+            description_parts.append(timer_str)
+
             active_abilities = []
             if self.duration_doubled: active_abilities.append("> ✨ 집중 탐사 (시간 2배)")
             if self.time_reduction > 0: active_abilities.append("> ⚡ 신속한 채굴 (쿨타임 감소)")
@@ -133,6 +144,8 @@ class MiningGameView(ui.View):
             if active_abilities: description_parts.append(f"**--- 활성화된 능력 ---**\n" + "\n".join(active_abilities))
             description_parts.append(f"**사용 중인 장비:** {self.pickaxe}")
             embed.description = "\n\n".join(description_parts)
+        # ▲▲▲ [핵심 수정] ▲▲▲
+
         elif self.state == "discovered":
             desc_text = f"### {self.discovered_ore}을(를) 발견했다!" if self.discovered_ore != "꽝" else "### 아무것도 발견하지 못했다..."
             embed.description = desc_text
