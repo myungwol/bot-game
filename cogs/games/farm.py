@@ -104,61 +104,90 @@ class FarmActionView(ui.View):
         self.action_type = "plant_location"
         await self.refresh_view(interaction)
     async def _build_location_select(self):
-        sx, sy = 1, 1
         available_plots = [p for p in self.farm_data['farm_plots'] if p['state'] == 'tilled']
+        
+        inventory = await get_inventory(self.user)
+        num_seeds = inventory.get(self.selected_item, 0)
 
         if not available_plots: 
-            self.add_item(ui.Button(label=f"경작된 빈 땅이 없습니다.", disabled=True)); return
+            self.add_item(ui.Button(label="경작된 빈 땅이 없습니다.", disabled=True))
+            return
+        if num_seeds == 0:
+            self.add_item(ui.Button(label=f"'{self.selected_item}' 씨앗이 부족합니다.", disabled=True))
+            return
 
         options = [discord.SelectOption(label=f"{p['pos_y']+1}행 {p['pos_x']+1}열", value=f"{p['id']}") for p in available_plots]
         
-        select = ui.Select(placeholder="심을 위치 선택...", options=options[:25], custom_id="location_select")
+        # 선택 가능한 최대 개수 = min(빈 땅 수, 가진 씨앗 수, 디스코드 최대 선택 수)
+        max_selectable = min(len(available_plots), num_seeds, 25)
+        
+        select = ui.Select(
+            placeholder=f"심을 위치를 선택하세요 (최대 {max_selectable}개)", 
+            options=options[:25], 
+            min_values=1,
+            max_values=max_selectable, # 다중 선택 활성화
+            custom_id="location_select"
+        )
         select.callback = self.on_location_select
         self.add_item(select)
-        
+    # ▲▲▲ [핵심 수정] ▲▲▲
+
+    # ▼▼▼ [핵심 수정] 이 함수 전체를 아래 코드로 교체해주세요. ▼▼▼
     async def on_location_select(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        plot_id = int(interaction.data['values'][0])
+        
+        plot_ids_to_plant = [int(val) for val in interaction.data['values']]
+        num_planted = len(plot_ids_to_plant)
         
         now = datetime.now(timezone.utc)
         weather_key = get_config("current_weather", "sunny")
         is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
         
-        updates = {
-            'state': 'planted', 'planted_item_name': self.selected_item, 'planted_at': now.isoformat(), 
-            'growth_stage': 0, 'quality': 5, 'last_watered_at': now.isoformat() if is_raining else None,
+        updates_payload = {
+            'state': 'planted', 
+            'planted_item_name': self.selected_item, 
+            'planted_at': now.isoformat(), 
+            'growth_stage': 0, 
+            'quality': 5, 
+            'last_watered_at': now.isoformat() if is_raining else None,
             'water_count': 1 if is_raining else 0
         }
         
-        db_tasks = [update_plot(plot_id, updates)]
+        # '씨앗 절약' 능력 처리
         user_abilities = await get_user_abilities(self.user.id)
-        seed_saved = False
-        if 'farm_seed_saver_1' in user_abilities and random.random() < 0.2:
-            seed_saved = True
-        
-        if not seed_saved:
-            db_tasks.append(update_inventory(self.user.id, self.selected_item, -1))
+        seeds_to_deduct = num_planted
+        seeds_saved = 0
+        if 'farm_seed_saver_1' in user_abilities:
+            for _ in range(num_planted):
+                if random.random() < 0.2: # 20% 확률로 씨앗 절약
+                    seeds_saved += 1
+            seeds_to_deduct -= seeds_saved
+
+        # 데이터베이스 작업 준비
+        db_tasks = []
+        db_tasks.append(
+            supabase.table('farm_plots').update(updates_payload).in_('id', plot_ids_to_plant).execute()
+        )
+        if seeds_to_deduct > 0:
+            db_tasks.append(update_inventory(self.user.id, self.selected_item, -seeds_to_deduct))
 
         await asyncio.gather(*db_tasks)
         
+        # UI 새로고침
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
         
-        followup_message = f"✅ '{self.selected_item}'을(를) 심었습니다."
-        if seed_saved:
-            followup_message += "\n✨ 능력 효과로 씨앗을 소모하지 않았습니다!"
+        # 결과 메시지 생성 및 전송
+        followup_message = f"✅ '{self.selected_item}'을(를) {num_planted}곳에 심었습니다."
+        if seeds_saved > 0:
+            followup_message += f"\n✨ 능력 효과로 씨앗 {seeds_saved}개를 절약했습니다!"
         if is_raining:
             followup_message += "\n🌧️ 비가 와서 자동으로 물이 뿌려졌습니다!"
         
-        if seed_saved or is_raining:
-            msg = await interaction.followup.send(followup_message, ephemeral=True)
-            await asyncio.sleep(5)
-            try:
-                await msg.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
+        msg = await interaction.followup.send(followup_message, ephemeral=True)
+        asyncio.create_task(delete_after(msg, 10))
         
         await interaction.delete_original_response()
 
