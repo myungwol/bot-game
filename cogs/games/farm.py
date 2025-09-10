@@ -874,4 +874,4 @@ class Farm(commands.Cog):
         logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(Farm(bot))```
+    await bot.add_cog(Farm(bot))
