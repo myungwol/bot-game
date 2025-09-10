@@ -703,11 +703,21 @@ class Farm(commands.Cog):
                                     emoji = info.get('item_emoji', '❓')
                                 else:
                                     if item_type == 'sapling':
-                                        # [수정] 수확 후 다시 자라는 나무가 항상 나무 이모티콘으로 표시되도록 수정합니다.
-                                        # 이로 인해 새로 심은 나무도 초기부터 나무 이모티콘으로 보이지만,
-                                        # 수확 후의 표시 오류를 해결하기 위한 최선의 방법입니다.
-                                        emoji = '🌳'
+                                        # ▼▼▼ [핵심 수정] 나무 이모티콘 표시 로직 ▼▼▼
+                                        # 심은 시간을 기준으로 나무가 첫 성장인지, 재성장인지 판단합니다.
+                                        planted_at_dt = datetime.fromisoformat(plot['planted_at'].replace('Z', '+00:00'))
+                                        time_since_planted = datetime.now(timezone.utc) - planted_at_dt
+                                        initial_growth_time = timedelta(hours=info.get('growth_time_hours', 999))
+                                        
+                                        if time_since_planted > initial_growth_time:
+                                            # 심은 지 총 성장 시간보다 오래 지났다면, 재성장 중인 나무로 판단합니다.
+                                            emoji = '🌳'
+                                        else:
+                                            # 그렇지 않다면, 첫 성장 주기로 판단하고 단계별 이모티콘을 사용합니다.
+                                            emoji = CROP_EMOJI_MAP.get('sapling', {}).get(stage, '🪴')
+                                        # ▲▲▲ [핵심 수정] 로직 종료 ▲▲▲
                                     else:
+                                        # 나무가 아닌 작물은 기존 로직을 따릅니다.
                                         emoji = CROP_EMOJI_MAP.get('seed', {}).get(stage, '🌱')
                                 
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
