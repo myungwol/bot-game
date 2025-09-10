@@ -10,6 +10,7 @@ import time
 import math
 import random
 from datetime import datetime, timezone, timedelta, time as dt_time
+from collections import defaultdict
 
 from utils.database import (
     get_farm_data, create_farm, get_config, expand_farm_db,
@@ -157,7 +158,8 @@ class FarmActionView(ui.View):
             'quality': 5, 
             'last_watered_at': now.isoformat() if is_raining else None,
             'water_count': 1 if is_raining else 0,
-            'is_regrowing': False
+            'is_regrowing': False,
+            'water_retention_used': False
         }
         
         user_abilities = await get_user_abilities(self.user.id)
@@ -324,7 +326,6 @@ class FarmUIView(ui.View):
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
         await interaction.delete_original_response()
 
-    # ▼▼▼ [핵심 수정] 밭 갈기 순서 보장 로직 추가 ▼▼▼
     async def on_farm_till_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         gear = await get_user_gear(interaction.user)
@@ -338,7 +339,6 @@ class FarmUIView(ui.View):
         if not farm_data: return
         tilled, plots_to_update_db = 0, []
         
-        # 밭을 위치(y좌표, x좌표) 순으로 정렬합니다.
         sorted_plots = sorted(farm_data['farm_plots'], key=lambda p: (p['pos_y'], p['pos_x']))
 
         for plot in sorted_plots:
@@ -357,7 +357,6 @@ class FarmUIView(ui.View):
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
         await interaction.delete_original_response()
-    # ▲▲▲ [핵심 수정] 종료 ▲▲▲
     
     async def on_farm_plant_click(self, i: discord.Interaction): 
         farm_data = await get_farm_data(self.farm_owner_id)
@@ -391,7 +390,7 @@ class FarmUIView(ui.View):
             return
         now_iso = datetime.now(timezone.utc).isoformat()
         tasks = [
-            supabase.table('farm_plots').update({'last_watered_at': now_iso}).in_('id', list(plots_to_update_db)).execute(),
+            supabase.table('farm_plots').update({'last_watered_at': now_iso, 'water_retention_used': False}).in_('id', list(plots_to_update_db)).execute(),
             supabase.rpc('increment_water_count', {'plot_ids': list(plots_to_update_db)}).execute()
         ]
         await asyncio.gather(*tasks)
@@ -454,7 +453,8 @@ class FarmUIView(ui.View):
                     'is_regrowing': update_data['is_regrowing'],
                     'planted_at': now_iso,
                     'last_watered_at': now_iso,
-                    'quality': 5
+                    'quality': 5,
+                    'water_retention_used': False
                 }))
         if total_xp > 0:
             db_tasks.append(supabase.rpc('add_xp', {'p_user_id': str(owner.id), 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute())
@@ -573,7 +573,9 @@ class Farm(commands.Cog):
 
             plots_to_update_db = []
             today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
-            yesterday_jst_midnight = today_jst_midnight - timedelta(days=1)
+            
+            # ▼▼▼ [핵심 수정] 능력 발동 알림을 위한 변수 추가 ▼▼▼
+            growth_ability_activations = defaultdict(int)
 
             for plot in all_plots:
                 update_payload = plot.copy()
@@ -588,27 +590,27 @@ class Farm(commands.Cog):
                     continue
 
                 owner_abilities = owner_abilities_map.get(owner_id, set())
-                
                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
-                last_watered_kst = last_watered_dt.astimezone(KST)
-
-                is_watered_today = last_watered_kst >= today_jst_midnight or is_raining
                 
-                if not is_watered_today and 'farm_water_retention_1' in owner_abilities:
-                    if last_watered_kst >= yesterday_jst_midnight:
-                        is_watered_today = True
-
+                is_watered_today = last_watered_dt.astimezone(KST) >= today_jst_midnight or is_raining
+                
                 if is_watered_today:
+                    update_payload['water_retention_used'] = False
+                    
                     growth_amount = 1
                     if 'farm_growth_speed_up_2' in owner_abilities and not plot.get('is_regrowing', False):
                         growth_amount += 1
+                        growth_ability_activations[owner_id] += 1
                     
                     update_payload['growth_stage'] = min(
                         plot['growth_stage'] + growth_amount,
                         item_info.get('max_growth_stage', 99)
                     )
-                else:
-                    update_payload['state'] = 'withered'
+                else: # 물을 주지 않은 경우
+                    if 'farm_water_retention_1' in owner_abilities and not plot.get('water_retention_used', False):
+                        update_payload['water_retention_used'] = True # 능력을 사용했다고 표시
+                    else:
+                        update_payload['state'] = 'withered'
                 
                 plots_to_update_db.append(update_payload)
 
@@ -621,6 +623,17 @@ class Farm(commands.Cog):
                     await self.request_farm_ui_update(user_id)
             else:
                 logger.info("상태가 변경된 작물이 없습니다.")
+
+            # ▼▼▼ [핵심 수정] 능력 발동 DM 알림 전송 로직 ▼▼▼
+            for user_id, count in growth_ability_activations.items():
+                if count > 0:
+                    try:
+                        user = self.bot.get_user(user_id) or await self.bot.fetch_user(user_id)
+                        await user.send(f"**[농장 알림]**\n오늘 농장 업데이트에서 **성장 속도 UP (대)** 능력이 발동하여, {count}개의 작물이 추가로 성장했습니다!")
+                    except discord.Forbidden:
+                        logger.warning(f"{user_id}님에게 능력 발동 DM을 보낼 수 없습니다.")
+                    except Exception as e:
+                        logger.error(f"{user_id}님에게 능력 발동 DM 전송 중 오류 발생: {e}")
 
         except Exception as e:
             logger.error(f"일일 작물 업데이트 중 오류: {e}", exc_info=True)
