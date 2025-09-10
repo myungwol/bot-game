@@ -619,6 +619,7 @@ class SellCategoryView(ShopViewBase):
         self.add_item(ui.Button(label="물고기", custom_id="sell_category_fish"))
         self.add_item(ui.Button(label="작물", custom_id="sell_category_crop"))
         self.add_item(ui.Button(label="광물", custom_id="sell_category_mineral"))
+        self.add_item(ui.Button(label="음식", custom_id="sell_category_cooking"))
         for child in self.children:
             if isinstance(child, ui.Button):
                 child.callback = self.on_button_click
@@ -630,6 +631,9 @@ class SellCategoryView(ShopViewBase):
         if category == "fish": view = SellFishView(self.user)
         elif category == "crop": view = SellCropView(self.user)
         elif category == "mineral": view = SellMineralView(self.user)
+        
+        elif category == "cooking": view = SellCookingView(self.user)
+        
         else: return
 
         view.message = self.message
