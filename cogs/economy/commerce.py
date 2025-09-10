@@ -620,7 +620,7 @@ class SellCookingView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
-        embed = discord.Embed(title="🍲 판매함 - 요리", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 요리를 아래 메뉴에서 선택해주세요.", color=0xE67E22)
+        embed = discord.Embed(title="🍲 판매함 - 음식", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 음식을 아래 메뉴에서 선택해주세요.", color=0xE67E22)
         embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         return embed
 
@@ -648,7 +648,7 @@ class SellCookingView(ShopViewBase):
                 ))
 
         if options:
-            select = ui.Select(placeholder="판매할 요리를 선택하세요...", options=options)
+            select = ui.Select(placeholder="판매할 음식을 선택하세요...", options=options)
             select.callback = self.on_select
             self.add_item(select)
         
@@ -685,7 +685,7 @@ class SellCookingView(ShopViewBase):
             
             await self.refresh_view(interaction)
         except Exception as e:
-            logger.error(f"요리 판매 중 오류: {e}", exc_info=True)
+            logger.error(f"음식 판매 중 오류: {e}", exc_info=True)
             await self.handle_error(interaction, e)
 
     async def go_back(self, interaction: discord.Interaction):
@@ -702,7 +702,6 @@ class SellCategoryView(ShopViewBase):
 
     async def build_components(self):
         self.clear_items()
-        self.add_item(ui.Button(label="장비", custom_id="sell_category_gear", disabled=True))
         self.add_item(ui.Button(label="물고기", custom_id="sell_category_fish"))
         self.add_item(ui.Button(label="작물", custom_id="sell_category_crop"))
         self.add_item(ui.Button(label="광물", custom_id="sell_category_mineral"))
