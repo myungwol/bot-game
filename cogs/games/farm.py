@@ -304,15 +304,13 @@ class FarmUIView(ui.View):
             updated_farm_data['farm_message_id'] = None
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
-        msg = await interaction.followup.send("✅ 농장 패널을 새로고침했습니다.", ephemeral=True)
-        self.cog.bot.loop.create_task(delete_after(msg, 5))
+        await interaction.delete_original_response()
 
     async def on_farm_till_click(self, interaction: discord.Interaction):
         gear = await get_user_gear(interaction.user)
         hoe = gear.get('hoe', BARE_HANDS)
         if hoe == BARE_HANDS:
-            msg = await interaction.followup.send("❌ 먼저 상점에서 '괭이'를 구매하고 프로필 화면에서 장착해주세요.", ephemeral=True)
-            self.cog.bot.loop.create_task(delete_after(msg, 10))
+            await interaction.followup.send("❌ 먼저 상점에서 '괭이'를 구매하고 프로필 화면에서 장착해주세요.", ephemeral=True, delete_after=10)
             return
             
         power = get_item_database().get(hoe, {}).get('power', 1)
@@ -327,8 +325,7 @@ class FarmUIView(ui.View):
                 tilled += 1
         
         if not tilled:
-            msg = await interaction.followup.send("ℹ️ 더 이상 갈 수 있는 밭이 없습니다.", ephemeral=True)
-            self.cog.bot.loop.create_task(delete_after(msg, 5))
+            await interaction.followup.send("ℹ️ 더 이상 갈 수 있는 밭이 없습니다.", ephemeral=True, delete_after=5)
             return
 
         await supabase.table('farm_plots').update({'state': 'tilled'}).in_('id', plots_to_update_db).execute()
@@ -338,8 +335,7 @@ class FarmUIView(ui.View):
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
-        msg = await interaction.followup.send(f"✅ 괭이로 밭 {tilled}칸을 갈았습니다.", ephemeral=True)
-        self.cog.bot.loop.create_task(delete_after(msg, 5))
+        await interaction.delete_original_response()
     
     async def on_farm_plant_click(self, i: discord.Interaction): 
         farm_data = await get_farm_data(self.farm_owner_id)
@@ -351,8 +347,7 @@ class FarmUIView(ui.View):
         gear = await get_user_gear(interaction.user)
         can = gear.get('watering_can', BARE_HANDS)
         if can == BARE_HANDS:
-            msg = await interaction.followup.send("❌ 먼저 상점에서 '물뿌리개'를 구매하고 프로필 화면에서 장착해주세요.", ephemeral=True)
-            self.cog.bot.loop.create_task(delete_after(msg, 10))
+            await interaction.followup.send("❌ 먼저 상점에서 '물뿌리개'를 구매하고 프로필 화면에서 장착해주세요.", ephemeral=True, delete_after=10)
             return
 
         power = get_item_database().get(can, {}).get('power', 1)
@@ -375,8 +370,7 @@ class FarmUIView(ui.View):
                 watered_count += 1
         
         if not plots_to_update_db:
-            msg = await interaction.followup.send("ℹ️ 물을 줄 필요가 있는 작물이 없습니다.", ephemeral=True)
-            self.cog.bot.loop.create_task(delete_after(msg, 5))
+            await interaction.followup.send("ℹ️ 물을 줄 필요가 있는 작물이 없습니다.", ephemeral=True, delete_after=5)
             return
             
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -391,8 +385,7 @@ class FarmUIView(ui.View):
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data, message=interaction.message)
             
-        msg = await interaction.followup.send(f"✅ 작물 {watered_count}개에 물을 주었습니다.", ephemeral=True)
-        self.cog.bot.loop.create_task(delete_after(msg, 5))
+        await interaction.delete_original_response()
         
     async def on_farm_uproot_click(self, i: discord.Interaction): 
         farm_data = await get_farm_data(self.farm_owner_id)
