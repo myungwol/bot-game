@@ -573,9 +573,9 @@ class Farm(commands.Cog):
 
             plots_to_update_db = []
             today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+            yesterday_jst_midnight = today_jst_midnight - timedelta(days=1)
             
-            # ▼▼▼ [핵심 수정] 능력 발동 알림을 위한 변수 추가 ▼▼▼
-            growth_ability_activations = defaultdict(int)
+            growth_ability_activations = defaultdict(lambda: {'count': 0, 'thread_id': None})
 
             for plot in all_plots:
                 update_payload = plot.copy()
@@ -600,15 +600,16 @@ class Farm(commands.Cog):
                     growth_amount = 1
                     if 'farm_growth_speed_up_2' in owner_abilities and not plot.get('is_regrowing', False):
                         growth_amount += 1
-                        growth_ability_activations[owner_id] += 1
+                        growth_ability_activations[owner_id]['count'] += 1
+                        growth_ability_activations[owner_id]['thread_id'] = plot['farms']['thread_id']
                     
                     update_payload['growth_stage'] = min(
                         plot['growth_stage'] + growth_amount,
                         item_info.get('max_growth_stage', 99)
                     )
-                else: # 물을 주지 않은 경우
+                else: 
                     if 'farm_water_retention_1' in owner_abilities and not plot.get('water_retention_used', False):
-                        update_payload['water_retention_used'] = True # 능력을 사용했다고 표시
+                        update_payload['water_retention_used'] = True
                     else:
                         update_payload['state'] = 'withered'
                 
@@ -624,16 +625,14 @@ class Farm(commands.Cog):
             else:
                 logger.info("상태가 변경된 작물이 없습니다.")
 
-            # ▼▼▼ [핵심 수정] 능력 발동 DM 알림 전송 로직 ▼▼▼
-            for user_id, count in growth_ability_activations.items():
-                if count > 0:
+            for user_id, data in growth_ability_activations.items():
+                if data['count'] > 0 and data['thread_id']:
                     try:
-                        user = self.bot.get_user(user_id) or await self.bot.fetch_user(user_id)
-                        await user.send(f"**[농장 알림]**\n오늘 농장 업데이트에서 **성장 속도 UP (대)** 능력이 발동하여, {count}개의 작물이 추가로 성장했습니다!")
-                    except discord.Forbidden:
-                        logger.warning(f"{user_id}님에게 능력 발동 DM을 보낼 수 없습니다.")
+                        thread = self.bot.get_channel(data['thread_id'])
+                        if thread:
+                            await thread.send(f"**[농장 알림]**\n오늘 농장 업데이트에서 **성장 속도 UP (대)** 능력이 발동하여, {data['count']}개의 작물이 추가로 성장했습니다!", delete_after=3600)
                     except Exception as e:
-                        logger.error(f"{user_id}님에게 능력 발동 DM 전송 중 오류 발생: {e}")
+                        logger.error(f"{user_id}의 농장 스레드({data['thread_id']})에 능력 발동 메시지 전송 중 오류: {e}")
 
         except Exception as e:
             logger.error(f"일일 작물 업데이트 중 오류: {e}", exc_info=True)
@@ -875,4 +874,4 @@ class Farm(commands.Cog):
         logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(Farm(bot))
+    await bot.add_cog(Farm(bot))```
