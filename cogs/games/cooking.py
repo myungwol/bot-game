@@ -259,6 +259,11 @@ class CookingPanelView(ui.View):
             await supabase.table('cauldrons').insert({'user_id': str(self.user.id), 'slot_number': slot, 'state': 'idle'}).execute()
         
         self.selected_cauldron_slot = slot
+
+        # ▼▼▼ [핵심 수정] 선택한 솥 번호를 DB에 저장합니다. ▼▼▼
+        await save_config_to_db(f"kitchen_state_{self.user.id}", {"selected_slot": slot})
+        # ▲▲▲ [핵심 수정] ▲▲▲
+        
         await self.refresh(interaction)
 
     async def add_ingredient_prompt(self, interaction: discord.Interaction):
@@ -580,6 +585,7 @@ class Cooking(commands.Cog):
 
             thread = await interaction.channel.create_thread(name=f"🍲｜{user.display_name}의 부엌", type=discord.ChannelType.private_thread)
             await thread.add_user(user)
+            await delete_config_from_db(f"kitchen_state_{user.id}")
             await supabase.table('user_settings').upsert({'user_id': str(user.id), 'kitchen_thread_id': thread.id}).execute()
             
             embed_data = await get_embed_from_db("cooking_thread_welcome")
