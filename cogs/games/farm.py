@@ -536,14 +536,19 @@ class Farm(commands.Cog):
             yesterday_jst_midnight = today_jst_midnight - timedelta(days=1)
 
             for plot in all_plots:
-                # ▼▼▼ [핵심 수정] update_payload에 pos_x와 pos_y를 추가합니다. ▼▼▼
+                # [핵심 수정] update_payload에 DB의 모든 주요 정보를 포함시켜 데이터 유실을 방지합니다.
                 update_payload = {
                     'id': plot['id'],
                     'farm_id': plot['farm_id'],
-                    'pos_x': plot['pos_x'], # pos_x 추가
-                    'pos_y': plot['pos_y'], # pos_y 추가
+                    'pos_x': plot['pos_x'],
+                    'pos_y': plot['pos_y'],
                     'state': plot['state'],
-                    'growth_stage': plot['growth_stage']
+                    'planted_item_name': plot['planted_item_name'],
+                    'planted_at': plot['planted_at'],
+                    'growth_stage': plot['growth_stage'],
+                    'quality': plot['quality'],
+                    'last_watered_at': plot['last_watered_at'],
+                    'water_count': plot['water_count']
                 }
                 
                 owner_id = plot.get('farms', {}).get('user_id')
