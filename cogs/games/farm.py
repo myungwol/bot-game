@@ -219,7 +219,13 @@ class FarmUIView(ui.View):
             item.callback = self.dispatch_callback
             self.add_item(item)
     
+    # [핵심 수정] 모든 버튼 클릭의 진입점이 되는 dispatch_callback 함수 수정
     async def dispatch_callback(self, interaction: discord.Interaction):
+        # 1. 여기서 단 한 번만 defer를 호출하여 상호작용에 응답합니다.
+        #    대부분의 작업이 시간이 걸리므로 ephemeral defer가 적합합니다.
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        
+        # 2. 이후 각 버튼에 맞는 함수를 호출합니다.
         method_name = f"on_{interaction.data['custom_id']}_click"
         if hasattr(self, method_name):
             await getattr(self, method_name)(interaction)
@@ -227,14 +233,15 @@ class FarmUIView(ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         self.farm_owner_id = await get_farm_owner_by_thread(interaction.channel.id)
         if not self.farm_owner_id: 
-            await interaction.response.send_message("❌ 이 농장의 정보를 찾을 수 없습니다.", ephemeral=True)
+            # defer() 후에 메시지를 보내야 하므로 followup.send 사용
+            await interaction.followup.send("❌ 이 농장의 정보를 찾을 수 없습니다.", ephemeral=True)
             return False
         
         if interaction.user.id == self.farm_owner_id: 
             return True
         
         if interaction.data['custom_id'] in ["farm_invite", "farm_share", "farm_rename"]: 
-            await interaction.response.send_message("❌ 이 작업은 농장 소유자만 할 수 있습니다.", ephemeral=True)
+            await interaction.followup.send("❌ 이 작업은 농장 소유자만 할 수 있습니다.", ephemeral=True)
             return False
         
         farm_data = await get_farm_data(self.farm_owner_id)
@@ -247,18 +254,22 @@ class FarmUIView(ui.View):
         if not action: return False 
             
         has_perm = await check_farm_permission(farm_data['id'], interaction.user.id, action)
-        if not has_perm: await interaction.response.send_message("❌ 이 작업을 수행할 권한이 없습니다.", ephemeral=True)
+        if not has_perm: await interaction.followup.send("❌ 이 작업을 수행할 권한이 없습니다.", ephemeral=True)
         return has_perm
         
+    # [핵심 수정] on_error 핸들러를 더 안전하게 변경
     async def on_error(self, i: discord.Interaction, e: Exception, item: ui.Item) -> None:
         logger.error(f"FarmUIView 오류 (item: {item.custom_id}): {e}", exc_info=True)
         msg = "❌ 처리 중 예기치 않은 오류가 발생했습니다."
-        if i.response.is_done(): await i.followup.send(msg, ephemeral=True)
-        else: await i.response.send_message(msg, ephemeral=True)
+        # 상호작용이 이미 응답되었을 가능성이 높으므로 followup.send 사용
+        if i.response.is_done():
+            await i.followup.send(msg, ephemeral=True)
+        else:
+            # 만약의 경우 응답되지 않았다면 원래대로 send_message 사용
+            await i.response.send_message(msg, ephemeral=True)
         
     async def on_farm_regenerate_click(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        
+        # defer()는 dispatch_callback에서 이미 처리했으므로 여기서는 로직만 실행
         try:
             await interaction.message.delete()
         except (discord.NotFound, discord.Forbidden) as e:
@@ -271,7 +282,7 @@ class FarmUIView(ui.View):
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
     async def on_farm_till_click(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        # defer()는 dispatch_callback에서 이미 처리했으므로 여기서는 로직만 실행
         gear = await get_user_gear(interaction.user)
         hoe = gear.get('hoe', BARE_HANDS)
         if hoe == BARE_HANDS:
@@ -344,8 +355,7 @@ class FarmUIView(ui.View):
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data, message=interaction.message)
         
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
+        # [핵심 수정] defer() 호출을 제거합니다.
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
 
