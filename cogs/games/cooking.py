@@ -486,36 +486,43 @@ class Cooking(commands.Cog):
     @kitchen_ui_updater.before_loop
     async def before_kitchen_ui_updater(self): await self.bot.wait_until_ready()
 
-    async def check_and_log_recipe_discovery(self, user: discord.Member, recipe_name: str, ingredients: Dict):
-        try:
-            res = await supabase.table('discovered_recipes').select('id').eq('recipe_name', recipe_name).maybe_single().execute()
-            if res.data:
-                return
-            
-            await supabase.table('discovered_recipes').insert({
-                'recipe_name': recipe_name,
-                'discoverer_id': str(user.id),
-                'guild_id': str(user.guild.id)
-            }).execute()
-            
-            log_channel_id = get_id("log_recipe_discovery_channel_id")
-            if not (log_channel_id and (log_channel := self.bot.get_channel(log_channel_id))):
-                logger.warning("레시피 발견 로그 채널이 설정되지 않았습니다.")
-                return
+async def check_and_log_recipe_discovery(self, user: discord.Member, recipe_name: str, ingredients: Dict):
+    try:
+        res = await supabase.table('discovered_recipes').select('id').eq('recipe_name', recipe_name).maybe_single().execute()
+        if res.data:
+            return
+        
+        await supabase.table('discovered_recipes').insert({
+            'recipe_name': recipe_name,
+            'discoverer_id': str(user.id),
+            'guild_id': str(user.guild.id)
+        }).execute()
+        
+        log_channel_id = get_id("log_recipe_discovery_channel_id")
+        if not (log_channel_id and (log_channel := self.bot.get_channel(log_channel_id))):
+            logger.warning("레시피 발견 로그 채널이 설정되지 않았습니다.")
+            return
 
-            embed = discord.Embed(
-                title="🎉 새로운 레시피 발견!",
-                description=f"**{user.mention}**님이 새로운 요리 **'{recipe_name}'**의 레시피를 최초로 발견했습니다!",
-                color=0xFFD700
-            )
-            
-            ingredients_str = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in ingredients.items()])
-            embed.add_field(name="📜 레시피", value=ingredients_str, inline=False)
-            embed.set_thumbnail(url=user.display_avatar.url if user.display_avatar else None)
-            
-            await log_channel.send(content="@here", embed=embed, allowed_mentions=discord.AllowedMentions(everyone=True))
-        except Exception as e:
-            logger.error(f"레시피 발견 처리 중 오류: {e}", exc_info=True)
+        # [핵심 수정] 아래 로직을 수정합니다.
+        embed_data = await get_embed_from_db("log_recipe_discovery")
+        if not embed_data:
+            logger.warning("DB에서 'log_recipe_discovery' 임베드 템플릿을 찾을 수 없습니다.")
+            return
+
+        ingredients_str = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in ingredients.items()])
+        user_avatar_url = user.display_avatar.url if user.display_avatar else ""
+        
+        log_embed = format_embed_from_db(
+            embed_data,
+            user_mention=user.mention,
+            recipe_name=recipe_name,
+            ingredients_str=ingredients_str,
+            user_avatar_url=user_avatar_url
+        )
+        
+        await log_channel.send(content="@here", embed=log_embed, allowed_mentions=discord.AllowedMentions(everyone=True))
+    except Exception as e:
+        logger.error(f"레시피 발견 처리 중 오류: {e}", exc_info=True)
 
     async def register_persistent_views(self):
         self.bot.add_view(CookingCreationPanelView(self))
