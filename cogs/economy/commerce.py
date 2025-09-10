@@ -353,7 +353,16 @@ class SellFishView(ShopViewBase):
     async def build_components(self):
         self.clear_items()
         aquarium = await get_aquarium(str(self.user.id))
-        loot_db = {loot['name']: loot for loot in get_fishing_loot()}
+        
+        # [핵심 수정] 메모리 캐시 대신 DB에서 직접 최신 낚시 정보를 불러옵니다.
+        loot_res = await supabase.table('fishing_loots').select('*').execute()
+        if not (loot_res and loot_res.data):
+            logger.error("데이터베이스에서 낚시 아이템 정보를 불러오는 데 실패했습니다.")
+            self.add_item(ui.Button(label="오류: 가격 정보를 불러올 수 없습니다.", disabled=True))
+            return
+        loot_db = {loot['name']: loot for loot in loot_res.data}
+        # [핵심 수정] 여기까지
+        
         self.fish_data_map.clear()
         
         options = []
@@ -362,6 +371,7 @@ class SellFishView(ShopViewBase):
                 fish_id = str(fish['id'])
                 loot_info = loot_db.get(fish['name'], {})
                 
+                # 이제 항상 최신 current_base_value를 사용합니다.
                 base_value = loot_info.get('current_base_value', loot_info.get('base_value', 0))
                 size_multiplier = loot_info.get('size_multiplier', 0)
                 price = int(base_value + (fish['size'] * size_multiplier))
@@ -385,7 +395,7 @@ class SellFishView(ShopViewBase):
         back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey)
         back_button.callback = self.go_back
         self.add_item(back_button)
-
+        
     async def on_select(self, interaction: discord.Interaction):
         sell_button = next((c for c in self.children if isinstance(c, ui.Button) and c.custom_id == "sell_fish_confirm"), None)
         if sell_button:
