@@ -469,7 +469,6 @@ class Cooking(commands.Cog):
 
     async def check_and_log_recipe_discovery(self, user: discord.Member, recipe_name: str, ingredients: Any):
         try:
-            # ▼▼▼ [핵심 수정] 재료 데이터가 문자열일 경우를 대비한 파싱 로직 추가 ▼▼▼
             parsed_ingredients = {}
             if isinstance(ingredients, str):
                 try:
@@ -479,10 +478,13 @@ class Cooking(commands.Cog):
                     return 
             elif isinstance(ingredients, dict):
                 parsed_ingredients = ingredients
-                
+
             res = await supabase.table('discovered_recipes').select('id').eq('recipe_name', recipe_name).maybe_single().execute()
-            if res.data:
+            
+            # ▼▼▼ [핵심 수정] res가 None이 아닌지 먼저 확인하는 로직 추가 ▼▼▼
+            if res and res.data:
                 return
+            # ▲▲▲ [핵심 수정] ▲▲▲
             
             await supabase.table('discovered_recipes').insert({
                 'recipe_name': recipe_name,
@@ -500,7 +502,6 @@ class Cooking(commands.Cog):
                 logger.warning("DB에서 'log_recipe_discovery' 임베드 템플릿을 찾을 수 없습니다.")
                 return
 
-            # 파싱된 데이터를 사용하여 로그 메시지 생성
             ingredients_str = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in parsed_ingredients.items()])
             user_avatar_url = user.display_avatar.url if user.display_avatar else ""
             
