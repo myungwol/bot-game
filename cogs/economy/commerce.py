@@ -606,7 +606,94 @@ class SellMineralView(ShopViewBase):
         view = SellCategoryView(self.user)
         view.message = self.message
         await view.update_view(interaction)
+        
+class SellCookingView(ShopViewBase):
+    def __init__(self, user: discord.Member):
+        super().__init__(user)
+        self.cooking_data_map: Dict[str, Dict[str, Any]] = {}
 
+    async def refresh_view(self, interaction: discord.Interaction):
+        embed = await self.build_embed()
+        await self.build_components()
+        await interaction.edit_original_response(embed=embed, view=self)
+    
+    async def build_embed(self) -> discord.Embed:
+        wallet = await get_wallet(self.user.id)
+        balance = wallet.get('balance', 0)
+        embed = discord.Embed(title="🍲 판매함 - 요리", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 요리를 아래 메뉴에서 선택해주세요.", color=0xE67E22)
+        embed.set_footer(text="매일 00:05(KST)에 시세 변동")
+        return embed
+
+    async def build_components(self):
+        self.clear_items()
+        inventory = await get_inventory(self.user)
+        item_db = get_item_database()
+        self.cooking_data_map.clear()
+        
+        options = []
+        # '요리' 카테고리의 아이템만 필터링합니다.
+        cooking_items = {name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category', '').strip() == '요리'}
+
+        if cooking_items:
+            for name, qty in cooking_items.items():
+                item_data = item_db.get(name, {})
+                price = item_data.get('current_price', item_data.get('sell_price', 0)) 
+                self.cooking_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
+                
+                options.append(discord.SelectOption(
+                    label=f"{name} (보유: {qty}개)", 
+                    value=name, 
+                    description=f"개당: {price}{self.currency_icon}",
+                    emoji=item_data.get('emoji', '🍲')
+                ))
+
+        if options:
+            select = ui.Select(placeholder="판매할 요리를 선택하세요...", options=options)
+            select.callback = self.on_select
+            self.add_item(select)
+        
+        back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=1)
+        back_button.callback = self.go_back
+        self.add_item(back_button)
+
+    async def on_select(self, interaction: discord.Interaction):
+        selected_cooking = interaction.data['values'][0]
+        cooking_info = self.cooking_data_map.get(selected_cooking)
+        if not cooking_info: return
+
+        modal = QuantityModal(f"'{selected_cooking}' 판매", cooking_info['max_qty'])
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+
+        if modal.value is None:
+            msg = await interaction.followup.send("판매가 취소되었습니다.", ephemeral=True)
+            asyncio.create_task(delete_after(msg, 5))
+            return
+
+        quantity_to_sell = modal.value
+        total_price = cooking_info['price'] * quantity_to_sell
+        
+        try:
+            await update_inventory(str(self.user.id), selected_cooking, -quantity_to_sell)
+            await update_wallet(self.user, total_price)
+
+            new_wallet = await get_wallet(self.user.id)
+            new_balance = new_wallet.get('balance', 0)
+            success_message = f"✅ **{selected_cooking}** {quantity_to_sell}개를 `{total_price:,}`{self.currency_icon}에 판매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
+            msg = await interaction.followup.send(success_message, ephemeral=True)
+            asyncio.create_task(delete_after(msg, 10))
+            
+            await self.refresh_view(interaction)
+        except Exception as e:
+            logger.error(f"요리 판매 중 오류: {e}", exc_info=True)
+            await self.handle_error(interaction, e)
+
+    async def go_back(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        view = SellCategoryView(self.user)
+        view.message = self.message
+        await view.update_view(interaction)
+        
 class SellCategoryView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title="📦 판매함 - 카테고리 선택", description="판매할 아이템의 카테고리를 선택해주세요.", color=discord.Color.green())
