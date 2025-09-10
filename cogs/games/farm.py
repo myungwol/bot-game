@@ -5,7 +5,7 @@ from discord.ext import commands, tasks
 from discord import ui
 import logging
 from typing import Optional, Dict, List, Any
-import asyncio # ◀◀◀ asyncio를 import 합니다.
+import asyncio
 import time
 import math
 import random
@@ -189,7 +189,7 @@ class FarmActionView(ui.View):
             followup_message += "\n🌧️ 비가 와서 자동으로 물이 뿌려졌습니다!"
         
         msg = await interaction.followup.send(followup_message, ephemeral=True)
-        asyncio.create_task(delete_after(msg, 10))
+        self.cog.bot.loop.create_task(delete_after(msg, 10))
         
         await interaction.delete_original_response()
 
@@ -304,12 +304,9 @@ class FarmUIView(ui.View):
             updated_farm_data['farm_message_id'] = None
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
-        # delete_after를 사용하는 대신 수동으로 삭제 작업을 예약합니다.
         msg = await interaction.followup.send("✅ 농장 패널을 새로고침했습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_after(msg, 5))
-    # ▲▲▲ [핵심 수정] ▲▲▲
 
-    # ▼▼▼ [핵심 수정] 이 함수 전체를 교체해주세요. ▼▼▼
     async def on_farm_till_click(self, interaction: discord.Interaction):
         gear = await get_user_gear(interaction.user)
         hoe = gear.get('hoe', BARE_HANDS)
@@ -341,7 +338,6 @@ class FarmUIView(ui.View):
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
-        # delete_after를 사용하는 대신 수동으로 삭제 작업을 예약합니다.
         msg = await interaction.followup.send(f"✅ 괭이로 밭 {tilled}칸을 갈았습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_after(msg, 5))
     
@@ -395,7 +391,6 @@ class FarmUIView(ui.View):
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data, message=interaction.message)
             
-        # delete_after를 사용하는 대신 수동으로 삭제 작업을 예약합니다.
         msg = await interaction.followup.send(f"✅ 작물 {watered_count}개에 물을 주었습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_after(msg, 5))
         
@@ -428,7 +423,7 @@ class FarmUIView(ui.View):
                 
                 if info.get('is_tree') is True:
                     max_stage = info.get('max_growth_stage', 3)
-                    regrowth = info.get('regrowth_days', 3)
+                    regrowth = info.get('regrowth_days', 1)
                     new_growth_stage = max(0, max_stage - regrowth)
                     trees_to_update[p['id']] = new_growth_stage
                 else: 
@@ -472,7 +467,7 @@ class FarmUIView(ui.View):
             followup_message += "\n✨ **대농**의 능력으로 수확량이 대폭 증가했습니다!"
         
         msg = await interaction.followup.send(followup_message, ephemeral=True)
-        asyncio.create_task(delete_after(msg, 10))
+        self.cog.bot.loop.create_task(delete_after(msg, 10))
 
         for res in results:
             if isinstance(res, dict) and 'data' in res and res.data and isinstance(res.data, list) and res.data[0].get('leveled_up'):
@@ -726,7 +721,18 @@ class Farm(commands.Cog):
                             if info:
                                 stage = plot['growth_stage']
                                 max_stage = info.get('max_growth_stage', 3)
-                                emoji = info.get('item_emoji', '❓') if stage >= max_stage else CROP_EMOJI_MAP.get(info.get('item_type', 'seed'), {}).get(stage, '🌱')
+                                item_type = info.get('item_type', 'seed')
+
+                                if stage >= max_stage:
+                                    emoji = info.get('item_emoji', '❓')
+                                else:
+                                    if item_type == 'sapling':
+                                        if stage >= 2:
+                                            emoji = '🌳'
+                                        else:
+                                            emoji = CROP_EMOJI_MAP.get(item_type, {}).get(stage, '🌱')
+                                    else:
+                                        emoji = CROP_EMOJI_MAP.get(item_type, {}).get(stage, '🌱')
                                 
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
                                 last_watered_jst = last_watered_dt.astimezone(KST)
@@ -837,7 +843,7 @@ class Farm(commands.Cog):
             thread = await interaction.channel.create_thread(name=f"🌱｜{farm_name}", type=discord.ChannelType.private_thread)
             await thread.add_user(user)
 
-            await delete_config_from_db(f"farm_state_{user.id}") # 이전 상태가 있다면 삭제
+            await delete_config_from_db(f"farm_state_{user.id}")
 
             farm_data = await create_farm(user.id)
             if not farm_data:
