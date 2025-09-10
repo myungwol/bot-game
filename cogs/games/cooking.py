@@ -83,6 +83,7 @@ class IngredientSelectView(ui.View):
             await interaction.delete_original_response()
         except (discord.NotFound, discord.HTTPException): pass
 
+# ▼▼▼ [최종 수정] 아래 CookingPanelView 클래스 전체를 교체해주세요. ▼▼▼
 class CookingPanelView(ui.View):
     def __init__(self, cog: 'Cooking', user: Optional[discord.Member] = None, message: Optional[discord.Message] = None):
         super().__init__(timeout=None)
@@ -91,6 +92,20 @@ class CookingPanelView(ui.View):
         self.cauldrons: List[Dict] = []
         self.selected_cauldron_slot: Optional[int] = None
         self.message = message
+
+    # 1. 모든 상호작용의 진입점이 되는 interaction_check 추가
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """모든 버튼/메뉴 상호작용 전에 실행되어 컨텍스트를 복구하고 권한을 확인합니다."""
+        # 스레드 ID를 기반으로 컨텍스트(소유자, 메시지 등)를 로드합니다.
+        if not await self._load_context(interaction):
+            return False # 컨텍스트 로드 실패 시 상호작용 중단
+
+        # 상호작용을 시도한 유저가 부엌 소유자인지 확인합니다.
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message("부엌 주인만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
+            return False
+        
+        return True # 모든 확인 통과
 
     async def _load_context(self, interaction: discord.Interaction) -> bool:
         res = await supabase.table('user_settings').select('user_id, kitchen_panel_message_id').eq('kitchen_thread_id', interaction.channel.id).maybe_single().execute()
@@ -103,35 +118,28 @@ class CookingPanelView(ui.View):
         owner_id = int(res.data['user_id'])
         message_id = res.data.get('kitchen_panel_message_id')
 
-        # ▼▼▼ [핵심 수정] DB에서 마지막으로 선택한 솥 번호를 불러옵니다. ▼▼▼
-        state_data = get_config(f"kitchen_state_{owner_id}")
-        self.selected_cauldron_slot = state_data.get("selected_slot") if isinstance(state_data, dict) else None
-        # ▲▲▲ [핵심 수정] ▲▲▲
         try:
             guild = self.cog.bot.get_guild(interaction.guild_id)
+            if not guild: return False
             self.user = await guild.fetch_member(owner_id)
         except (discord.NotFound, AttributeError):
             if not interaction.response.is_done(): await interaction.response.defer()
             await interaction.followup.send("부엌 주인을 찾을 수 없습니다.", ephemeral=True, delete_after=5)
             return False
-            
+
         if message_id:
             try:
+                # interaction.message는 현재 클릭한 메시지이므로, DB에 저장된 ID로 원본 패널을 찾아야 합니다.
                 self.message = await interaction.channel.fetch_message(int(message_id))
             except (discord.NotFound, discord.Forbidden):
-                logger.warning(f"부엌 패널 메시지(ID: {message_id})를 찾을 수 없습니다. UI 새로고침 시 새로 생성됩니다.")
+                logger.warning(f"부엌 패널 메시지(ID: {message_id})를 찾을 수 없습니다.")
                 self.message = None
         else:
-             self.message = None
+             self.message = interaction.message if not self.message else self.message
 
         cauldron_res = await supabase.table('cauldrons').select('*').eq('user_id', str(owner_id)).order('slot_number').execute()
         self.cauldrons = cauldron_res.data if cauldron_res.data else []
         
-        return True
-        
-        cauldron_res = await supabase.table('cauldrons').select('*').eq('user_id', str(owner_id)).order('slot_number').execute()
-        self.cauldrons = cauldron_res.data if cauldron_res.data else []
-        self.message = interaction.message
         return True
 
     def get_selected_cauldron(self) -> Optional[Dict]:
@@ -155,7 +163,7 @@ class CookingPanelView(ui.View):
         try:
             if self.message:
                 await self.message.edit(content=None, embed=embed, view=self)
-            else:
+            else: # 메시지를 찾지 못했거나 없는 경우 새로 생성
                 channel = interaction.channel if interaction else None
                 if channel:
                     self.message = await channel.send(content=None, embed=embed, view=self)
@@ -165,6 +173,7 @@ class CookingPanelView(ui.View):
             channel = interaction.channel if interaction else self.message.channel if self.message else None
             if channel:
                 try:
+                    # 실패 시 강제로 새 메시지를 생성
                     self.message = await channel.send(content=None, embed=embed, view=self)
                     await supabase.table('user_settings').update({'kitchen_panel_message_id': self.message.id}).eq('user_id', str(self.user.id)).execute()
                 except Exception as e_inner:
@@ -229,13 +238,10 @@ class CookingPanelView(ui.View):
             if isinstance(child, ui.Button):
                 child.callback = self.dispatch_button_callback
 
+    # 2. 개별 버튼 콜백에서 컨텍스트 로딩 로직 제거 (interaction_check가 처리하므로)
     async def dispatch_button_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if not await self._load_context(interaction): return
-        
-        if interaction.user.id != self.user.id:
-            await interaction.followup.send("부엌 주인만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
-            return
+        # self._load_context 호출 제거
         
         custom_id = interaction.data['custom_id']
         action = custom_id.split(':')[-1]
@@ -250,26 +256,17 @@ class CookingPanelView(ui.View):
             await method(interaction)
 
     async def on_cauldron_select(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        if not await self._load_context(interaction): return
+        # defer()는 interaction_check에서 처리
+        if not interaction.response.is_done(): await interaction.response.defer()
         
         slot = int(interaction.data['values'][0])
         is_installed = any(c['slot_number'] == slot for c in self.cauldrons)
-        
-        # ▼▼▼ [핵심 수정] 가마솥을 '설치'하는 경우에도 DB에 상태를 저장합니다. ▼▼▼
         if not is_installed:
-            # 새로 설치하는 경우, 이 솥을 기본 선택으로 지정하고 DB에 즉시 저장합니다.
             await supabase.table('cauldrons').insert({'user_id': str(self.user.id), 'slot_number': slot, 'state': 'idle'}).execute()
-            self.selected_cauldron_slot = slot
-            await save_config_to_db(f"kitchen_state_{self.user.id}", {"selected_slot": slot})
-        else:
-            # 이미 설치된 솥을 선택하는 경우
-            self.selected_cauldron_slot = slot
-            await save_config_to_db(f"kitchen_state_{self.user.id}", {"selected_slot": slot})
-        # ▲▲▲ [핵심 수정] ▲▲▲
         
+        self.selected_cauldron_slot = slot
         await self.refresh(interaction)
-
+    
     async def add_ingredient_prompt(self, interaction: discord.Interaction):
         cauldron = self.get_selected_cauldron()
         if not cauldron or cauldron['state'] not in ['idle', 'adding_ingredients']:
