@@ -345,6 +345,7 @@ class EconomyCore(commands.Cog):
     async def update_market_prices(self):
         logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
         try:
+            # [수정] 아래 모든 코드 블록을 try 구문 안으로 들여쓰기 했습니다.
             from utils.database import load_game_data_from_db
             await load_game_data_from_db()
 
@@ -360,9 +361,8 @@ class EconomyCore(commands.Cog):
                     old_price = data.get('current_price', data.get('price', 0))
                     new_price = self._calculate_new_price(old_price, data['volatility'], data.get('min_price'), data.get('max_price'))
                     if new_price != old_price:
-                        # 기존 데이터를 복사하고 가격만 업데이트하여 모든 NOT NULL 필드를 유지합니다.
                         item_update_payload = data.copy()
-                        item_update_payload['name'] = name # 'name'이 key이므로 명시적으로 추가
+                        item_update_payload['name'] = name
                         item_update_payload['current_price'] = new_price
                         items_to_update.append(item_update_payload)
 
@@ -377,7 +377,6 @@ class EconomyCore(commands.Cog):
                     old_price = fish.get('current_base_value', fish.get('base_value', 0))
                     new_price = self._calculate_new_price(old_price, fish['volatility'], fish.get('min_price'), fish.get('max_price'))
                     if new_price != old_price:
-                        # ▼▼▼ [핵심 수정] 기존 fish 객체를 복사하여 필요한 값만 갱신합니다. ▼▼▼
                         fish_update_payload = fish.copy()
                         fish_update_payload['current_base_value'] = new_price
                         fish_to_update.append(fish_update_payload)
@@ -390,6 +389,11 @@ class EconomyCore(commands.Cog):
                 await supabase.table('items').upsert(items_to_update, on_conflict="name").execute()
             if fish_to_update:
                 await supabase.table('fishing_loots').upsert(fish_to_update, on_conflict="id").execute()
+
+            # [핵심 수정] DB 업데이트 후, 즉시 로컬 캐시를 다시 로드합니다.
+            if items_to_update or fish_to_update:
+                logger.info("[시장] DB 가격 업데이트 완료, 로컬 게임 데이터 캐시를 새로고침합니다.")
+                await load_game_data_from_db()
 
             await save_config_to_db("market_fluctuations", announcements)
             
