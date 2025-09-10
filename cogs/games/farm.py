@@ -552,7 +552,8 @@ class Farm(commands.Cog):
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
             
-            planted_plots_res = await supabase.table('farm_plots').select('*, farms!inner(user_id, id)').eq('state', 'planted').execute()
+            # ▼▼▼ [핵심 수정] 쿼리 변경: thread_id를 함께 가져옵니다. ▼▼▼
+            planted_plots_res = await supabase.table('farm_plots').select('*, farms!inner(user_id, id, thread_id)').eq('state', 'planted').execute()
             
             if not (planted_plots_res and planted_plots_res.data):
                 logger.info("업데이트할 작물이 없습니다.")
@@ -573,7 +574,6 @@ class Farm(commands.Cog):
 
             plots_to_update_db = []
             today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
-            yesterday_jst_midnight = today_jst_midnight - timedelta(days=1)
             
             growth_ability_activations = defaultdict(lambda: {'count': 0, 'thread_id': None})
 
