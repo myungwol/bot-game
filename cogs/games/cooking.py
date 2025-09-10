@@ -93,13 +93,20 @@ class CookingPanelView(ui.View):
         self.message = message
 
     async def _load_context(self, interaction: discord.Interaction) -> bool:
-        res = await supabase.table('user_settings').select('user_id').eq('kitchen_thread_id', interaction.channel.id).maybe_single().execute()
+        res = await supabase.table('user_settings').select('user_id, kitchen_panel_message_id').eq('kitchen_thread_id', interaction.channel.id).maybe_single().execute()
+        
         if not (res and res.data):
             if not interaction.response.is_done(): await interaction.response.defer()
             await interaction.followup.send("이 부엌 정보를 찾을 수 없습니다.", ephemeral=True, delete_after=5)
             return False
         
         owner_id = int(res.data['user_id'])
+        message_id = res.data.get('kitchen_panel_message_id')
+
+        # ▼▼▼ [핵심 수정] DB에서 마지막으로 선택한 솥 번호를 불러옵니다. ▼▼▼
+        state_data = get_config(f"kitchen_state_{owner_id}")
+        self.selected_cauldron_slot = state_data.get("selected_slot") if isinstance(state_data, dict) else None
+        # ▲▲▲ [핵심 수정] ▲▲▲
         try:
             guild = self.cog.bot.get_guild(interaction.guild_id)
             self.user = await guild.fetch_member(owner_id)
@@ -107,7 +114,21 @@ class CookingPanelView(ui.View):
             if not interaction.response.is_done(): await interaction.response.defer()
             await interaction.followup.send("부엌 주인을 찾을 수 없습니다.", ephemeral=True, delete_after=5)
             return False
+            
+        if message_id:
+            try:
+                self.message = await interaction.channel.fetch_message(int(message_id))
+            except (discord.NotFound, discord.Forbidden):
+                logger.warning(f"부엌 패널 메시지(ID: {message_id})를 찾을 수 없습니다. UI 새로고침 시 새로 생성됩니다.")
+                self.message = None
+        else:
+             self.message = None
 
+        cauldron_res = await supabase.table('cauldrons').select('*').eq('user_id', str(owner_id)).order('slot_number').execute()
+        self.cauldrons = cauldron_res.data if cauldron_res.data else []
+        
+        return True
+        
         cauldron_res = await supabase.table('cauldrons').select('*').eq('user_id', str(owner_id)).order('slot_number').execute()
         self.cauldrons = cauldron_res.data if cauldron_res.data else []
         self.message = interaction.message
