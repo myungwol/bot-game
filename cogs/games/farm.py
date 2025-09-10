@@ -193,6 +193,7 @@ class FarmActionView(ui.View):
         
         await interaction.delete_original_response()
 
+    # ▼▼▼ [핵심 수정] 밭 정리 UI 생성 로직 변경 ▼▼▼
     async def _build_uproot_select(self):
         plots = [p for p in self.farm_data['farm_plots'] if p['state'] in ['planted', 'withered']]
         if not plots: 
@@ -204,26 +205,45 @@ class FarmActionView(ui.View):
             label = f"{'🥀' if plot['state'] == 'withered' else ''}{name} ({plot['pos_y']+1}행 {plot['pos_x']+1}열)"
             options.append(discord.SelectOption(label=label, value=str(plot['id'])))
         
-        select = ui.Select(placeholder="제거할 작물/나무 선택...", options=options[:25], custom_id="uproot_select")
+        # min_values와 max_values를 추가하여 다중 선택이 가능하도록 변경합니다.
+        max_selectable = min(len(options), 25)
+        select = ui.Select(
+            placeholder="제거할 작물을 여러 개 선택하세요...", 
+            options=options[:max_selectable], 
+            custom_id="uproot_select",
+            min_values=1,
+            max_values=max_selectable
+        )
         select.callback = self.on_uproot_select
         self.add_item(select)
 
+    # ▼▼▼ [핵심 수정] 밭 정리 콜백 함수 로직 변경 ▼▼▼
     async def on_uproot_select(self, interaction: discord.Interaction):
-        plot_id = int(interaction.data['values'][0])
+        # 여러 개의 plot ID를 리스트로 받습니다.
+        plot_ids_to_uproot = [int(val) for val in interaction.data['values']]
+        count = len(plot_ids_to_uproot)
+        
         view = ConfirmationView(self.user)
-        await interaction.response.send_message("정말로 이 작물을 제거하시겠습니까?\n이 작업은 되돌릴 수 없습니다.", view=view, ephemeral=True)
+        await interaction.response.send_message(
+            f"정말로 **{count}개**의 작물을 제거하시겠습니까?\n이 작업은 되돌릴 수 없습니다.", 
+            view=view, 
+            ephemeral=True
+        )
         await view.wait()
+        
         if view.value:
-            await clear_plots_db([plot_id])
+            # 선택된 모든 plot ID를 DB 함수에 전달합니다.
+            await clear_plots_db(plot_ids_to_uproot)
             
             updated_farm_data = await get_farm_data(self.farm_owner_id)
             owner = self.cog.bot.get_user(self.farm_owner_id)
             if updated_farm_data and owner:
                 await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
-            await interaction.edit_original_response(content="✅ 작물을 제거했습니다.", view=None)
+            await interaction.edit_original_response(content=f"✅ {count}개의 작물을 제거했습니다.", view=None)
         else:
             await interaction.edit_original_response(content="취소되었습니다.", view=None)
+
     async def cancel_action(self, interaction: discord.Interaction):
         await interaction.response.defer(); await interaction.delete_original_response()
     async def refresh_view(self, interaction: discord.Interaction):
@@ -703,21 +723,15 @@ class Farm(commands.Cog):
                                     emoji = info.get('item_emoji', '❓')
                                 else:
                                     if item_type == 'sapling':
-                                        # ▼▼▼ [핵심 수정] 나무 이모티콘 표시 로직 ▼▼▼
-                                        # 심은 시간을 기준으로 나무가 첫 성장인지, 재성장인지 판단합니다.
                                         planted_at_dt = datetime.fromisoformat(plot['planted_at'].replace('Z', '+00:00'))
                                         time_since_planted = datetime.now(timezone.utc) - planted_at_dt
                                         initial_growth_time = timedelta(hours=info.get('growth_time_hours', 999))
                                         
                                         if time_since_planted > initial_growth_time:
-                                            # 심은 지 총 성장 시간보다 오래 지났다면, 재성장 중인 나무로 판단합니다.
                                             emoji = '🌳'
                                         else:
-                                            # 그렇지 않다면, 첫 성장 주기로 판단하고 단계별 이모티콘을 사용합니다.
                                             emoji = CROP_EMOJI_MAP.get('sapling', {}).get(stage, '🪴')
-                                        # ▲▲▲ [핵심 수정] 로직 종료 ▲▲▲
                                     else:
-                                        # 나무가 아닌 작물은 기존 로직을 따릅니다.
                                         emoji = CROP_EMOJI_MAP.get('seed', {}).get(stage, '🌱')
                                 
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
