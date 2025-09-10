@@ -251,8 +251,7 @@ class FarmUIView(ui.View):
             self.add_item(item)
     
     async def dispatch_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        
+        # defer()를 여기서 일괄 처리하지 않고, 각 콜백이 직접 처리하도록 변경합니다.
         method_name = f"on_{interaction.data['custom_id']}_click"
         if hasattr(self, method_name):
             await getattr(self, method_name)(interaction)
@@ -260,19 +259,25 @@ class FarmUIView(ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         self.farm_owner_id = await get_farm_owner_by_thread(interaction.channel.id)
         if not self.farm_owner_id: 
-            await interaction.followup.send("❌ 이 농장의 정보를 찾을 수 없습니다.", ephemeral=True)
+            # defer가 없으므로, 응답이 필요한 경우 send_message를 사용합니다.
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ 이 농장의 정보를 찾을 수 없습니다.", ephemeral=True, delete_after=5)
+            else:
+                await interaction.followup.send("❌ 이 농장의 정보를 찾을 수 없습니다.", ephemeral=True, delete_after=5)
             return False
         
         if interaction.user.id == self.farm_owner_id: 
             return True
         
         if interaction.data['custom_id'] in ["farm_invite", "farm_share", "farm_rename"]: 
-            await interaction.followup.send("❌ 이 작업은 농장 소유자만 할 수 있습니다.", ephemeral=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ 이 작업은 농장 소유자만 할 수 있습니다.", ephemeral=True, delete_after=5)
+            else:
+                await interaction.followup.send("❌ 이 작업은 농장 소유자만 할 수 있습니다.", ephemeral=True, delete_after=5)
             return False
         
         farm_data = await get_farm_data(self.farm_owner_id)
-        if not farm_data:
-            return False
+        if not farm_data: return False
 
         action_map = { "farm_till": "till", "farm_plant": "plant", "farm_water": "water", "farm_harvest": "harvest", "farm_uproot": "plant", "farm_regenerate": "till" }
         action = action_map.get(interaction.data['custom_id'])
@@ -280,61 +285,57 @@ class FarmUIView(ui.View):
         if not action: return False 
             
         has_perm = await check_farm_permission(farm_data['id'], interaction.user.id, action)
-        if not has_perm: await interaction.followup.send("❌ 이 작업을 수행할 권한이 없습니다.", ephemeral=True)
+        if not has_perm: 
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ 이 작업을 수행할 권한이 없습니다.", ephemeral=True, delete_after=5)
+            else:
+                await interaction.followup.send("❌ 이 작업을 수행할 권한이 없습니다.", ephemeral=True, delete_after=5)
         return has_perm
         
     async def on_error(self, i: discord.Interaction, e: Exception, item: ui.Item) -> None:
         logger.error(f"FarmUIView 오류 (item: {item.custom_id}): {e}", exc_info=True)
         msg = "❌ 처리 중 예기치 않은 오류가 발생했습니다."
-        if i.response.is_done():
-            await i.followup.send(msg, ephemeral=True)
+        if not i.response.is_done():
+            await i.response.send_message(msg, ephemeral=True, delete_after=5)
         else:
-            await i.response.send_message(msg, ephemeral=True)
+            await i.followup.send(msg, ephemeral=True, delete_after=5)
         
     async def on_farm_regenerate_click(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            if interaction.message:
-                await interaction.message.delete()
+            if interaction.message: await interaction.message.delete()
         except (discord.NotFound, discord.Forbidden) as e:
-            logger.warning(f"재설치 시 이전 패널(ID: {interaction.message.id if interaction.message else 'N/A'}) 삭제 실패: {e}")
-
+            logger.warning(f"재설치 시 이전 패널 삭제 실패: {e}")
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
             updated_farm_data['farm_message_id'] = None
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
-
         await interaction.delete_original_response()
 
     async def on_farm_till_click(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
         gear = await get_user_gear(interaction.user)
         hoe = gear.get('hoe', BARE_HANDS)
         if hoe == BARE_HANDS:
             await interaction.followup.send("❌ 먼저 상점에서 '괭이'를 구매하고 프로필 화면에서 장착해주세요.", ephemeral=True, delete_after=10)
             return
-            
         power = get_item_database().get(hoe, {}).get('power', 1)
-        
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
-
         tilled, plots_to_update_db = 0, []
         for plot in farm_data['farm_plots']:
             if plot['state'] == 'default' and tilled < power:
                 plots_to_update_db.append(plot['id'])
                 tilled += 1
-        
         if not tilled:
             await interaction.followup.send("ℹ️ 더 이상 갈 수 있는 밭이 없습니다.", ephemeral=True, delete_after=5)
             return
-
         await supabase.table('farm_plots').update({'state': 'tilled'}).in_('id', plots_to_update_db).execute()
-        
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
-
         await interaction.delete_original_response()
     
     async def on_farm_plant_click(self, i: discord.Interaction): 
@@ -344,47 +345,37 @@ class FarmUIView(ui.View):
         await view.send_initial_message(i)
         
     async def on_farm_water_click(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
         gear = await get_user_gear(interaction.user)
         can = gear.get('watering_can', BARE_HANDS)
         if can == BARE_HANDS:
             await interaction.followup.send("❌ 먼저 상점에서 '물뿌리개'를 구매하고 프로필 화면에서 장착해주세요.", ephemeral=True, delete_after=10)
             return
-
         power = get_item_database().get(can, {}).get('power', 1)
         today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
-        
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
-
         plots_to_update_db = set()
         watered_count = 0
-
         for p in sorted(farm_data['farm_plots'], key=lambda x: (x['pos_y'], x['pos_x'])):
-            if watered_count >= power:
-                break
-            
+            if watered_count >= power: break
             last_watered_dt = datetime.fromisoformat(p['last_watered_at']) if p.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
-            
             if p['state'] == 'planted' and last_watered_dt.astimezone(KST) < today_jst_midnight:
                 plots_to_update_db.add(p['id'])
                 watered_count += 1
-        
         if not plots_to_update_db:
             await interaction.followup.send("ℹ️ 물을 줄 필요가 있는 작물이 없습니다.", ephemeral=True, delete_after=5)
             return
-            
         now_iso = datetime.now(timezone.utc).isoformat()
         tasks = [
             supabase.table('farm_plots').update({'last_watered_at': now_iso}).in_('id', list(plots_to_update_db)).execute(),
             supabase.rpc('increment_water_count', {'plot_ids': list(plots_to_update_db)}).execute()
         ]
         await asyncio.gather(*tasks)
-
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data, message=interaction.message)
-            
         await interaction.delete_original_response()
         
     async def on_farm_uproot_click(self, i: discord.Interaction): 
@@ -394,26 +385,22 @@ class FarmUIView(ui.View):
         await view.send_initial_message(i)
         
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
-
         harvested, plots_to_reset, trees_to_update = {}, [], {}
         info_map = await preload_farmable_info(farm_data)
-        
         owner_abilities = await get_user_abilities(self.farm_owner_id)
         yield_bonus = 0.5 if 'farm_yield_up_2' in owner_abilities else 0.0
-        
         for p in farm_data['farm_plots']:
             info = info_map.get(p['planted_item_name'])
             if not info: continue
-
             if p['state'] == 'planted' and p['growth_stage'] >= info.get('max_growth_stage', 3):
                 quality = p['quality']
                 yield_mult = 1.0 + (quality / 100.0) + yield_bonus
                 final_yield = max(1, round(info.get('base_yield', 1) * yield_mult))
                 harvest_name = info['harvest_item_name']
                 harvested[harvest_name] = harvested.get(harvest_name, 0) + final_yield
-                
                 if info.get('is_tree') is True:
                     max_stage = info.get('max_growth_stage', 3)
                     regrowth = info.get('regrowth_days', 1)
@@ -421,47 +408,35 @@ class FarmUIView(ui.View):
                     trees_to_update[p['id']] = new_growth_stage
                 else: 
                     plots_to_reset.append(p['id'])
-        
         if not harvested:
-            await interaction.followup.send("ℹ️ 수확할 수 있는 작물이 없습니다.", ephemeral=True); return
-
+            await interaction.followup.send("ℹ️ 수확할 수 있는 작물이 없습니다.", ephemeral=True, delete_after=5)
+            return
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if not owner: return
-
         total_harvested_amount = sum(harvested.values())
         xp_per_crop = get_config("GAME_CONFIG", {}).get("XP_FROM_FARMING", 15)
         total_xp = total_harvested_amount * xp_per_crop
-        
         if total_harvested_amount > 0:
             await log_activity(owner.id, 'farm_harvest', amount=total_harvested_amount, xp_earned=total_xp)
-
         db_tasks = []
         for name, quantity in harvested.items():
             db_tasks.append(update_inventory(str(owner.id), name, quantity))
-        
-        if plots_to_reset:
-            db_tasks.append(clear_plots_db(plots_to_reset))
+        if plots_to_reset: db_tasks.append(clear_plots_db(plots_to_reset))
         if trees_to_update:
             now_iso = datetime.now(timezone.utc).isoformat()
             for pid, new_stage in trees_to_update.items():
                 db_tasks.append(update_plot(pid, {'growth_stage': new_stage, 'planted_at': now_iso, 'last_watered_at': now_iso, 'quality': 5}))
-
         if total_xp > 0:
             db_tasks.append(supabase.rpc('add_xp', {'p_user_id': str(owner.id), 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute())
-        
         results = await asyncio.gather(*db_tasks, return_exceptions=True)
-        
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         if updated_farm_data:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
-        
         followup_message = f"🎉 **{', '.join([f'{n} {q}개' for n, q in harvested.items()])}**을(를) 수확했습니다!"
         if yield_bonus > 0.0:
             followup_message += "\n✨ **대농**의 능력으로 수확량이 대폭 증가했습니다!"
-        
         msg = await interaction.followup.send(followup_message, ephemeral=True)
         self.cog.bot.loop.create_task(delete_after(msg, 10))
-
         for res in results:
             if isinstance(res, dict) and 'data' in res and res.data and isinstance(res.data, list) and res.data[0].get('leveled_up'):
                 if (level_cog := self.cog.bot.get_cog("LevelSystem")):
@@ -469,32 +444,24 @@ class FarmUIView(ui.View):
                 break
     
     async def on_farm_invite_click(self, i: discord.Interaction):
-        view = ui.View(timeout=180)
-        select = ui.UserSelect(placeholder="농장에 초대할 유저를 선택하세요...")
-        async def cb(si: discord.Interaction):
-            await si.response.defer(ephemeral=True)
-            for user in select.values:
-                try: await i.channel.add_user(user)
-                except: pass
-            await i.edit_original_response(content=None, view=None)
-        select.callback = cb
-        view.add_item(select)
-        await i.followup.send("누구를 농장에 초대하시겠습니까?", view=view, ephemeral=True)
+        await i.response.send_message("누구를 농장에 초대하시겠습니까?", view=ui.View(timeout=180).add_item(ui.UserSelect(placeholder="농장에 초대할 유저를 선택...", callback=lambda si: self.invite_callback(si, i))), ephemeral=True)
+    async def invite_callback(self, si: discord.Interaction, original_i: discord.Interaction):
+        await si.response.defer(ephemeral=True)
+        for user in si.data['values']:
+            try: await original_i.channel.add_user(self.cog.bot.get_user(int(user)))
+            except: pass
+        await original_i.edit_original_response(content="초대가 완료되었습니다.", view=None)
 
     async def on_farm_share_click(self, i: discord.Interaction):
-        view = ui.View(timeout=180)
-        select = ui.UserSelect(placeholder="권한을 부여할 유저를 선택하세요...")
-        async def cb(si: discord.Interaction):
-            await si.response.defer(ephemeral=True)
-            farm_data = await get_farm_data(self.farm_owner_id)
-            if not farm_data: return
-
-            for user in select.values:
-                await grant_farm_permission(farm_data['id'], user.id)
-            await i.edit_original_response(content=f"{', '.join(u.display_name for u in select.values)}님에게 권한을 부여했습니다.", view=None)
-        select.callback = cb
-        view.add_item(select)
-        await i.followup.send("누구에게 농장 권한을 주시겠습니까?", view=view, ephemeral=True)
+        await i.response.send_message("누구에게 농장 권한을 주시겠습니까?", view=ui.View(timeout=180).add_item(ui.UserSelect(placeholder="권한을 부여할 유저를 선택...", callback=lambda si: self.share_callback(si, i))), ephemeral=True)
+    async def share_callback(self, si: discord.Interaction, original_i: discord.Interaction):
+        await si.response.defer(ephemeral=True)
+        farm_data = await get_farm_data(self.farm_owner_id)
+        if not farm_data: return
+        users_to_grant = [self.cog.bot.get_user(int(uid)) for uid in si.data['values']]
+        for user in users_to_grant:
+            if user: await grant_farm_permission(farm_data['id'], user.id)
+        await original_i.edit_original_response(content=f"{', '.join(u.display_name for u in users_to_grant if u)}님에게 권한을 부여했습니다.", view=None)
 
     async def on_farm_rename_click(self, i: discord.Interaction): 
         farm_data = await get_farm_data(self.farm_owner_id)
