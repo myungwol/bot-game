@@ -98,6 +98,8 @@ class CookingPanelView(ui.View):
         self.cauldrons: List[Dict] = []
         self.selected_cauldron_slot: Optional[int] = None
         self.message = message
+        # ▼▼▼ [핵심 추가] 사용자가 드롭다운에서 선택한 요리 ID들을 저장할 리스트 ▼▼▼
+        self.selected_dishes_to_claim: List[str] = []
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if not await self._load_context(interaction):
@@ -110,7 +112,7 @@ class CookingPanelView(ui.View):
         return True
 
     async def _load_context(self, interaction: discord.Interaction) -> bool:
-        res = await supabase.table('user_settings').select('user_id, kitchen_panel_message_id').eq('kitchen_thread_id', interaction.channel.id).maybe_single().execute()
+        res = await supabase.table('user_settings').select('user_id, kitchen_panel_message_id, kitchen_selected_slot').eq('kitchen_thread_id', interaction.channel.id).maybe_single().execute()
         
         if not (res and res.data):
             if not interaction.response.is_done(): await interaction.response.defer()
@@ -119,6 +121,8 @@ class CookingPanelView(ui.View):
         
         owner_id = int(res.data['user_id'])
         message_id = res.data.get('kitchen_panel_message_id')
+        # ▼▼▼ [핵심 추가] DB에서 마지막으로 선택한 가마솥 슬롯 번호를 불러옵니다. ▼▼▼
+        self.selected_cauldron_slot = res.data.get('kitchen_selected_slot')
 
         try:
             guild = self.cog.bot.get_guild(interaction.guild_id)
@@ -156,6 +160,7 @@ class CookingPanelView(ui.View):
         cauldron_res = await supabase.table('cauldrons').select('*').eq('user_id', str(self.user.id)).order('slot_number').execute()
         self.cauldrons = cauldron_res.data if cauldron_res.data else []
         
+        # ▼▼▼ [핵심 수정] build_components를 먼저 호출하여 View의 상태를 업데이트합니다. ▼▼▼
         await self.build_components()
         embed = await self.build_embed()
         
@@ -168,7 +173,7 @@ class CookingPanelView(ui.View):
                 if channel:
                     self.message = await channel.send(content=None, embed=embed, view=self)
                     await supabase.table('user_settings').update({'kitchen_panel_message_id': self.message.id}).eq('user_id', str(self.user.id)).execute()
-        except (discord.NotFound, AttributeError, discord.HTTPException) as e:
+        except (discord.NotFound, AttributeError, discord.HTTPException):
             channel = interaction.channel if interaction else (self.message.channel if self.message else None)
             if channel:
                 try:
@@ -266,6 +271,8 @@ class CookingPanelView(ui.View):
         self.clear_items()
         inventory = await get_inventory(self.user)
         total_cauldrons = inventory.get("가마솥", 0)
+        
+        # --- 1. 가마솥 관리 드롭다운 ---
         cauldron_options = []
         for i in range(1, min(total_cauldrons, MAX_CAULDRONS) + 1):
             is_installed = any(c['slot_number'] == i for c in self.cauldrons)
@@ -275,21 +282,53 @@ class CookingPanelView(ui.View):
             cauldron_options.append(option)
         
         if cauldron_options:
-            cauldron_select = ui.Select(placeholder="관리할 가마솥을 선택하세요...", options=cauldron_options, custom_id="cooking_panel:select_cauldron")
+            cauldron_select = ui.Select(placeholder="관리할 가마솥을 선택하세요...", options=cauldron_options, custom_id="cooking_panel:select_cauldron", row=0)
             cauldron_select.callback = self.on_cauldron_select
             self.add_item(cauldron_select)
 
-        cauldron = self.get_selected_cauldron()
-        if cauldron:
-            state = cauldron['state']
+        # --- 2. 선택된 가마솥에 대한 작업 버튼 ---
+        selected_cauldron = self.get_selected_cauldron()
+        if selected_cauldron:
+            state = selected_cauldron['state']
             if state in ['idle', 'adding_ingredients']:
                 self.add_item(ui.Button(label="재료 넣기", emoji="🥕", custom_id="cooking_panel:add_ingredient", row=1))
-                self.add_item(ui.Button(label="재료 비우기", emoji="🗑️", custom_id="cooking_panel:clear_ingredients", row=1, disabled=not cauldron.get('current_ingredients')))
-                self.add_item(ui.Button(label="요리 시작!", style=discord.ButtonStyle.success, emoji="🔥", custom_id="cooking_panel:start_cooking", row=2, disabled=not cauldron.get('current_ingredients')))
-            elif state == 'ready':
-                self.add_item(ui.Button(label="요리 받기", style=discord.ButtonStyle.primary, emoji="🎁", custom_id="cooking_panel:claim_dish", row=1))
+                self.add_item(ui.Button(label="재료 비우기", emoji="🗑️", custom_id="cooking_panel:clear_ingredients", row=1, disabled=not selected_cauldron.get('current_ingredients')))
+                self.add_item(ui.Button(label="요리 시작!", style=discord.ButtonStyle.success, emoji="🔥", custom_id="cooking_panel:start_cooking", row=2, disabled=not selected_cauldron.get('current_ingredients')))
+
+        # ▼▼▼ [핵심 수정] 3. 완성된 요리 일괄 수령 UI 추가 ▼▼▼
+        ready_cauldrons = [c for c in self.cauldrons if c['state'] == 'ready']
+        if ready_cauldrons:
+            options = [
+                discord.SelectOption(
+                    label=f"솥 #{c['slot_number']}: {c['result_item_name']}",
+                    value=str(c['id']), # 가마솥의 고유 ID를 값으로 사용
+                    emoji="🍲"
+                ) for c in ready_cauldrons
+            ]
+            
+            dish_select = ui.Select(
+                placeholder="받을 요리를 모두 선택하세요...",
+                options=options,
+                custom_id="cooking_panel:select_dishes_to_claim",
+                max_values=len(options), # 여러 개 선택 가능하도록 설정
+                row=3
+            )
+            dish_select.callback = self.on_dish_select
+            self.add_item(dish_select)
+            
+            claim_button = ui.Button(
+                label="선택한 요리 모두 받기",
+                style=discord.ButtonStyle.success,
+                emoji="🎁",
+                custom_id="cooking_panel:claim_selected",
+                disabled=not self.selected_dishes_to_claim, # 선택된 것이 없으면 비활성화
+                row=4
+            )
+            claim_button.callback = self.dispatch_button_callback
+            self.add_item(claim_button)
         
         for child in self.children:
+            # 버튼 콜백만 dispatch로 연결 (select는 자체 콜백 사용)
             if isinstance(child, ui.Button):
                 child.callback = self.dispatch_button_callback
     
@@ -301,7 +340,7 @@ class CookingPanelView(ui.View):
             "add_ingredient": self.add_ingredient_prompt,
             "clear_ingredients": self.clear_ingredients,
             "start_cooking": self.start_cooking,
-            "claim_dish": self.claim_dish,
+            "claim_selected": self.claim_selected_dishes, # 이전 claim_dish를 대체
         }
         if method := method_map.get(action):
             await method(interaction)
@@ -314,9 +353,17 @@ class CookingPanelView(ui.View):
         if not is_installed:
             await supabase.table('cauldrons').insert({'user_id': str(self.user.id), 'slot_number': slot, 'state': 'idle'}).execute()
         
+        # ▼▼▼ [핵심 수정] 선택한 슬롯을 DB에 저장합니다. ▼▼▼
+        await supabase.table('user_settings').update({'kitchen_selected_slot': slot}).eq('user_id', str(self.user.id)).execute()
         self.selected_cauldron_slot = slot
         await self.refresh(interaction)
-    
+
+    # ▼▼▼ [핵심 추가] 완성된 요리 드롭다운 선택 콜백 함수 ▼▼▼
+    async def on_dish_select(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        self.selected_dishes_to_claim = interaction.data.get('values', [])
+        await self.refresh(interaction)
+
     async def add_ingredient_prompt(self, interaction: discord.Interaction):
         cauldron = self.get_selected_cauldron()
         if not cauldron or cauldron['state'] not in ['idle', 'adding_ingredients']:
@@ -394,45 +441,73 @@ class CookingPanelView(ui.View):
 
         await self.refresh(interaction)
     
-    async def claim_dish(self, interaction: discord.Interaction):
+    # ▼▼▼ [핵심 수정] 새로운 일괄 수령 함수 ▼▼▼
+    async def claim_selected_dishes(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        cauldron = self.get_selected_cauldron()
-        result_item_base_name = cauldron['result_item_name']
+
+        if not self.selected_dishes_to_claim:
+            msg = await interaction.followup.send("❌ 받을 요리를 먼저 선택해주세요.", ephemeral=True)
+            await delete_after(msg, 5)
+            return
+
+        cauldron_ids_to_process = [int(cid) for cid in self.selected_dishes_to_claim]
+        
+        total_claimed_items: Dict[str, int] = defaultdict(int)
+        ability_messages = []
+        db_tasks = []
         
         user_abilities = await get_user_abilities(self.user.id)
-        quantity_to_claim = 1
-        double_yield_activated = False
-        quality_up_activated = False
 
-        final_result_item = result_item_base_name
-        if 'cook_quality_up_2' in user_abilities and random.random() < 0.10:
-            if result_item_base_name != FAILED_DISH_NAME:
+        for cauldron_id in cauldron_ids_to_process:
+            cauldron = next((c for c in self.cauldrons if c['id'] == cauldron_id), None)
+            if not cauldron: continue
+
+            result_item_base_name = cauldron['result_item_name']
+            
+            quantity_to_claim = 1
+            final_result_item = result_item_base_name
+
+            if 'cook_quality_up_2' in user_abilities and random.random() < 0.10 and result_item_base_name != FAILED_DISH_NAME:
                 final_result_item = f"[특상품] {result_item_base_name}"
-                quality_up_activated = True
+                if "장인의 솜씨" not in ability_messages:
+                    ability_messages.append("✨ **장인의 솜씨** 능력 발동! '특상품' 요리를 만들었습니다!")
+            
+            if 'cook_double_yield_2' in user_abilities and random.random() < 0.15:
+                quantity_to_claim = 2
+                if "풍성한 식탁" not in ability_messages:
+                    ability_messages.append("✨ **풍성한 식탁** 능력 발동! 요리를 2개 획득했습니다!")
+
+            total_claimed_items[final_result_item] += quantity_to_claim
+            
+            if result_item_base_name != FAILED_DISH_NAME:
+                # 레시피 발견은 비동기 작업이므로 gather에 포함하지 않음
+                await self.cog.check_and_log_recipe_discovery(interaction.user, result_item_base_name, cauldron.get('current_ingredients'))
+
+        # DB 작업을 일괄 처리
+        for item, qty in total_claimed_items.items():
+            db_tasks.append(update_inventory(self.user.id, item, qty))
         
-        if 'cook_double_yield_2' in user_abilities and random.random() < 0.15:
-            quantity_to_claim = 2
-            double_yield_activated = True
-
-        await update_inventory(self.user.id, final_result_item, quantity_to_claim)
-
-        if result_item_base_name != FAILED_DISH_NAME:
-            await self.cog.check_and_log_recipe_discovery(interaction.user, result_item_base_name, cauldron.get('current_ingredients'))
-
-        await supabase.table('cauldrons').update({
-            'state': 'idle', 'current_ingredients': None, 'cooking_started_at': None,
-            'cooking_completes_at': None, 'result_item_name': None
-        }).eq('id', cauldron['id']).execute()
+        # 가마솥 상태를 일괄 업데이트
+        db_tasks.append(
+            supabase.table('cauldrons').update({
+                'state': 'idle', 'current_ingredients': None, 'cooking_started_at': None,
+                'cooking_completes_at': None, 'result_item_name': None
+            }).in_('id', cauldron_ids_to_process).execute()
+        )
         
-        success_message = f"✅ **{final_result_item}** {quantity_to_claim}개 획득!"
-        if quality_up_activated:
-            success_message += "\n✨ **장인의 솜씨** 능력 발동! '특상품' 요리를 만들었습니다!"
-        if double_yield_activated:
-            success_message += "\n✨ **풍성한 식탁** 능력 발동! 요리를 2개 획득했습니다!"
+        await asyncio.gather(*db_tasks)
+        
+        # 사용자 피드백 메시지 생성
+        claimed_summary = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in total_claimed_items.items()])
+        success_message = f"✅ **총 {len(cauldron_ids_to_process)}개의 요리를 받았습니다!**\n\n**획득 아이템:**\n{claimed_summary}"
+        if ability_messages:
+            success_message += "\n\n" + "\n".join(ability_messages)
             
         msg = await interaction.followup.send(success_message, ephemeral=True)
-        self.cog.bot.loop.create_task(delete_after(msg, 10))
+        self.cog.bot.loop.create_task(delete_after(msg, 15))
 
+        # 선택 목록 초기화 및 UI 새로고침
+        self.selected_dishes_to_claim.clear()
         await self.refresh(interaction)
 
 class CookingCreationPanelView(ui.View):
