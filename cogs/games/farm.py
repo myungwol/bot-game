@@ -554,7 +554,6 @@ class Farm(commands.Cog):
             
             if not (planted_plots_res and planted_plots_res.data):
                 logger.info("[CROP UPDATE] 업데이트할 작물이 없습니다.")
-                # ▼▼▼ [로깅 추가] ▼▼▼
                 logger.info("[CROP UPDATE] 일일 작물 상태 업데이트 작업을 마칩니다.")
                 return
 
@@ -575,34 +574,43 @@ class Farm(commands.Cog):
             
             now_kst = datetime.now(KST)
             today_date_str = now_kst.date().isoformat()
-            today_jst_midnight = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
-            yesterday_jst_midnight = today_jst_midnight - timedelta(days=1)
-            day_before_yesterday_jst_midnight = today_jst_midnight - timedelta(days=2)
 
             growth_ability_activations = defaultdict(lambda: {'count': 0, 'thread_id': None})
+            
+            # ▼▼▼ [핵심] UI 업데이트가 필요한 모든 농장의 주인 ID를 저장할 집합 ▼▼▼
+            farms_to_update_ui = set()
 
             for plot in all_plots:
+                owner_id = plot.get('farms', {}).get('user_id')
+                # 루프 시작 시 먼저 UI 업데이트 대상에 추가
+                if owner_id:
+                    farms_to_update_ui.add(owner_id)
+
                 if plot.get('last_growth_check_at') == today_date_str:
                     continue
 
                 update_payload = plot.copy()
                 del update_payload['farms']
 
-                owner_id = plot.get('farms', {}).get('user_id')
                 item_info = item_info_map.get(plot['planted_item_name'])
                 if not owner_id or not item_info or plot['growth_stage'] >= item_info.get('max_growth_stage', 99):
                     continue
 
                 owner_abilities = owner_abilities_map.get(owner_id, set())
-                last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
-                last_watered_kst_date = last_watered_dt.astimezone(KST).date()
+                
+                # ▼▼▼ [핵심 수정] 타임스탬프를 항상 UTC로 먼저 파싱하고, KST 날짜로 변환합니다. ▼▼▼
+                last_watered_utc = datetime.fromisoformat(plot['last_watered_at'].replace('Z', '+00:00')) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
+                last_watered_kst_date = last_watered_utc.astimezone(KST).date()
                 
                 days_since_watered = (now_kst.date() - last_watered_kst_date).days
+                
+                # ▼▼▼ [로깅 추가] 날짜 계산이 올바른지 확인합니다. ▼▼▼
+                logger.info(f"Plot ID {plot['id']}: 마지막 물 준 날짜(KST) = {last_watered_kst_date}, 오늘 날짜(KST) = {now_kst.date()}, 경과일 = {days_since_watered}")
 
                 should_grow = False
                 should_wither = False
 
-                if is_raining or days_since_watered == 0:
+                if is_raining or days_since_watered <= 0: # 오늘 물을 준 경우 (0 또는 음수)
                     should_grow = True
                 elif 'farm_water_retention_1' in owner_abilities:
                     if days_since_watered == 1:
@@ -634,14 +642,15 @@ class Farm(commands.Cog):
 
             if plots_to_update_db:
                 await supabase.table('farm_plots').upsert(plots_to_update_db).execute()
-                logger.info(f"[CROP UPDATE] DB 업데이트 완료. {len(plots_to_update_db)}개의 밭이 영향을 받았습니다. UI 업데이트를 요청합니다.")
-                
-                affected_farms = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
-                for user_id in affected_farms:
-                    logger.info(f"[CROP UPDATE] 유저 ID {user_id}에 대한 UI 업데이트를 요청합니다.")
-                    await self.request_farm_ui_update(user_id)
+                logger.info(f"[CROP UPDATE] DB 업데이트 완료. {len(plots_to_update_db)}개의 밭이 영향을 받았습니다.")
             else:
                 logger.info("[CROP UPDATE] 상태가 변경된 작물이 없거나, 모두 오늘 이미 업데이트되었습니다.")
+            
+            # ▼▼▼ [핵심 수정] 상태 변경 여부와 관계없이, 확인된 모든 농장에 대해 UI 업데이트를 요청합니다. ▼▼▼
+            if farms_to_update_ui:
+                logger.info(f"[CROP UPDATE] 총 {len(farms_to_update_ui)}개의 농장에 대해 UI 업데이트를 요청합니다.")
+                for user_id in farms_to_update_ui:
+                    await self.request_farm_ui_update(user_id)
 
             for user_id, data in growth_ability_activations.items():
                 if data['count'] > 0 and data['thread_id']:
@@ -655,7 +664,7 @@ class Farm(commands.Cog):
         except Exception as e:
             logger.error(f"일일 작물 업데이트 중 오류: {e}", exc_info=True)
         logger.info("[CROP UPDATE] 일일 작물 상태 업데이트 작업을 마칩니다.")
-            
+        
     @daily_crop_update.before_loop
     async def before_daily_crop_update(self):
         await self.bot.wait_until_ready()
