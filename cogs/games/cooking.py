@@ -26,6 +26,13 @@ FAILED_DISH_NAME = "정체불명의 요리"
 DEFAULT_COOK_TIME_MINUTES = 10
 XP_PER_INGREDIENT = 3
 
+async def delete_after(message: discord.WebhookMessage, delay: int):
+    await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except (discord.NotFound, discord.Forbidden):
+        pass
+
 class IngredientSelectModal(ui.Modal):
     def __init__(self, item_name: str, max_qty: int, parent_view: 'CookingPanelView'):
         super().__init__(title=f"'{item_name}' 수량 입력")
@@ -93,7 +100,6 @@ class CookingPanelView(ui.View):
         self.message = message
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """모든 버튼/메뉴 상호작용 전에 실행되어 컨텍스트를 복구하고 권한을 확인합니다."""
         if not await self._load_context(interaction):
             return False
 
@@ -104,7 +110,6 @@ class CookingPanelView(ui.View):
         return True
 
     async def _load_context(self, interaction: discord.Interaction) -> bool:
-        """상호작용이 발생한 스레드 ID를 기반으로 DB에서 소유자, 메시지, 가마솥 정보를 불러옵니다."""
         res = await supabase.table('user_settings').select('user_id, kitchen_panel_message_id').eq('kitchen_thread_id', interaction.channel.id).maybe_single().execute()
         
         if not (res and res.data):
@@ -141,7 +146,6 @@ class CookingPanelView(ui.View):
         return next((c for c in self.cauldrons if c['slot_number'] == self.selected_cauldron_slot), None)
 
     async def refresh(self, interaction: Optional[discord.Interaction] = None):
-        """UI를 최신 정보로 새로고침합니다."""
         if interaction and not interaction.response.is_done():
             await interaction.response.defer()
 
@@ -182,8 +186,7 @@ class CookingPanelView(ui.View):
         total_cauldrons = inventory.get("가마솥", 0)
         
         installed_cauldrons = len(self.cauldrons)
-        description_parts = [f"**보유한 가마솥:** {installed_cauldrons} / {total_cauldrons} (최대 {MAX_CAULDRONS}개)"]
-        embed.description = "\n\n".join(description_parts)
+        embed.description = f"**보유한 가마솥:** {installed_cauldrons} / {total_cauldrons} (최대 {MAX_CAULDRONS}개)"
         
         if not self.cauldrons:
             embed.add_field(
