@@ -451,8 +451,10 @@ class CookingPanelView(ui.View):
         await interaction.response.defer()
 
         if not self.selected_dishes_to_claim:
+            # ▼▼▼ [핵심 수정] delete_after를 제거하고 헬퍼 함수를 사용하도록 변경합니다. ▼▼▼
             msg = await interaction.followup.send("❌ 받을 요리를 먼저 선택해주세요.", ephemeral=True)
-            await delete_after(msg, 5)
+            self.cog.bot.loop.create_task(delete_after(msg, 5))
+            # ▲▲▲ [핵심 수정] ▲▲▲
             return
 
         cauldron_ids_to_process = [int(cid) for cid in self.selected_dishes_to_claim]
@@ -504,8 +506,10 @@ class CookingPanelView(ui.View):
         if ability_messages:
             success_message += "\n\n" + "\n".join(ability_messages)
             
+        # ▼▼▼ [핵심 수정] delete_after를 제거하고 헬퍼 함수를 사용하도록 변경합니다. ▼▼▼
         msg = await interaction.followup.send(success_message, ephemeral=True)
         self.cog.bot.loop.create_task(delete_after(msg, 15))
+        # ▲▲▲ [핵심 수정] ▲▲▲
 
         self.selected_dishes_to_claim.clear()
         await self.refresh(interaction)
