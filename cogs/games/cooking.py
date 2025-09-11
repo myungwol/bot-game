@@ -185,21 +185,62 @@ class CookingPanelView(ui.View):
         total_cauldrons = inventory.get("가마솥", 0)
         
         installed_cauldrons = len(self.cauldrons)
-        
-        # ▼▼▼ [핵심 수정] 아래 embed.description 부분을 새로운 로직으로 교체합니다. ▼▼▼
-        description_parts = [f"**보유한 가마솥:** {installed_cauldrons} / {total_cauldrons} (최대 {MAX_CAULDRONS}개)"]
+        embed.description = f"**보유한 가마솥:** {installed_cauldrons} / {total_cauldrons} (최대 {MAX_CAULDRONS}개)"
 
-        # --- 능력 표시 로직 시작 ---
+        # --- 모든 가마솥 정보 상시 표시 로직 ---
+        if not self.cauldrons:
+            embed.add_field(
+                name="가마솥 없음",
+                value="상점에서 '가마솥'을 구매한 후, 아래 메뉴에서 설치해주세요.",
+                inline=False
+            )
+        else:
+            # 상태에 따라 가마솥을 정렬 (요리 완료 > 요리 중 > 재료 넣는 중 > 대기)
+            state_order = {'ready': 0, 'cooking': 1, 'adding_ingredients': 2, 'idle': 3}
+            sorted_cauldrons = sorted(self.cauldrons, key=lambda c: state_order.get(c['state'], 4))
+            
+            for cauldron in sorted_cauldrons:
+                slot_number = cauldron['slot_number']
+                state = cauldron['state']
+                
+                state_map = {'idle': '대기 중', 'adding_ingredients': '재료 넣는 중', 'cooking': '요리 중', 'ready': '요리 완료'}
+                state_str = state_map.get(state, '알 수 없음')
+                
+                # 선택된 가마솥을 강조하기 위한 이모지
+                title_emoji = "▶️" if self.selected_cauldron_slot == slot_number else "솥"
+                
+                field_value_parts = [f"**상태:** {state_str}"]
+                
+                ingredients = cauldron.get('current_ingredients') or {}
+                if ingredients:
+                    ing_str = ", ".join([f"{name} {qty}개" for name, qty in ingredients.items()])
+                    field_value_parts.append(f"**재료:** {ing_str}")
+
+                if state == 'cooking':
+                    completes_at = datetime.fromisoformat(cauldron['cooking_completes_at'].replace('Z', '+00:00'))
+                    field_value_parts.append(f"**완료까지:** {discord.utils.format_dt(completes_at, 'R')}")
+                    if result_item := cauldron.get('result_item_name'):
+                        field_value_parts.append(f"**예상 요리:** {result_item}")
+
+                elif state == 'ready':
+                    if result_item := cauldron.get('result_item_name'):
+                        field_value_parts.append(f"**완성된 요리:** {result_item}")
+
+                embed.add_field(
+                    name=f"--- {title_emoji} #{slot_number} ---",
+                    value="\n".join(field_value_parts),
+                    inline=False
+                )
+
+        # --- 능력 표시 로직 (최하단으로 이동) ---
         owner_abilities = await get_user_abilities(self.user.id)
         
-        # 모든 요리 관련 능력 정보를 가져옵니다.
         all_cooking_abilities_map = {}
         job_advancement_data = get_config("JOB_ADVANCEMENT_DATA", {})
         
         if isinstance(job_advancement_data, dict):
             for level_data in job_advancement_data.values():
                 for job in level_data:
-                    # 직업 키에 'chef'가 포함된 경우 (chef, master_chef 등)
                     if 'chef' in job.get('job_key', ''):
                         for ability in job.get('abilities', []):
                             all_cooking_abilities_map[ability['ability_key']] = {
@@ -213,35 +254,16 @@ class CookingPanelView(ui.View):
         for ability_key in owner_abilities:
             if ability_key in all_cooking_abilities_map:
                 ability_info = all_cooking_abilities_map[ability_key]
-                # 키워드에 맞는 이모지를 찾습니다.
                 emoji = next((e for key, e in EMOJI_MAP.items() if key in ability_key), '🍳')
                 active_effects.append(f"> {emoji} **{ability_info['name']}**: {ability_info['description']}")
         
         if active_effects:
-            description_parts.append(f"**--- 요리 패시브 효과 ---**\n" + "\n".join(active_effects))
-        
-        embed.description = "\n\n".join(description_parts)
-        # --- 능력 표시 로직 종료 ---
-        # ▲▲▲ [핵심 수정] ▲▲▲
+            embed.add_field(
+                name="--- 요리 패시브 효과 ---",
+                value="\n".join(active_effects),
+                inline=False
+            )
 
-        cauldron = self.get_selected_cauldron()
-        if cauldron:
-            state_map = {'idle': '대기 중', 'adding_ingredients': '재료 넣는 중', 'cooking': '요리 중', 'ready': '요리 완료'}
-            state_str = state_map.get(cauldron['state'], '알 수 없음')
-            field_value_parts = [f"**상태:** {state_str}"]
-            ingredients = cauldron.get('current_ingredients') or {}
-            if ingredients:
-                ing_str = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in ingredients.items()])
-                field_value_parts.append(f"**넣은 재료:**\n{ing_str}")
-            if cauldron['state'] == 'cooking':
-                completes_at = datetime.fromisoformat(cauldron['cooking_completes_at'].replace('Z', '+00:00'))
-                field_value_parts.append(f"**완료까지:** {discord.utils.format_dt(completes_at, 'R')}")
-                field_value_parts.append(f"**예상 요리:** {cauldron['result_item_name']}")
-            elif cauldron['state'] == 'ready':
-                field_value_parts.append(f"**완성된 요리:** {cauldron['result_item_name']}")
-            embed.add_field(name=f"솥 #{self.selected_cauldron_slot} 정보", value="\n".join(field_value_parts), inline=False)
-        else:
-            embed.add_field(name="안내", value="관리할 가마솥을 아래 메뉴에서 선택하거나, 새로 설치해주세요.", inline=False)
         return embed
 
     async def build_components(self):
