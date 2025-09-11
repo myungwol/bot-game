@@ -468,44 +468,56 @@ class LevelSystem(commands.Cog):
 
     async def update_user_xp_and_level_from_admin(self, user: discord.Member, xp_to_add: int = 0, exact_level: Optional[int] = None) -> bool:
         try:
-            if xp_to_add > 0:
-                await log_activity(user.id, 'admin', xp_earned=xp_to_add)
-
             res = await supabase.table('user_levels').select('level, xp').eq('user_id', user.id).maybe_single().execute()
             
-            # [핵심 수정] res가 None인 경우를 처리하여 AttributeError 방지
             if res and res.data:
                 current_data = res.data
             else:
-                # DB에서 데이터를 가져오지 못했거나 유저가 없는 경우 기본값 사용
                 current_data = {'level': 1, 'xp': 0}
-            
-            new_total_xp = current_data['xp']
+
+            current_xp = current_data.get('xp', 0)
             leveled_up = False
 
             if exact_level is not None:
-                new_level = exact_level
-                new_total_xp = calculate_xp_for_level(new_level)
-                if new_level > current_data['level']: leveled_up = True
-            else:
-                new_total_xp += xp_to_add
-                new_level = current_data['level']
-                # [수정] 레벨 1부터 시작하도록 보장
-                while new_level > 0 and new_total_xp >= calculate_xp_for_level(new_level + 1):
+                new_level = max(1, exact_level) # 레벨은 최소 1
+                
+                # [핵심 수정] 새로운 레벨 설정 로직
+                xp_for_new_level = calculate_xp_for_level(new_level)
+                
+                # 현재 경험치가 목표 레벨의 최소 경험치보다 낮을 때만 경험치를 조정
+                if current_xp < xp_for_new_level:
+                    new_total_xp = xp_for_new_level
+                else:
+                    new_total_xp = current_xp # 경험치 손실 방지
+
+                if new_level > current_data.get('level', 1):
+                    leveled_up = True
+            else: # xp_to_add의 경우
+                new_total_xp = current_xp + xp_to_add
+                new_level = current_data.get('level', 1)
+                
+                # 레벨 1부터 시작하도록 보장
+                while new_level > 0 and calculate_xp_for_level(new_level + 1) <= new_total_xp:
                     new_level += 1
-                if new_level > current_data['level']: leveled_up = True
-            
+                
+                if new_level > current_data.get('level', 1):
+                    leveled_up = True
+
+            # xp_to_add가 0보다 큰 경우에만 로그를 남기도록 수정 (레벨 설정 시에는 불필요)
+            if xp_to_add > 0:
+                await log_activity(user.id, 'admin', xp_earned=xp_to_add)
+
             await supabase.table('user_levels').upsert({'user_id': user.id, 'level': new_level, 'xp': new_total_xp}).execute()
             
             if leveled_up:
                 await self.handle_level_up_event(user, [{"leveled_up": True, "new_level": new_level}])
             
-            logger.info(f"관리자 요청으로 {user.display_name}님의 레벨/XP가 성공적으로 업데이트되었습니다.")
-            return True # 성공 시 True 반환
-        
+            logger.info(f"관리자 요청으로 {user.display_name}님의 레벨/XP가 성공적으로 업데이트되었습니다. (New Level: {new_level}, New XP: {new_total_xp})")
+            return True
+
         except Exception as e:
             logger.error(f"관리자 요청으로 레벨/XP 업데이트 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
-            return False # 실패 시 False 반환
+            return False
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_level_check") -> bool:
         try:
