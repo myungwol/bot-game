@@ -19,7 +19,8 @@ class PanelUpdater(commands.Cog):
     def cog_unload(self):
         self.check_for_panel_updates.cancel()
 
-    @tasks.loop(seconds=10.0)
+    # ▼▼▼ [핵심 수정] API 요청 빈도를 줄이기 위해 루프 주기를 20초로 늘립니다. ▼▼▼
+    @tasks.loop(seconds=20.0)
     async def check_for_panel_updates(self):
         # [✅ 구조 개선] 하드코딩된 목록 대신 DB의 SETUP_COMMAND_MAP을 사용합니다.
         setup_map = get_config("SETUP_COMMAND_MAP", {})
