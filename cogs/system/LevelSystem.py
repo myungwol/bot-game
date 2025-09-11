@@ -291,12 +291,17 @@ class LevelPanelView(ui.View):
 
     @ui.button(label="상태 확인", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
     async def check_level_button(self, interaction: discord.Interaction, button: ui.Button):
-        bucket = self.cog.level_check_cooldown.get_bucket(interaction.message)
+        # ▼▼▼ [핵심 수정] 쿨타임 기준을 interaction.message -> interaction 으로 변경 ▼▼▼
+        # BucketType.user 설정에 따라 상호작용을 한 '유저'를 기준으로 쿨타임이 적용됩니다.
+        bucket = self.cog.level_check_cooldown.get_bucket(interaction)
+        # ▲▲▲ [핵심 수정] 종료 ▲▲▲
+        
         retry_after = bucket.update_rate_limit()
 
         if retry_after:
             available_at = discord.utils.utcnow() + timedelta(seconds=retry_after)
             
+            # 쿨타임 알림은 본인에게만 보이도록 ephemeral=True 유지
             await interaction.response.send_message(
                 f"⏳ 잠시 후 다시 시도해주세요. (사용 가능: {discord.utils.format_dt(available_at, style='R')})",
                 ephemeral=True,
@@ -305,12 +310,15 @@ class LevelPanelView(ui.View):
             return
 
         try:
-            await interaction.response.defer(ephemeral=False)
+            # [원상 복구] ephemeral=False로 설정하여 다른 사람에게도 "생각 중..."이 보이게 합니다.
+            await interaction.response.defer(ephemeral=False, thinking=True)
             
             level_embed = await build_level_embed(interaction.user)
             
+            # [원상 복구] ephemeral=False로 설정하여 결과 메시지가 채널에 공개적으로 보이도록 합니다.
             await interaction.followup.send(embed=level_embed, ephemeral=False)
             
+            # [원상 복구] 패널 재생성 로직을 다시 활성화합니다. (의도된 기능으로 판단)
             panel_info = get_panel_id(self.cog.panel_key.replace("panel_", ""))
             if panel_info and (panel_channel := self.cog.bot.get_channel(panel_info['channel_id'])):
                 await self.cog.regenerate_panel(panel_channel, panel_key=self.cog.panel_key)
@@ -318,7 +326,11 @@ class LevelPanelView(ui.View):
         except Exception as e:
             logger.error(f"개인 레벨 확인 및 패널 재생성 중 오류 발생 (유저: {interaction.user.id}): {e}", exc_info=True)
             error_message = "❌ 상태 정보를 불러오는 중 오류가 발생했습니다."
-            await interaction.followup.send(error_message, ephemeral=True)
+            # 에러 메시지는 본인에게만 보이도록 ephemeral=True 유지
+            if not interaction.response.is_done():
+                await interaction.response.send_message(error_message, ephemeral=True)
+            else:
+                await interaction.followup.send(error_message, ephemeral=True)
 
     @ui.button(label="랭킹 확인", style=discord.ButtonStyle.secondary, emoji="👑", custom_id="show_ranking_button")
     async def show_ranking_button(self, interaction: discord.Interaction, button: ui.Button):
