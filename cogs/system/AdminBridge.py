@@ -18,15 +18,13 @@ class AdminBridge(commands.Cog):
     def cog_unload(self):
         self.check_for_admin_requests.cancel()
 
-    # ▼▼▼ [핵심 수정] API 요청 빈도를 줄이기 위해 루프 주기를 15초로 늘립니다. ▼▼▼
-    @tasks.loop(seconds=15.0)
+    @tasks.loop(seconds=20.0)
     async def check_for_admin_requests(self):
         try:
-            # SERVER_ID가 DB에 설정되어 있는지 확인하고, 없으면 에러 로그를 남기고 대기합니다.
             server_id_str = get_config("SERVER_ID")
             if not server_id_str:
                 logger.error("DB에 'SERVER_ID'가 설정되지 않았습니다. 관리자 봇에서 `/admin set_server_id` 명령어를 실행해주세요.")
-                await asyncio.sleep(60) # 60초 대기 후 다시 시도
+                await asyncio.sleep(60)
                 return
 
             try:
@@ -42,8 +40,8 @@ class AdminBridge(commands.Cog):
                 await asyncio.sleep(60)
                 return
 
-            # XP 및 레벨 업데이트 요청을 확인합니다.
-            response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', 'xp_admin_update_request_%').execute()
+            # XP, 코인 등 관리자 요청을 한 번에 확인
+            response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', '%_admin_update_request_%').execute()
             
             if not response or not response.data:
                 return
@@ -52,27 +50,33 @@ class AdminBridge(commands.Cog):
             keys_to_delete = [req['config_key'] for req in requests_to_process]
             
             level_cog = self.bot.get_cog("LevelSystem")
-            if not level_cog:
-                logger.error("LevelSystem Cog를 찾을 수 없어 관리자 요청을 처리할 수 없습니다.")
-                return
-
+            
             tasks = []
             for req in requests_to_process:
                 try:
-                    user_id = int(req['config_key'].split('_')[-1])
+                    key_parts = req['config_key'].split('_')
+                    req_type = key_parts[0] # 'xp' or 'coin'
+                    user_id = int(key_parts[-1])
+                    
                     user = guild.get_member(user_id)
                     if not user:
                         logger.warning(f"관리자 요청 처리 중 유저(ID: {user_id})를 서버에서 찾을 수 없습니다.")
                         continue
                     
                     payload = req.get('config_value', {})
-                    xp_to_add = payload.get('xp_to_add')
-                    exact_level = payload.get('exact_level')
 
-                    if xp_to_add:
-                        tasks.append(level_cog.update_user_xp_and_level_from_admin(user, xp_to_add=xp_to_add))
-                    elif exact_level:
-                        tasks.append(level_cog.update_user_xp_and_level_from_admin(user, exact_level=exact_level))
+                    if req_type == 'xp' and level_cog:
+                        xp_to_add = payload.get('xp_to_add')
+                        exact_level = payload.get('exact_level')
+                        if xp_to_add:
+                            tasks.append(level_cog.update_user_xp_and_level_from_admin(user, xp_to_add=xp_to_add))
+                        elif exact_level:
+                            tasks.append(level_cog.update_user_xp_and_level_from_admin(user, exact_level=exact_level))
+                    
+                    elif req_type == 'coin':
+                        amount = payload.get('amount')
+                        if amount:
+                            tasks.append(update_wallet(user, amount))
 
                 except (ValueError, IndexError) as e:
                     logger.error(f"잘못된 형식의 관리자 요청 키를 발견했습니다: {req['config_key']} - {e}")
