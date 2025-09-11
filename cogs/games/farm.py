@@ -695,12 +695,17 @@ class Farm(commands.Cog):
                 try:
                     user_id = int(req['config_key'].split('_')[-1])
                     user = self.bot.get_user(user_id)
-                    farm_data = await get_farm_data(user_id)
-                    if user and farm_data and farm_data.get('thread_id'):
-                        if thread := self.bot.get_channel(farm_data['thread_id']):
-                            force_new = req.get('config_value', {}).get('force_new', False)
-                            logger.info(f"[UI UPDATER] 유저 ID {user_id}의 농장 UI 업데이트를 실행합니다. (스레드 ID: {thread.id})")
-                            await self.update_farm_ui(thread, user, farm_data, force_new)
+                    # ▼▼▼ [핵심 수정] 여기서 farm_data를 미리 가져올 필요가 없습니다. ▼▼▼
+                    # farm_data = await get_farm_data(user_id)
+                    if user: # farm_data 확인 로직 제거
+                        # ▼▼▼ [핵심 수정] farm_data를 가져오지 않고, 스레드 채널만 확인합니다. ▼▼▼
+                        res = await supabase.table('farms').select('thread_id').eq('user_id', str(user_id)).maybe_single().execute()
+                        if res and res.data and (thread_id := res.data.get('thread_id')):
+                            if thread := self.bot.get_channel(thread_id):
+                                force_new = req.get('config_value', {}).get('force_new', False)
+                                logger.info(f"[UI UPDATER] 유저 ID {user_id}의 농장 UI 업데이트를 실행합니다. (스레드 ID: {thread.id})")
+                                # update_farm_ui는 이제 user와 thread만 필요로 합니다.
+                                await self.update_farm_ui(thread, user, force_new=force_new)
                 except (ValueError, IndexError):
                     logger.warning(f"잘못된 형식의 농장 UI 업데이트 요청 키 발견: {req.get('config_key')}")
 
@@ -808,8 +813,12 @@ class Farm(commands.Cog):
                 active_effects.append(f"> {emoji} **{ability_info['name']}**: {ability_info['description']}")
         
         if active_effects:
-            description_parts.append(f"**--- 농장 패시브 효과 ---**\n" + "\n".join(active_effects))
-
+            # ▼▼▼ [핵심 수정] 분리선과 제목을 추가합니다. ▼▼▼
+            effects_text = "\n".join(active_effects)
+            description_parts.append(f"**--- 농장 패시브 효과 ---**\n{effects_text}")
+        
+        # ▼▼▼ [핵심 수정] 날씨 정보 위에도 분리선을 추가합니다. ▼▼▼
+        description_parts.append("⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯")
         weather_key = get_config("current_weather", "sunny")
         weather = WEATHER_TYPES.get(weather_key, {"emoji": "❔", "name": "알 수 없음"})
         description_parts.append(f"**오늘의 날씨:** {weather['emoji']} {weather['name']}")
@@ -824,11 +833,14 @@ class Farm(commands.Cog):
         embed.description = "\n\n".join(description_parts)
         return embed
         
-        
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User, farm_data: Dict, force_new: bool = False, message: discord.Message = None):
         lock = self.thread_locks.setdefault(thread.id, asyncio.Lock())
         async with lock:
-            if not (user and farm_data): return
+            # ▼▼▼ [핵심 수정] farm_data를 함수 인자로 받지 않고, 함수 내부에서 직접 최신 데이터를 불러옵니다. ▼▼▼
+            current_farm_data = await get_farm_data(user.id)
+            if not (user and current_farm_data):
+                logger.warning(f"[UI UPDATE FUNC] 사용자({user.id})의 최신 농장 데이터를 가져올 수 없어 UI 업데이트를 중단합니다.")
+                return
 
             logger.info(f"[UI UPDATE FUNC] update_farm_ui 함수 호출됨. 사용자: {user.id}, 스레드: {thread.id}")
 
@@ -836,7 +848,7 @@ class Farm(commands.Cog):
                 message_to_edit = message
                 
                 if not message_to_edit:
-                    message_id = farm_data.get("farm_message_id")
+                    message_id = current_farm_data.get("farm_message_id")
                     if message_id and not force_new:
                         try:
                             message_to_edit = await thread.fetch_message(message_id)
@@ -851,7 +863,8 @@ class Farm(commands.Cog):
                         pass
                     message_to_edit = None
 
-                embed = await self.build_farm_embed(farm_data, user)
+                # 최신 데이터로 임베드를 생성합니다.
+                embed = await self.build_farm_embed(current_farm_data, user)
                 view = FarmUIView(self)
                 
                 if message_to_edit:
@@ -860,11 +873,11 @@ class Farm(commands.Cog):
                 else:
                     if force_new:
                         if embed_data := await get_embed_from_db("farm_thread_welcome"):
-                            await thread.send(embed=format_embed_from_db(embed_data, user_name=farm_data.get('name') or user.display_name))
+                            await thread.send(embed=format_embed_from_db(embed_data, user_name=current_farm_data.get('name') or user.display_name))
                     
                     logger.info(f"[UI UPDATE FUNC] 새로운 패널 메시지를 생성합니다.")
                     new_message = await thread.send(embed=embed, view=view)
-                    await supabase.table('farms').update({'farm_message_id': new_message.id}).eq('id', farm_data['id']).execute()
+                    await supabase.table('farms').update({'farm_message_id': new_message.id}).eq('id', current_farm_data['id']).execute()
                 
             except Exception as e:
                 logger.error(f"농장 UI 업데이트 중 오류: {e}", exc_info=True)
