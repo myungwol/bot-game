@@ -593,9 +593,9 @@ class Farm(commands.Cog):
                 
                 is_watered_today = last_watered_dt.astimezone(KST) >= today_jst_midnight or is_raining
                 
-                # ▼▼▼ [핵심 수정] 아래의 로직 전체를 교체합니다. ▼▼▼
+                # ▼▼▼ [핵심 수정] 아래의 로직 전체를 새로운 DB 상태 기반 로직으로 교체합니다. ▼▼▼
                 if is_watered_today:
-                    # 물을 준 경우, 작물은 성장하고 수분 유지력 플래그는 초기화됩니다.
+                    # 물을 준 경우, 작물은 성장하고 수분 유지력 플래그는 '사용 안 함(False)'으로 초기화됩니다.
                     update_payload['water_retention_used'] = False
                     
                     growth_amount = 1
@@ -611,10 +611,10 @@ class Farm(commands.Cog):
                 else: 
                     # 물을 주지 않은 경우, 수분 유지력 능력을 확인합니다.
                     if 'farm_water_retention_1' in owner_abilities and plot.get('water_retention_used') is not True:
-                        # 능력이 있고, 아직 사용되지 않았다면 능력을 사용하고 작물을 살립니다.
+                        # 능력이 있고, 아직 사용되지 않았다면(False), 능력을 '사용함(True)'으로 바꾸고 작물을 살립니다.
                         update_payload['water_retention_used'] = True
                     else:
-                        # 능력이 없거나 이미 사용했다면 작물은 시듭니다.
+                        # 능력이 없거나 이미 사용했다면(True), 작물은 시듭니다.
                         update_payload['state'] = 'withered'
                 # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
                 
