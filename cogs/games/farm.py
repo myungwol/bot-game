@@ -608,8 +608,10 @@ class Farm(commands.Cog):
                         item_info.get('max_growth_stage', 99)
                     )
                 else: 
-                    if 'farm_water_retention_1' in owner_abilities and not plot.get('water_retention_used', False):
+                    # ▼▼▼ [핵심 수정] 아래 조건문을 is not True 로 변경하여 명확성을 높입니다. ▼▼▼
+                    if 'farm_water_retention_1' in owner_abilities and plot.get('water_retention_used') is not True:
                         update_payload['water_retention_used'] = True
+                    # ▲▲▲ [핵심 수정] ▲▲▲
                     else:
                         update_payload['state'] = 'withered'
                 
