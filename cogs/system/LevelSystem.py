@@ -453,13 +453,19 @@ class LevelSystem(commands.Cog):
             if advancement_level := updates.get("advancement_level"):
                 await handler_cog.start_advancement_process(member, advancement_level)
 
-    async def update_user_xp_and_level_from_admin(self, user: discord.Member, xp_to_add: int = 0, exact_level: Optional[int] = None):
+    async def update_user_xp_and_level_from_admin(self, user: discord.Member, xp_to_add: int = 0, exact_level: Optional[int] = None) -> bool:
         try:
             if xp_to_add > 0:
                 await log_activity(user.id, 'admin', xp_earned=xp_to_add)
 
             res = await supabase.table('user_levels').select('level, xp').eq('user_id', user.id).maybe_single().execute()
-            current_data = res.data if res.data else {'level': 1, 'xp': 0}
+            
+            # [핵심 수정] res가 None인 경우를 처리하여 AttributeError 방지
+            if res and res.data:
+                current_data = res.data
+            else:
+                # DB에서 데이터를 가져오지 못했거나 유저가 없는 경우 기본값 사용
+                current_data = {'level': 1, 'xp': 0}
             
             new_total_xp = current_data['xp']
             leveled_up = False
@@ -471,7 +477,8 @@ class LevelSystem(commands.Cog):
             else:
                 new_total_xp += xp_to_add
                 new_level = current_data['level']
-                while new_total_xp >= calculate_xp_for_level(new_level + 1):
+                # [수정] 레벨 1부터 시작하도록 보장
+                while new_level > 0 and new_total_xp >= calculate_xp_for_level(new_level + 1):
                     new_level += 1
                 if new_level > current_data['level']: leveled_up = True
             
@@ -479,9 +486,13 @@ class LevelSystem(commands.Cog):
             
             if leveled_up:
                 await self.handle_level_up_event(user, [{"leveled_up": True, "new_level": new_level}])
+            
+            logger.info(f"관리자 요청으로 {user.display_name}님의 레벨/XP가 성공적으로 업데이트되었습니다.")
+            return True # 성공 시 True 반환
         
         except Exception as e:
             logger.error(f"관리자 요청으로 레벨/XP 업데이트 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
+            return False # 실패 시 False 반환
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_level_check") -> bool:
         try:
