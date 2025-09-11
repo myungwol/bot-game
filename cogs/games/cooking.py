@@ -426,7 +426,10 @@ class CookingPanelView(ui.View):
                     tasks_to_run.append(update_inventory(self.user.id, name, -qty))
                 if tasks_to_run: await asyncio.gather(*tasks_to_run)
             else:
-                await interaction.followup.send("✨ **알뜰한 손맛** 능력 발동! 재료를 소모하지 않았습니다!", ephemeral=True, delete_after=10)
+                # ▼▼▼ [핵심 수정] delete_after를 제거하고 헬퍼 함수를 사용하도록 변경합니다. ▼▼▼
+                msg = await interaction.followup.send("✨ **알뜰한 손맛** 능력 발동! 재료를 소모하지 않았습니다!", ephemeral=True)
+                self.cog.bot.loop.create_task(delete_after(msg, 10))
+                # ▲▲▲ [핵심 수정] ▲▲▲
 
             await supabase.table('cauldrons').update({
                 'state': 'cooking', 'cooking_started_at': now.isoformat(),
