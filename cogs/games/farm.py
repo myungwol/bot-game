@@ -159,7 +159,6 @@ class FarmActionView(ui.View):
             'last_watered_at': now.isoformat() if is_raining else None,
             'water_count': 1 if is_raining else 0,
             'is_regrowing': False,
-            'water_retention_used': False
         }
         
         user_abilities = await get_user_abilities(self.user.id)
@@ -390,7 +389,8 @@ class FarmUIView(ui.View):
             return
         now_iso = datetime.now(timezone.utc).isoformat()
         tasks = [
-            supabase.table('farm_plots').update({'last_watered_at': now_iso, 'water_retention_used': False}).in_('id', list(plots_to_update_db)).execute(),
+            # ▼▼▼ [핵심 수정] 아래 .update() 에서 'water_retention_used': False 부분을 삭제합니다. ▼▼▼
+            supabase.table('farm_plots').update({'last_watered_at': now_iso}).in_('id', list(plots_to_update_db)).execute(),
             supabase.rpc('increment_water_count', {'plot_ids': list(plots_to_update_db)}).execute()
         ]
         await asyncio.gather(*tasks)
@@ -454,7 +454,8 @@ class FarmUIView(ui.View):
                     'planted_at': now_iso,
                     'last_watered_at': now_iso,
                     'quality': 5,
-                    'water_retention_used': False
+                    # ▼▼▼ [핵심 수정] 아래 라인을 완전히 삭제해주세요. ▼▼▼
+                    # 'water_retention_used': False
                 }))
         if total_xp > 0:
             db_tasks.append(supabase.rpc('add_xp', {'p_user_id': str(owner.id), 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute())
