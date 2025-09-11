@@ -158,7 +158,7 @@ class FarmActionView(ui.View):
             'quality': 5, 
             'last_watered_at': now.isoformat() if is_raining else None,
             'water_count': 1 if is_raining else 0,
-            'is_regrowing': False,
+            'is_regrowing': False
         }
         
         user_abilities = await get_user_abilities(self.user.id)
@@ -389,7 +389,6 @@ class FarmUIView(ui.View):
             return
         now_iso = datetime.now(timezone.utc).isoformat()
         tasks = [
-            # ▼▼▼ [핵심 수정] 아래 .update() 에서 'water_retention_used': False 부분을 삭제합니다. ▼▼▼
             supabase.table('farm_plots').update({'last_watered_at': now_iso}).in_('id', list(plots_to_update_db)).execute(),
             supabase.rpc('increment_water_count', {'plot_ids': list(plots_to_update_db)}).execute()
         ]
@@ -453,9 +452,7 @@ class FarmUIView(ui.View):
                     'is_regrowing': update_data['is_regrowing'],
                     'planted_at': now_iso,
                     'last_watered_at': now_iso,
-                    'quality': 5,
-                    # ▼▼▼ [핵심 수정] 아래 라인을 완전히 삭제해주세요. ▼▼▼
-                    # 'water_retention_used': False
+                    'quality': 5
                 }))
         if total_xp > 0:
             db_tasks.append(supabase.rpc('add_xp', {'p_user_id': str(owner.id), 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute())
@@ -553,7 +550,6 @@ class Farm(commands.Cog):
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
             
-            # last_growth_check_at 열도 함께 가져옵니다.
             planted_plots_res = await supabase.table('farm_plots').select('*, farms!inner(user_id, id, thread_id)').eq('state', 'planted').execute()
             
             if not (planted_plots_res and planted_plots_res.data):
@@ -574,22 +570,11 @@ class Farm(commands.Cog):
             owner_abilities_map = {uid: set(abilities) for uid, abilities in zip(owner_ids, abilities_results)}
 
             plots_to_update_db = []
+            today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
             
-            now_kst = datetime.now(KST)
-            today_jst_midnight = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
-            
-            # ▼▼▼ [핵심] 오늘 날짜 문자열과, 어제, 그저께 자정 시간 기준을 설정합니다. ▼▼▼
-            today_date_str = now_kst.date().isoformat()
-            yesterday_jst_midnight = today_jst_midnight - timedelta(days=1)
-            day_before_yesterday_jst_midnight = today_jst_midnight - timedelta(days=2)
-
             growth_ability_activations = defaultdict(lambda: {'count': 0, 'thread_id': None})
 
             for plot in all_plots:
-                # 오늘 이미 업데이트된 밭은 건너뛰는 로직
-                if plot.get('last_growth_check_at') == today_date_str:
-                    continue
-
                 update_payload = plot.copy()
                 del update_payload['farms']
 
@@ -603,31 +588,10 @@ class Farm(commands.Cog):
 
                 owner_abilities = owner_abilities_map.get(owner_id, set())
                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
-                last_watered_kst = last_watered_dt.astimezone(KST)
                 
-                should_grow = False
-                should_wither = False
-
-                # ▼▼▼ [핵심] 사용자님의 시나리오를 정확히 반영한 최종 로직 ▼▼▼
-                if is_raining or last_watered_kst >= today_jst_midnight:
-                    # Case 1: 오늘 물을 줬거나 비가 옴 -> 성장
-                    should_grow = True
-                elif 'farm_water_retention_1' in owner_abilities:
-                    # Case 2: 능력이 있는 경우
-                    if last_watered_kst >= yesterday_jst_midnight:
-                        # Case 2-1: 어제 물을 줬음 -> 성장 (능력 발동)
-                        should_grow = True
-                    elif last_watered_kst >= day_before_yesterday_jst_midnight:
-                        # Case 2-2: 그저께 물을 줬음 -> 성장 멈춤, 하지만 생존 (아무것도 하지 않음)
-                        pass
-                    else:
-                        # Case 2-3: 3일 이상 물을 안 줌 -> 시듦
-                        should_wither = True
-                else:
-                    # Case 3: 능력이 없고, 오늘 물을 안 줌 -> 시듦
-                    should_wither = True
-
-                if should_grow:
+                is_watered_today = last_watered_dt.astimezone(KST) >= today_jst_midnight or is_raining
+                
+                if is_watered_today:
                     growth_amount = 1
                     if 'farm_growth_speed_up_2' in owner_abilities and not plot.get('is_regrowing', False):
                         growth_amount += 1
@@ -638,12 +602,9 @@ class Farm(commands.Cog):
                         plot['growth_stage'] + growth_amount,
                         item_info.get('max_growth_stage', 99)
                     )
-                elif should_wither:
+                else:
                     update_payload['state'] = 'withered'
-                # ▲▲▲ [핵심] 최종 로직 종료 ▲▲▲
                 
-                # 오늘 날짜를 기록하여 중복 실행 방지
-                update_payload['last_growth_check_at'] = today_date_str
                 plots_to_update_db.append(update_payload)
 
             if plots_to_update_db:
@@ -672,7 +633,7 @@ class Farm(commands.Cog):
     async def before_daily_crop_update(self):
         await self.bot.wait_until_ready()
 
-    @tasks.loop(seconds=5.0)
+    @tasks.loop(seconds=30.0)
     async def farm_ui_updater_task(self):
         response = None
         for attempt in range(3):
@@ -693,7 +654,6 @@ class Farm(commands.Cog):
             
             keys_to_delete = [req['config_key'] for req in response.data]
             
-            # ▼▼▼ [핵심 수정] asyncio.gather를 사용하는 대신, for 루프로 순차 처리하도록 변경합니다. ▼▼▼
             for req in response.data:
                 try:
                     user_id = int(req['config_key'].split('_')[-1])
@@ -702,13 +662,9 @@ class Farm(commands.Cog):
                     if user and farm_data and farm_data.get('thread_id'):
                         if thread := self.bot.get_channel(farm_data['thread_id']):
                             force_new = req.get('config_value', {}).get('force_new', False)
-                            # 하나씩 순차적으로 업데이트를 실행합니다.
                             await self.update_farm_ui(thread, user, farm_data, force_new)
-                            # Rate Limit을 피하기 위해 각 업데이트 사이에 1.5초의 지연을 줍니다.
-                            await asyncio.sleep(1.5)
                 except (ValueError, IndexError):
                     logger.warning(f"잘못된 형식의 농장 UI 업데이트 요청 키 발견: {req.get('config_key')}")
-            # ▲▲▲ [핵심 수정] ▲▲▲
 
             if keys_to_delete:
                 await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
