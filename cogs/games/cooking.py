@@ -111,34 +111,46 @@ class CookingPanelView(ui.View):
         return True
 
     async def _load_context(self, interaction: discord.Interaction) -> bool:
-        res = await supabase.table('user_settings').select('user_id, kitchen_panel_message_id, kitchen_selected_slot').eq('kitchen_thread_id', interaction.channel.id).maybe_single().execute()
+        logger.info(f"[_load_context] 컨텍스트 로딩 시작. 스레드 ID: {interaction.channel.id}")
+        
+        # ▼▼▼ [핵심 수정] 여러 번의 select 대신 새로 만든 DB 함수(RPC)를 호출합니다. ▼▼▼
+        rpc_params = {'p_thread_id': interaction.channel.id}
+        res = await supabase.rpc('get_kitchen_context', rpc_params).maybe_single().execute()
         
         if not (res and res.data):
             if not interaction.response.is_done(): await interaction.response.defer()
             await interaction.followup.send("이 부엌 정보를 찾을 수 없습니다. 채널을 다시 만들어주세요.", ephemeral=True, delete_after=10)
+            logger.error(f"[_load_context] DB에서 스레드 ID({interaction.channel.id})에 해당하는 부엌 정보를 찾지 못했습니다.")
             return False
         
-        owner_id = int(res.data['user_id'])
-        message_id = res.data.get('kitchen_panel_message_id')
-        self.selected_cauldron_slot = res.data.get('kitchen_selected_slot')
+        context = res.data
+        owner_id = int(context['owner_id'])
+        message_id = context.get('panel_message_id')
+        self.selected_cauldron_slot = context.get('selected_slot')
+        self.cauldrons = context.get('cauldrons') or [] # cauldrons가 null일 경우 빈 리스트로 처리
+        
+        logger.info(f"[_load_context] DB 함수 호출 성공: 소유자 ID({owner_id}), 메시지 ID({message_id}), 가마솥 {len(self.cauldrons)}개.")
 
         try:
             guild = self.cog.bot.get_guild(interaction.guild_id)
-            if not guild: return False
+            if not guild:
+                logger.error(f"[_load_context] 길드를 찾을 수 없습니다: {interaction.guild_id}")
+                return False
             self.user = await guild.fetch_member(owner_id)
-        except (discord.NotFound, AttributeError):
+            logger.info(f"[_load_context] 소유자 멤버 객체를 성공적으로 가져왔습니다: {self.user.name}")
+        except (discord.NotFound, AttributeError) as e:
             if not interaction.response.is_done(): await interaction.response.defer()
             await interaction.followup.send("부엌 주인을 찾을 수 없습니다.", ephemeral=True, delete_after=5)
+            logger.error(f"[_load_context] 소유자 멤버 객체를 가져오는 중 오류 발생: {e}")
             return False
 
         if message_id:
             try:
                 self.message = await interaction.channel.fetch_message(int(message_id))
+                logger.info(f"[_load_context] 패널 메시지 객체를 성공적으로 가져왔습니다: {self.message.id}")
             except (discord.NotFound, discord.Forbidden):
+                logger.warning(f"[_load_context] 부엌 패널 메시지(ID: {message_id})를 찾을 수 없어 새로 생성될 수 있습니다.")
                 self.message = None
-        
-        cauldron_res = await supabase.table('cauldrons').select('*').eq('user_id', str(owner_id)).order('slot_number').execute()
-        self.cauldrons = cauldron_res.data if cauldron_res.data else []
         
         return True
 
