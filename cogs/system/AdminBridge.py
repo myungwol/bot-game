@@ -1,4 +1,4 @@
-# bot-game/cogs/systems/AdminBridge.py
+# cogs/system/AdminBridge.py
 
 import discord
 from discord.ext import commands, tasks
@@ -18,7 +18,8 @@ class AdminBridge(commands.Cog):
     def cog_unload(self):
         self.check_for_admin_requests.cancel()
 
-    @tasks.loop(seconds=10.0)
+    # ▼▼▼ [핵심 수정] API 요청 빈도를 줄이기 위해 루프 주기를 15초로 늘립니다. ▼▼▼
+    @tasks.loop(seconds=15.0)
     async def check_for_admin_requests(self):
         try:
             # SERVER_ID가 DB에 설정되어 있는지 확인하고, 없으면 에러 로그를 남기고 대기합니다.
