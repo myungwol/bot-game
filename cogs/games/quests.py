@@ -7,6 +7,7 @@ import logging
 import time
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
+import asyncio
 
 from utils.database import (
     get_all_user_stats, 
