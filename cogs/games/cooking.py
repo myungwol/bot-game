@@ -186,8 +186,10 @@ class CookingPanelView(ui.View):
         total_cauldrons = inventory.get("가마솥", 0)
         
         installed_cauldrons = len(self.cauldrons)
-        embed.description = f"**보유한 가마솥:** {installed_cauldrons} / {total_cauldrons} (최대 {MAX_CAULDRONS}개)"
         
+        # ▼▼▼ [핵심 수정] description 내용을 간단한 안내 문구로 변경합니다. ▼▼▼
+        embed.description = "아래 목록에서 관리할 가마솥을 선택하거나, 버튼을 눌러 작업을 시작하세요."
+
         if not self.cauldrons:
             embed.add_field(
                 name="가마솥 없음",
@@ -261,7 +263,12 @@ class CookingPanelView(ui.View):
                 inline=False
             )
 
+        # ▼▼▼ [핵심 수정] 가마솥 정보를 푸터에 설정합니다. ▼▼▼
+        footer_text = f"보유한 가마솥: {installed_cauldrons} / {total_cauldrons} (최대 {MAX_CAULDRONS}개)"
+        embed.set_footer(text=footer_text)
+
         return embed
+
 
     async def build_components(self):
         self.clear_items()
