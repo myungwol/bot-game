@@ -7,6 +7,7 @@ import logging
 import asyncio
 import math
 from typing import Optional, Dict, List, Any
+import time # [추가] time 모듈 임포트
 
 from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
@@ -101,72 +102,49 @@ class ItemUsageView(ui.View):
         item_type = item_info.get("type")
         
         if item_type == "consume_with_reason":
-            if selected_item_key == "role_item_event_priority":
-                is_active = get_config("event_priority_pass_active", False)
-                if not is_active:
-                    await interaction.response.send_message("❌ 현재 우선 참여권을 사용할 수 있는 이벤트가 없습니다.", ephemeral=True, delete_after=5)
-                    return
+            # ... (기존 로직 그대로)
+            pass # 설명을 위해 생략
 
-                used_users = get_config("event_priority_pass_users", [])
-                if self.user.id in used_users:
-                    await interaction.response.send_message("❌ 이미 이 이벤트에 우선 참여권을 사용했습니다.", ephemeral=True, delete_after=5)
-                    return
-
-            modal = ReasonModal(item_name_from_db)
-            await interaction.response.send_modal(modal)
-            await modal.wait()
-            
-            if not modal.reason: return
-            
+        # ▼▼▼ [핵심 수정] elif 블록 전체를 추가해주세요. ▼▼▼
+        elif item_type == "job_reset":
+            await interaction.response.defer()
             try:
-                await self.log_item_usage(item_info, modal.reason)
+                # 1. DB에서 직업 관련 정보 삭제 (RPC 함수 호출)
+                await supabase.rpc('reset_user_job_and_abilities', {'p_user_id': self.user.id}).execute()
+
+                # 2. 인벤토리에서 아이템 차감
                 await update_inventory(self.user.id, item_name_from_db, -1)
+
+                # 3. 사용 로그 기록
+                await self.log_item_usage(item_info, f"'{item_name_from_db}'을(를) 사용하여 직업을 초기화했습니다.")
+
+                # 4. 유저의 현재 레벨을 확인하여 전직 절차 재시작 요청
+                level_res = await supabase.table('user_levels').select('level').eq('user_id', self.user.id).single().execute()
+                user_level = level_res.data['level'] if level_res.data else 0
                 
-                if selected_item_key == "role_item_event_priority":
-                    used_users.append(self.user.id)
-                    await save_config_to_db("event_priority_pass_users", used_users)
+                if user_level >= 50:
+                    # LevelSystem이 처리하는 방식과 동일하게 DB에 요청을 저장
+                    await save_config_to_db(f"job_advancement_request_{self.user.id}", {"level": user_level, "timestamp": time.time()})
+                    self.parent_view.status_message = f"✅ 직업이 초기화되었습니다. 곧 전직 안내 스레드가 생성됩니다."
+                else:
+                    self.parent_view.status_message = f"✅ 직업이 초기화되었습니다."
 
-                self.parent_view.status_message = get_string("profile_view.item_usage_view.consume_success", item_name=item_name_from_db)
             except Exception as e:
-                logger.error(f"아이템 사용 처리 중 오류 (아이템: {selected_item_key}): {e}", exc_info=True)
-                self.parent_view.status_message = get_string("profile_view.item_usage_view.error_generic")
-
-            return await self.on_back(None, reload_data=True)
+                logger.error(f"직업 초기화 처리 중 오류: {e}", exc_info=True)
+                self.parent_view.status_message = "❌ 직업 초기화 중 오류가 발생했습니다."
+            
+            return await self.on_back(interaction, reload_data=True)
+        # ▲▲▲ [핵심 수정] 종료 ▲▲▲
 
         await interaction.response.defer()
         try:
             if item_type == "deduct_warning":
-                current_warnings_res = await supabase.rpc('get_total_warnings', {'p_user_id': self.user.id, 'p_guild_id': self.user.guild.id}).execute()
-                current_warnings = current_warnings_res.data
-
-                if current_warnings <= 0:
-                    self.parent_view.status_message = "ℹ️ 차감할 벌점이 없습니다. 아이템을 사용할 수 없습니다."
-                    return await self.on_back(interaction, reload_data=False)
-
-                rpc_params = {'p_guild_id': self.user.guild.id, 'p_user_id': self.user.id, 'p_moderator_id': self.user.id, 'p_reason': f"'{item_name_from_db}' 아이템 사용", 'p_amount': -1}
-                response = await supabase.rpc('add_warning_and_get_total', rpc_params).execute()
-                new_total = response.data
-
-                await update_inventory(self.user.id, item_name_from_db, -1)
-                await self.log_item_usage(item_info, f"'{item_name_from_db}'을(를) 사용하여 벌점을 1회 차감했습니다. (현재 벌점: {new_total}회)")
-                await self._update_warning_roles(self.user, new_total)
-                self.parent_view.status_message = f"✅ '{item_name_from_db}'을(를) 사용했습니다. (현재 벌점: {new_total}회)"
+                # ... (기존 로직 그대로)
+                pass # 설명을 위해 생략
             
             elif item_type == "farm_expansion":
-                farm_data = await get_farm_data(self.user.id)
-                if not farm_data:
-                    self.parent_view.status_message = get_string("profile_view.item_usage_view.farm_expand_fail_no_farm")
-                else:
-                    current_plots = len(farm_data.get('farm_plots', []))
-                    if current_plots >= 25:
-                        self.parent_view.status_message = get_string("profile_view.item_usage_view.farm_expand_fail_max")
-                    else:
-                        success = await expand_farm_db(farm_data['id'], current_plots)
-                        if success:
-                            await update_inventory(self.user.id, item_name_from_db, -1)
-                            self.parent_view.status_message = get_string("profile_view.item_usage_view.farm_expand_success", plot_count=current_plots + 1)
-                        else:
-                            raise Exception("DB 농장 확장 실패")
+                # ... (기존 로직 그대로)
+                pass # 설명을 위해 생략
         except Exception as e:
             logger.error(f"아이템 사용 처리 중 오류 (아이템: {selected_item_key}): {e}", exc_info=True)
             self.parent_view.status_message = get_string("profile_view.item_usage_view.error_generic")
