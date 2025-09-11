@@ -138,19 +138,28 @@ class JobAdvancementView(ui.View):
                         await log_channel.send(embed=log_embed)
             
             job_name = selected_job_data['job_name']
-            success_message = f"🎉 **전직 완료!**\n축하합니다! 이제부터 당신은 **{job_name}** 입니다."
+            success_message = f"🎉 **전직 완료!**\n축하합니다! 이제부터 당신은 **{job_name}** 입니다.\n\n이 창은 다음 전직 절차를 위해 곧 사라집니다..."
             await interaction.edit_original_response(content=success_message, view=None)
 
             if handler_cog := self.bot.get_cog("JobAndTierHandler"):
                 await asyncio.sleep(2)
                 await handler_cog.trigger_advancement_check(user)
+            
+            # [삭제] 연쇄 전직 로직이 스레드를 관리하므로, 여기서는 삭제하지 않습니다.
+            # await asyncio.sleep(15)
+            # if isinstance(interaction.channel, discord.Thread): await interaction.channel.delete()
 
-            await asyncio.sleep(15)
-            if isinstance(interaction.channel, discord.Thread): await interaction.channel.delete()
+        except discord.NotFound:
+            # 연쇄 전직 로직이 스레드/메시지를 먼저 삭제했을 때 발생하는 오류를 무시합니다.
+            logger.info(f"{self.user_id}의 전직 완료 후 UI 수정/삭제 시도 중 대상을 찾지 못했으나 정상 처리된 것으로 간주합니다.")
+            pass # 정상적인 흐름이므로 오류를 로깅할 필요 없음
+
         except Exception as e:
             logger.error(f"전직 처리 중 오류가 발생했습니다 (유저: {self.user_id}): {e}", exc_info=True)
-            await interaction.edit_original_response(content="❌ 전직 처리 중 오류가 발생했습니다. 관리자에게 문의해주세요.", view=None)
-
+            try:
+                await interaction.edit_original_response(content="❌ 전직 처리 중 오류가 발생했습니다. 관리자에게 문의해주세요.", view=None)
+            except discord.NotFound:
+                 logger.error(f"{self.user_id}의 전직 처리 실패 메시지를 수정하려 했으나 메시지를 찾을 수 없습니다.")
 class StartAdvancementView(ui.View):
     def __init__(self, bot: commands.Bot, user_id: int, jobs: List[Dict[str, Any]], level: int):
         super().__init__(timeout=None)
