@@ -15,7 +15,8 @@ from utils.database import (
     get_cooldown, set_cooldown, save_config_to_db,
     get_embed_from_db, log_activity
 )
-from utils.helpers import format_embed_from_db, calculate_xp_for_level
+# ▼▼▼ [핵심 수정] 쿨타임 메시지를 포맷팅하기 위한 헬퍼 함수를 가져옵니다. ▼▼▼
+from utils.helpers import format_embed_from_db, calculate_xp_for_level, format_timedelta_minutes_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -290,16 +291,41 @@ class LevelPanelView(ui.View):
 
     @ui.button(label="상태 확인", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
     async def check_level_button(self, interaction: discord.Interaction, button: ui.Button):
+        # ▼▼▼ [핵심 수정] 쿨타임 확인 로직 전체를 추가합니다. ▼▼▼
+        bucket = self.cog.level_check_cooldown.get_bucket(interaction.message)
+        retry_after = bucket.update_rate_limit()
+
+        if retry_after:
+            # 쿨타임에 걸렸을 경우, 남은 시간을 알려줍니다.
+            remaining_time = timedelta(seconds=int(retry_after))
+            await interaction.response.send_message(
+                f"⏳ 잠시 후 다시 시도해주세요. (남은 시간: {format_timedelta_minutes_seconds(remaining_time)})",
+                ephemeral=True,
+                delete_after=10
+            )
+            return
+        # ▲▲▲ [핵심 수정] ▲▲▲
+
         try:
-            await interaction.response.send_message("요청을 처리하는 중입니다...", ephemeral=True)
+            # ephemeral=False로 변경하여 다른 사람도 볼 수 있게 합니다.
+            await interaction.response.send_message("요청을 처리하는 중입니다...", ephemeral=False, delete_after=5)
             level_embed = await build_level_embed(interaction.user)
             await interaction.channel.send(embed=level_embed)
-            await self.cog.regenerate_panel(interaction.channel, panel_key=self.cog.panel_key)
-            await interaction.delete_original_response()
+            
+            # 패널이 있는 채널과 현재 채널이 다를 수 있으므로, interaction.channel 대신 패널 채널을 사용합니다.
+            panel_info = get_panel_id(self.cog.panel_key.replace("panel_", ""))
+            if panel_info and (panel_channel := self.cog.bot.get_channel(panel_info['channel_id'])):
+                await self.cog.regenerate_panel(panel_channel, panel_key=self.cog.panel_key)
+            
+            # defer()를 호출하지 않았으므로, original_response를 삭제할 필요가 없습니다.
         except Exception as e:
             logger.error(f"개인 레벨 확인 및 패널 재생성 중 오류 발생 (유저: {interaction.user.id}): {e}", exc_info=True)
             error_message = "❌ 상태 정보를 불러오는 중 오류가 발생했습니다."
-            await interaction.edit_original_response(content=error_message)
+            # send_message로 보냈으므로 followup으로 수정합니다.
+            msg = await interaction.followup.send(error_message, ephemeral=True)
+            await asyncio.sleep(5)
+            try: await msg.delete()
+            except discord.NotFound: pass
 
     @ui.button(label="랭킹 확인", style=discord.ButtonStyle.secondary, emoji="👑", custom_id="show_ranking_button")
     async def show_ranking_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -312,6 +338,8 @@ class LevelSystem(commands.Cog):
         self.panel_key = "panel_level_check"
         self.channel_id_key = "level_check_panel_channel_id"
         logger.info("LevelSystem Cog (게임봇)가 성공적으로 초기화되었습니다.")
+        # ▼▼▼ [핵심 수정] Cog가 초기화될 때 쿨타임 객체를 생성합니다. ▼▼▼
+        self.level_check_cooldown = commands.CooldownMapping.from_cooldown(1, 60.0, commands.BucketType.user)
     
     async def cog_load(self):
         self.update_champion_panel.start()
