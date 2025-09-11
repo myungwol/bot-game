@@ -126,7 +126,8 @@ class EconomyCore(commands.Cog):
         self.config_reload_checker.cancel()
         self.manual_update_checker.cancel()
 
-    @tasks.loop(seconds=10.0)
+    # ▼▼▼ [핵심 수정] API 요청 빈도를 줄이기 위해 루프 주기를 30초로 늘립니다. ▼▼▼
+    @tasks.loop(seconds=30.0)
     async def config_reload_checker(self):
         try:
             response = await supabase.table('bot_configs').select('config_key').eq('config_key', 'config_reload_request').maybe_single().execute()
@@ -148,7 +149,6 @@ class EconomyCore(commands.Cog):
     @config_reload_checker.before_loop
     async def before_config_reload_checker(self):
         await self.bot.wait_until_ready()
-
 
     async def coin_log_sender(self):
         await self.bot.wait_until_ready()
@@ -345,7 +345,6 @@ class EconomyCore(commands.Cog):
     async def update_market_prices(self):
         logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
         try:
-            # [수정] 아래 모든 코드 블록을 try 구문 안으로 들여쓰기 했습니다.
             from utils.database import load_game_data_from_db
             await load_game_data_from_db()
 
@@ -355,7 +354,6 @@ class EconomyCore(commands.Cog):
             items_to_update = []
             announcements = []
 
-            # 아이템 가격 변동
             for name, data in item_db.items():
                 if data.get('volatility', 0) > 0:
                     old_price = data.get('current_price', data.get('price', 0))
@@ -370,7 +368,6 @@ class EconomyCore(commands.Cog):
                             status = "폭등 📈" if new_price > old_price else "폭락 📉"
                             announcements.append(f" - {name}: `{old_price}` → `{new_price}`{self.currency_icon} ({status})")
 
-            # 물고기 가격 변동
             fish_to_update = []
             for fish in loot_db:
                 if fish.get('volatility', 0) > 0 and 'id' in fish:
@@ -390,7 +387,6 @@ class EconomyCore(commands.Cog):
             if fish_to_update:
                 await supabase.table('fishing_loots').upsert(fish_to_update, on_conflict="id").execute()
 
-            # [핵심 수정] DB 업데이트 후, 즉시 로컬 캐시를 다시 로드합니다.
             if items_to_update or fish_to_update:
                 logger.info("[시장] DB 가격 업데이트 완료, 로컬 게임 데이터 캐시를 새로고침합니다.")
                 await load_game_data_from_db()
@@ -420,7 +416,8 @@ class EconomyCore(commands.Cog):
         if max_p is not None: new_price = min(max_p, new_price)
         return new_price
         
-    @tasks.loop(seconds=15.0)
+    # ▼▼▼ [핵심 수정] API 요청 빈도를 줄이기 위해 루프 주기를 30초로 늘립니다. ▼▼▼
+    @tasks.loop(seconds=30.0)
     async def manual_update_checker(self):
         try:
             response = await supabase.table('bot_configs').select('config_key').eq('config_key', 'manual_update_request').maybe_single().execute()
@@ -436,7 +433,6 @@ class EconomyCore(commands.Cog):
                 else:
                     logger.error("[수동 업데이트] Farm Cog를 찾을 수 없거나 daily_crop_update 함수가 없습니다.")
                 
-                # Market update는 자기 자신(EconomyCore)에 있으므로 직접 호출
                 await self.update_market_prices()
                 logger.info("[수동 업데이트] 시세 업데이트를 성공적으로 실행했습니다.")
 
@@ -449,7 +445,6 @@ class EconomyCore(commands.Cog):
     @manual_update_checker.before_loop
     async def before_manual_update_checker(self):
         await self.bot.wait_until_ready()
-    # ▲▲▲ 여기까지 추가 ▲▲▲
     
     @update_market_prices.before_loop
     async def before_update_market_prices(self):
