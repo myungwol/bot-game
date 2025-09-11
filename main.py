@@ -52,15 +52,14 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         await self.load_all_extensions()
         
-        # ▼▼▼ [핵심 수정] 아래 리스트에 'Cooking'을 추가하세요. ▼▼▼
+        # ▼▼▼ [핵심 수정] 아래 리스트에서 "PanelUpdater"를 삭제합니다. ▼▼▼
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
             "DiceGame", "SlotMachine", "RPSGame",
-            "DailyCheck", "Quests", "Farm", "PanelUpdater",
+            "DailyCheck", "Quests", "Farm",
             "WorldSystem", "EconomyCore", "LevelSystem",
-            "Mining", "Blacksmith", "Trade", "Cooking" # <--- 여기에 'Cooking'을 추가했습니다.
+            "Mining", "Blacksmith", "Trade", "Cooking"
         ]
-        # ▲▲▲ [핵심 수정] ▲▲▲
         
         registered_views_count = 0
         for cog_name in cogs_with_persistent_views:
