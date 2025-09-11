@@ -9,14 +9,14 @@ import time
 import math
 from typing import Optional, Dict, List, Any
 from datetime import time as dt_time, timezone, timedelta
+from collections import defaultdict
 
 from utils.database import (
     supabase, get_panel_id, save_panel_id, get_id, get_config, 
     get_cooldown, set_cooldown, save_config_to_db,
     get_embed_from_db, log_activity
 )
-# ▼▼▼ [핵심 수정] 이전 답변에서 추가했던 format_timedelta_minutes_seconds는 더 이상 필요 없으므로 삭제해도 됩니다. ▼▼▼
-from utils.helpers import format_embed_from_db, calculate_xp_for_level
+from utils.helpers import format_embed_from_db, calculate_xp_for_level, format_timedelta_minutes_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -304,19 +304,13 @@ class LevelPanelView(ui.View):
             )
             return
 
-        # ▼▼▼ [핵심 수정] 아래 로직 전체를 새로운 방식으로 변경합니다. ▼▼▼
         try:
-            # 1. 먼저 상호작용을 '생각 중' 상태로 만듭니다.
             await interaction.response.defer(ephemeral=False)
             
-            # 2. 레벨 임베드를 생성합니다.
             level_embed = await build_level_embed(interaction.user)
             
-            # 3. followup.send()를 사용하여 최종 응답을 보냅니다.
-            #    이렇게 하면 "요청을 처리하는 중입니다" 메시지가 남지 않습니다.
             await interaction.followup.send(embed=level_embed, ephemeral=False)
             
-            # 4. 패널 재생성 로직은 그대로 유지합니다.
             panel_info = get_panel_id(self.cog.panel_key.replace("panel_", ""))
             if panel_info and (panel_channel := self.cog.bot.get_channel(panel_info['channel_id'])):
                 await self.cog.regenerate_panel(panel_channel, panel_key=self.cog.panel_key)
@@ -324,9 +318,7 @@ class LevelPanelView(ui.View):
         except Exception as e:
             logger.error(f"개인 레벨 확인 및 패널 재생성 중 오류 발생 (유저: {interaction.user.id}): {e}", exc_info=True)
             error_message = "❌ 상태 정보를 불러오는 중 오류가 발생했습니다."
-            # 만약 defer() 후 오류가 발생하면 followup으로 오류 메시지를 보냅니다.
             await interaction.followup.send(error_message, ephemeral=True)
-        # ▲▲▲ [핵심 수정] ▲▲▲
 
     @ui.button(label="랭킹 확인", style=discord.ButtonStyle.secondary, emoji="👑", custom_id="show_ranking_button")
     async def show_ranking_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -339,7 +331,6 @@ class LevelSystem(commands.Cog):
         self.panel_key = "panel_level_check"
         self.channel_id_key = "level_check_panel_channel_id"
         logger.info("LevelSystem Cog (게임봇)가 성공적으로 초기화되었습니다.")
-        # ▼▼▼ [핵심 수정] Cog가 초기화될 때 쿨타임 객체를 생성합니다. ▼▼▼
         self.level_check_cooldown = commands.CooldownMapping.from_cooldown(1, 60.0, commands.BucketType.user)
     
     async def cog_load(self):
@@ -418,28 +409,49 @@ class LevelSystem(commands.Cog):
     async def load_configs(self):
         pass
     
-    # ▼▼▼ [핵심 수정] 이 함수 전체를 아래 코드로 교체해주세요. ▼▼▼
     async def handle_level_up_event(self, user: discord.Member, result_data: List[Dict]):
         if not result_data or not result_data[0].get('leveled_up'): return
         
         new_level = result_data[0].get('new_level')
         logger.info(f"유저 {user.display_name}(ID: {user.id})가 레벨 {new_level}(으)로 레벨업했습니다.")
         
-        handler_cog = self.bot.get_cog("JobAndTierHandler")
-        if not handler_cog:
-            logger.error("JobAndTierHandler Cog를 찾을 수 없습니다. 전직/등급 처리를 건너뜁니다.")
-            return
-
-        await handler_cog.update_tier_role(user, new_level)
-        logger.info(f"{user.name}님의 등급 역할 업데이트를 요청했습니다.")
-
-        # GAME_CONFIG를 get_config 함수로 불러오도록 수정합니다.
+        # 'level_tier_update_request'와 'job_advancement_request'를 DB에 저장
+        await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
+        
         game_config = get_config("GAME_CONFIG", {})
         job_advancement_levels = game_config.get("JOB_ADVANCEMENT_LEVELS", [50, 100])
         
         if new_level in job_advancement_levels:
-            await handler_cog.start_advancement_process(user, new_level)
-            logger.info(f"유저가 전직 가능 레벨({new_level})에 도달하여 전직 절차를 시작합니다.")
+            await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": time.time()})
+
+    async def process_level_requests(self, requests_by_prefix: Dict[str, List]):
+        server_id_str = get_config("SERVER_ID")
+        if not server_id_str: return
+        guild = self.bot.get_guild(int(server_id_str))
+        if not guild: return
+            
+        handler_cog = self.bot.get_cog("JobAndTierHandler")
+        if not handler_cog: return
+
+        user_updates = defaultdict(lambda: {"level": None, "advancement_level": None})
+
+        for req in requests_by_prefix.get("level_tier_update", []):
+            user_id = int(req['config_key'].split('_')[-1])
+            user_updates[user_id]["level"] = req['config_value'].get('level')
+
+        for req in requests_by_prefix.get("job_advancement", []):
+            user_id = int(req['config_key'].split('_')[-1])
+            user_updates[user_id]["advancement_level"] = req['config_value'].get('level')
+
+        for user_id, updates in user_updates.items():
+            member = guild.get_member(user_id)
+            if not member: continue
+
+            if new_level := updates.get("level"):
+                await handler_cog.update_tier_role(member, new_level)
+            
+            if advancement_level := updates.get("advancement_level"):
+                await handler_cog.start_advancement_process(member, advancement_level)
 
     async def update_user_xp_and_level_from_admin(self, user: discord.Member, xp_to_add: int = 0, exact_level: Optional[int] = None):
         try:
