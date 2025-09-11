@@ -506,14 +506,10 @@ class Cooking(commands.Cog):
             elif isinstance(ingredients, dict):
                 parsed_ingredients = ingredients
 
-            # ▼▼▼ [핵심 수정] .maybe_single() 을 .limit(1) 으로 변경하여 안정성을 높입니다. ▼▼▼
             res = await supabase.table('discovered_recipes').select('id').eq('recipe_name', recipe_name).limit(1).execute()
             
-            # 이제 res.data는 결과가 없으면 항상 빈 리스트([])가 됩니다.
             if res and res.data:
-                # 리스트가 비어있지 않으면 (이미 발견된 레시피이면) 함수를 종료합니다.
                 return
-            # ▲▲▲ [핵심 수정] ▲▲▲
             
             await supabase.table('discovered_recipes').insert({
                 'recipe_name': recipe_name,
@@ -532,15 +528,19 @@ class Cooking(commands.Cog):
                 return
 
             ingredients_str = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in parsed_ingredients.items()])
-            user_avatar_url = user.display_avatar.url if user.display_avatar else ""
             
+            # ▼▼▼ [핵심 수정] 아래 로직 전체를 변경합니다. ▼▼▼
             log_embed = format_embed_from_db(
                 embed_data,
                 user_mention=user.mention,
                 recipe_name=recipe_name,
-                ingredients_str=ingredients_str,
-                user_avatar_url=user_avatar_url
+                ingredients_str=ingredients_str
             )
+
+            # 사용자가 아바타를 가지고 있을 경우에만 썸네일을 설정합니다.
+            if user.display_avatar:
+                log_embed.set_thumbnail(url=user.display_avatar.url)
+            # ▲▲▲ [핵심 수정] ▲▲▲
             
             await log_channel.send(content="@here", embed=log_embed, allowed_mentions=discord.AllowedMentions(everyone=True))
         except Exception as e:
