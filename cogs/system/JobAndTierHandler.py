@@ -1,4 +1,4 @@
-# bot-game/cogs/systems/JobAndTierHandler.py
+# cogs/systems/JobAndTierHandler.py
 
 import discord
 from discord.ext import commands
@@ -8,8 +8,6 @@ import asyncio
 from typing import Dict, Any, List
 
 from utils.database import supabase, get_config, get_id, get_embed_from_db
-# ▼ 아래 라인에서 JOB_SYSTEM_CONFIG와 JOB_ADVANCEMENT_DATA를 삭제합니다.
-# from utils.game_config_defaults import JOB_SYSTEM_CONFIG, JOB_ADVANCEMENT_DATA
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
@@ -118,10 +116,8 @@ class JobAdvancementView(ui.View):
                 raise Exception(f"DB에서 직업 또는 능력 ID를 찾을 수 없습니다.")
             
             job_id, ability_id = job_res.data['id'], ability_res.data['id']
-            
             job_role_key = selected_job_data['role_key']
             
-            # ▼ DB에서 JOB_SYSTEM_CONFIG를 가져오도록 수정
             job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
             all_job_role_keys = list(job_system_config.get("JOB_ROLE_MAP", {}).values())
             
@@ -144,6 +140,11 @@ class JobAdvancementView(ui.View):
             job_name = selected_job_data['job_name']
             success_message = f"🎉 **전직 완료!**\n축하합니다! 이제부터 당신은 **{job_name}** 입니다."
             await interaction.edit_original_response(content=success_message, view=None)
+
+            if handler_cog := self.bot.get_cog("JobAndTierHandler"):
+                await asyncio.sleep(2)
+                await handler_cog.trigger_advancement_check(user)
+
             await asyncio.sleep(15)
             if isinstance(interaction.channel, discord.Thread): await interaction.channel.delete()
         except Exception as e:
@@ -211,13 +212,11 @@ class JobAndTierHandler(commands.Cog):
                         comp = message.components[0].children[0]
                         if isinstance(comp, discord.Button) and comp.custom_id and comp.custom_id.startswith("start_advancement_"):
                             level = int(comp.custom_id.split('_')[-1])
-                            # ▼ DB에서 JOB_ADVANCEMENT_DATA를 가져오도록 수정
                             advancement_data = get_config("JOB_ADVANCEMENT_DATA", {}).get(str(level), [])
                             view = StartAdvancementView(self.bot, owner_id, advancement_data, level)
                             self.bot.add_view(view, message_id=message.id)
                             logger.info(f"'{thread.name}' 스레드에서 StartAdvancementView를 다시 로드했습니다.")
                         elif isinstance(comp, discord.ui.Select) and comp.custom_id == "job_adv_job_select":
-                            # TODO: JobAdvancementView 복구 로직 (필요 시 구현)
                             pass
                         break
             except Exception as e:
@@ -226,78 +225,72 @@ class JobAndTierHandler(commands.Cog):
         self.active_views_loaded = True
         logger.info("활성 전직 View 로드가 완료되었습니다.")
 
-    async def start_advancement_process(self, member: discord.Member, level: int):
+    async def trigger_advancement_check(self, member: discord.Member):
         try:
+            level_res = await supabase.table('user_levels').select('level').eq('user_id', member.id).single().execute()
+            if not level_res.data: return
+            level = level_res.data['level']
+
             channel_id = get_id("job_advancement_channel_id")
             if not (channel_id and (channel := self.bot.get_channel(channel_id))):
-                logger.error(f"'전직소' 채널(job_advancement_channel_id)이 설정되지 않았거나 찾을 수 없습니다.")
+                logger.error("'전직소' 채널을 찾을 수 없습니다.")
                 return
 
-            if any(thread.name == f"전직｜{member.name}" for thread in channel.threads):
-                logger.warning(f"{member.name}님의 전직 스레드가 이미 존재하여 생성을 건너뜁니다.")
-                return
+            for thread in channel.threads:
+                if thread.name == f"전직｜{member.name}":
+                    logger.info(f"{member.name}님의 이전 전직 스레드를 삭제하고 새 절차를 시작합니다.")
+                    try: await thread.delete()
+                    except Exception as e: logger.error(f"이전 전직 스레드 삭제 실패: {e}")
+                    break
 
             user_job_res = await supabase.table('user_jobs').select('jobs(job_key)').eq('user_id', member.id).maybe_single().execute()
             current_job_key = user_job_res.data['jobs']['job_key'] if user_job_res and user_job_res.data and user_job_res.data.get('jobs') else None
-
-            all_advancement_data = get_config("JOB_ADVANCEMENT_DATA", {})
             
-            # ▼▼▼ [핵심 수정] 전직 가능 직업 필터링 및 따라잡기 로직 ▼▼▼
+            all_advancement_data = get_config("JOB_ADVANCEMENT_DATA", {})
+            all_jobs_50 = [job['job_key'] for job in all_advancement_data.get('50', [])]
+
             target_level_for_advancement = 0
-            advancement_title = ""
-            advancement_description = ""
-
-            if level >= 100 and not current_job_key:
-                # 100레벨 이상이지만 1차 전직을 안 한 경우
+            
+            if level >= 50 and not current_job_key:
                 target_level_for_advancement = 50
-                advancement_title = "🎉 100레벨 달성! 2차 전직을 위한 준비!"
-                advancement_description = f"{member.mention}님, 100레벨 달성을 축하합니다!\n2차 전직을 진행하기 전에, 먼저 당신의 길을 결정할 1차 전직을 완료해야 합니다.\n\n아래 버튼을 눌러 1차 전직 절차를 시작해주세요."
-            elif level >= 100 and current_job_key:
-                # 정상적인 2차 전직
+            elif level >= 100 and current_job_key in all_jobs_50:
                 target_level_for_advancement = 100
-            elif level >= 50 and not current_job_key:
-                # 정상적인 1차 전직
-                target_level_for_advancement = 50
 
-            # target_level_for_advancement가 0이면 전직 대상이 아님
             if target_level_for_advancement == 0:
                 logger.info(f"{member.name} (레벨: {level}, 직업: {current_job_key})님은 현재 전직 대상이 아닙니다.")
                 return
 
             available_jobs = all_advancement_data.get(str(target_level_for_advancement), [])
             filtered_jobs = [
-                job_info for job_info in available_jobs 
-                if not (prerequisite := job_info.get("prerequisite_job")) or prerequisite == current_job_key
+                job for job in available_jobs 
+                if not (prerequisite := job.get("prerequisite_job")) or prerequisite == current_job_key
             ]
-            # ▲▲▲ [핵심 수정] 종료 ▲▲▲
 
             if not filtered_jobs:
-                logger.warning(f"{member.name} (현재 직업: {current_job_key}) 님을 위한 레벨 {target_level_for_advancement} 상위 직업을 찾을 수 없습니다.")
+                logger.warning(f"{member.name} (직업: {current_job_key}) 님을 위한 레벨 {target_level_for_advancement} 직업을 찾을 수 없습니다.")
                 return
 
             thread = await channel.create_thread(name=f"전직｜{member.name}", type=discord.ChannelType.private_thread, invitable=False)
             await thread.add_user(member)
-            
-            # [수정] 동적 제목 및 설명 사용
-            if not advancement_title:
-                advancement_title = f"🎉 레벨 {target_level_for_advancement} 달성! 새로운 길을 개척할 시간입니다!"
-            if not advancement_description:
-                advancement_description = f"{member.mention}님, 새로운 능력을 얻을 때가 왔습니다.\n\n아래 버튼을 눌러 전직 절차를 시작해주세요."
 
-            embed = discord.Embed(title=advancement_title, description=advancement_description, color=0xFFD700)
+            title = f"🎉 레벨 {target_level_for_advancement} 전직 안내"
+            description = f"{member.mention}님, 새로운 길을 개척할 시간입니다.\n\n아래 버튼을 눌러 전직 절차를 시작해주세요."
+            if target_level_for_advancement == 50 and level >= 100:
+                title = "✨ 전직 따라잡기: 1차 전직"
+                description = f"{member.mention}님, 2차 전직에 앞서 먼저 당신의 길을 결정할 1차 전직을 완료해야 합니다.\n\n1차 전직을 완료하면 자동으로 2차 전직 안내가 시작됩니다."
             
+            embed = discord.Embed(title=title, description=description, color=0xFFD700)
             view = StartAdvancementView(self.bot, member.id, filtered_jobs, target_level_for_advancement)
             await thread.send(embed=embed, view=view)
-            
             self.bot.add_view(view)
-            logger.info(f"{member.name}님의 레벨 {target_level_for_advancement} 전직 스레드를 성공적으로 생성하고 View를 등록했습니다.")
+            logger.info(f"{member.name}님의 레벨 {target_level_for_advancement} 전직 스레드를 생성했습니다.")
+
         except Exception as e:
-            logger.error(f"{member.name}님의 전직 절차 시작 중 오류가 발생했습니다: {e}", exc_info=True)
-            
+            logger.error(f"{member.name}님의 전직 절차 시작 중 오류 발생: {e}", exc_info=True)
+
     async def update_tier_role(self, member: discord.Member, level: int):
         try:
             guild = member.guild
-            # ▼ DB에서 JOB_SYSTEM_CONFIG를 가져오도록 수정
             job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
             tier_roles_config = sorted(job_system_config.get("LEVEL_TIER_ROLES", []), key=lambda x: x['level'], reverse=True)
             
