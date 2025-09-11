@@ -506,10 +506,12 @@ class Cooking(commands.Cog):
             elif isinstance(ingredients, dict):
                 parsed_ingredients = ingredients
 
-            res = await supabase.table('discovered_recipes').select('id').eq('recipe_name', recipe_name).maybe_single().execute()
+            # ▼▼▼ [핵심 수정] .maybe_single() 을 .limit(1) 으로 변경하여 안정성을 높입니다. ▼▼▼
+            res = await supabase.table('discovered_recipes').select('id').eq('recipe_name', recipe_name).limit(1).execute()
             
-            # ▼▼▼ [핵심 수정] res가 None이 아닌지 먼저 확인하는 로직 추가 ▼▼▼
+            # 이제 res.data는 결과가 없으면 항상 빈 리스트([])가 됩니다.
             if res and res.data:
+                # 리스트가 비어있지 않으면 (이미 발견된 레시피이면) 함수를 종료합니다.
                 return
             # ▲▲▲ [핵심 수정] ▲▲▲
             
