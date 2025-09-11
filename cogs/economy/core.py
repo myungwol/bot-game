@@ -8,7 +8,7 @@ import logging
 import time
 from datetime import datetime, timezone, timedelta, time as dt_time
 from typing import Dict, Optional, List, Deque, Set
-from collections import deque
+from collections import deque, defaultdict
 
 from utils.database import (
     get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
@@ -50,8 +50,7 @@ class EconomyCore(commands.Cog):
         self.voice_activity_tracker.start()
         self.update_market_prices.start()
         self.monthly_whale_reset.start()
-        self.config_reload_checker.start()
-        self.manual_update_checker.start()
+        self.unified_request_dispatcher.start()
 
         self.initial_setup_done = False
 
@@ -123,31 +122,72 @@ class EconomyCore(commands.Cog):
         self.monthly_whale_reset.cancel()
         if self.log_sender_task:
             self.log_sender_task.cancel()
-        self.config_reload_checker.cancel()
-        self.manual_update_checker.cancel()
+        self.unified_request_dispatcher.cancel()
 
-    # ▼▼▼ [핵심 수정] API 요청 빈도를 줄이기 위해 루프 주기를 30초로 늘립니다. ▼▼▼
-    @tasks.loop(seconds=30.0)
-    async def config_reload_checker(self):
+    @tasks.loop(seconds=10.0)
+    async def unified_request_dispatcher(self):
         try:
-            response = await supabase.table('bot_configs').select('config_key').eq('config_key', 'config_reload_request').maybe_single().execute()
+            response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', '%_request%').execute()
             
-            if response and response.data:
-                logger.info("[CONFIG] 관리 봇으로부터 설정 새로고침 요청을 감지했습니다. DB에서 설정을 다시 불러옵니다...")
-                
+            if not (response and response.data):
+                return
+
+            requests = response.data
+            keys_to_delete = [req['config_key'] for req in requests]
+
+            requests_by_prefix = defaultdict(list)
+            for req in requests:
+                # 'request'를 기준으로 분리하여 접두사를 얻습니다.
+                # 예: 'level_tier_update_request_...' -> 'level_tier_update'
+                prefix_parts = req['config_key'].split('_request')
+                if len(prefix_parts) > 1:
+                    prefix = prefix_parts[0]
+                    requests_by_prefix[prefix].append(req)
+
+            # --- 각 Cog에 작업 전달 ---
+            if 'level_tier_update' in requests_by_prefix or 'job_advancement' in requests_by_prefix:
+                if level_cog := self.bot.get_cog("LevelSystem"):
+                    # LevelSystem은 두 종류의 요청을 모두 처리해야 하므로 전체 딕셔너리를 전달
+                    await level_cog.process_level_requests(requests_by_prefix)
+            
+            if 'farm_ui_update' in requests_by_prefix:
+                if farm_cog := self.bot.get_cog("Farm"):
+                    user_ids = {int(req['config_key'].split('_')[-1]) for req in requests_by_prefix['farm_ui_update']}
+                    await farm_cog.process_ui_update_requests(user_ids)
+
+            if 'kitchen_ui_update' in requests_by_prefix:
+                if cooking_cog := self.bot.get_cog("Cooking"):
+                    user_ids = {int(req['config_key'].split('_')[-1]) for req in requests_by_prefix['kitchen_ui_update']}
+                    await cooking_cog.process_ui_update_requests(user_ids)
+            
+            if 'panel_regenerate' in requests_by_prefix:
+                if panel_cog := self.bot.get_cog("PanelUpdater"):
+                    await panel_cog.process_panel_regenerate_requests(requests_by_prefix['panel_regenerate'])
+
+            if 'config_reload' in requests_by_prefix:
+                logger.info("[CONFIG] 설정 새로고침 요청 감지...")
                 await load_bot_configs_from_db()
-                
                 for cog in self.bot.cogs.values():
                     if hasattr(cog, 'load_configs'):
                         await cog.load_configs()
+                logger.info("[CONFIG] 모든 설정 새로고침 완료.")
 
-                await delete_config_from_db("config_reload_request")
-                logger.info("[CONFIG] 모든 설정 새로고침이 완료되었습니다.")
+            if 'manual_update' in requests_by_prefix:
+                logger.info("[수동 업데이트] 요청 감지...")
+                if farm_cog := self.bot.get_cog("Farm"):
+                    await farm_cog.daily_crop_update()
+                await self.update_market_prices()
+                logger.info("[수동 업데이트] 모든 수동 업데이트 완료.")
+            
+            # 처리된 요청 키 DB에서 삭제
+            if keys_to_delete:
+                await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
+
         except Exception as e:
-            logger.error(f"설정 새로고침 작업 중 오류 발생: {e}", exc_info=True)
+            logger.error(f"통합 요청 처리기에서 오류 발생: {e}", exc_info=True)
 
-    @config_reload_checker.before_loop
-    async def before_config_reload_checker(self):
+    @unified_request_dispatcher.before_loop
+    async def before_unified_dispatcher(self):
         await self.bot.wait_until_ready()
 
     async def coin_log_sender(self):
@@ -305,6 +345,8 @@ class EconomyCore(commands.Cog):
         logger.info(f"유저 {user.display_name}(ID: {user.id})가 레벨 {new_level}(으)로 레벨업했습니다.")
         game_config = get_config("GAME_CONFIG", {})
         job_advancement_levels = game_config.get("JOB_ADVANCEMENT_LEVELS", [50, 100])
+        
+        # 'job_advancement_request'와 'level_tier_update_request' 키를 사용합니다.
         if new_level in job_advancement_levels:
             await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": time.time()})
         await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
@@ -416,36 +458,6 @@ class EconomyCore(commands.Cog):
         if max_p is not None: new_price = min(max_p, new_price)
         return new_price
         
-    # ▼▼▼ [핵심 수정] API 요청 빈도를 줄이기 위해 루프 주기를 30초로 늘립니다. ▼▼▼
-    @tasks.loop(seconds=30.0)
-    async def manual_update_checker(self):
-        try:
-            response = await supabase.table('bot_configs').select('config_key').eq('config_key', 'manual_update_request').maybe_single().execute()
-            
-            if response and response.data:
-                logger.info("[수동 업데이트] 관리자로부터 수동 업데이트 요청을 감지했습니다.")
-                
-                farm_cog = self.bot.get_cog("Farm")
-                
-                if farm_cog and hasattr(farm_cog, 'daily_crop_update'):
-                    await farm_cog.daily_crop_update()
-                    logger.info("[수동 업데이트] 작물 업데이트를 성공적으로 실행했습니다.")
-                else:
-                    logger.error("[수동 업데이트] Farm Cog를 찾을 수 없거나 daily_crop_update 함수가 없습니다.")
-                
-                await self.update_market_prices()
-                logger.info("[수동 업데이트] 시세 업데이트를 성공적으로 실행했습니다.")
-
-                await delete_config_from_db("manual_update_request")
-                logger.info("[수동 업데이트] 요청 키를 DB에서 삭제했습니다.")
-
-        except Exception as e:
-            logger.error(f"수동 업데이트 작업 중 오류 발생: {e}", exc_info=True)
-
-    @manual_update_checker.before_loop
-    async def before_manual_update_checker(self):
-        await self.bot.wait_until_ready()
-    
     @update_market_prices.before_loop
     async def before_update_market_prices(self):
         await self.bot.wait_until_ready()
