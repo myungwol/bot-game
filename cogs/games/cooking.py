@@ -36,7 +36,7 @@ async def delete_after(message: discord.WebhookMessage, delay: int):
 
 class IngredientSelectModal(ui.Modal):
     def __init__(self, item_name: str, max_qty: int, parent_view: 'CookingPanelView'):
-        super().__init__(title=f"'{item_name}' 수량 입력")
+        super().__init__(title=f"'{item_name}' 수량 입력 (솥 1개당)")
         self.parent_view = parent_view
         self.item_name = item_name
         self.quantity_input = ui.TextInput(label="수량", placeholder=f"최대 {max_qty}개")
@@ -67,12 +67,17 @@ class IngredientSelectView(ui.View):
         self.clear_items()
         inventory = await get_inventory(self.user)
         item_db = get_item_database()
-        cauldron = self.parent_view.get_first_selected_cauldron()
-        current_ingredients = (cauldron.get('current_ingredients') or {}).keys() if cauldron else []
+        
+        # [수정] 여러 솥에 재료를 추가할 때, 이미 한 솥에라도 들어간 재료는 목록에서 제외 (중복 방지)
+        all_ingredients_in_selected = set()
+        for cauldron in self.parent_view.get_selected_cauldrons():
+            all_ingredients_in_selected.update((cauldron.get('current_ingredients') or {}).keys())
+
         cookable_items = {
             name: qty for name, qty in inventory.items()
-            if item_db.get(name, {}).get('category') in COOKABLE_CATEGORIES and name not in current_ingredients
+            if item_db.get(name, {}).get('category') in COOKABLE_CATEGORIES and name not in all_ingredients_in_selected
         }
+
         if not cookable_items:
             self.add_item(ui.Button(label="요리할 재료가 없습니다.", disabled=True))
             return
@@ -274,9 +279,8 @@ class CookingPanelView(ui.View):
 
         selected_cauldrons = self.get_selected_cauldrons()
         if selected_cauldrons:
-            # [핵심 수정] 재료 넣기는 1개 이상 선택 시, 첫 번째 솥을 기준으로 활성화
-            first_cauldron = self.get_first_selected_cauldron()
-            can_add_ingredients = len(selected_cauldrons) > 0 and first_cauldron and first_cauldron['state'] in ['idle', 'adding_ingredients']
+            # [핵심 수정] 재료 넣기는 선택된 모든 솥이 재료를 넣을 수 있는 상태일 때만 활성화
+            can_add_ingredients = all(c['state'] in ['idle', 'adding_ingredients'] for c in selected_cauldrons)
             
             can_clear = all(c.get('current_ingredients') and c['state'] in ['idle', 'adding_ingredients'] for c in selected_cauldrons)
             can_start_cooking = all(c.get('current_ingredients') and c['state'] in ['idle', 'adding_ingredients'] for c in selected_cauldrons)
@@ -326,20 +330,39 @@ class CookingPanelView(ui.View):
         await self.refresh(interaction)
 
     async def add_ingredient_prompt(self, interaction: discord.Interaction):
-        cauldron = self.get_first_selected_cauldron()
-        if not cauldron or cauldron['state'] not in ['idle', 'adding_ingredients']:
-            await interaction.response.send_message("❌ 지금은 재료를 추가할 수 없습니다.", ephemeral=True, delete_after=5)
+        selected_cauldrons = self.get_selected_cauldrons()
+        if not selected_cauldrons or not all(c['state'] in ['idle', 'adding_ingredients'] for c in selected_cauldrons):
+            await interaction.response.send_message("❌ 지금은 재료를 추가할 수 없는 가마솥이 선택되어 있습니다.", ephemeral=True, delete_after=5)
             return
         await interaction.response.defer(ephemeral=True)
         view = IngredientSelectView(self)
         await view.start(interaction)
 
+    # [핵심 수정] 여러 가마솥에 재료를 동시에 추가하는 로직
     async def add_ingredient(self, interaction: discord.Interaction, item_name: str, quantity: int):
         await interaction.response.defer()
-        cauldron = self.get_first_selected_cauldron()
-        current_ingredients = cauldron.get('current_ingredients') or {}
-        current_ingredients[item_name] = current_ingredients.get(item_name, 0) + quantity
-        await supabase.table('cauldrons').update({'state': 'adding_ingredients', 'current_ingredients': current_ingredients}).eq('id', cauldron['id']).execute()
+        selected_cauldrons = self.get_selected_cauldrons()
+        
+        total_needed = quantity * len(selected_cauldrons)
+        inventory = await get_inventory(self.user)
+        if inventory.get(item_name, 0) < total_needed:
+            msg = await interaction.followup.send(f"❌ 재료가 부족합니다! '{item_name}'이(가) 총 {total_needed}개 필요하지만 {inventory.get(item_name, 0)}개만 가지고 있습니다.", ephemeral=True)
+            await delete_after(msg, 10)
+            return
+
+        updates_to_perform = []
+        for cauldron in selected_cauldrons:
+            current_ingredients = cauldron.get('current_ingredients') or {}
+            current_ingredients[item_name] = current_ingredients.get(item_name, 0) + quantity
+            updates_to_perform.append({
+                'id': cauldron['id'],
+                'state': 'adding_ingredients',
+                'current_ingredients': current_ingredients
+            })
+
+        if updates_to_perform:
+            await supabase.table('cauldrons').upsert(updates_to_perform).execute()
+
         await self.refresh(interaction)
     
     async def clear_ingredients(self, interaction: discord.Interaction):
@@ -459,6 +482,7 @@ class CookingCreationPanelView(ui.View):
         self.cog = cog
         btn = ui.Button(label="부엌 만들기", style=discord.ButtonStyle.success, emoji="🍲", custom_id="cooking_create_button")
         btn.callback = self.create_kitchen_callback
+        self.add_item(btn)
 
     async def create_kitchen_callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
