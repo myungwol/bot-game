@@ -5,7 +5,7 @@ from discord.ext import commands, tasks
 from discord import ui
 import logging
 import asyncio
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Set # <--- 여기에 Set 추가
 from datetime import datetime, timezone, timedelta
 import json
 import random
