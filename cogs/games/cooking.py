@@ -539,6 +539,10 @@ class Cooking(commands.Cog):
                     panel_view = CookingPanelView(self, user, message)
                     await panel_view.refresh()
 
+                    # ▼▼▼ [핵심 수정] 각 패널 업데이트 후 1.5초 지연을 추가합니다. ▼▼▼
+                    await asyncio.sleep(1.5)
+                    # ▲▲▲ [핵심 수정] ▲▲▲
+
                 except Exception as e:
                     logger.error(f"개별 키친 UI 업데이트 중 오류({req['config_key']}): {e}", exc_info=True)
             
@@ -546,6 +550,7 @@ class Cooking(commands.Cog):
                 await supabase.table('bot_configs').delete().in_('config_key', tuple(keys_to_delete)).execute()
         except Exception as e:
             logger.error(f"키친 UI 업데이터 루프 중 오류: {e}", exc_info=True)
+
 
     @kitchen_ui_updater.before_loop
     async def before_kitchen_ui_updater(self): await self.bot.wait_until_ready()
