@@ -593,9 +593,9 @@ class Farm(commands.Cog):
                 
                 is_watered_today = last_watered_dt.astimezone(KST) >= today_jst_midnight or is_raining
                 
-                # ▼▼▼ [핵심 수정] 아래의 로직 전체를 새로운 DB 상태 기반 로직으로 교체합니다. ▼▼▼
+                # ▼▼▼ [진짜 최종 수정] 사용자님의 시나리오를 완벽히 구현하는 로직 ▼▼▼
                 if is_watered_today:
-                    # 물을 준 경우, 작물은 성장하고 수분 유지력 플래그는 '사용 안 함(False)'으로 초기화됩니다.
+                    # 물을 줬으므로 성장하고, 능력 플래그는 초기화
                     update_payload['water_retention_used'] = False
                     
                     growth_amount = 1
@@ -609,14 +609,26 @@ class Farm(commands.Cog):
                         item_info.get('max_growth_stage', 99)
                     )
                 else: 
-                    # 물을 주지 않은 경우, 수분 유지력 능력을 확인합니다.
+                    # 물을 안 줬을 때
                     if 'farm_water_retention_1' in owner_abilities and plot.get('water_retention_used') is not True:
-                        # 능력이 있고, 아직 사용되지 않았다면(False), 능력을 '사용함(True)'으로 바꾸고 작물을 살립니다.
+                        # 능력이 있고, 아직 사용 안 함 -> 능력 사용하고 성장
                         update_payload['water_retention_used'] = True
+                        
+                        growth_amount = 1
+                        if 'farm_growth_speed_up_2' in owner_abilities and not plot.get('is_regrowing', False):
+                            growth_amount += 1
+                            # 능력으로 성장할 때도 성장 가속은 적용
+                            growth_ability_activations[owner_id]['count'] += 1
+                            growth_ability_activations[owner_id]['thread_id'] = plot['farms']['thread_id']
+                        
+                        update_payload['growth_stage'] = min(
+                            plot['growth_stage'] + growth_amount,
+                            item_info.get('max_growth_stage', 99)
+                        )
                     else:
-                        # 능력이 없거나 이미 사용했다면(True), 작물은 시듭니다.
+                        # 능력이 없거나, 이미 사용함 -> 시듦
                         update_payload['state'] = 'withered'
-                # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
+                # ▲▲▲ [진짜 최종 수정] ▲▲▲
                 
                 plots_to_update_db.append(update_payload)
 
