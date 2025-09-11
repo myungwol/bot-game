@@ -552,7 +552,6 @@ class Farm(commands.Cog):
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
             
-            # ▼▼▼ [핵심 수정] 쿼리 변경: thread_id를 함께 가져옵니다. ▼▼▼
             planted_plots_res = await supabase.table('farm_plots').select('*, farms!inner(user_id, id, thread_id)').eq('state', 'planted').execute()
             
             if not (planted_plots_res and planted_plots_res.data):
@@ -594,7 +593,9 @@ class Farm(commands.Cog):
                 
                 is_watered_today = last_watered_dt.astimezone(KST) >= today_jst_midnight or is_raining
                 
+                # ▼▼▼ [핵심 수정] 아래의 로직 전체를 교체합니다. ▼▼▼
                 if is_watered_today:
+                    # 물을 준 경우, 작물은 성장하고 수분 유지력 플래그는 초기화됩니다.
                     update_payload['water_retention_used'] = False
                     
                     growth_amount = 1
@@ -608,12 +609,14 @@ class Farm(commands.Cog):
                         item_info.get('max_growth_stage', 99)
                     )
                 else: 
-                    # ▼▼▼ [핵심 수정] 아래 조건문을 is not True 로 변경하여 명확성을 높입니다. ▼▼▼
+                    # 물을 주지 않은 경우, 수분 유지력 능력을 확인합니다.
                     if 'farm_water_retention_1' in owner_abilities and plot.get('water_retention_used') is not True:
+                        # 능력이 있고, 아직 사용되지 않았다면 능력을 사용하고 작물을 살립니다.
                         update_payload['water_retention_used'] = True
-                    # ▲▲▲ [핵심 수정] ▲▲▲
                     else:
+                        # 능력이 없거나 이미 사용했다면 작물은 시듭니다.
                         update_payload['state'] = 'withered'
+                # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
                 
                 plots_to_update_db.append(update_payload)
 
