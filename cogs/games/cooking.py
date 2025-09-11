@@ -100,44 +100,59 @@ class CookingPanelView(ui.View):
         self.message = message
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # ▼▼▼ [로깅 추가] ▼▼▼
+        logger.info(f"[INTERACTION CHECK] 상호작용 시작. User: {interaction.user.id}, Channel: {interaction.channel.id}, Custom ID: {interaction.data.get('custom_id')}")
         if not await self._load_context(interaction):
+            logger.warning("[INTERACTION CHECK] _load_context 실패. 상호작용 중단.")
             return False
 
         if interaction.user.id != self.user.id:
             await interaction.response.send_message("부엌 주인만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
+            logger.warning(f"[INTERACTION CHECK] 권한 없음. 요청자: {interaction.user.id}, 주인: {self.user.id}")
             return False
         
+        logger.info("[INTERACTION CHECK] 상호작용 통과.")
         return True
 
     async def _load_context(self, interaction: discord.Interaction) -> bool:
+        # ▼▼▼ [로깅 추가] ▼▼▼
+        logger.info(f"[_load_context] 컨텍스트 로딩 시작. 스레드 ID: {interaction.channel.id}")
         res = await supabase.table('user_settings').select('user_id, kitchen_panel_message_id').eq('kitchen_thread_id', interaction.channel.id).maybe_single().execute()
         
         if not (res and res.data):
             if not interaction.response.is_done(): await interaction.response.defer()
             await interaction.followup.send("이 부엌 정보를 찾을 수 없습니다. 채널을 다시 만들어주세요.", ephemeral=True, delete_after=10)
+            logger.error(f"[_load_context] DB에서 스레드 ID({interaction.channel.id})에 해당하는 부엌 정보를 찾지 못했습니다.")
             return False
         
         owner_id = int(res.data['user_id'])
         message_id = res.data.get('kitchen_panel_message_id')
+        logger.info(f"[_load_context] DB에서 소유자 ID({owner_id})와 메시지 ID({message_id})를 찾았습니다.")
 
         try:
             guild = self.cog.bot.get_guild(interaction.guild_id)
-            if not guild: return False
+            if not guild:
+                logger.error(f"[_load_context] 길드를 찾을 수 없습니다: {interaction.guild_id}")
+                return False
             self.user = await guild.fetch_member(owner_id)
-        except (discord.NotFound, AttributeError):
+            logger.info(f"[_load_context] 소유자 멤버 객체를 성공적으로 가져왔습니다: {self.user.name}")
+        except (discord.NotFound, AttributeError) as e:
             if not interaction.response.is_done(): await interaction.response.defer()
             await interaction.followup.send("부엌 주인을 찾을 수 없습니다.", ephemeral=True, delete_after=5)
+            logger.error(f"[_load_context] 소유자 멤버 객체를 가져오는 중 오류 발생: {e}")
             return False
 
         if message_id:
             try:
                 self.message = await interaction.channel.fetch_message(int(message_id))
+                logger.info(f"[_load_context] 패널 메시지 객체를 성공적으로 가져왔습니다: {self.message.id}")
             except (discord.NotFound, discord.Forbidden):
-                logger.warning(f"부엌 패널 메시지(ID: {message_id})를 찾을 수 없어 새로 생성될 수 있습니다.")
+                logger.warning(f"[_load_context] 부엌 패널 메시지(ID: {message_id})를 찾을 수 없어 새로 생성될 수 있습니다.")
                 self.message = None
         
         cauldron_res = await supabase.table('cauldrons').select('*').eq('user_id', str(owner_id)).order('slot_number').execute()
         self.cauldrons = cauldron_res.data if cauldron_res.data else []
+        logger.info(f"[_load_context] 소유자의 가마솥 정보를 가져왔습니다. 총 {len(self.cauldrons)}개.")
         
         return True
 
@@ -149,14 +164,18 @@ class CookingPanelView(ui.View):
         if interaction and not interaction.response.is_done():
             await interaction.response.defer()
 
+        # ▼▼▼ [로깅 추가] ▼▼▼
+        logger.info(f"[refresh] UI 새로고침 시작. 사용자: {getattr(self.user, 'id', 'None')}")
+
         if not self.user:
-            logger.error("CookingPanelView.refresh: self.user가 설정되지 않았습니다. UI 업데이트를 중단합니다.")
+            logger.error("[refresh] self.user가 설정되지 않았습니다. UI 업데이트를 중단합니다.")
             if interaction:
                 await interaction.followup.send("오류: 사용자 정보를 불러올 수 없습니다.", ephemeral=True)
             return
 
         cauldron_res = await supabase.table('cauldrons').select('*').eq('user_id', str(self.user.id)).order('slot_number').execute()
         self.cauldrons = cauldron_res.data if cauldron_res.data else []
+        logger.info(f"[refresh] 가마솥 정보 새로고침 완료. 총 {len(self.cauldrons)}개.")
         
         await self.build_components()
         embed = await self.build_embed()
@@ -164,21 +183,25 @@ class CookingPanelView(ui.View):
         try:
             target_message = self.message or (interaction.message if interaction else None)
             if target_message:
+                logger.info(f"[refresh] 기존 메시지(ID: {target_message.id})를 수정합니다.")
                 await target_message.edit(content=None, embed=embed, view=self)
             else:
+                logger.warning("[refresh] 대상 메시지가 없어 새로 생성합니다.")
                 channel = interaction.channel if interaction else None
                 if channel:
                     self.message = await channel.send(content=None, embed=embed, view=self)
                     await supabase.table('user_settings').update({'kitchen_panel_message_id': self.message.id}).eq('user_id', str(self.user.id)).execute()
+                    logger.info(f"[refresh] 새 메시지 생성 완료 (ID: {self.message.id}). DB에 저장했습니다.")
         except (discord.NotFound, AttributeError, discord.HTTPException) as e:
-            logger.warning(f"요리 패널 메시지 수정/생성 실패, 재생성을 시도합니다: {e}")
+            logger.warning(f"[refresh] 요리 패널 메시지 수정/생성 실패, 재생성을 시도합니다: {e}")
             channel = interaction.channel if interaction else (self.message.channel if self.message else None)
             if channel:
                 try:
                     self.message = await channel.send(content=None, embed=embed, view=self)
                     await supabase.table('user_settings').update({'kitchen_panel_message_id': self.message.id}).eq('user_id', str(self.user.id)).execute()
+                    logger.info(f"[refresh] 메시지 재생성 성공 (ID: {self.message.id}).")
                 except Exception as e_inner:
-                    logger.error(f"요리 패널 메시지 재생성 최종 실패: {e_inner}")
+                    logger.error(f"[refresh] 요리 패널 메시지 재생성 최종 실패: {e_inner}")
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"🍲 {self.user.display_name}의 부엌", color=0xE67E22)
@@ -468,13 +491,14 @@ class Cooking(commands.Cog):
         if self.active_views_loaded:
             return
 
-        logger.info("이전에 활성화된 부엌(요리) View를 다시 로드합니다...")
+        # ▼▼▼ [로깅 추가] ▼▼▼
+        logger.info("[ON READY] 이전에 활성화된 부엌(요리) View를 다시 로드합니다...")
         
         try:
             res = await supabase.table('user_settings').select('kitchen_thread_id, kitchen_panel_message_id').not_.is_('kitchen_thread_id', None).not_.is_('kitchen_panel_message_id', None).execute()
 
             if not (res and res.data):
-                logger.info("다시 로드할 활성 부엌 View가 없습니다.")
+                logger.info("[ON READY] 다시 로드할 활성 부엌 View가 없습니다.")
                 self.active_views_loaded = True
                 return
 
@@ -486,13 +510,15 @@ class Cooking(commands.Cog):
                 if not (thread_id and message_id):
                     continue
                 
+                # ▼▼▼ [로깅 추가] ▼▼▼
+                logger.info(f"[ON READY] 메시지 ID {message_id}에 CookingPanelView를 다시 연결합니다.")
                 self.bot.add_view(CookingPanelView(self), message_id=int(message_id))
                 loaded_count += 1
             
-            logger.info(f"총 {loaded_count}개의 부엌 View를 성공적으로 다시 로드했습니다.")
+            logger.info(f"[ON READY] 총 {loaded_count}개의 부엌 View를 성공적으로 다시 로드했습니다.")
 
         except Exception as e:
-            logger.error(f"활성 부엌 View를 다시 로드하는 중 오류가 발생했습니다: {e}", exc_info=True)
+            logger.error(f"[ON READY] 활성 부엌 View를 다시 로드하는 중 오류가 발생했습니다: {e}", exc_info=True)
         
         self.active_views_loaded = True
 
