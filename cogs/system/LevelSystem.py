@@ -295,24 +295,28 @@ class LevelPanelView(ui.View):
         retry_after = bucket.update_rate_limit()
 
         if retry_after:
-            # ▼▼▼ [핵심 수정] 아래 4줄의 코드를 새로운 동적 타이머 코드로 교체합니다. ▼▼▼
-            # 쿨타임이 다시 사용 가능해지는 정확한 시간을 계산합니다.
             available_at = discord.utils.utcnow() + timedelta(seconds=retry_after)
             
-            # 디스코드 타임스탬프를 사용하여 동적으로 변하는 메시지를 보냅니다.
             await interaction.response.send_message(
                 f"⏳ 잠시 후 다시 시도해주세요. (사용 가능: {discord.utils.format_dt(available_at, style='R')})",
                 ephemeral=True,
                 delete_after=10
             )
-            # ▲▲▲ [핵심 수정] ▲▲▲
             return
 
+        # ▼▼▼ [핵심 수정] 아래 로직 전체를 새로운 방식으로 변경합니다. ▼▼▼
         try:
-            await interaction.response.send_message("요청을 처리하는 중입니다...", ephemeral=False, delete_after=5)
-            level_embed = await build_level_embed(interaction.user)
-            await interaction.channel.send(embed=level_embed)
+            # 1. 먼저 상호작용을 '생각 중' 상태로 만듭니다.
+            await interaction.response.defer(ephemeral=False)
             
+            # 2. 레벨 임베드를 생성합니다.
+            level_embed = await build_level_embed(interaction.user)
+            
+            # 3. followup.send()를 사용하여 최종 응답을 보냅니다.
+            #    이렇게 하면 "요청을 처리하는 중입니다" 메시지가 남지 않습니다.
+            await interaction.followup.send(embed=level_embed, ephemeral=False)
+            
+            # 4. 패널 재생성 로직은 그대로 유지합니다.
             panel_info = get_panel_id(self.cog.panel_key.replace("panel_", ""))
             if panel_info and (panel_channel := self.cog.bot.get_channel(panel_info['channel_id'])):
                 await self.cog.regenerate_panel(panel_channel, panel_key=self.cog.panel_key)
@@ -320,10 +324,9 @@ class LevelPanelView(ui.View):
         except Exception as e:
             logger.error(f"개인 레벨 확인 및 패널 재생성 중 오류 발생 (유저: {interaction.user.id}): {e}", exc_info=True)
             error_message = "❌ 상태 정보를 불러오는 중 오류가 발생했습니다."
-            msg = await interaction.followup.send(error_message, ephemeral=True)
-            await asyncio.sleep(5)
-            try: await msg.delete()
-            except discord.NotFound: pass
+            # 만약 defer() 후 오류가 발생하면 followup으로 오류 메시지를 보냅니다.
+            await interaction.followup.send(error_message, ephemeral=True)
+        # ▲▲▲ [핵심 수정] ▲▲▲
 
     @ui.button(label="랭킹 확인", style=discord.ButtonStyle.secondary, emoji="👑", custom_id="show_ranking_button")
     async def show_ranking_button(self, interaction: discord.Interaction, button: ui.Button):
