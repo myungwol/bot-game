@@ -68,7 +68,6 @@ class IngredientSelectView(ui.View):
         inventory = await get_inventory(self.user)
         item_db = get_item_database()
         
-        # [수정] 여러 솥에 재료를 추가할 때, 이미 한 솥에라도 들어간 재료는 목록에서 제외 (중복 방지)
         all_ingredients_in_selected = set()
         for cauldron in self.parent_view.get_selected_cauldrons():
             all_ingredients_in_selected.update((cauldron.get('current_ingredients') or {}).keys())
@@ -279,9 +278,7 @@ class CookingPanelView(ui.View):
 
         selected_cauldrons = self.get_selected_cauldrons()
         if selected_cauldrons:
-            # [핵심 수정] 재료 넣기는 선택된 모든 솥이 재료를 넣을 수 있는 상태일 때만 활성화
             can_add_ingredients = all(c['state'] in ['idle', 'adding_ingredients'] for c in selected_cauldrons)
-            
             can_clear = all(c.get('current_ingredients') and c['state'] in ['idle', 'adding_ingredients'] for c in selected_cauldrons)
             can_start_cooking = all(c.get('current_ingredients') and c['state'] in ['idle', 'adding_ingredients'] for c in selected_cauldrons)
 
@@ -338,7 +335,6 @@ class CookingPanelView(ui.View):
         view = IngredientSelectView(self)
         await view.start(interaction)
 
-    # [핵심 수정] 여러 가마솥에 재료를 동시에 추가하는 로직
     async def add_ingredient(self, interaction: discord.Interaction, item_name: str, quantity: int):
         await interaction.response.defer()
         selected_cauldrons = self.get_selected_cauldrons()
@@ -354,8 +350,11 @@ class CookingPanelView(ui.View):
         for cauldron in selected_cauldrons:
             current_ingredients = cauldron.get('current_ingredients') or {}
             current_ingredients[item_name] = current_ingredients.get(item_name, 0) + quantity
+            # [핵심 수정] DB 오류를 해결하기 위해 user_id와 slot_number를 명시적으로 추가
             updates_to_perform.append({
                 'id': cauldron['id'],
+                'user_id': str(self.user.id),
+                'slot_number': cauldron['slot_number'],
                 'state': 'adding_ingredients',
                 'current_ingredients': current_ingredients
             })
@@ -409,6 +408,8 @@ class CookingPanelView(ui.View):
 
             db_updates.append({
                 'id': cauldron['id'],
+                'user_id': str(self.user.id),
+                'slot_number': cauldron['slot_number'],
                 'state': 'cooking',
                 'cooking_started_at': now.isoformat(),
                 'cooking_completes_at': completes_at.isoformat(),
