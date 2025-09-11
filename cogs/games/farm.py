@@ -693,7 +693,7 @@ class Farm(commands.Cog):
             
             keys_to_delete = [req['config_key'] for req in response.data]
             
-            tasks = []
+            # ▼▼▼ [핵심 수정] asyncio.gather를 사용하는 대신, for 루프로 순차 처리하도록 변경합니다. ▼▼▼
             for req in response.data:
                 try:
                     user_id = int(req['config_key'].split('_')[-1])
@@ -702,12 +702,13 @@ class Farm(commands.Cog):
                     if user and farm_data and farm_data.get('thread_id'):
                         if thread := self.bot.get_channel(farm_data['thread_id']):
                             force_new = req.get('config_value', {}).get('force_new', False)
-                            tasks.append(self.update_farm_ui(thread, user, farm_data, force_new))
+                            # 하나씩 순차적으로 업데이트를 실행합니다.
+                            await self.update_farm_ui(thread, user, farm_data, force_new)
+                            # Rate Limit을 피하기 위해 각 업데이트 사이에 1.5초의 지연을 줍니다.
+                            await asyncio.sleep(1.5)
                 except (ValueError, IndexError):
                     logger.warning(f"잘못된 형식의 농장 UI 업데이트 요청 키 발견: {req.get('config_key')}")
-
-            if tasks:
-                await asyncio.gather(*tasks)
+            # ▲▲▲ [핵심 수정] ▲▲▲
 
             if keys_to_delete:
                 await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
