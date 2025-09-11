@@ -108,7 +108,6 @@ class CookingPanelView(ui.View):
         res = await supabase.table('user_settings').select('user_id, kitchen_panel_message_id').eq('kitchen_thread_id', interaction.channel.id).maybe_single().execute()
         
         if not (res and res.data):
-            # defer()를 먼저 호출하여 "This interaction failed" 오류를 방지합니다.
             if not interaction.response.is_done(): await interaction.response.defer()
             await interaction.followup.send("이 부엌 정보를 찾을 수 없습니다. 채널을 다시 만들어주세요.", ephemeral=True, delete_after=10)
             return False
@@ -130,7 +129,7 @@ class CookingPanelView(ui.View):
                 self.message = await interaction.channel.fetch_message(int(message_id))
             except (discord.NotFound, discord.Forbidden):
                 logger.warning(f"부엌 패널 메시지(ID: {message_id})를 찾을 수 없어 새로 생성될 수 있습니다.")
-                self.message = None # 메시지를 찾지 못하면 refresh에서 새로 생성하도록 유도
+                self.message = None
         
         cauldron_res = await supabase.table('cauldrons').select('*').eq('user_id', str(owner_id)).order('slot_number').execute()
         self.cauldrons = cauldron_res.data if cauldron_res.data else []
@@ -146,7 +145,6 @@ class CookingPanelView(ui.View):
         if interaction and not interaction.response.is_done():
             await interaction.response.defer()
 
-        # refresh가 호출되는 시점에는 user 정보가 반드시 필요합니다.
         if not self.user:
             logger.error("CookingPanelView.refresh: self.user가 설정되지 않았습니다. UI 업데이트를 중단합니다.")
             if interaction:
@@ -164,7 +162,6 @@ class CookingPanelView(ui.View):
             if target_message:
                 await target_message.edit(content=None, embed=embed, view=self)
             else:
-                # 메시지를 찾지 못했거나 없는 경우 새로 생성하고 DB에 ID를 업데이트합니다.
                 channel = interaction.channel if interaction else None
                 if channel:
                     self.message = await channel.send(content=None, embed=embed, view=self)
@@ -185,9 +182,9 @@ class CookingPanelView(ui.View):
         total_cauldrons = inventory.get("가마솥", 0)
         
         installed_cauldrons = len(self.cauldrons)
-        embed.description = f"**보유한 가마솥:** {installed_cauldrons} / {total_cauldrons} (최대 {MAX_CAULDRONS}개)"
-
-        # --- 모든 가마솥 정보 상시 표시 로직 ---
+        description_parts = [f"**보유한 가마솥:** {installed_cauldrons} / {total_cauldrons} (최대 {MAX_CAULDRONS}개)"]
+        embed.description = "\n\n".join(description_parts)
+        
         if not self.cauldrons:
             embed.add_field(
                 name="가마솥 없음",
@@ -195,7 +192,6 @@ class CookingPanelView(ui.View):
                 inline=False
             )
         else:
-            # 상태에 따라 가마솥을 정렬 (요리 완료 > 요리 중 > 재료 넣는 중 > 대기)
             state_order = {'ready': 0, 'cooking': 1, 'adding_ingredients': 2, 'idle': 3}
             sorted_cauldrons = sorted(self.cauldrons, key=lambda c: state_order.get(c['state'], 4))
             
@@ -206,7 +202,6 @@ class CookingPanelView(ui.View):
                 state_map = {'idle': '대기 중', 'adding_ingredients': '재료 넣는 중', 'cooking': '요리 중', 'ready': '요리 완료'}
                 state_str = state_map.get(state, '알 수 없음')
                 
-                # 선택된 가마솥을 강조하기 위한 이모지
                 title_emoji = "▶️" if self.selected_cauldron_slot == slot_number else "솥"
                 
                 field_value_parts = [f"**상태:** {state_str}"]
@@ -232,7 +227,6 @@ class CookingPanelView(ui.View):
                     inline=False
                 )
 
-        # --- 능력 표시 로직 (최하단으로 이동) ---
         owner_abilities = await get_user_abilities(self.user.id)
         
         all_cooking_abilities_map = {}
@@ -298,8 +292,6 @@ class CookingPanelView(ui.View):
                 child.callback = self.dispatch_button_callback
     
     async def dispatch_button_callback(self, interaction: discord.Interaction):
-        # interaction_check에서 이미 defer()를 호출하지 않으므로, 각 콜백에서 필요 시 호출합니다.
-        
         custom_id = interaction.data['custom_id']
         action = custom_id.split(':')[-1]
 
@@ -459,6 +451,40 @@ class Cooking(commands.Cog):
         self.currency_icon = "🪙"
         self.check_completed_cooking.start()
         self.kitchen_ui_updater.start()
+        self.active_views_loaded = False
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if self.active_views_loaded:
+            return
+
+        logger.info("이전에 활성화된 부엌(요리) View를 다시 로드합니다...")
+        
+        try:
+            res = await supabase.table('user_settings').select('kitchen_thread_id, kitchen_panel_message_id').not_.is_('kitchen_thread_id', None).not_.is_('kitchen_panel_message_id', None).execute()
+
+            if not (res and res.data):
+                logger.info("다시 로드할 활성 부엌 View가 없습니다.")
+                self.active_views_loaded = True
+                return
+
+            loaded_count = 0
+            for setting in res.data:
+                thread_id = setting.get('kitchen_thread_id')
+                message_id = setting.get('kitchen_panel_message_id')
+
+                if not (thread_id and message_id):
+                    continue
+                
+                self.bot.add_view(CookingPanelView(self), message_id=int(message_id))
+                loaded_count += 1
+            
+            logger.info(f"총 {loaded_count}개의 부엌 View를 성공적으로 다시 로드했습니다.")
+
+        except Exception as e:
+            logger.error(f"활성 부엌 View를 다시 로드하는 중 오류가 발생했습니다: {e}", exc_info=True)
+        
+        self.active_views_loaded = True
 
     async def cog_load(self):
         self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙")
@@ -505,7 +531,7 @@ class Cooking(commands.Cog):
     @check_completed_cooking.before_loop
     async def before_check_completed_cooking(self): await self.bot.wait_until_ready()
 
-    @tasks.loop(seconds=5.0)
+    @tasks.loop(seconds=25.0)
     async def kitchen_ui_updater(self):
         try:
             res = await supabase.table('bot_configs').select('config_key').like('config_key', 'kitchen_ui_update_request_%').execute()
@@ -539,10 +565,6 @@ class Cooking(commands.Cog):
                     panel_view = CookingPanelView(self, user, message)
                     await panel_view.refresh()
 
-                    # ▼▼▼ [핵심 수정] 각 패널 업데이트 후 1.5초 지연을 추가합니다. ▼▼▼
-                    await asyncio.sleep(1.5)
-                    # ▲▲▲ [핵심 수정] ▲▲▲
-
                 except Exception as e:
                     logger.error(f"개별 키친 UI 업데이트 중 오류({req['config_key']}): {e}", exc_info=True)
             
@@ -550,7 +572,6 @@ class Cooking(commands.Cog):
                 await supabase.table('bot_configs').delete().in_('config_key', tuple(keys_to_delete)).execute()
         except Exception as e:
             logger.error(f"키친 UI 업데이터 루프 중 오류: {e}", exc_info=True)
-
 
     @kitchen_ui_updater.before_loop
     async def before_kitchen_ui_updater(self): await self.bot.wait_until_ready()
@@ -600,10 +621,7 @@ class Cooking(commands.Cog):
             if user.display_avatar:
                 log_embed.set_thumbnail(url=user.display_avatar.url)
             
-            # ▼▼▼ [핵심 수정] 아래 라인에서 content 와 allowed_mentions 부분을 삭제합니다. ▼▼▼
             await log_channel.send(embed=log_embed)
-            # ▲▲▲ [핵심 수정] ▲▲▲
-            
         except Exception as e:
             logger.error(f"레시피 발견 처리 중 오류: {e}", exc_info=True)
 
