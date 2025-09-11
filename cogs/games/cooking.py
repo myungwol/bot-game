@@ -529,7 +529,6 @@ class Cooking(commands.Cog):
 
             ingredients_str = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in parsed_ingredients.items()])
             
-            # ▼▼▼ [핵심 수정] 아래 로직 전체를 변경합니다. ▼▼▼
             log_embed = format_embed_from_db(
                 embed_data,
                 user_mention=user.mention,
@@ -537,12 +536,13 @@ class Cooking(commands.Cog):
                 ingredients_str=ingredients_str
             )
 
-            # 사용자가 아바타를 가지고 있을 경우에만 썸네일을 설정합니다.
             if user.display_avatar:
                 log_embed.set_thumbnail(url=user.display_avatar.url)
+            
+            # ▼▼▼ [핵심 수정] 아래 라인에서 content 와 allowed_mentions 부분을 삭제합니다. ▼▼▼
+            await log_channel.send(embed=log_embed)
             # ▲▲▲ [핵심 수정] ▲▲▲
             
-            await log_channel.send(content="@here", embed=log_embed, allowed_mentions=discord.AllowedMentions(everyone=True))
         except Exception as e:
             logger.error(f"레시피 발견 처리 중 오류: {e}", exc_info=True)
 
