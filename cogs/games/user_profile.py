@@ -6,7 +6,6 @@ from discord import ui
 import logging
 import asyncio
 import math
-import time
 from typing import Optional, Dict, List, Any
 
 from utils.database import (
@@ -299,8 +298,8 @@ class ProfileView(ui.View):
             description += f"**{self.status_message}**\n\n"
         
         if self.current_page == "info":
+            # ... (info 탭 로직은 그대로 유지)
             embed.add_field(name=get_string("profile_view.info_tab.field_balance", "소지금"), value=f"`{balance:,}`{self.currency_icon}", inline=True)
-            
             job_mention = "`없음`"
             job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
             job_role_map = job_system_config.get("JOB_ROLE_MAP", {})
@@ -308,9 +307,7 @@ class ProfileView(ui.View):
                 job_res = await supabase.table('user_jobs').select('jobs(job_key, job_name)').eq('user_id', self.user.id).maybe_single().execute()
                 if job_res and job_res.data and job_res.data.get('jobs'):
                     job_info = job_res.data['jobs']
-                    job_key = job_info['job_key']
-                    job_name = job_info['job_name']
-                    
+                    job_key, job_name = job_info['job_key'], job_info['job_name']
                     if (role_key := job_role_map.get(job_key)) and (role_id := get_id(role_key)):
                         job_mention = f"<@&{role_id}>"
                     else:
@@ -318,29 +315,27 @@ class ProfileView(ui.View):
             except Exception as e:
                 logger.error(f"직업 정보 조회 중 오류 발생 (유저: {self.user.id}): {e}")
             embed.add_field(name="직업", value=job_mention, inline=True)
-
             user_rank_mention = get_string("profile_view.info_tab.default_rank_name", "새내기 주민")
             rank_roles_config = get_config("PROFILE_RANK_ROLES", []) 
-            
             if rank_roles_config:
                 user_role_ids = {role.id for role in self.user.roles}
                 for rank_info in rank_roles_config:
                     if (role_key := rank_info.get("role_key")) and (rank_role_id := get_id(role_key)) and rank_role_id in user_role_ids:
-                        user_rank_mention = f"<@&{rank_role_id}>"
-                        break
-            
+                        user_rank_mention = f"<@&{rank_role_id}>"; break
             embed.add_field(name=get_string("profile_view.info_tab.field_rank", "등급"), value=user_rank_mention, inline=True)
             description += get_string("profile_view.info_tab.description", "아래 탭을 선택하여 상세 정보를 확인하세요.")
             embed.description = description
         
         elif self.current_page == "item":
-            # [수정] ui_defaults.py에 정의된 제외 목록을 가져와 필터링
             excluded_categories = get_string("profile_view.item_tab.excluded_categories", [])
+            # [디버깅 로그 추가]
+            logger.info(f"[Profile Item Tab] 필터링에 사용될 제외 카테고리 목록: {excluded_categories}")
             general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
             item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`개" for n, c in general_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items", "보유 중인 아이템이 없습니다."))
         
         elif self.current_page == "gear":
+            # ... (gear 탭 로직은 그대로 유지)
             gear_categories = {
                 "낚시": {"rod": "🎣 낚싯대", "bait": "🐛 미끼"},
                 "농장": {"hoe": "🪓 괭이", "watering_can": "💧 물뿌리개"},
@@ -349,24 +344,16 @@ class ProfileView(ui.View):
             for category_name, items in gear_categories.items():
                 field_lines = [f"**{label}:** `{gear.get(key, BARE_HANDS)}`" for key, label in items.items()]
                 embed.add_field(name=f"**[ 현재 장비: {category_name} ]**", value="\n".join(field_lines), inline=False)
-            
             equipped_gear_names = set(gear.values())
             owned_gear_categories = [GEAR_CATEGORY, BAIT_CATEGORY]
-            
-            owned_gear_items = {
-                name: count for name, count in inventory.items()
-                if item_db.get(name, {}).get('category') in owned_gear_categories
-                and name not in equipped_gear_names
-            }
-
+            owned_gear_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') in owned_gear_categories and name not in equipped_gear_names}
             if owned_gear_items:
                 gear_list = [f"{item_db.get(n,{}).get('emoji','🔧')} **{n}**: `{c}`개" for n, c in sorted(owned_gear_items.items())]
                 embed.add_field(name="\n**[ 보유 중인 장비 ]**", value="\n".join(gear_list), inline=False)
             else:
                 embed.add_field(name="\n**[ 보유 중인 장비 ]**", value=get_string("profile_view.gear_tab.no_owned_gear", "보유 중인 장비가 없습니다."), inline=False)
-            
             embed.description = description
-        
+
         elif self.current_page == "fish":
             # ... (fish 탭 로직은 그대로 유지)
             aquarium = self.cached_data.get("aquarium", [])
@@ -394,13 +381,11 @@ class ProfileView(ui.View):
             item_list = [f"{item_db.get(n,{}).get('emoji','🌾')} **{n}**: `{c}`개" for n, c in crop_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.crop_tab.no_items", "보유 중인 작물이 없습니다."))
 
-        # ▼▼▼ [핵심 추가] 음식(food) 탭에 대한 로직 추가 ▼▼▼
         elif self.current_page == "food":
             food_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "요리"}
             item_list = [f"{item_db.get(n,{}).get('emoji','🍲')} **{n}**: `{c}`개" for n, c in food_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.food_tab.no_items", "보유 중인 음식이 없습니다."))
-        # ▲▲▲ [핵심 추가] 종료 ▲▲▲
-        
+            
         else:
             embed.description = description + get_string("profile_view.wip_tab.description", "이 기능은 현재 준비 중입니다.")
         return embed
