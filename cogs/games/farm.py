@@ -570,28 +570,56 @@ class Farm(commands.Cog):
             owner_abilities_map = {uid: set(abilities) for uid, abilities in zip(owner_ids, abilities_results)}
 
             plots_to_update_db = []
-            today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
             
+            now_kst = datetime.now(KST)
+            today_date_str = now_kst.date().isoformat()
+
             growth_ability_activations = defaultdict(lambda: {'count': 0, 'thread_id': None})
 
             for plot in all_plots:
+                # 1. 수동 업데이트 중복 실행 방지
+                if plot.get('last_growth_check_at') == today_date_str:
+                    continue
+
                 update_payload = plot.copy()
                 del update_payload['farms']
 
                 owner_id = plot.get('farms', {}).get('user_id')
                 item_info = item_info_map.get(plot['planted_item_name'])
-                if not owner_id or not item_info:
-                    continue
-                
-                if plot['growth_stage'] >= item_info.get('max_growth_stage', 99):
+                if not owner_id or not item_info or plot['growth_stage'] >= item_info.get('max_growth_stage', 99):
                     continue
 
                 owner_abilities = owner_abilities_map.get(owner_id, set())
                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
+                last_watered_kst_date = last_watered_dt.astimezone(KST).date()
                 
-                is_watered_today = last_watered_dt.astimezone(KST) >= today_jst_midnight or is_raining
-                
-                if is_watered_today:
+                # 2. 마지막으로 물을 준 날로부터 며칠이 지났는지 계산
+                days_since_watered = (now_kst.date() - last_watered_kst_date).days
+
+                should_grow = False
+                should_wither = False
+
+                # 3. 사용자님의 시나리오를 정확히 구현하는 최종 로직
+                if is_raining or days_since_watered == 0:
+                    # Case 1: 오늘 물을 줬거나 비가 옴 -> 성장
+                    should_grow = True
+                elif 'farm_water_retention_1' in owner_abilities:
+                    # Case 2: 능력이 있는 경우
+                    if days_since_watered == 1:
+                        # Case 2-1: 어제 물을 줬음 -> 성장 (능력 발동)
+                        should_grow = True
+                    elif days_since_watered == 2:
+                        # Case 2-2: 그저께 물을 줬음 -> 성장 멈춤, 하지만 생존 (아무것도 하지 않음)
+                        pass
+                    else: # 3일 이상 경과
+                        # Case 2-3: 3일 이상 물을 안 줌 -> 시듦
+                        should_wither = True
+                else:
+                    # Case 3: 능력이 없고, 어제 이후로 물을 안 줌 -> 시듦
+                    if days_since_watered >= 1:
+                        should_wither = True
+
+                if should_grow:
                     growth_amount = 1
                     if 'farm_growth_speed_up_2' in owner_abilities and not plot.get('is_regrowing', False):
                         growth_amount += 1
@@ -602,9 +630,11 @@ class Farm(commands.Cog):
                         plot['growth_stage'] + growth_amount,
                         item_info.get('max_growth_stage', 99)
                     )
-                else:
+                elif should_wither:
                     update_payload['state'] = 'withered'
                 
+                # 4. 로직 처리 후, 오늘 날짜를 기록하여 중복 실행을 방지
+                update_payload['last_growth_check_at'] = today_date_str
                 plots_to_update_db.append(update_payload)
 
             if plots_to_update_db:
@@ -615,7 +645,7 @@ class Farm(commands.Cog):
                 for user_id in affected_farms:
                     await self.request_farm_ui_update(user_id)
             else:
-                logger.info("상태가 변경된 작물이 없습니다.")
+                logger.info("상태가 변경된 작물이 없거나, 모두 오늘 이미 업데이트되었습니다.")
 
             for user_id, data in growth_ability_activations.items():
                 if data['count'] > 0 and data['thread_id']:
