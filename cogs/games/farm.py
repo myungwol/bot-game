@@ -665,10 +665,6 @@ class Farm(commands.Cog):
             logger.error(f"일일 작물 업데이트 중 오류: {e}", exc_info=True)
         logger.info("[CROP UPDATE] 일일 작물 상태 업데이트 작업을 마칩니다.")
         
-    @daily_crop_update.before_loop
-    async def before_daily_crop_update(self):
-        await self.bot.wait_until_ready()
-
     @tasks.loop(seconds=30.0)
     async def farm_ui_updater_task(self):
         response = None
@@ -695,17 +691,13 @@ class Farm(commands.Cog):
                 try:
                     user_id = int(req['config_key'].split('_')[-1])
                     user = self.bot.get_user(user_id)
-                    # ▼▼▼ [핵심 수정] 여기서 farm_data를 미리 가져올 필요가 없습니다. ▼▼▼
-                    # farm_data = await get_farm_data(user_id)
-                    if user: # farm_data 확인 로직 제거
-                        # ▼▼▼ [핵심 수정] farm_data를 가져오지 않고, 스레드 채널만 확인합니다. ▼▼▼
-                        res = await supabase.table('farms').select('thread_id').eq('user_id', str(user_id)).maybe_single().execute()
-                        if res and res.data and (thread_id := res.data.get('thread_id')):
-                            if thread := self.bot.get_channel(thread_id):
-                                force_new = req.get('config_value', {}).get('force_new', False)
-                                logger.info(f"[UI UPDATER] 유저 ID {user_id}의 농장 UI 업데이트를 실행합니다. (스레드 ID: {thread.id})")
-                                # update_farm_ui는 이제 user와 thread만 필요로 합니다.
-                                await self.update_farm_ui(thread, user, force_new=force_new)
+                    # ▼▼▼ [핵심 수정] farm_data를 다시 불러오고, update_farm_ui에 전달합니다. ▼▼▼
+                    farm_data = await get_farm_data(user_id)
+                    if user and farm_data and farm_data.get('thread_id'):
+                        if thread := self.bot.get_channel(farm_data['thread_id']):
+                            force_new = req.get('config_value', {}).get('force_new', False)
+                            logger.info(f"[UI UPDATER] 유저 ID {user_id}의 농장 UI 업데이트를 실행합니다. (스레드 ID: {thread.id})")
+                            await self.update_farm_ui(thread, user, farm_data, force_new=force_new)
                 except (ValueError, IndexError):
                     logger.warning(f"잘못된 형식의 농장 UI 업데이트 요청 키 발견: {req.get('config_key')}")
 
@@ -836,15 +828,21 @@ class Farm(commands.Cog):
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User, farm_data: Dict, force_new: bool = False, message: discord.Message = None):
         lock = self.thread_locks.setdefault(thread.id, asyncio.Lock())
         async with lock:
-            # ▼▼▼ [핵심 수정] farm_data를 함수 인자로 받지 않고, 함수 내부에서 직접 최신 데이터를 불러옵니다. ▼▼▼
-            current_farm_data = await get_farm_data(user.id)
-            if not (user and current_farm_data):
-                logger.warning(f"[UI UPDATE FUNC] 사용자({user.id})의 최신 농장 데이터를 가져올 수 없어 UI 업데이트를 중단합니다.")
+            # ▼▼▼ [핵심 수정] 함수 내부에서 데이터를 다시 불러오는 대신, 인자로 받은 farm_data를 사용합니다. ▼▼▼
+            # 하지만 안정성을 위해 받은 데이터가 유효한지 다시 한번 확인합니다.
+            if not (user and farm_data):
+                logger.warning(f"[UI UPDATE FUNC] 유효하지 않은 데이터로 UI 업데이트가 요청되어 중단합니다.")
                 return
 
             logger.info(f"[UI UPDATE FUNC] update_farm_ui 함수 호출됨. 사용자: {user.id}, 스레드: {thread.id}")
 
             try:
+                # ▼▼▼ [핵심 수정] 만약의 경우를 대비해, 최신 데이터를 한 번 더 가져와서 교체합니다. ▼▼▼
+                current_farm_data = await get_farm_data(user.id)
+                if not current_farm_data:
+                    logger.error(f"사용자 {user.id}의 농장 데이터를 찾을 수 없어 UI 업데이트에 실패했습니다.")
+                    return
+
                 message_to_edit = message
                 
                 if not message_to_edit:
@@ -863,7 +861,6 @@ class Farm(commands.Cog):
                         pass
                     message_to_edit = None
 
-                # 최신 데이터로 임베드를 생성합니다.
                 embed = await self.build_farm_embed(current_farm_data, user)
                 view = FarmUIView(self)
                 
