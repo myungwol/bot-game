@@ -10,7 +10,7 @@ import math
 from typing import Optional, Dict, List, Any
 from datetime import time as dt_time, timezone, timedelta
 from collections import defaultdict
-from types import SimpleNamespace # <--- [추가] 이 라인을 파일 상단에 추가해주세요.
+from types import SimpleNamespace
 
 from utils.database import (
     supabase, get_panel_id, save_panel_id, get_id, get_config, 
@@ -292,12 +292,8 @@ class LevelPanelView(ui.View):
 
     @ui.button(label="상태 확인", style=discord.ButtonStyle.primary, emoji="📊", custom_id="level_check_button")
     async def check_level_button(self, interaction: discord.Interaction, button: ui.Button):
-        # ▼▼▼ [핵심 수정] 쿨타임 시스템이 요구하는 형식에 맞게 임시 객체를 생성 ▼▼▼
-        # CooldownMapping이 message.author.id를 찾으므로,
-        # author 속성이 interaction.user를 가리키는 임시 객체를 만들어 전달합니다.
         dummy_message = SimpleNamespace(author=interaction.user)
         bucket = self.cog.level_check_cooldown.get_bucket(dummy_message)
-        # ▲▲▲ [핵심 수정] 종료 ▲▲▲
         
         retry_after = bucket.update_rate_limit()
 
@@ -428,7 +424,6 @@ class LevelSystem(commands.Cog):
         new_level = result_data[0].get('new_level')
         logger.info(f"유저 {user.display_name}(ID: {user.id})가 레벨 {new_level}(으)로 레벨업했습니다.")
         
-        # 'level_tier_update_request'와 'job_advancement_request'를 DB에 저장
         await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
         
         game_config = get_config("GAME_CONFIG", {})
@@ -446,7 +441,7 @@ class LevelSystem(commands.Cog):
         handler_cog = self.bot.get_cog("JobAndTierHandler")
         if not handler_cog: return
 
-        user_updates = defaultdict(lambda: {"level": None, "advancement_level": None})
+        user_updates = defaultdict(lambda: {"level": None})
 
         for req in requests_by_prefix.get("level_tier_update", []):
             user_id = int(req['config_key'].split('_')[-1])
@@ -454,7 +449,8 @@ class LevelSystem(commands.Cog):
 
         for req in requests_by_prefix.get("job_advancement", []):
             user_id = int(req['config_key'].split('_')[-1])
-            user_updates[user_id]["advancement_level"] = req['config_value'].get('level')
+            if member := guild.get_member(user_id):
+                await handler_cog.trigger_advancement_check(member)
 
         for user_id, updates in user_updates.items():
             member = guild.get_member(user_id)
@@ -462,51 +458,33 @@ class LevelSystem(commands.Cog):
 
             if new_level := updates.get("level"):
                 await handler_cog.update_tier_role(member, new_level)
-            
-            if advancement_level := updates.get("advancement_level"):
-                await handler_cog.start_advancement_process(member, advancement_level)
 
     async def update_user_xp_and_level_from_admin(self, user: discord.Member, xp_to_add: int = 0, exact_level: Optional[int] = None) -> bool:
         try:
+            if xp_to_add > 0:
+                await log_activity(user.id, 'admin', xp_earned=xp_to_add)
+
             res = await supabase.table('user_levels').select('level, xp').eq('user_id', user.id).maybe_single().execute()
             
             if res and res.data:
                 current_data = res.data
             else:
                 current_data = {'level': 1, 'xp': 0}
-
-            current_xp = current_data.get('xp', 0)
+            
+            new_total_xp = current_data['xp']
             leveled_up = False
 
             if exact_level is not None:
-                new_level = max(1, exact_level) # 레벨은 최소 1
-                
-                # [핵심 수정] 새로운 레벨 설정 로직
-                xp_for_new_level = calculate_xp_for_level(new_level)
-                
-                # 현재 경험치가 목표 레벨의 최소 경험치보다 낮을 때만 경험치를 조정
-                if current_xp < xp_for_new_level:
-                    new_total_xp = xp_for_new_level
-                else:
-                    new_total_xp = current_xp # 경험치 손실 방지
-
-                if new_level > current_data.get('level', 1):
-                    leveled_up = True
-            else: # xp_to_add의 경우
-                new_total_xp = current_xp + xp_to_add
-                new_level = current_data.get('level', 1)
-                
-                # 레벨 1부터 시작하도록 보장
-                while new_level > 0 and calculate_xp_for_level(new_level + 1) <= new_total_xp:
+                new_level = exact_level
+                new_total_xp = calculate_xp_for_level(new_level)
+                if new_level > current_data['level']: leveled_up = True
+            else:
+                new_total_xp += xp_to_add
+                new_level = current_data['level']
+                while new_level > 0 and new_total_xp >= calculate_xp_for_level(new_level + 1):
                     new_level += 1
-                
-                if new_level > current_data.get('level', 1):
-                    leveled_up = True
-
-            # xp_to_add가 0보다 큰 경우에만 로그를 남기도록 수정 (레벨 설정 시에는 불필요)
-            if xp_to_add > 0:
-                await log_activity(user.id, 'admin', xp_earned=xp_to_add)
-
+                if new_level > current_data['level']: leveled_up = True
+            
             await supabase.table('user_levels').upsert({'user_id': user.id, 'level': new_level, 'xp': new_total_xp}).execute()
             
             if leveled_up:
@@ -514,7 +492,7 @@ class LevelSystem(commands.Cog):
             
             logger.info(f"관리자 요청으로 {user.display_name}님의 레벨/XP가 성공적으로 업데이트되었습니다. (New Level: {new_level}, New XP: {new_total_xp})")
             return True
-
+        
         except Exception as e:
             logger.error(f"관리자 요청으로 레벨/XP 업데이트 중 오류 발생 (유저: {user.id}): {e}", exc_info=True)
             return False
