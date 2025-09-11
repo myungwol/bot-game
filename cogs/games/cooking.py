@@ -185,8 +185,45 @@ class CookingPanelView(ui.View):
         total_cauldrons = inventory.get("가마솥", 0)
         
         installed_cauldrons = len(self.cauldrons)
-        embed.description = f"**보유한 가마솥:** {installed_cauldrons} / {total_cauldrons} (최대 {MAX_CAULDRONS}개)"
         
+        # ▼▼▼ [핵심 수정] 아래 embed.description 부분을 새로운 로직으로 교체합니다. ▼▼▼
+        description_parts = [f"**보유한 가마솥:** {installed_cauldrons} / {total_cauldrons} (최대 {MAX_CAULDRONS}개)"]
+
+        # --- 능력 표시 로직 시작 ---
+        owner_abilities = await get_user_abilities(self.user.id)
+        
+        # 모든 요리 관련 능력 정보를 가져옵니다.
+        all_cooking_abilities_map = {}
+        job_advancement_data = get_config("JOB_ADVANCEMENT_DATA", {})
+        
+        if isinstance(job_advancement_data, dict):
+            for level_data in job_advancement_data.values():
+                for job in level_data:
+                    # 직업 키에 'chef'가 포함된 경우 (chef, master_chef 등)
+                    if 'chef' in job.get('job_key', ''):
+                        for ability in job.get('abilities', []):
+                            all_cooking_abilities_map[ability['ability_key']] = {
+                                'name': ability['ability_name'],
+                                'description': ability['description']
+                            }
+        
+        active_effects = []
+        EMOJI_MAP = {'ingredient': '✨', 'time': '⏱️', 'quality': '⭐', 'yield': '🎁'}
+        
+        for ability_key in owner_abilities:
+            if ability_key in all_cooking_abilities_map:
+                ability_info = all_cooking_abilities_map[ability_key]
+                # 키워드에 맞는 이모지를 찾습니다.
+                emoji = next((e for key, e in EMOJI_MAP.items() if key in ability_key), '🍳')
+                active_effects.append(f"> {emoji} **{ability_info['name']}**: {ability_info['description']}")
+        
+        if active_effects:
+            description_parts.append(f"**--- 요리 패시브 효과 ---**\n" + "\n".join(active_effects))
+        
+        embed.description = "\n\n".join(description_parts)
+        # --- 능력 표시 로직 종료 ---
+        # ▲▲▲ [핵심 수정] ▲▲▲
+
         cauldron = self.get_selected_cauldron()
         if cauldron:
             state_map = {'idle': '대기 중', 'adding_ingredients': '재료 넣는 중', 'cooking': '요리 중', 'ready': '요리 완료'}
