@@ -334,7 +334,8 @@ class ProfileView(ui.View):
             embed.description = description
         
         elif self.current_page == "item":
-            excluded_categories = [GEAR_CATEGORY, FARM_TOOL_CATEGORY, "농장_씨앗", "농장_작물", BAIT_CATEGORY, "광물"]
+            # [수정] ui_defaults.py에 정의된 제외 목록을 가져와 필터링
+            excluded_categories = get_string("profile_view.item_tab.excluded_categories", [])
             general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
             item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`개" for n, c in general_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items", "보유 중인 아이템이 없습니다."))
@@ -365,8 +366,9 @@ class ProfileView(ui.View):
                 embed.add_field(name="\n**[ 보유 중인 장비 ]**", value=get_string("profile_view.gear_tab.no_owned_gear", "보유 중인 장비가 없습니다."), inline=False)
             
             embed.description = description
-
+        
         elif self.current_page == "fish":
+            # ... (fish 탭 로직은 그대로 유지)
             aquarium = self.cached_data.get("aquarium", [])
             if not aquarium:
                 embed.description = description + get_string("profile_view.fish_tab.no_fish", "어항에 물고기가 없습니다.")
@@ -376,6 +378,13 @@ class ProfileView(ui.View):
                 fish_on_page = aquarium[self.fish_page_index * 10 : self.fish_page_index * 10 + 10]
                 embed.description = description + "\n".join([f"{f['emoji']} **{f['name']}**: `{f['size']}`cm" for f in fish_on_page])
                 embed.set_footer(text=get_string("profile_view.fish_tab.pagination_footer", "페이지 {current_page} / {total_pages}", current_page=self.fish_page_index + 1, total_pages=total_pages))
+        
+        # ▼▼▼ [핵심 추가] 음식(food) 탭에 대한 로직 추가 ▼▼▼
+        elif self.current_page == "food":
+            food_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "요리"}
+            item_list = [f"{item_db.get(n,{}).get('emoji','🍲')} **{n}**: `{c}`개" for n, c in food_items.items()]
+            embed.description = description + ("\n".join(item_list) or get_string("profile_view.food_tab.no_items", "보유 중인 음식이 없습니다."))
+        # ▲▲▲ [핵심 추가] 종료 ▲▲▲
                 
         elif self.current_page == "mineral":
             mineral_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "광물"}
