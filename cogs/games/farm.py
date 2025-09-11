@@ -545,7 +545,7 @@ class Farm(commands.Cog):
         
     @tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
-        logger.info("일일 작물 상태 업데이트 시작...")
+        logger.info("[CROP UPDATE] 일일 작물 상태 업데이트 작업을 시작합니다.")
         try:
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
@@ -553,7 +553,9 @@ class Farm(commands.Cog):
             planted_plots_res = await supabase.table('farm_plots').select('*, farms!inner(user_id, id, thread_id)').eq('state', 'planted').execute()
             
             if not (planted_plots_res and planted_plots_res.data):
-                logger.info("업데이트할 작물이 없습니다.")
+                logger.info("[CROP UPDATE] 업데이트할 작물이 없습니다.")
+                # ▼▼▼ [로깅 추가] ▼▼▼
+                logger.info("[CROP UPDATE] 일일 작물 상태 업데이트 작업을 마칩니다.")
                 return
 
             all_plots = planted_plots_res.data
@@ -573,11 +575,13 @@ class Farm(commands.Cog):
             
             now_kst = datetime.now(KST)
             today_date_str = now_kst.date().isoformat()
+            today_jst_midnight = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
+            yesterday_jst_midnight = today_jst_midnight - timedelta(days=1)
+            day_before_yesterday_jst_midnight = today_jst_midnight - timedelta(days=2)
 
             growth_ability_activations = defaultdict(lambda: {'count': 0, 'thread_id': None})
 
             for plot in all_plots:
-                # 1. 수동 업데이트 중복 실행 방지
                 if plot.get('last_growth_check_at') == today_date_str:
                     continue
 
@@ -593,29 +597,21 @@ class Farm(commands.Cog):
                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
                 last_watered_kst_date = last_watered_dt.astimezone(KST).date()
                 
-                # 2. 마지막으로 물을 준 날로부터 며칠이 지났는지 계산
                 days_since_watered = (now_kst.date() - last_watered_kst_date).days
 
                 should_grow = False
                 should_wither = False
 
-                # 3. 사용자님의 시나리오를 정확히 구현하는 최종 로직
                 if is_raining or days_since_watered == 0:
-                    # Case 1: 오늘 물을 줬거나 비가 옴 -> 성장
                     should_grow = True
                 elif 'farm_water_retention_1' in owner_abilities:
-                    # Case 2: 능력이 있는 경우
                     if days_since_watered == 1:
-                        # Case 2-1: 어제 물을 줬음 -> 성장 (능력 발동)
                         should_grow = True
                     elif days_since_watered == 2:
-                        # Case 2-2: 그저께 물을 줬음 -> 성장 멈춤, 하지만 생존 (아무것도 하지 않음)
                         pass
-                    else: # 3일 이상 경과
-                        # Case 2-3: 3일 이상 물을 안 줌 -> 시듦
+                    else:
                         should_wither = True
                 else:
-                    # Case 3: 능력이 없고, 어제 이후로 물을 안 줌 -> 시듦
                     if days_since_watered >= 1:
                         should_wither = True
 
@@ -633,19 +629,19 @@ class Farm(commands.Cog):
                 elif should_wither:
                     update_payload['state'] = 'withered'
                 
-                # 4. 로직 처리 후, 오늘 날짜를 기록하여 중복 실행을 방지
                 update_payload['last_growth_check_at'] = today_date_str
                 plots_to_update_db.append(update_payload)
 
             if plots_to_update_db:
                 await supabase.table('farm_plots').upsert(plots_to_update_db).execute()
-                logger.info(f"일일 작물 업데이트 완료. {len(plots_to_update_db)}개의 밭이 영향을 받았습니다. UI 업데이트를 요청합니다.")
+                logger.info(f"[CROP UPDATE] DB 업데이트 완료. {len(plots_to_update_db)}개의 밭이 영향을 받았습니다. UI 업데이트를 요청합니다.")
                 
                 affected_farms = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
                 for user_id in affected_farms:
+                    logger.info(f"[CROP UPDATE] 유저 ID {user_id}에 대한 UI 업데이트를 요청합니다.")
                     await self.request_farm_ui_update(user_id)
             else:
-                logger.info("상태가 변경된 작물이 없거나, 모두 오늘 이미 업데이트되었습니다.")
+                logger.info("[CROP UPDATE] 상태가 변경된 작물이 없거나, 모두 오늘 이미 업데이트되었습니다.")
 
             for user_id, data in growth_ability_activations.items():
                 if data['count'] > 0 and data['thread_id']:
@@ -658,6 +654,7 @@ class Farm(commands.Cog):
 
         except Exception as e:
             logger.error(f"일일 작물 업데이트 중 오류: {e}", exc_info=True)
+        logger.info("[CROP UPDATE] 일일 작물 상태 업데이트 작업을 마칩니다.")
             
     @daily_crop_update.before_loop
     async def before_daily_crop_update(self):
@@ -682,6 +679,7 @@ class Farm(commands.Cog):
             if not response or not response.data: 
                 return
             
+            logger.info(f"[UI UPDATER] {len(response.data)}개의 농장 UI 업데이트 요청을 감지했습니다.")
             keys_to_delete = [req['config_key'] for req in response.data]
             
             for req in response.data:
@@ -692,6 +690,7 @@ class Farm(commands.Cog):
                     if user and farm_data and farm_data.get('thread_id'):
                         if thread := self.bot.get_channel(farm_data['thread_id']):
                             force_new = req.get('config_value', {}).get('force_new', False)
+                            logger.info(f"[UI UPDATER] 유저 ID {user_id}의 농장 UI 업데이트를 실행합니다. (스레드 ID: {thread.id})")
                             await self.update_farm_ui(thread, user, farm_data, force_new)
                 except (ValueError, IndexError):
                     logger.warning(f"잘못된 형식의 농장 UI 업데이트 요청 키 발견: {req.get('config_key')}")
@@ -816,10 +815,13 @@ class Farm(commands.Cog):
         embed.description = "\n\n".join(description_parts)
         return embed
         
+        
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User, farm_data: Dict, force_new: bool = False, message: discord.Message = None):
         lock = self.thread_locks.setdefault(thread.id, asyncio.Lock())
         async with lock:
             if not (user and farm_data): return
+
+            logger.info(f"[UI UPDATE FUNC] update_farm_ui 함수 호출됨. 사용자: {user.id}, 스레드: {thread.id}")
 
             try:
                 message_to_edit = message
@@ -844,12 +846,14 @@ class Farm(commands.Cog):
                 view = FarmUIView(self)
                 
                 if message_to_edit:
+                    logger.info(f"[UI UPDATE FUNC] 기존 메시지(ID: {message_to_edit.id})를 수정합니다.")
                     await message_to_edit.edit(embed=embed, view=view)
                 else:
                     if force_new:
                         if embed_data := await get_embed_from_db("farm_thread_welcome"):
                             await thread.send(embed=format_embed_from_db(embed_data, user_name=farm_data.get('name') or user.display_name))
                     
+                    logger.info(f"[UI UPDATE FUNC] 새로운 패널 메시지를 생성합니다.")
                     new_message = await thread.send(embed=embed, view=view)
                     await supabase.table('farms').update({'farm_message_id': new_message.id}).eq('id', farm_data['id']).execute()
                 
