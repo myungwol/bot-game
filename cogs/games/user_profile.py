@@ -396,6 +396,7 @@ class ProfileView(ui.View):
             description += f"**{self.status_message}**\n\n"
         
         if self.current_page == "info":
+            # ... (info 탭 로직은 그대로 유지)
             embed.add_field(name=get_string("profile_view.info_tab.field_balance", "소지금"), value=f"`{balance:,}`{self.currency_icon}", inline=True)
             job_mention = "`없음`"
             job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
@@ -404,9 +405,7 @@ class ProfileView(ui.View):
                 job_res = await supabase.table('user_jobs').select('jobs(job_key, job_name)').eq('user_id', self.user.id).maybe_single().execute()
                 if job_res and job_res.data and job_res.data.get('jobs'):
                     job_info = job_res.data['jobs']
-                    job_key = job_info['job_key']
-                    job_name = job_info['job_name']
-                    
+                    job_key, job_name = job_info['job_key'], job_info['job_name']
                     if (role_key := job_role_map.get(job_key)) and (role_id := get_id(role_key)):
                         job_mention = f"<@&{role_id}>"
                     else:
@@ -416,33 +415,40 @@ class ProfileView(ui.View):
             embed.add_field(name="직업", value=job_mention, inline=True)
             user_rank_mention = get_string("profile_view.info_tab.default_rank_name", "새내기 주민")
             rank_roles_config = get_config("PROFILE_RANK_ROLES", []) 
-            
             if rank_roles_config:
                 user_role_ids = {role.id for role in self.user.roles}
                 for rank_info in rank_roles_config:
                     if (role_key := rank_info.get("role_key")) and (rank_role_id := get_id(role_key)) and rank_role_id in user_role_ids:
-                        user_rank_mention = f"<@&{rank_role_id}>"
-                        break
-            
+                        user_rank_mention = f"<@&{rank_role_id}>"; break
             embed.add_field(name=get_string("profile_view.info_tab.field_rank", "등급"), value=user_rank_mention, inline=True)
             description += get_string("profile_view.info_tab.description", "아래 탭을 선택하여 상세 정보를 확인하세요.")
             embed.description = description
         
+        # ▼▼▼ [핵심 수정] "아이템" 탭의 필터링 로직을 "명시적 포함" 방식으로 변경 ▼▼▼
         elif self.current_page == "item":
-            excluded_categories = get_string("profile_view.item_tab.excluded_categories", [])
-            logger.info(f"[Profile Item Tab] 필터링에 사용될 제외 카테고리 목록: {excluded_categories}")
-            general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
+            # 이제 '아이템' 카테고리에 속한 것만 명시적으로 필터링합니다.
+            general_items = {
+                name: count for name, count in inventory.items() 
+                if item_db.get(name, {}).get('category') == '아이템'
+            }
+            
             item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`개" for n, c in general_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items", "보유 중인 아이템이 없습니다."))
+        # ▲▲▲ [핵심 수정] 종료 ▲▲▲
         
         elif self.current_page == "gear":
-            gear_categories = { "낚시": {"rod": "🎣 낚싯대", "bait": "🐛 미끼"}, "농장": {"hoe": "🪓 괭이", "watering_can": "💧 물뿌리개"}, "광산": {"pickaxe": "⛏️ 곡괭이"} }
+            # ... (gear 탭 로직은 그대로 유지)
+            gear_categories = {
+                "낚시": {"rod": "🎣 낚싯대", "bait": "🐛 미끼"},
+                "농장": {"hoe": "🪓 괭이", "watering_can": "💧 물뿌리개"},
+                "광산": {"pickaxe": "⛏️ 곡괭이"}
+            }
             for category_name, items in gear_categories.items():
                 field_lines = [f"**{label}:** `{gear.get(key, BARE_HANDS)}`" for key, label in items.items()]
                 embed.add_field(name=f"**[ 현재 장비: {category_name} ]**", value="\n".join(field_lines), inline=False)
             equipped_gear_names = set(gear.values())
             owned_gear_categories = [GEAR_CATEGORY, BAIT_CATEGORY]
-            owned_gear_items = { name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') in owned_gear_categories and name not in equipped_gear_names }
+            owned_gear_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') in owned_gear_categories and name not in equipped_gear_names}
             if owned_gear_items:
                 gear_list = [f"{item_db.get(n,{}).get('emoji','🔧')} **{n}**: `{c}`개" for n, c in sorted(owned_gear_items.items())]
                 embed.add_field(name="\n**[ 보유 중인 장비 ]**", value="\n".join(gear_list), inline=False)
@@ -451,15 +457,17 @@ class ProfileView(ui.View):
             embed.description = description
 
         elif self.current_page == "fish":
+            # ... (fish 탭 로직은 그대로 유지)
             aquarium = self.cached_data.get("aquarium", [])
-            if not aquarium: embed.description = description + get_string("profile_view.fish_tab.no_fish", "어항에 물고기가 없습니다.")
+            if not aquarium:
+                embed.description = description + get_string("profile_view.fish_tab.no_fish", "어항에 물고기가 없습니다.")
             else:
                 total_pages = math.ceil(len(aquarium) / 10)
                 self.fish_page_index = max(0, min(self.fish_page_index, total_pages - 1))
                 fish_on_page = aquarium[self.fish_page_index * 10 : self.fish_page_index * 10 + 10]
                 embed.description = description + "\n".join([f"{f['emoji']} **{f['name']}**: `{f['size']}`cm" for f in fish_on_page])
                 embed.set_footer(text=get_string("profile_view.fish_tab.pagination_footer", "페이지 {current_page} / {total_pages}", current_page=self.fish_page_index + 1, total_pages=total_pages))
-        
+                
         elif self.current_page == "mineral":
             mineral_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "광물"}
             item_list = [f"{item_db.get(n,{}).get('emoji','💎')} **{n}**: `{c}`개" for n, c in mineral_items.items()]
@@ -474,12 +482,12 @@ class ProfileView(ui.View):
             crop_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "농장_작물"}
             item_list = [f"{item_db.get(n,{}).get('emoji','🌾')} **{n}**: `{c}`개" for n, c in crop_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.crop_tab.no_items", "보유 중인 작물이 없습니다."))
-            
+
         elif self.current_page == "food":
             food_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "요리"}
             item_list = [f"{item_db.get(n,{}).get('emoji','🍲')} **{n}**: `{c}`개" for n, c in food_items.items()]
-            embed.description = description + ("\n".join(item_list) or get_string("profile_view.food_tab.no_items", "보유 중인 음식이 없습니다."))      
-            
+            embed.description = description + ("\n".join(item_list) or get_string("profile_view.food_tab.no_items", "보유 중인 음식이 없습니다."))
+        
         else:
             embed.description = description + get_string("profile_view.wip_tab.description", "이 기능은 현재 준비 중입니다.")
         return embed
