@@ -7,6 +7,7 @@ import logging
 import asyncio
 import math
 from typing import Optional, Dict, List, Any
+from datetime import datetime, timezone, timedelta
 
 from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
@@ -223,6 +224,103 @@ class ItemUsageView(ui.View):
         await self.parent_view.update_display(interaction, reload_data=reload_data)
 
 
+class FoodConsumptionView(ui.View):
+    def __init__(self, parent_view: 'ProfileView'):
+        super().__init__(timeout=180)
+        self.parent_view = parent_view
+        self.user = parent_view.user
+
+    async def start(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        inventory = await get_inventory(self.user)
+        item_db = get_item_database()
+        
+        usable_foods = []
+        for name, qty in inventory.items():
+            item_data = item_db.get(name)
+            if item_data and item_data.get('category') == '요리' and item_data.get('effect_type'):
+                usable_foods.append({
+                    "name": name,
+                    "description": item_data.get('description', '설명 없음'),
+                    "emoji": item_data.get('emoji', '🍲')
+                })
+
+        if not usable_foods:
+            self.parent_view.status_message = "사용할 수 있는 음식이 없습니다."
+            await self.on_back(interaction)
+            return
+
+        options = [discord.SelectOption(label=f['name'], description=f['description'][:100], emoji=f['emoji'], value=f['name']) for f in usable_foods]
+        select = ui.Select(placeholder="사용할 음식을 선택하세요...", options=options)
+        select.callback = self.on_food_select
+        self.add_item(select)
+
+        back_button = ui.Button(label="뒤로", style=discord.ButtonStyle.grey)
+        back_button.callback = self.on_back
+        self.add_item(back_button)
+
+        embed = discord.Embed(title="🍲 음식 먹기", description="인벤토리에서 먹고 싶은 음식을 선택해주세요.", color=discord.Color.green())
+        await interaction.edit_original_response(embed=embed, view=self)
+
+    async def on_food_select(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        item_name = interaction.data["values"][0]
+        
+        recipe_res = await supabase.table('recipes').select('*').eq('result_item_name', item_name).maybe_single().execute()
+        
+        if not (recipe_res and recipe_res.data and (effect_type := recipe_res.data.get('effect_type'))):
+            self.parent_view.status_message = f"'{item_name}'은(는) 특별한 효과가 없는 음식입니다."
+            return await self.on_back(interaction, reload_data=False)
+
+        try:
+            recipe_data = recipe_res.data
+            duration_hours = recipe_data.get('effect_duration_hours', 2)
+            effect_value_decimal = recipe_data.get('effect_value', 0.25) 
+            
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=duration_hours)
+
+            await supabase.table('active_buffs').upsert({
+                'user_id': self.user.id,
+                'buff_type': effect_type,
+                'value': 1.0 + effect_value_decimal,
+                'expires_at': expires_at.isoformat()
+            }, on_conflict='user_id, buff_type').execute()
+
+            await update_inventory(self.user.id, item_name, -1)
+            
+            duration_minutes = duration_hours * 60
+            effect_percent = effect_value_decimal * 100
+            effect_description = f"{duration_hours}시간 동안 {effect_type.replace('_', ' ').title()} +{effect_percent:.0f}%"
+            await self.log_food_usage(item_name, effect_description)
+
+            self.parent_view.status_message = f"✅ **{item_name}**을(를) 먹었습니다! ({duration_hours}시간 지속)"
+
+        except Exception as e:
+            logger.error(f"음식 사용 중 오류: {e}", exc_info=True)
+            self.parent_view.status_message = "❌ 음식을 사용하는 중 오류가 발생했습니다."
+
+        await self.on_back(interaction, reload_data=True)
+
+    async def log_food_usage(self, item_name: str, effect_description: str):
+        log_channel_id = get_id("log_food_channel_id")
+        if not log_channel_id or not (log_channel := self.user.guild.get_channel(log_channel_id)):
+            return
+
+        embed_data = await get_embed_from_db("log_food_consumption")
+        if not embed_data: return
+        
+        embed = format_embed_from_db(
+            embed_data, 
+            user_mention=self.user.mention, 
+            item_name=item_name, 
+            effect_description=effect_description
+        )
+        embed.set_author(name=self.user.display_name, icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
+        await log_channel.send(embed=embed)
+
+    async def on_back(self, interaction: discord.Interaction, reload_data: bool = False):
+        await self.parent_view.update_display(interaction, reload_data=reload_data)
+
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
         super().__init__(timeout=300)
@@ -298,7 +396,6 @@ class ProfileView(ui.View):
             description += f"**{self.status_message}**\n\n"
         
         if self.current_page == "info":
-            # ... (info 탭 로직은 그대로 유지)
             embed.add_field(name=get_string("profile_view.info_tab.field_balance", "소지금"), value=f"`{balance:,}`{self.currency_icon}", inline=True)
             job_mention = "`없음`"
             job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
@@ -307,7 +404,9 @@ class ProfileView(ui.View):
                 job_res = await supabase.table('user_jobs').select('jobs(job_key, job_name)').eq('user_id', self.user.id).maybe_single().execute()
                 if job_res and job_res.data and job_res.data.get('jobs'):
                     job_info = job_res.data['jobs']
-                    job_key, job_name = job_info['job_key'], job_info['job_name']
+                    job_key = job_info['job_key']
+                    job_name = job_info['job_name']
+                    
                     if (role_key := job_role_map.get(job_key)) and (role_id := get_id(role_key)):
                         job_mention = f"<@&{role_id}>"
                     else:
@@ -317,36 +416,33 @@ class ProfileView(ui.View):
             embed.add_field(name="직업", value=job_mention, inline=True)
             user_rank_mention = get_string("profile_view.info_tab.default_rank_name", "새내기 주민")
             rank_roles_config = get_config("PROFILE_RANK_ROLES", []) 
+            
             if rank_roles_config:
                 user_role_ids = {role.id for role in self.user.roles}
                 for rank_info in rank_roles_config:
                     if (role_key := rank_info.get("role_key")) and (rank_role_id := get_id(role_key)) and rank_role_id in user_role_ids:
-                        user_rank_mention = f"<@&{rank_role_id}>"; break
+                        user_rank_mention = f"<@&{rank_role_id}>"
+                        break
+            
             embed.add_field(name=get_string("profile_view.info_tab.field_rank", "등급"), value=user_rank_mention, inline=True)
             description += get_string("profile_view.info_tab.description", "아래 탭을 선택하여 상세 정보를 확인하세요.")
             embed.description = description
         
         elif self.current_page == "item":
             excluded_categories = get_string("profile_view.item_tab.excluded_categories", [])
-            # [디버깅 로그 추가]
             logger.info(f"[Profile Item Tab] 필터링에 사용될 제외 카테고리 목록: {excluded_categories}")
             general_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') not in excluded_categories}
             item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`개" for n, c in general_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items", "보유 중인 아이템이 없습니다."))
         
         elif self.current_page == "gear":
-            # ... (gear 탭 로직은 그대로 유지)
-            gear_categories = {
-                "낚시": {"rod": "🎣 낚싯대", "bait": "🐛 미끼"},
-                "농장": {"hoe": "🪓 괭이", "watering_can": "💧 물뿌리개"},
-                "광산": {"pickaxe": "⛏️ 곡괭이"}
-            }
+            gear_categories = { "낚시": {"rod": "🎣 낚싯대", "bait": "🐛 미끼"}, "농장": {"hoe": "🪓 괭이", "watering_can": "💧 물뿌리개"}, "광산": {"pickaxe": "⛏️ 곡괭이"} }
             for category_name, items in gear_categories.items():
                 field_lines = [f"**{label}:** `{gear.get(key, BARE_HANDS)}`" for key, label in items.items()]
                 embed.add_field(name=f"**[ 현재 장비: {category_name} ]**", value="\n".join(field_lines), inline=False)
             equipped_gear_names = set(gear.values())
             owned_gear_categories = [GEAR_CATEGORY, BAIT_CATEGORY]
-            owned_gear_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') in owned_gear_categories and name not in equipped_gear_names}
+            owned_gear_items = { name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') in owned_gear_categories and name not in equipped_gear_names }
             if owned_gear_items:
                 gear_list = [f"{item_db.get(n,{}).get('emoji','🔧')} **{n}**: `{c}`개" for n, c in sorted(owned_gear_items.items())]
                 embed.add_field(name="\n**[ 보유 중인 장비 ]**", value="\n".join(gear_list), inline=False)
@@ -355,17 +451,15 @@ class ProfileView(ui.View):
             embed.description = description
 
         elif self.current_page == "fish":
-            # ... (fish 탭 로직은 그대로 유지)
             aquarium = self.cached_data.get("aquarium", [])
-            if not aquarium:
-                embed.description = description + get_string("profile_view.fish_tab.no_fish", "어항에 물고기가 없습니다.")
+            if not aquarium: embed.description = description + get_string("profile_view.fish_tab.no_fish", "어항에 물고기가 없습니다.")
             else:
                 total_pages = math.ceil(len(aquarium) / 10)
                 self.fish_page_index = max(0, min(self.fish_page_index, total_pages - 1))
                 fish_on_page = aquarium[self.fish_page_index * 10 : self.fish_page_index * 10 + 10]
                 embed.description = description + "\n".join([f"{f['emoji']} **{f['name']}**: `{f['size']}`cm" for f in fish_on_page])
                 embed.set_footer(text=get_string("profile_view.fish_tab.pagination_footer", "페이지 {current_page} / {total_pages}", current_page=self.fish_page_index + 1, total_pages=total_pages))
-                
+        
         elif self.current_page == "mineral":
             mineral_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "광물"}
             item_list = [f"{item_db.get(n,{}).get('emoji','💎')} **{n}**: `{c}`개" for n, c in mineral_items.items()]
@@ -380,11 +474,11 @@ class ProfileView(ui.View):
             crop_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "농장_작물"}
             item_list = [f"{item_db.get(n,{}).get('emoji','🌾')} **{n}**: `{c}`개" for n, c in crop_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.crop_tab.no_items", "보유 중인 작물이 없습니다."))
-
+            
         elif self.current_page == "food":
             food_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "요리"}
             item_list = [f"{item_db.get(n,{}).get('emoji','🍲')} **{n}**: `{c}`개" for n, c in food_items.items()]
-            embed.description = description + ("\n".join(item_list) or get_string("profile_view.food_tab.no_items", "보유 중인 음식이 없습니다."))
+            embed.description = description + ("\n".join(item_list) or get_string("profile_view.food_tab.no_items", "보유 중인 음식이 없습니다."))      
             
         else:
             embed.description = description + get_string("profile_view.wip_tab.description", "이 기능은 현재 준비 중입니다.")
@@ -397,8 +491,7 @@ class ProfileView(ui.View):
         row_counter, tab_buttons_in_row = 0, 0
         for config in tabs_config:
             if not (key := config.get("key")): continue
-            if tab_buttons_in_row >= 5:
-                row_counter += 1; tab_buttons_in_row = 0
+            if tab_buttons_in_row >= 5: row_counter += 1; tab_buttons_in_row = 0
             style = discord.ButtonStyle.primary if self.current_page == key else discord.ButtonStyle.secondary
             self.add_item(ui.Button(label=config.get("label"), style=style, custom_id=f"profile_tab_{key}", emoji=config.get("emoji"), row=row_counter))
             tab_buttons_in_row += 1
@@ -407,6 +500,10 @@ class ProfileView(ui.View):
         if self.current_page == "item":
             use_item_label = get_string("profile_view.item_tab.use_item_button_label", "아이템 사용")
             self.add_item(ui.Button(label=use_item_label, style=discord.ButtonStyle.success, emoji="✨", custom_id="profile_use_item", row=row_counter))
+
+        if self.current_page == "food":
+            use_food_label = get_string("profile_view.food_tab.use_food_button_label", "먹기")
+            self.add_item(ui.Button(label=use_food_label, style=discord.ButtonStyle.success, emoji="🍴", custom_id="profile_use_food", row=row_counter))
 
         if self.current_page == "gear":
             self.add_item(ui.Button(label="낚싯대 변경", style=discord.ButtonStyle.blurple, custom_id="profile_change_rod", emoji="🎣", row=row_counter))
@@ -442,43 +539,34 @@ class ProfileView(ui.View):
             
         elif custom_id == "profile_use_item":
             usage_view = ItemUsageView(self)
-            
             usable_items_config = get_config("USABLE_ITEMS", {})
             user_inventory = await get_inventory(self.user)
             item_db = get_item_database()
-            
             owned_usable_items = []
             for item_name, quantity in user_inventory.items():
                 if quantity <= 0: continue
-                
                 item_data_from_db = item_db.get(item_name)
                 if not item_data_from_db: continue
-                
                 item_id_key = item_data_from_db.get('id_key')
                 if item_id_key and item_id_key in usable_items_config:
                     item_info_from_config = usable_items_config[item_id_key]
-                    owned_usable_items.append({
-                        "key": item_id_key,
-                        "name": item_info_from_config.get('name', item_name),
-                        "description": item_info_from_config.get('description', '설명 없음')
-                    })
-
+                    owned_usable_items.append({ "key": item_id_key, "name": item_info_from_config.get('name', item_name), "description": item_info_from_config.get('description', '설명 없음') })
             if not owned_usable_items:
                 await interaction.response.send_message(get_string("profile_view.item_usage_view.no_usable_items"), ephemeral=True, delete_after=5)
                 return
-
             options = [discord.SelectOption(label=item["name"], value=item["key"], description=item["description"]) for item in owned_usable_items]
             select = ui.Select(placeholder=get_string("profile_view.item_usage_view.select_placeholder"), options=options)
             select.callback = usage_view.on_item_select
             usage_view.add_item(select)
-
             back_button = ui.Button(label=get_string("profile_view.item_usage_view.back_button"), style=discord.ButtonStyle.grey)
             back_button.callback = usage_view.on_back
             usage_view.add_item(back_button)
-
             embed = discord.Embed(title=get_string("profile_view.item_usage_view.embed_title"), description=get_string("profile_view.item_usage_view.embed_description"), color=discord.Color.gold())
-            
             await interaction.response.edit_message(embed=embed, view=usage_view)
+
+        elif custom_id == "profile_use_food":
+            food_view = FoodConsumptionView(self)
+            await food_view.start(interaction)
 
         elif custom_id.startswith("profile_change_"):
             gear_key = custom_id.replace("profile_change_", "", 1)
