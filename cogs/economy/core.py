@@ -65,6 +65,11 @@ class EconomyCore(commands.Cog):
         await load_all_data_from_db()
         logger.info("EconomyCore: 데이터베이스 설정 로딩 완료.")
         
+        # ▼▼▼ [코드 추가] 아래 두 줄을 여기에 추가해주세요. ▼▼▼
+        # 봇 재시작 시 테스트용으로 설정된 농장 시간을 자동으로 초기화합니다.
+        await delete_config_from_db("farm_current_date")
+        # ▲▲▲ [코드 추가] ▲▲▲
+        
         await self._ensure_all_members_have_gear()
 
         self.initial_setup_done = True
