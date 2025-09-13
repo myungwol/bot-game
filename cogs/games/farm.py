@@ -618,8 +618,6 @@ class Farm(commands.Cog):
                             plot['growth_stage'] + growth_amount,
                             item_info.get('max_growth_stage', 99)
                         )
-                else:
-                    update_payload['state'] = 'withered'
                 
                 plots_to_update_db.append(update_payload)
 
