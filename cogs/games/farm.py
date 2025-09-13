@@ -564,6 +564,8 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 농장 관련 영구 View가 정상적으로 등록되었습니다.")
 
+# cogs/games/farm.py
+
     @tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("--- [CROP UPDATE START] ---")
@@ -601,7 +603,9 @@ class Farm(commands.Cog):
             owner_abilities_map = {uid: set(abilities) for uid, abilities in zip(owner_ids, abilities_results)}
 
             plots_to_update_db = []
-            growth_ability_activations = defaultdict(lambda: {'count': 0, 'thread_id': None})
+            # ▼▼▼ [핵심 수정] 능력 발동 내역을 사용자별로 저장할 딕셔너리로 변경 ▼▼▼
+            ability_activations_by_user = defaultdict(lambda: {"growth": 0, "water": 0, "thread_id": None})
+            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
             for plot in all_plots:
                 update_payload = plot.copy()
@@ -635,7 +639,6 @@ class Farm(commands.Cog):
                 should_wither = False
                 
                 if not is_raining:
-                    # ▼▼▼ [핵심 수정] 능력 보유 시 시듦 기준일을 3일로 변경 ▼▼▼
                     wither_threshold = 3 if owner_has_water_ability else 2
                     logger.info(f"    > Is Raining: {is_raining}, Has Ability: {owner_has_water_ability}, Wither Threshold: {wither_threshold} days.")
                     if days_since_watered >= wither_threshold:
@@ -655,6 +658,11 @@ class Farm(commands.Cog):
                         if days_since_watered < growth_threshold:
                             grows_today = True
                             logger.info(f"    > RESULT: GROWING. ({days_since_watered} < {growth_threshold})")
+                            # ▼▼▼ [핵심 수정] 수분 유지 능력이 발동한 경우 카운트 ▼▼▼
+                            if owner_has_water_ability and days_since_watered == 1:
+                                ability_activations_by_user[owner_id]["water"] += 1
+                                ability_activations_by_user[owner_id]["thread_id"] = plot['farms']['thread_id']
+                            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
                         else:
                             logger.info(f"    > RESULT: NOT GROWING. ({days_since_watered} >= {growth_threshold})")
                     
@@ -662,14 +670,15 @@ class Farm(commands.Cog):
                         growth_amount = 1
                         if 'farm_growth_speed_up_2' in owner_abilities and not plot.get('is_regrowing', False):
                             growth_amount += 1
-                            growth_ability_activations[owner_id]['count'] += 1
-                            growth_ability_activations[owner_id]['thread_id'] = plot['farms']['thread_id']
+                            # ▼▼▼ [핵심 수정] 성장 가속 능력 발동 카운트 ▼▼▼
+                            ability_activations_by_user[owner_id]["growth"] += 1
+                            ability_activations_by_user[owner_id]["thread_id"] = plot['farms']['thread_id']
+                            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
                         
                         update_payload['growth_stage'] = min(
                             plot['growth_stage'] + growth_amount,
                             item_info.get('max_growth_stage', 99)
                         )
-                # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
                 
                 plots_to_update_db.append(update_payload)
 
@@ -683,14 +692,22 @@ class Farm(commands.Cog):
             else:
                 logger.info("[CROP UPDATE] No plots needed an update.")
 
-            for user_id, data in growth_ability_activations.items():
-                if data['count'] > 0 and data['thread_id']:
-                    try:
-                        thread = self.bot.get_channel(data['thread_id'])
-                        if thread:
-                            await thread.send(f"**[농장 알림]**\n오늘 농장 업데이트에서 **성장 속도 UP (대)** 능력이 발동하여, {data['count']}개의 작물이 추가로 성장했습니다!", delete_after=3600)
-                    except Exception as e:
-                        logger.error(f"{user_id}의 농장 스레드({data['thread_id']})에 능력 발동 메시지 전송 중 오류: {e}")
+            # ▼▼▼ [핵심 수정] 메시지 전송 로직을 DB에 저장하는 로직으로 변경 ▼▼▼
+            db_save_tasks = []
+            for user_id, data in ability_activations_by_user.items():
+                messages_to_send = []
+                if data['growth'] > 0:
+                    messages_to_send.append(f"**[농장 알림]**\n오늘 농장 업데이트에서 **성장 속도 UP (대)** 능력이 발동하여, {data['growth']}개의 작물이 추가로 성장했습니다!")
+                if data['water'] > 0:
+                    messages_to_send.append(f"**[농장 알림]**\n오늘 농장 업데이트에서 **수분 유지력 UP** 능력이 발동하여, 물을 주지 않은 {data['water']}개의 작물이 시들지 않았습니다!")
+                
+                if messages_to_send and data['thread_id']:
+                    payload = {"thread_id": data['thread_id'], "messages": messages_to_send}
+                    db_save_tasks.append(save_config_to_db(f"farm_ability_messages_{user_id}", payload))
+            
+            if db_save_tasks:
+                await asyncio.gather(*db_save_tasks)
+            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
             
             logger.info("--- [CROP UPDATE END] ---")
 
@@ -712,6 +729,25 @@ class Farm(commands.Cog):
             if farm_data and (thread_id := farm_data.get('thread_id')):
                 if thread := self.bot.get_channel(thread_id):
                     await self.update_farm_ui(thread, user, farm_data)
+                    
+                    # ▼▼▼ [핵심 수정] UI 업데이트 후, DB에 저장된 메시지를 불러와 전송 ▼▼▼
+                    message_config_key = f"farm_ability_messages_{user_id}"
+                    message_data = get_config(message_config_key)
+                    if message_data and isinstance(message_data, dict):
+                        messages = message_data.get("messages", [])
+                        msg_thread_id = message_data.get("thread_id")
+                        
+                        if messages and msg_thread_id and (msg_thread := self.bot.get_channel(msg_thread_id)):
+                            try:
+                                for msg in messages:
+                                    await msg_thread.send(msg, delete_after=86400) # 24시간 후 삭제
+                                    await asyncio.sleep(1) # 메시지 순서 보장을 위한 짧은 딜레이
+                            except Exception as e:
+                                logger.error(f"농장 능력 발동 메시지 전송 실패 (User: {user_id}, Thread: {msg_thread_id}): {e}")
+                        
+                        await delete_config_from_db(message_config_key)
+                    # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
+                    
                     await asyncio.sleep(1.5)
 
     async def request_farm_ui_update(self, user_id: int, force_new: bool = False):
