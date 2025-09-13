@@ -548,11 +548,18 @@ class Farm(commands.Cog):
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
             
-            # ▼▼▼ [코드 추가] 아래 두 줄을 여기에 추가해주세요. ▼▼▼
-            today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+            # ▼▼▼ [핵심 수정] 실제 시간이 아닌, DB의 '농장 기준일'을 우선적으로 사용하도록 변경
+            farm_date_str = get_config("farm_current_date")
+            if farm_date_str:
+                # DB에 저장된 기준일이 있으면 그 날짜를 사용합니다.
+                today_jst_midnight = datetime.fromisoformat(farm_date_str).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=KST)
+                logger.info(f"농장 기준일({farm_date_str})을 사용하여 작물 업데이트를 진행합니다.")
+            else:
+                # 기준일이 없으면 실제 오늘 날짜를 사용합니다 (기본 동작).
+                today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+            
             yesterday_midnight_kst = today_jst_midnight - timedelta(days=1)
-            day_before_yesterday_midnight_kst = today_jst_midnight - timedelta(days=2)
-            # ▲▲▲ [코드 추가] ▲▲▲
+            # ▲▲▲ [핵심 수정] 여기까지
 
             planted_plots_res = await supabase.table('farm_plots').select('*, farms!inner(user_id, id, thread_id)').eq('state', 'planted').execute()
             
@@ -574,7 +581,6 @@ class Farm(commands.Cog):
             owner_abilities_map = {uid: set(abilities) for uid, abilities in zip(owner_ids, abilities_results)}
 
             plots_to_update_db = []
-            today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
             
             growth_ability_activations = defaultdict(lambda: {'count': 0, 'thread_id': None})
 
@@ -592,20 +598,40 @@ class Farm(commands.Cog):
 
                 owner_abilities = owner_abilities_map.get(owner_id, set())
                 
-                # ▼▼▼ [코드 교체] 아래 로직을 교체합니다. ▼▼▼
-                owner_has_water_ability = 'farm_water_retention_1' in owner_abilities
-                last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
-                last_watered_kst = last_watered_dt.astimezone(KST)
-                
-                withering_threshold = day_before_yesterday_midnight_kst if owner_has_water_ability else yesterday_midnight_kst
-                should_wither = (last_watered_kst < withering_threshold) and not is_raining
+                # ▼▼▼ [핵심 수정] 수분 유지력 능력 버그 최종 수정 로직
+                if not plot.get('last_watered_at'):
+                    update_payload['state'] = 'withered'
+                    plots_to_update_db.append(update_payload)
+                    continue
 
+                last_watered_kst = datetime.fromisoformat(plot['last_watered_at']).astimezone(KST)
+                
+                days_since_watered = (today_jst_midnight.date() - last_watered_kst.date()).days
+
+                owner_has_water_ability = 'farm_water_retention_1' in owner_abilities
+                should_wither = False
+                
+                if not is_raining:
+                    if owner_has_water_ability:
+                        if days_since_watered >= 2: # 이틀 전(경과일 2일)에 물을 줬다면 오늘은 물을 안줘도 됨. 3일째부터 시듦.
+                            should_wither = True
+                    else:
+                        if days_since_watered >= 1: # 어제(경과일 1일) 물을 안줬다면 오늘 시듦.
+                            should_wither = True
+                
                 if should_wither:
                     update_payload['state'] = 'withered'
                 else:
-                    grows_today = (is_raining or 
-                                   last_watered_kst >= today_jst_midnight or
-                                   (owner_has_water_ability and last_watered_kst >= yesterday_midnight_kst))
+                    grows_today = False
+                    if is_raining:
+                        grows_today = True
+                    else:
+                        if owner_has_water_ability:
+                            if days_since_watered < 2: # 어제 또는 오늘 물을 줬다면 성장
+                                grows_today = True
+                        else:
+                            if days_since_watered < 1: # 오늘 물을 줬다면 성장
+                                grows_today = True
                     
                     if grows_today:
                         growth_amount = 1
@@ -618,6 +644,7 @@ class Farm(commands.Cog):
                             plot['growth_stage'] + growth_amount,
                             item_info.get('max_growth_stage', 99)
                         )
+                # ▲▲▲ [핵심 수정] 여기까지
                 
                 plots_to_update_db.append(update_payload)
 
@@ -673,7 +700,12 @@ class Farm(commands.Cog):
         
         plots = {(p['pos_x'], p['pos_y']): p for p in farm_data.get('farm_plots', [])}
         grid, infos = [['' for _ in range(sx)] for _ in range(sy)], []
-        today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        farm_date_str = get_config("farm_current_date")
+        if farm_date_str:
+            today_jst_midnight = datetime.fromisoformat(farm_date_str).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=KST)
+        else:
+            today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
 
         for y in range(sy):
             for x in range(sx):
@@ -708,7 +740,7 @@ class Farm(commands.Cog):
                                 
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
                                 last_watered_jst = last_watered_dt.astimezone(KST)
-                                water_emoji = '💧' if last_watered_jst >= today_jst_midnight else '➖'
+                                water_emoji = '💧' if last_watered_jst.date() >= today_jst_midnight.date() else '➖'
                                 
                                 growth_status_text = ""
                                 if stage >= max_stage:
@@ -762,8 +794,8 @@ class Farm(commands.Cog):
         description_parts.append(f"**오늘의 날씨:** {weather['emoji']} {weather['name']}")
         
         now_kst = discord.utils.utcnow().astimezone(KST)
-        next_update_time = now_kst.replace(hour=0, minute=5, second=0, microsecond=0)
-        if now_kst >= next_update_time:
+        next_update_time = today_jst_midnight.replace(hour=0, minute=5)
+        if now_kst.time() >= KST_MIDNIGHT_UPDATE:
             next_update_time += timedelta(days=1)
         
         description_parts.append(f"다음 작물 업데이트: {discord.utils.format_dt(next_update_time, style='R')}")
@@ -821,12 +853,14 @@ class Farm(commands.Cog):
     async def create_new_farm_thread(self, interaction: discord.Interaction, user: discord.Member):
         try:
             farm_name = f"{user.display_name}의 농장"
+            # ▼▼▼ [핵심 수정] 스레드 생성 옵션 추가 ▼▼▼
             thread = await interaction.channel.create_thread(
                 name=f"🌱｜{farm_name}", 
                 type=discord.ChannelType.private_thread,
-                auto_archive_duration=10080,  # 1주일(60 * 24 * 7)
-                invitable=False  # 초대 기능 비활성화
+                auto_archive_duration=10080,
+                invitable=False
             )
+            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
             await thread.add_user(user)
 
             await delete_config_from_db(f"farm_state_{user.id}")
