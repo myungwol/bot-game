@@ -362,7 +362,7 @@ class FarmUIView(ui.View):
         if not farm_data: return
         view = FarmActionView(self.cog, farm_data, i.user, "plant_seed", self.farm_owner_id)
         await view.send_initial_message(i)
-        
+
     async def on_farm_water_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         gear = await get_user_gear(interaction.user)
@@ -393,6 +393,12 @@ class FarmUIView(ui.View):
             supabase.rpc('increment_water_count', {'plot_ids': list(plots_to_update_db)}).execute()
         ]
         await asyncio.gather(*tasks)
+
+        # ▼▼▼ [핵심 수정] 사용자에게 즉시 피드백을 주고, 기존 응답을 삭제하는 대신 followup을 사용 ▼▼▼
+        msg = await interaction.followup.send(f"✅ {watered_count}개의 작물에 물을 주었습니다.", ephemeral=True)
+        self.cog.bot.loop.create_task(delete_after(msg, 5))
+        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
+
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
@@ -807,14 +813,16 @@ class Farm(commands.Cog):
         
         embed.description = "\n\n".join(description_parts)
         return embed
-        
+
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User, farm_data: Dict, force_new: bool = False, message: discord.Message = None):
         lock = self.thread_locks.setdefault(thread.id, asyncio.Lock())
         async with lock:
-            current_farm_data = await get_farm_data(user.id)
+            # ▼▼▼ [핵심 수정] 불필요한 DB 조회를 제거하고, 전달받은 데이터를 즉시 사용하도록 변경 ▼▼▼
+            current_farm_data = farm_data 
             if not (user and current_farm_data):
                 logger.warning(f"[UI UPDATE FUNC] 사용자({user.id})의 최신 농장 데이터를 가져올 수 없어 UI 업데이트를 중단합니다.")
                 return
+            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
             logger.info(f"[UI UPDATE FUNC] update_farm_ui 함수 호출됨. 사용자: {user.id}, 스레드: {thread.id}")
 
