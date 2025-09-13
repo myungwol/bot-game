@@ -563,7 +563,7 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmCreationPanelView(self))
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 농장 관련 영구 View가 정상적으로 등록되었습니다.")
-        
+
     @tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("--- [CROP UPDATE START] ---")
@@ -628,7 +628,6 @@ class Farm(commands.Cog):
 
                 last_watered_kst = datetime.fromisoformat(plot['last_watered_at']).astimezone(KST)
                 
-                # ▼▼▼ [핵심 로깅] 날짜 계산의 모든 변수를 출력합니다. ▼▼▼
                 days_since_watered = (today_jst_midnight.date() - last_watered_kst.date()).days
                 logger.info(f"    > Plot {plot['id']}: Today KST = {today_jst_midnight.date()}, Last Watered KST = {last_watered_kst.date()}, Days Since Watered = {days_since_watered}")
 
@@ -636,7 +635,8 @@ class Farm(commands.Cog):
                 should_wither = False
                 
                 if not is_raining:
-                    wither_threshold = 2 if owner_has_water_ability else 1
+                    # ▼▼▼ [핵심 수정] 능력 보유 시 시듦 기준일을 3일로 변경 ▼▼▼
+                    wither_threshold = 3 if owner_has_water_ability else 2
                     logger.info(f"    > Is Raining: {is_raining}, Has Ability: {owner_has_water_ability}, Wither Threshold: {wither_threshold} days.")
                     if days_since_watered >= wither_threshold:
                         should_wither = True
@@ -669,7 +669,7 @@ class Farm(commands.Cog):
                             plot['growth_stage'] + growth_amount,
                             item_info.get('max_growth_stage', 99)
                         )
-                # ▲▲▲ [핵심 로깅] 여기까지 ▲▲▲
+                # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
                 
                 plots_to_update_db.append(update_payload)
 
@@ -735,10 +735,8 @@ class Farm(commands.Cog):
         else:
             today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # ▼▼▼ [핵심 수정] UI를 그리기 전에 사용자의 능력을 미리 불러옵니다. ▼▼▼
         owner_abilities = await get_user_abilities(user.id)
         owner_has_water_ability = 'farm_water_retention_1' in owner_abilities
-        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
         logger.info("--- [BUILD EMBED LOG START] ---")
         logger.info(f"Building embed for user {user.id}. Today's KST date is {today_jst_midnight.date()}")
@@ -777,16 +775,16 @@ class Farm(commands.Cog):
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
                                 last_watered_jst = last_watered_dt.astimezone(KST)
                                 
-                                # ▼▼▼ [핵심 수정] 물주기 이모지 판별 로직을 성장 로직과 동일하게 변경 ▼▼▼
+                                # ▼▼▼ [핵심 수정] UI의 물주기 표시 기준일을 2일로 변경 ▼▼▼
                                 days_since_watered = (today_jst_midnight.date() - last_watered_jst.date()).days
                                 
                                 water_threshold = 2 if owner_has_water_ability else 1
                                 is_watered_for_display = days_since_watered < water_threshold
                                 
                                 water_emoji = '💧' if is_watered_for_display else '➖'
+                                # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
                                 
                                 logger.info(f"Plot ID {plot['id']}: last_watered_kst={last_watered_jst.date()}, today_kst={today_jst_midnight.date()}, days_since={days_since_watered}, has_ability={owner_has_water_ability}, is_watered={is_watered_for_display}, emoji={water_emoji}")
-                                # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
                                 
                                 growth_status_text = ""
                                 if stage >= max_stage:
