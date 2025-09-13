@@ -548,6 +548,12 @@ class Farm(commands.Cog):
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
             
+            # ▼▼▼ [코드 추가] 아래 두 줄을 여기에 추가해주세요. ▼▼▼
+            today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+            yesterday_midnight_kst = today_jst_midnight - timedelta(days=1)
+            day_before_yesterday_midnight_kst = today_jst_midnight - timedelta(days=2)
+            # ▲▲▲ [코드 추가] ▲▲▲
+
             planted_plots_res = await supabase.table('farm_plots').select('*, farms!inner(user_id, id, thread_id)').eq('state', 'planted').execute()
             
             if not (planted_plots_res and planted_plots_res.data):
@@ -585,21 +591,33 @@ class Farm(commands.Cog):
                     continue
 
                 owner_abilities = owner_abilities_map.get(owner_id, set())
+                
+                # ▼▼▼ [코드 교체] 아래 로직을 교체합니다. ▼▼▼
+                owner_has_water_ability = 'farm_water_retention_1' in owner_abilities
                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
+                last_watered_kst = last_watered_dt.astimezone(KST)
                 
-                is_watered_today = last_watered_dt.astimezone(KST) >= today_jst_midnight or is_raining
-                
-                if is_watered_today:
-                    growth_amount = 1
-                    if 'farm_growth_speed_up_2' in owner_abilities and not plot.get('is_regrowing', False):
-                        growth_amount += 1
-                        growth_ability_activations[owner_id]['count'] += 1
-                        growth_ability_activations[owner_id]['thread_id'] = plot['farms']['thread_id']
+                withering_threshold = day_before_yesterday_midnight_kst if owner_has_water_ability else yesterday_midnight_kst
+                should_wither = (last_watered_kst < withering_threshold) and not is_raining
+
+                if should_wither:
+                    update_payload['state'] = 'withered'
+                else:
+                    grows_today = (is_raining or 
+                                   last_watered_kst >= today_jst_midnight or
+                                   (owner_has_water_ability and last_watered_kst >= yesterday_midnight_kst))
                     
-                    update_payload['growth_stage'] = min(
-                        plot['growth_stage'] + growth_amount,
-                        item_info.get('max_growth_stage', 99)
-                    )
+                    if grows_today:
+                        growth_amount = 1
+                        if 'farm_growth_speed_up_2' in owner_abilities and not plot.get('is_regrowing', False):
+                            growth_amount += 1
+                            growth_ability_activations[owner_id]['count'] += 1
+                            growth_ability_activations[owner_id]['thread_id'] = plot['farms']['thread_id']
+                        
+                        update_payload['growth_stage'] = min(
+                            plot['growth_stage'] + growth_amount,
+                            item_info.get('max_growth_stage', 99)
+                        )
                 else:
                     update_payload['state'] = 'withered'
                 
@@ -805,7 +823,12 @@ class Farm(commands.Cog):
     async def create_new_farm_thread(self, interaction: discord.Interaction, user: discord.Member):
         try:
             farm_name = f"{user.display_name}의 농장"
-            thread = await interaction.channel.create_thread(name=f"🌱｜{farm_name}", type=discord.ChannelType.private_thread)
+            thread = await interaction.channel.create_thread(
+                name=f"🌱｜{farm_name}", 
+                type=discord.ChannelType.private_thread,
+                auto_archive_duration=10080,  # 1주일(60 * 24 * 7)
+                invitable=False  # 초대 기능 비활성화
+            )
             await thread.add_user(user)
 
             await delete_config_from_db(f"farm_state_{user.id}")
