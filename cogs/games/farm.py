@@ -735,10 +735,13 @@ class Farm(commands.Cog):
         else:
             today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
         
-        # ▼▼▼ [로깅 추가] 3. UI 렌더링 시점 확인 ▼▼▼
+        # ▼▼▼ [핵심 수정] UI를 그리기 전에 사용자의 능력을 미리 불러옵니다. ▼▼▼
+        owner_abilities = await get_user_abilities(user.id)
+        owner_has_water_ability = 'farm_water_retention_1' in owner_abilities
+        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
+
         logger.info("--- [BUILD EMBED LOG START] ---")
         logger.info(f"Building embed for user {user.id}. Today's KST date is {today_jst_midnight.date()}")
-        # ▲▲▲ [로깅 추가] 3. 여기까지 ▲▲▲
         
         for y in range(sy):
             for x in range(sx):
@@ -774,12 +777,16 @@ class Farm(commands.Cog):
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
                                 last_watered_jst = last_watered_dt.astimezone(KST)
                                 
-                                # ▼▼▼ [로깅 추가] 4. 물주기 이모지 판별 로직 확인 ▼▼▼
-                                comparison_result = last_watered_jst.date() >= today_jst_midnight.date()
-                                water_emoji = '💧' if comparison_result else '➖'
+                                # ▼▼▼ [핵심 수정] 물주기 이모지 판별 로직을 성장 로직과 동일하게 변경 ▼▼▼
+                                days_since_watered = (today_jst_midnight.date() - last_watered_jst.date()).days
                                 
-                                logger.info(f"Plot ID {plot['id']}: last_watered_kst={last_watered_jst.date()}, today_kst={today_jst_midnight.date()}, comparison={comparison_result}, emoji={water_emoji}")
-                                # ▲▲▲ [로깅 추가] 4. 여기까지 ▲▲▲
+                                water_threshold = 2 if owner_has_water_ability else 1
+                                is_watered_for_display = days_since_watered < water_threshold
+                                
+                                water_emoji = '💧' if is_watered_for_display else '➖'
+                                
+                                logger.info(f"Plot ID {plot['id']}: last_watered_kst={last_watered_jst.date()}, today_kst={today_jst_midnight.date()}, days_since={days_since_watered}, has_ability={owner_has_water_ability}, is_watered={is_watered_for_display}, emoji={water_emoji}")
+                                # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
                                 
                                 growth_status_text = ""
                                 if stage >= max_stage:
@@ -802,8 +809,6 @@ class Farm(commands.Cog):
         
         if infos:
             description_parts.append("\n".join(sorted(infos)))
-        
-        owner_abilities = await get_user_abilities(user.id)
         
         all_farm_abilities_map = {}
         job_advancement_data = get_config("JOB_ADVANCEMENT_DATA", {})
