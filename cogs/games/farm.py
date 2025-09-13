@@ -655,6 +655,7 @@ class Farm(commands.Cog):
                         grows_today = True
                         logger.info(f"    > RESULT: GROWING. (Reason: Rain)")
                     else:
+                        # ▼▼▼ [핵심 수정] 능력 보유 시 성장 기준일을 2일 '미만'으로 명확하게 수정합니다. ▼▼▼
                         growth_threshold = 2 if owner_has_water_ability else 1
                         logger.info(f"    > Growth Threshold: {growth_threshold} days.")
                         if days_since_watered < growth_threshold:
@@ -665,6 +666,7 @@ class Farm(commands.Cog):
                                 ability_activations_by_user[owner_id]["thread_id"] = plot['farms']['thread_id']
                         else:
                             logger.info(f"    > RESULT: NOT GROWING. ({days_since_watered} >= {growth_threshold})")
+                        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
                     
                     if grows_today:
                         growth_amount = 1
@@ -673,15 +675,10 @@ class Farm(commands.Cog):
                             ability_activations_by_user[owner_id]["growth"] += 1
                             ability_activations_by_user[owner_id]["thread_id"] = plot['farms']['thread_id']
                         
-                        # ▼▼▼ [핵심 수정] 최대 성장 단계를 넘어서도 일단 더하고, 나중에 UI에서만 제한하도록 변경 ▼▼▼
-                        # 이렇게 하면 마지막 날 성장이 누락되는 문제를 방지할 수 있습니다.
                         update_payload['growth_stage'] = plot['growth_stage'] + growth_amount
                         logger.info(f"    > Growth Amount: {growth_amount}. New stage: {update_payload['growth_stage']}")
-                        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
                 plots_to_update_db.append(update_payload)
-
-            # ... (메서드 하단은 그대로 유지) ...
 
             if plots_to_update_db:
                 await supabase.table('farm_plots').upsert(plots_to_update_db).execute()
@@ -700,7 +697,7 @@ class Farm(commands.Cog):
                 if data['growth'] > 0:
                     messages_to_send.append(f"**[농장 알림]**\n오늘 농장 업데이트에서 **성장 속도 UP (대)** 능력이 발동하여, {data['growth']}개의 작물이 추가로 성장했습니다!")
                 if data['water'] > 0:
-                    messages_to_send.append(f"**[농장 알림]**\n오늘 농장 업데이트에서 **수분 유지력 UP** 능력이 발동하여, 물을 주지 않은 {data['water']}개의 작물이 시들지 않았습니다!")
+                    messages_to_send.append(f"**[농장 알림]**\n오늘 농장 업데이트에서 **수분 유지력 UP** 능력이 발동하여, {data['water']}개의 작물의 수분이 유지되었습니다!")
                 
                 if messages_to_send and data['thread_id']:
                     payload = {"thread_id": data['thread_id'], "messages": messages_to_send}
