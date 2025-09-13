@@ -362,7 +362,7 @@ class FarmUIView(ui.View):
         if not farm_data: return
         view = FarmActionView(self.cog, farm_data, i.user, "plant_seed", self.farm_owner_id)
         await view.send_initial_message(i)
-
+        
     async def on_farm_water_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         gear = await get_user_gear(interaction.user)
@@ -387,23 +387,26 @@ class FarmUIView(ui.View):
             msg = await interaction.followup.send("ℹ️ 물을 줄 필요가 있는 작물이 없습니다.", ephemeral=True)
             self.cog.bot.loop.create_task(delete_after(msg, 5))
             return
+        
         now_iso = datetime.now(timezone.utc).isoformat()
         tasks = [
             supabase.table('farm_plots').update({'last_watered_at': now_iso}).in_('id', list(plots_to_update_db)).execute(),
             supabase.rpc('increment_water_count', {'plot_ids': list(plots_to_update_db)}).execute()
         ]
         await asyncio.gather(*tasks)
-
-        # ▼▼▼ [핵심 수정] 사용자에게 즉시 피드백을 주고, 기존 응답을 삭제하는 대신 followup을 사용 ▼▼▼
+        
         msg = await interaction.followup.send(f"✅ {watered_count}개의 작물에 물을 주었습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_after(msg, 5))
-        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
-        updated_farm_data = await get_farm_data(self.farm_owner_id)
+        # ▼▼▼ [핵심 수정] DB에서 다시 읽지 않고, 로컬 데이터를 직접 수정하여 UI 업데이트 ▼▼▼
+        for plot in farm_data['farm_plots']:
+            if plot['id'] in plots_to_update_db:
+                plot['last_watered_at'] = now_iso
+        
         owner = self.cog.bot.get_user(self.farm_owner_id)
-        if updated_farm_data and owner:
-            await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data, message=interaction.message)
-        await interaction.delete_original_response()
+        if farm_data and owner:
+            await self.cog.update_farm_ui(interaction.channel, owner, farm_data, message=interaction.message)
+        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
         
     async def on_farm_uproot_click(self, i: discord.Interaction): 
         farm_data = await get_farm_data(self.farm_owner_id)
