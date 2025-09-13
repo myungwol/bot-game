@@ -377,6 +377,15 @@ class FarmUIView(ui.View):
         if not farm_data: return
         plots_to_update_db = set()
         watered_count = 0
+
+        # ▼▼▼ [로깅 추가] 1. 물주기 전 상태 확인 ▼▼▼
+        logger.info("--- [WATER CLICK LOG START] ---")
+        logger.info(f"User {interaction.user.id} clicked water button.")
+        for p_before in farm_data['farm_plots']:
+            if p_before['state'] == 'planted':
+                logger.info(f"[BEFORE] Plot ID {p_before['id']}: last_watered_at = {p_before.get('last_watered_at')}")
+        # ▲▲▲ [로깅 추가] 1. 여기까지 ▲▲▲
+
         for p in sorted(farm_data['farm_plots'], key=lambda x: (x['pos_y'], x['pos_x'])):
             if watered_count >= power: break
             last_watered_dt = datetime.fromisoformat(p['last_watered_at']) if p.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
@@ -398,15 +407,20 @@ class FarmUIView(ui.View):
         msg = await interaction.followup.send(f"✅ {watered_count}개의 작물에 물을 주었습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_after(msg, 5))
 
-        # ▼▼▼ [핵심 수정] DB에서 다시 읽지 않고, 로컬 데이터를 직접 수정하여 UI 업데이트 ▼▼▼
         for plot in farm_data['farm_plots']:
             if plot['id'] in plots_to_update_db:
                 plot['last_watered_at'] = now_iso
         
+        # ▼▼▼ [로깅 추가] 2. UI 업데이트 직전 상태 확인 ▼▼▼
+        logger.info(f"DB & Local data updated. Plots watered: {plots_to_update_db}. New timestamp: {now_iso}")
+        for p_after in farm_data['farm_plots']:
+             if p_after['id'] in plots_to_update_db:
+                logger.info(f"[AFTER] Plot ID {p_after['id']}: last_watered_at is now {p_after.get('last_watered_at')}")
+        # ▲▲▲ [로깅 추가] 2. 여기까지 ▲▲▲
+        
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, farm_data, message=interaction.message)
-        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
         
     async def on_farm_uproot_click(self, i: discord.Interaction): 
         farm_data = await get_farm_data(self.farm_owner_id)
@@ -715,7 +729,12 @@ class Farm(commands.Cog):
             today_jst_midnight = datetime.fromisoformat(farm_date_str).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=KST)
         else:
             today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
-
+        
+        # ▼▼▼ [로깅 추가] 3. UI 렌더링 시점 확인 ▼▼▼
+        logger.info("--- [BUILD EMBED LOG START] ---")
+        logger.info(f"Building embed for user {user.id}. Today's KST date is {today_jst_midnight.date()}")
+        # ▲▲▲ [로깅 추가] 3. 여기까지 ▲▲▲
+        
         for y in range(sy):
             for x in range(sx):
                 is_owned_plot = (y * sx + x) < plot_count
@@ -749,7 +768,13 @@ class Farm(commands.Cog):
                                 
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
                                 last_watered_jst = last_watered_dt.astimezone(KST)
-                                water_emoji = '💧' if last_watered_jst.date() >= today_jst_midnight.date() else '➖'
+                                
+                                # ▼▼▼ [로깅 추가] 4. 물주기 이모지 판별 로직 확인 ▼▼▼
+                                comparison_result = last_watered_jst.date() >= today_jst_midnight.date()
+                                water_emoji = '💧' if comparison_result else '➖'
+                                
+                                logger.info(f"Plot ID {plot['id']}: last_watered_kst={last_watered_jst.date()}, today_kst={today_jst_midnight.date()}, comparison={comparison_result}, emoji={water_emoji}")
+                                # ▲▲▲ [로깅 추가] 4. 여기까지 ▲▲▲
                                 
                                 growth_status_text = ""
                                 if stage >= max_stage:
@@ -762,7 +787,8 @@ class Farm(commands.Cog):
                                 infos.append(info_text)
 
                 grid[y][x] = emoji
-
+        
+        logger.info("--- [BUILD EMBED LOG END] ---")
         farm_str = "\n".join("".join(row) for row in grid)
         farm_name = farm_data.get('name') or user.display_name
         embed = discord.Embed(title=f"**{farm_name}님의 농장**", color=0x8BC34A)
@@ -802,15 +828,11 @@ class Farm(commands.Cog):
         weather = WEATHER_TYPES.get(weather_key, {"emoji": "❔", "name": "알 수 없음"})
         description_parts.append(f"**오늘의 날씨:** {weather['emoji']} {weather['name']}")
         
-        # ▼▼▼ [핵심 수정] 시간 비교 로직 수정 ▼▼▼
         now_kst = discord.utils.utcnow().astimezone(KST)
-        # 오늘 자정 5분을 기준으로 '다음 업데이트 시간'을 설정합니다.
         next_update_time = today_jst_midnight.replace(hour=0, minute=5)
         
-        # 만약 현재 시간이 이미 오늘 업데이트 시간을 지났다면, 다음 업데이트는 내일입니다.
         if now_kst >= next_update_time:
             next_update_time += timedelta(days=1)
-        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
         
         description_parts.append(f"다음 작물 업데이트: {discord.utils.format_dt(next_update_time, style='R')}")
         
