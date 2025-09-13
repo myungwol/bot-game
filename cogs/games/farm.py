@@ -566,31 +566,28 @@ class Farm(commands.Cog):
         
     @tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
-        logger.info("일일 작물 상태 업데이트 시작...")
+        logger.info("--- [CROP UPDATE START] ---")
         try:
             weather_key = get_config("current_weather", "sunny")
             is_raining = WEATHER_TYPES.get(weather_key, {}).get('water_effect', False)
             
-            # ▼▼▼ [핵심 수정] 실제 시간이 아닌, DB의 '농장 기준일'을 우선적으로 사용하도록 변경
             farm_date_str = get_config("farm_current_date")
             if farm_date_str:
-                # DB에 저장된 기준일이 있으면 그 날짜를 사용합니다.
                 today_jst_midnight = datetime.fromisoformat(farm_date_str).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=KST)
-                logger.info(f"농장 기준일({farm_date_str})을 사용하여 작물 업데이트를 진행합니다.")
+                logger.info(f"[CROP UPDATE] Using virtual farm date: {farm_date_str}")
             else:
-                # 기준일이 없으면 실제 오늘 날짜를 사용합니다 (기본 동작).
                 today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+                logger.info(f"[CROP UPDATE] Using real current date: {today_jst_midnight.date()}")
             
-            yesterday_midnight_kst = today_jst_midnight - timedelta(days=1)
-            # ▲▲▲ [핵심 수정] 여기까지
-
             planted_plots_res = await supabase.table('farm_plots').select('*, farms!inner(user_id, id, thread_id)').eq('state', 'planted').execute()
             
             if not (planted_plots_res and planted_plots_res.data):
-                logger.info("업데이트할 작물이 없습니다.")
+                logger.info("[CROP UPDATE] No crops to update.")
+                logger.info("--- [CROP UPDATE END] ---")
                 return
 
             all_plots = planted_plots_res.data
+            logger.info(f"[CROP UPDATE] Found {len(all_plots)} planted plots to check.")
             
             item_names = {p['planted_item_name'] for p in all_plots if p.get('planted_item_name')}
             owner_ids = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
@@ -604,7 +601,6 @@ class Farm(commands.Cog):
             owner_abilities_map = {uid: set(abilities) for uid, abilities in zip(owner_ids, abilities_results)}
 
             plots_to_update_db = []
-            
             growth_ability_activations = defaultdict(lambda: {'count': 0, 'thread_id': None})
 
             for plot in all_plots:
@@ -616,31 +612,35 @@ class Farm(commands.Cog):
                 if not owner_id or not item_info:
                     continue
                 
+                logger.info(f"  - Checking Plot ID: {plot['id']} (Owner: {owner_id})")
+
                 if plot['growth_stage'] >= item_info.get('max_growth_stage', 99):
+                    logger.info(f"    > Plot {plot['id']} is fully grown. Skipping.")
                     continue
 
                 owner_abilities = owner_abilities_map.get(owner_id, set())
                 
-                # ▼▼▼ [핵심 수정] 수분 유지력 능력 버그 최종 수정 로직
                 if not plot.get('last_watered_at'):
+                    logger.info(f"    > Plot {plot['id']} has no water data. Setting to withered.")
                     update_payload['state'] = 'withered'
                     plots_to_update_db.append(update_payload)
                     continue
 
                 last_watered_kst = datetime.fromisoformat(plot['last_watered_at']).astimezone(KST)
                 
+                # ▼▼▼ [핵심 로깅] 날짜 계산의 모든 변수를 출력합니다. ▼▼▼
                 days_since_watered = (today_jst_midnight.date() - last_watered_kst.date()).days
+                logger.info(f"    > Plot {plot['id']}: Today KST = {today_jst_midnight.date()}, Last Watered KST = {last_watered_kst.date()}, Days Since Watered = {days_since_watered}")
 
                 owner_has_water_ability = 'farm_water_retention_1' in owner_abilities
                 should_wither = False
                 
                 if not is_raining:
-                    if owner_has_water_ability:
-                        if days_since_watered >= 2: # 이틀 전(경과일 2일)에 물을 줬다면 오늘은 물을 안줘도 됨. 3일째부터 시듦.
-                            should_wither = True
-                    else:
-                        if days_since_watered >= 1: # 어제(경과일 1일) 물을 안줬다면 오늘 시듦.
-                            should_wither = True
+                    wither_threshold = 2 if owner_has_water_ability else 1
+                    logger.info(f"    > Is Raining: {is_raining}, Has Ability: {owner_has_water_ability}, Wither Threshold: {wither_threshold} days.")
+                    if days_since_watered >= wither_threshold:
+                        should_wither = True
+                        logger.info(f"    > RESULT: WITHERING. ({days_since_watered} >= {wither_threshold})")
                 
                 if should_wither:
                     update_payload['state'] = 'withered'
@@ -648,13 +648,15 @@ class Farm(commands.Cog):
                     grows_today = False
                     if is_raining:
                         grows_today = True
+                        logger.info(f"    > RESULT: GROWING. (Reason: Rain)")
                     else:
-                        if owner_has_water_ability:
-                            if days_since_watered < 2: # 어제 또는 오늘 물을 줬다면 성장
-                                grows_today = True
+                        growth_threshold = 2 if owner_has_water_ability else 1
+                        logger.info(f"    > Growth Threshold: {growth_threshold} days.")
+                        if days_since_watered < growth_threshold:
+                            grows_today = True
+                            logger.info(f"    > RESULT: GROWING. ({days_since_watered} < {growth_threshold})")
                         else:
-                            if days_since_watered < 1: # 오늘 물을 줬다면 성장
-                                grows_today = True
+                            logger.info(f"    > RESULT: NOT GROWING. ({days_since_watered} >= {growth_threshold})")
                     
                     if grows_today:
                         growth_amount = 1
@@ -667,19 +669,19 @@ class Farm(commands.Cog):
                             plot['growth_stage'] + growth_amount,
                             item_info.get('max_growth_stage', 99)
                         )
-                # ▲▲▲ [핵심 수정] 여기까지
+                # ▲▲▲ [핵심 로깅] 여기까지 ▲▲▲
                 
                 plots_to_update_db.append(update_payload)
 
             if plots_to_update_db:
                 await supabase.table('farm_plots').upsert(plots_to_update_db).execute()
-                logger.info(f"일일 작물 업데이트 완료. {len(plots_to_update_db)}개의 밭이 영향을 받았습니다. UI 업데이트를 요청합니다.")
+                logger.info(f"[CROP UPDATE] DB update complete. {len(plots_to_update_db)} plots were affected.")
                 
                 affected_farms = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
                 for user_id in affected_farms:
                     await self.request_farm_ui_update(user_id)
             else:
-                logger.info("상태가 변경된 작물이 없습니다.")
+                logger.info("[CROP UPDATE] No plots needed an update.")
 
             for user_id, data in growth_ability_activations.items():
                 if data['count'] > 0 and data['thread_id']:
@@ -689,9 +691,12 @@ class Farm(commands.Cog):
                             await thread.send(f"**[농장 알림]**\n오늘 농장 업데이트에서 **성장 속도 UP (대)** 능력이 발동하여, {data['count']}개의 작물이 추가로 성장했습니다!", delete_after=3600)
                     except Exception as e:
                         logger.error(f"{user_id}의 농장 스레드({data['thread_id']})에 능력 발동 메시지 전송 중 오류: {e}")
+            
+            logger.info("--- [CROP UPDATE END] ---")
 
         except Exception as e:
             logger.error(f"일일 작물 업데이트 중 오류: {e}", exc_info=True)
+            logger.info("--- [CROP UPDATE END WITH ERROR] ---")
             
     @daily_crop_update.before_loop
     async def before_daily_crop_update(self):
