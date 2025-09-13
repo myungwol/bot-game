@@ -362,7 +362,7 @@ class FarmUIView(ui.View):
         if not farm_data: return
         view = FarmActionView(self.cog, farm_data, i.user, "plant_seed", self.farm_owner_id)
         await view.send_initial_message(i)
-        
+
     async def on_farm_water_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         gear = await get_user_gear(interaction.user)
@@ -371,20 +371,14 @@ class FarmUIView(ui.View):
             msg = await interaction.followup.send("❌ 먼저 상점에서 '물뿌리개'를 구매하고 프로필 화면에서 장착해주세요.", ephemeral=True)
             self.cog.bot.loop.create_task(delete_after(msg, 10))
             return
+            
         power = get_item_database().get(can, {}).get('power', 1)
         today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
+        
         plots_to_update_db = set()
         watered_count = 0
-
-        # ▼▼▼ [로깅 추가] 1. 물주기 전 상태 확인 ▼▼▼
-        logger.info("--- [WATER CLICK LOG START] ---")
-        logger.info(f"User {interaction.user.id} clicked water button.")
-        for p_before in farm_data['farm_plots']:
-            if p_before['state'] == 'planted':
-                logger.info(f"[BEFORE] Plot ID {p_before['id']}: last_watered_at = {p_before.get('last_watered_at')}")
-        # ▲▲▲ [로깅 추가] 1. 여기까지 ▲▲▲
 
         for p in sorted(farm_data['farm_plots'], key=lambda x: (x['pos_y'], x['pos_x'])):
             if watered_count >= power: break
@@ -392,6 +386,7 @@ class FarmUIView(ui.View):
             if p['state'] == 'planted' and last_watered_dt.astimezone(KST) < today_jst_midnight:
                 plots_to_update_db.add(p['id'])
                 watered_count += 1
+                
         if not plots_to_update_db:
             msg = await interaction.followup.send("ℹ️ 물을 줄 필요가 있는 작물이 없습니다.", ephemeral=True)
             self.cog.bot.loop.create_task(delete_after(msg, 5))
@@ -406,6 +401,12 @@ class FarmUIView(ui.View):
         
         msg = await interaction.followup.send(f"✅ {watered_count}개의 작물에 물을 주었습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_after(msg, 5))
+
+        # [핵심 수정] DB 업데이트 후 최신 데이터를 다시 불러와서 UI 업데이트
+        updated_farm_data = await get_farm_data(self.farm_owner_id)
+        owner = self.cog.bot.get_user(self.farm_owner_id)
+        if updated_farm_data and owner:
+            await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data, message=interaction.message)
 
         for plot in farm_data['farm_plots']:
             if plot['id'] in plots_to_update_db:
@@ -624,15 +625,12 @@ class Farm(commands.Cog):
                 
                 logger.info(f"  - Checking Plot ID: {plot['id']} (Owner: {owner_id})")
 
-                # [수정된 로직 시작]
-                # 1. 물주기 데이터가 없으면 즉시 시들게 함
                 if not plot.get('last_watered_at'):
                     logger.info(f"    > Plot {plot['id']} has no water data. Setting to withered.")
                     update_payload['state'] = 'withered'
                     plots_to_update_db.append(update_payload)
                     continue
 
-                # 2. 물을 준 마지막 날짜를 기준으로 시드는지 여부 먼저 판단
                 last_watered_kst = datetime.fromisoformat(plot['last_watered_at']).astimezone(KST)
                 days_since_watered = (today_jst_midnight.date() - last_watered_kst.date()).days
                 owner_abilities = owner_abilities_map.get(owner_id, set())
@@ -641,7 +639,6 @@ class Farm(commands.Cog):
                 
                 if not is_raining:
                     wither_threshold = 3 if owner_has_water_ability else 2
-                    logger.info(f"    > Is Raining: {is_raining}, Has Ability: {owner_has_water_ability}, Wither Threshold: {wither_threshold} days.")
                     if days_since_watered >= wither_threshold:
                         should_wither = True
                         logger.info(f"    > RESULT: WITHERING. ({days_since_watered} >= {wither_threshold})")
@@ -649,21 +646,18 @@ class Farm(commands.Cog):
                 if should_wither:
                     update_payload['state'] = 'withered'
                     plots_to_update_db.append(update_payload)
-                    continue # 시들었으면 성장 로직을 실행할 필요 없음
+                    continue
 
-                # 3. 시들지 않았다면, 다 자랐는지 확인. 다 자랐으면 더 이상 성장하지 않음.
                 if plot['growth_stage'] >= item_info.get('max_growth_stage', 99):
                     logger.info(f"    > Plot {plot['id']} is fully grown and watered. Skipping growth.")
                     continue
 
-                # 4. 시들지도 않았고, 아직 다 자라지도 않았다면 성장 로직 실행
                 grows_today = False
                 if is_raining:
                     grows_today = True
                     logger.info(f"    > RESULT: GROWING. (Reason: Rain)")
                 else:
                     growth_threshold = 2 if owner_has_water_ability else 1
-                    logger.info(f"    > Growth Threshold: {growth_threshold} days.")
                     if days_since_watered < growth_threshold:
                         grows_today = True
                         logger.info(f"    > RESULT: GROWING. ({days_since_watered} < {growth_threshold})")
@@ -685,17 +679,19 @@ class Farm(commands.Cog):
                         item_info.get('max_growth_stage', 99)
                     )
                     plots_to_update_db.append(update_payload)
-                # [수정된 로직 끝]
 
+            # [핵심 수정] UI 업데이트 요청을 if문 밖으로 이동
             if plots_to_update_db:
                 await supabase.table('farm_plots').upsert(plots_to_update_db).execute()
                 logger.info(f"[CROP UPDATE] DB update complete. {len(plots_to_update_db)} plots were affected.")
-                
-                affected_farms = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
-                for user_id in affected_farms:
-                    await self.request_farm_ui_update(user_id)
             else:
-                logger.info("[CROP UPDATE] No plots needed an update.")
+                logger.info("[CROP UPDATE] No plots needed a state update in the DB.")
+
+            affected_farms = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
+            logger.info(f"[CROP UPDATE] Requesting UI updates for {len(affected_farms)} farms.")
+            for user_id in affected_farms:
+                await self.request_farm_ui_update(user_id)
+            # [핵심 수정] 여기까지
 
             db_save_tasks = []
             for user_id, data in ability_activations_by_user.items():
