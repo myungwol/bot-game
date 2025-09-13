@@ -573,8 +573,12 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmCreationPanelView(self))
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 농장 관련 영구 View가 정상적으로 등록되었습니다.")
-
 # cogs/games/farm.py
+
+# ... (파일의 다른 부분은 그대로 유지) ...
+
+class Farm(commands.Cog):
+    # ... (__init__, cog_unload, register_persistent_views 등 다른 함수는 그대로 유지) ...
 
     @tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
@@ -613,9 +617,7 @@ class Farm(commands.Cog):
             owner_abilities_map = {uid: set(abilities) for uid, abilities in zip(owner_ids, abilities_results)}
 
             plots_to_update_db = []
-            # ▼▼▼ [핵심 수정] 능력 발동 내역을 사용자별로 저장할 딕셔너리로 변경 ▼▼▼
             ability_activations_by_user = defaultdict(lambda: {"growth": 0, "water": 0, "thread_id": None})
-            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
             for plot in all_plots:
                 update_payload = plot.copy()
@@ -628,23 +630,18 @@ class Farm(commands.Cog):
                 
                 logger.info(f"  - Checking Plot ID: {plot['id']} (Owner: {owner_id})")
 
-                if plot['growth_stage'] >= item_info.get('max_growth_stage', 99):
-                    logger.info(f"    > Plot {plot['id']} is fully grown. Skipping.")
-                    continue
-
-                owner_abilities = owner_abilities_map.get(owner_id, set())
-                
+                # [수정된 로직 시작]
+                # 1. 물주기 데이터가 없으면 즉시 시들게 함
                 if not plot.get('last_watered_at'):
                     logger.info(f"    > Plot {plot['id']} has no water data. Setting to withered.")
                     update_payload['state'] = 'withered'
                     plots_to_update_db.append(update_payload)
                     continue
 
+                # 2. 물을 준 마지막 날짜를 기준으로 시드는지 여부 먼저 판단
                 last_watered_kst = datetime.fromisoformat(plot['last_watered_at']).astimezone(KST)
-                
                 days_since_watered = (today_jst_midnight.date() - last_watered_kst.date()).days
-                logger.info(f"    > Plot {plot['id']}: Today KST = {today_jst_midnight.date()}, Last Watered KST = {last_watered_kst.date()}, Days Since Watered = {days_since_watered}")
-
+                owner_abilities = owner_abilities_map.get(owner_id, set())
                 owner_has_water_ability = 'farm_water_retention_1' in owner_abilities
                 should_wither = False
                 
@@ -654,43 +651,47 @@ class Farm(commands.Cog):
                     if days_since_watered >= wither_threshold:
                         should_wither = True
                         logger.info(f"    > RESULT: WITHERING. ({days_since_watered} >= {wither_threshold})")
-                
+
                 if should_wither:
                     update_payload['state'] = 'withered'
+                    plots_to_update_db.append(update_payload)
+                    continue # 시들었으면 성장 로직을 실행할 필요 없음
+
+                # 3. 시들지 않았다면, 다 자랐는지 확인. 다 자랐으면 더 이상 성장하지 않음.
+                if plot['growth_stage'] >= item_info.get('max_growth_stage', 99):
+                    logger.info(f"    > Plot {plot['id']} is fully grown and watered. Skipping growth.")
+                    continue
+
+                # 4. 시들지도 않았고, 아직 다 자라지도 않았다면 성장 로직 실행
+                grows_today = False
+                if is_raining:
+                    grows_today = True
+                    logger.info(f"    > RESULT: GROWING. (Reason: Rain)")
                 else:
-                    grows_today = False
-                    if is_raining:
+                    growth_threshold = 2 if owner_has_water_ability else 1
+                    logger.info(f"    > Growth Threshold: {growth_threshold} days.")
+                    if days_since_watered < growth_threshold:
                         grows_today = True
-                        logger.info(f"    > RESULT: GROWING. (Reason: Rain)")
-                    else:
-                        growth_threshold = 2 if owner_has_water_ability else 1
-                        logger.info(f"    > Growth Threshold: {growth_threshold} days.")
-                        if days_since_watered < growth_threshold:
-                            grows_today = True
-                            logger.info(f"    > RESULT: GROWING. ({days_since_watered} < {growth_threshold})")
-                            # ▼▼▼ [핵심 수정] 수분 유지 능력이 발동한 경우 카운트 ▼▼▼
-                            if owner_has_water_ability and days_since_watered == 1:
-                                ability_activations_by_user[owner_id]["water"] += 1
-                                ability_activations_by_user[owner_id]["thread_id"] = plot['farms']['thread_id']
-                            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
-                        else:
-                            logger.info(f"    > RESULT: NOT GROWING. ({days_since_watered} >= {growth_threshold})")
-                    
-                    if grows_today:
-                        growth_amount = 1
-                        if 'farm_growth_speed_up_2' in owner_abilities and not plot.get('is_regrowing', False):
-                            growth_amount += 1
-                            # ▼▼▼ [핵심 수정] 성장 가속 능력 발동 카운트 ▼▼▼
-                            ability_activations_by_user[owner_id]["growth"] += 1
+                        logger.info(f"    > RESULT: GROWING. ({days_since_watered} < {growth_threshold})")
+                        if owner_has_water_ability and days_since_watered == 1:
+                            ability_activations_by_user[owner_id]["water"] += 1
                             ability_activations_by_user[owner_id]["thread_id"] = plot['farms']['thread_id']
-                            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
-                        
-                        update_payload['growth_stage'] = min(
-                            plot['growth_stage'] + growth_amount,
-                            item_info.get('max_growth_stage', 99)
-                        )
-                
-                plots_to_update_db.append(update_payload)
+                    else:
+                        logger.info(f"    > RESULT: NOT GROWING. ({days_since_watered} >= {growth_threshold})")
+
+                if grows_today:
+                    growth_amount = 1
+                    if 'farm_growth_speed_up_2' in owner_abilities and not plot.get('is_regrowing', False):
+                        growth_amount += 1
+                        ability_activations_by_user[owner_id]["growth"] += 1
+                        ability_activations_by_user[owner_id]["thread_id"] = plot['farms']['thread_id']
+                    
+                    update_payload['growth_stage'] = min(
+                        plot['growth_stage'] + growth_amount,
+                        item_info.get('max_growth_stage', 99)
+                    )
+                    plots_to_update_db.append(update_payload)
+                # [수정된 로직 끝]
 
             if plots_to_update_db:
                 await supabase.table('farm_plots').upsert(plots_to_update_db).execute()
@@ -702,7 +703,6 @@ class Farm(commands.Cog):
             else:
                 logger.info("[CROP UPDATE] No plots needed an update.")
 
-            # ▼▼▼ [핵심 수정] 메시지 전송 로직을 DB에 저장하는 로직으로 변경 ▼▼▼
             db_save_tasks = []
             for user_id, data in ability_activations_by_user.items():
                 messages_to_send = []
@@ -717,7 +717,6 @@ class Farm(commands.Cog):
             
             if db_save_tasks:
                 await asyncio.gather(*db_save_tasks)
-            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
             
             logger.info("--- [CROP UPDATE END] ---")
 
