@@ -573,12 +573,6 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmCreationPanelView(self))
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 농장 관련 영구 View가 정상적으로 등록되었습니다.")
-# cogs/games/farm.py
-
-# ... (파일의 다른 부분은 그대로 유지) ...
-
-class Farm(commands.Cog):
-    # ... (__init__, cog_unload, register_persistent_views 등 다른 함수는 그대로 유지) ...
 
     @tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
