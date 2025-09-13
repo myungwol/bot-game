@@ -690,7 +690,7 @@ class Farm(commands.Cog):
         config_key = f"farm_ui_update_request_{user_id}"
         config_value = {"timestamp": time.time(), "force_new": force_new}
         await save_config_to_db(config_key, config_value)
-        
+
     async def build_farm_embed(self, farm_data: Dict, user: discord.User) -> discord.Embed:
         info_map = await preload_farmable_info(farm_data)
         
@@ -793,10 +793,15 @@ class Farm(commands.Cog):
         weather = WEATHER_TYPES.get(weather_key, {"emoji": "❔", "name": "알 수 없음"})
         description_parts.append(f"**오늘의 날씨:** {weather['emoji']} {weather['name']}")
         
+        # ▼▼▼ [핵심 수정] 시간 비교 로직 수정 ▼▼▼
         now_kst = discord.utils.utcnow().astimezone(KST)
+        # 오늘 자정 5분을 기준으로 '다음 업데이트 시간'을 설정합니다.
         next_update_time = today_jst_midnight.replace(hour=0, minute=5)
-        if now_kst.time() >= KST_MIDNIGHT_UPDATE:
+        
+        # 만약 현재 시간이 이미 오늘 업데이트 시간을 지났다면, 다음 업데이트는 내일입니다.
+        if now_kst >= next_update_time:
             next_update_time += timedelta(days=1)
+        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
         
         description_parts.append(f"다음 작물 업데이트: {discord.utils.format_dt(next_update_time, style='R')}")
         
