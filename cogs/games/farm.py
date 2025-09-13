@@ -445,17 +445,25 @@ class FarmUIView(ui.View):
                 final_yield = max(1, round(info.get('base_yield', 1) * yield_mult))
                 harvest_name = info['harvest_item_name']
                 harvested[harvest_name] = harvested.get(harvest_name, 0) + final_yield
-                if info.get('is_tree') is True:
+                
+                # ▼▼▼ [핵심 수정] 재성장(regrowth) 정보가 있는 나무인지 확인하는 로직 추가 ▼▼▼
+                is_regrowing_tree = info.get('is_tree', False) and (info.get('regrowth_days') is not None or info.get('regrowth_hours') is not None)
+
+                if is_regrowing_tree:
                     max_stage = info.get('max_growth_stage', 3)
-                    regrowth = info.get('regrowth_days', 1)
-                    new_growth_stage = max(0, max_stage - regrowth)
+                    regrowth_days = info.get('regrowth_days', 1) # 기본값을 1로 설정
+                    new_growth_stage = max(0, max_stage - regrowth_days)
                     trees_to_update[p['id']] = {'stage': new_growth_stage, 'is_regrowing': True}
                 else: 
+                    # 재성장하지 않는 나무 또는 일반 작물은 밭에서 제거합니다.
                     plots_to_reset.append(p['id'])
+                # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
+
         if not harvested:
             msg = await interaction.followup.send("ℹ️ 수확할 수 있는 작물이 없습니다.", ephemeral=True)
             self.cog.bot.loop.create_task(delete_after(msg, 5))
             return
+            
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if not owner: return
         total_harvested_amount = sum(harvested.values())
