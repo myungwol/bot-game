@@ -618,9 +618,11 @@ class Farm(commands.Cog):
                 
                 logger.info(f"  - Checking Plot ID: {plot['id']} (Owner: {owner_id})")
 
+                # ▼▼▼ [핵심 수정] 성장이 완료된 작물은 여기서 즉시 건너뜁니다. ▼▼▼
                 if plot['growth_stage'] >= item_info.get('max_growth_stage', 99):
-                    logger.info(f"    > Plot {plot['id']} is fully grown. Skipping.")
+                    logger.info(f"    > Plot {plot['id']} is already fully grown. Skipping.")
                     continue
+                # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
                 owner_abilities = owner_abilities_map.get(owner_id, set())
                 
@@ -658,11 +660,9 @@ class Farm(commands.Cog):
                         if days_since_watered < growth_threshold:
                             grows_today = True
                             logger.info(f"    > RESULT: GROWING. ({days_since_watered} < {growth_threshold})")
-                            # ▼▼▼ [핵심 수정] 수분 유지 능력이 발동한 경우 카운트 ▼▼▼
                             if owner_has_water_ability and days_since_watered == 1:
                                 ability_activations_by_user[owner_id]["water"] += 1
                                 ability_activations_by_user[owner_id]["thread_id"] = plot['farms']['thread_id']
-                            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
                         else:
                             logger.info(f"    > RESULT: NOT GROWING. ({days_since_watered} >= {growth_threshold})")
                     
@@ -670,17 +670,18 @@ class Farm(commands.Cog):
                         growth_amount = 1
                         if 'farm_growth_speed_up_2' in owner_abilities and not plot.get('is_regrowing', False):
                             growth_amount += 1
-                            # ▼▼▼ [핵심 수정] 성장 가속 능력 발동 카운트 ▼▼▼
                             ability_activations_by_user[owner_id]["growth"] += 1
                             ability_activations_by_user[owner_id]["thread_id"] = plot['farms']['thread_id']
-                            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
                         
-                        update_payload['growth_stage'] = min(
-                            plot['growth_stage'] + growth_amount,
-                            item_info.get('max_growth_stage', 99)
-                        )
-                
+                        # ▼▼▼ [핵심 수정] 최대 성장 단계를 넘어서도 일단 더하고, 나중에 UI에서만 제한하도록 변경 ▼▼▼
+                        # 이렇게 하면 마지막 날 성장이 누락되는 문제를 방지할 수 있습니다.
+                        update_payload['growth_stage'] = plot['growth_stage'] + growth_amount
+                        logger.info(f"    > Growth Amount: {growth_amount}. New stage: {update_payload['growth_stage']}")
+                        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
+
                 plots_to_update_db.append(update_payload)
+
+            # ... (메서드 하단은 그대로 유지) ...
 
             if plots_to_update_db:
                 await supabase.table('farm_plots').upsert(plots_to_update_db).execute()
