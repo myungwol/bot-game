@@ -402,35 +402,17 @@ class FarmUIView(ui.View):
         msg = await interaction.followup.send(f"✅ {watered_count}개의 작물에 물을 주었습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_after(msg, 5))
 
-        # [핵심 수정] DB 업데이트 후 최신 데이터를 다시 불러와서 UI 업데이트
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
-            await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data, message=interaction.message)
+            await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
-        for plot in farm_data['farm_plots']:
-            if plot['id'] in plots_to_update_db:
-                plot['last_watered_at'] = now_iso
-        
-        # ▼▼▼ [로깅 추가] 2. UI 업데이트 직전 상태 확인 ▼▼▼
-        logger.info(f"DB & Local data updated. Plots watered: {plots_to_update_db}. New timestamp: {now_iso}")
-        for p_after in farm_data['farm_plots']:
-             if p_after['id'] in plots_to_update_db:
-                logger.info(f"[AFTER] Plot ID {p_after['id']}: last_watered_at is now {p_after.get('last_watered_at')}")
-        # ▲▲▲ [로깅 추가] 2. 여기까지 ▲▲▲
-        
-        owner = self.cog.bot.get_user(self.farm_owner_id)
-        if farm_data and owner:
-            await self.cog.update_farm_ui(interaction.channel, owner, farm_data, message=interaction.message)
-        
     async def on_farm_uproot_click(self, i: discord.Interaction): 
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
         view = FarmActionView(self.cog, farm_data, i.user, "uproot", self.farm_owner_id)
         await view.send_initial_message(i)
         
-# cogs/games/farm.py -> FarmUIView 클래스 내부
-
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         farm_data = await get_farm_data(self.farm_owner_id)
@@ -449,18 +431,15 @@ class FarmUIView(ui.View):
                 harvest_name = info['harvest_item_name']
                 harvested[harvest_name] = harvested.get(harvest_name, 0) + final_yield
                 
-                # ▼▼▼ [핵심 수정] 재성장(regrowth) 정보가 있는 나무인지 확인하는 로직 추가 ▼▼▼
                 is_regrowing_tree = info.get('is_tree', False) and (info.get('regrowth_days') is not None or info.get('regrowth_hours') is not None)
 
                 if is_regrowing_tree:
                     max_stage = info.get('max_growth_stage', 3)
-                    regrowth_days = info.get('regrowth_days', 1) # 기본값을 1로 설정
+                    regrowth_days = info.get('regrowth_days', 1) 
                     new_growth_stage = max(0, max_stage - regrowth_days)
                     trees_to_update[p['id']] = {'stage': new_growth_stage, 'is_regrowing': True}
                 else: 
-                    # 재성장하지 않는 나무 또는 일반 작물은 밭에서 제거합니다.
                     plots_to_reset.append(p['id'])
-                # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
         if not harvested:
             msg = await interaction.followup.send("ℹ️ 수확할 수 있는 작물이 없습니다.", ephemeral=True)
@@ -585,20 +564,20 @@ class Farm(commands.Cog):
             farm_date_str = get_config("farm_current_date")
             if farm_date_str:
                 today_jst_midnight = datetime.fromisoformat(farm_date_str).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=KST)
-                logger.info(f"[CROP UPDATE] Using virtual farm date: {farm_date_str}")
+                logger.info(f"[CROP UPDATE] 가상 농장 날짜 사용: {farm_date_str}")
             else:
                 today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
-                logger.info(f"[CROP UPDATE] Using real current date: {today_jst_midnight.date()}")
+                logger.info(f"[CROP UPDATE] 현재 실제 날짜 사용: {today_jst_midnight.date()}")
             
             planted_plots_res = await supabase.table('farm_plots').select('*, farms!inner(user_id, id, thread_id)').eq('state', 'planted').execute()
             
             if not (planted_plots_res and planted_plots_res.data):
-                logger.info("[CROP UPDATE] No crops to update.")
+                logger.info("[CROP UPDATE] 업데이트할 작물이 없습니다.")
                 logger.info("--- [CROP UPDATE END] ---")
                 return
 
             all_plots = planted_plots_res.data
-            logger.info(f"[CROP UPDATE] Found {len(all_plots)} planted plots to check.")
+            logger.info(f"[CROP UPDATE] 확인할 작물이 심긴 밭 {len(all_plots)}개를 찾았습니다.")
             
             item_names = {p['planted_item_name'] for p in all_plots if p.get('planted_item_name')}
             owner_ids = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
@@ -608,7 +587,7 @@ class Farm(commands.Cog):
 
             item_info_results, abilities_results = await asyncio.gather(asyncio.gather(*item_info_tasks), asyncio.gather(*abilities_tasks))
             
-            item_info_map = {info['item_name']: info for info in item_info_results if info}
+            item_info_map = {info['item_name']: info for info in results if info}
             owner_abilities_map = {uid: set(abilities) for uid, abilities in zip(owner_ids, abilities_results)}
 
             plots_to_update_db = []
@@ -623,10 +602,11 @@ class Farm(commands.Cog):
                 if not owner_id or not item_info:
                     continue
                 
-                logger.info(f"  - Checking Plot ID: {plot['id']} (Owner: {owner_id})")
+                # [로깅 추가] 각 밭의 상태를 자세히 기록
+                logger.info(f"  - 확인 중인 밭 ID: {plot['id']} (소유자: {owner_id}, 작물: {plot['planted_item_name']})")
 
                 if not plot.get('last_watered_at'):
-                    logger.info(f"    > Plot {plot['id']} has no water data. Setting to withered.")
+                    logger.info(f"    > 밭 {plot['id']}에 물 준 기록이 없어 시들게 처리합니다.")
                     update_payload['state'] = 'withered'
                     plots_to_update_db.append(update_payload)
                     continue
@@ -637,11 +617,14 @@ class Farm(commands.Cog):
                 owner_has_water_ability = 'farm_water_retention_1' in owner_abilities
                 should_wither = False
                 
+                # [로깅 추가] 물주기 및 능력 상태 로깅
+                logger.info(f"    > 마지막 물 준 날짜(KST): {last_watered_kst.date()}, 경과일: {days_since_watered}일, 수분 유지 능력: {owner_has_water_ability}")
+
                 if not is_raining:
                     wither_threshold = 3 if owner_has_water_ability else 2
                     if days_since_watered >= wither_threshold:
                         should_wither = True
-                        logger.info(f"    > RESULT: WITHERING. ({days_since_watered} >= {wither_threshold})")
+                        logger.info(f"    > 결과: 시듦. (경과일 {days_since_watered}일 >= 시듦 기준 {wither_threshold}일)")
 
                 if should_wither:
                     update_payload['state'] = 'withered'
@@ -649,23 +632,25 @@ class Farm(commands.Cog):
                     continue
 
                 if plot['growth_stage'] >= item_info.get('max_growth_stage', 99):
-                    logger.info(f"    > Plot {plot['id']} is fully grown and watered. Skipping growth.")
+                    logger.info(f"    > 밭 {plot['id']}는 이미 성장을 완료하여 성장 로직을 건너뜁니다.")
                     continue
 
                 grows_today = False
+                # [핵심 수정] 성장 조건식을 wither_threshold를 사용하도록 변경
+                wither_threshold = 3 if owner_has_water_ability else 2
+                
                 if is_raining:
                     grows_today = True
-                    logger.info(f"    > RESULT: GROWING. (Reason: Rain)")
+                    logger.info(f"    > 결과: 성장. (이유: 비)")
                 else:
-                    growth_threshold = 2 if owner_has_water_ability else 1
-                    if days_since_watered < growth_threshold:
+                    if days_since_watered < wither_threshold:
                         grows_today = True
-                        logger.info(f"    > RESULT: GROWING. ({days_since_watered} < {growth_threshold})")
+                        logger.info(f"    > 결과: 성장. (경과일 {days_since_watered}일 < 시듦 기준 {wither_threshold}일)")
                         if owner_has_water_ability and days_since_watered == 1:
                             ability_activations_by_user[owner_id]["water"] += 1
                             ability_activations_by_user[owner_id]["thread_id"] = plot['farms']['thread_id']
                     else:
-                        logger.info(f"    > RESULT: NOT GROWING. ({days_since_watered} >= {growth_threshold})")
+                        logger.info(f"    > 결과: 성장 안 함. (경과일 {days_since_watered}일 >= 시듦 기준 {wither_threshold}일)")
 
                 if grows_today:
                     growth_amount = 1
@@ -680,18 +665,16 @@ class Farm(commands.Cog):
                     )
                     plots_to_update_db.append(update_payload)
 
-            # [핵심 수정] UI 업데이트 요청을 if문 밖으로 이동
             if plots_to_update_db:
                 await supabase.table('farm_plots').upsert(plots_to_update_db).execute()
-                logger.info(f"[CROP UPDATE] DB update complete. {len(plots_to_update_db)} plots were affected.")
+                logger.info(f"[CROP UPDATE] DB 업데이트 완료. {len(plots_to_update_db)}개의 밭이 영향을 받았습니다.")
             else:
-                logger.info("[CROP UPDATE] No plots needed a state update in the DB.")
+                logger.info("[CROP UPDATE] DB 상태를 업데이트할 밭이 없습니다.")
 
             affected_farms = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
-            logger.info(f"[CROP UPDATE] Requesting UI updates for {len(affected_farms)} farms.")
+            logger.info(f"[CROP UPDATE] {len(affected_farms)}개의 농장에 대한 UI 업데이트를 요청합니다.")
             for user_id in affected_farms:
                 await self.request_farm_ui_update(user_id)
-            # [핵심 수정] 여기까지
 
             db_save_tasks = []
             for user_id, data in ability_activations_by_user.items():
@@ -729,7 +712,6 @@ class Farm(commands.Cog):
                 if thread := self.bot.get_channel(thread_id):
                     await self.update_farm_ui(thread, user, farm_data)
                     
-                    # ▼▼▼ [핵심 수정] UI 업데이트 후, DB에 저장된 메시지를 불러와 전송 ▼▼▼
                     message_config_key = f"farm_ability_messages_{user_id}"
                     message_data = get_config(message_config_key)
                     if message_data and isinstance(message_data, dict):
@@ -739,13 +721,12 @@ class Farm(commands.Cog):
                         if messages and msg_thread_id and (msg_thread := self.bot.get_channel(msg_thread_id)):
                             try:
                                 for msg in messages:
-                                    await msg_thread.send(msg, delete_after=86400) # 24시간 후 삭제
-                                    await asyncio.sleep(1) # 메시지 순서 보장을 위한 짧은 딜레이
+                                    await msg_thread.send(msg, delete_after=86400) 
+                                    await asyncio.sleep(1) 
                             except Exception as e:
                                 logger.error(f"농장 능력 발동 메시지 전송 실패 (User: {user_id}, Thread: {msg_thread_id}): {e}")
                         
                         await delete_config_from_db(message_config_key)
-                    # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
                     
                     await asyncio.sleep(1.5)
 
@@ -774,7 +755,7 @@ class Farm(commands.Cog):
         owner_has_water_ability = 'farm_water_retention_1' in owner_abilities
 
         logger.info("--- [BUILD EMBED LOG START] ---")
-        logger.info(f"Building embed for user {user.id}. Today's KST date is {today_jst_midnight.date()}")
+        logger.info(f"유저 {user.id}의 임베드 생성. 기준 KST 날짜: {today_jst_midnight.date()}")
         
         for y in range(sy):
             for x in range(sx):
@@ -810,16 +791,16 @@ class Farm(commands.Cog):
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
                                 last_watered_jst = last_watered_dt.astimezone(KST)
                                 
-                                # ▼▼▼ [핵심 수정] UI의 물주기 표시 기준일을 2일로 변경 ▼▼▼
+                                # [핵심 수정] UI 물주기 표시 로직 수정
                                 days_since_watered = (today_jst_midnight.date() - last_watered_jst.date()).days
                                 
-                                water_threshold = 2 if owner_has_water_ability else 1
-                                is_watered_for_display = days_since_watered < water_threshold
+                                water_display_threshold = 2 if owner_has_water_ability else 1
+                                is_watered_for_display = days_since_watered < water_display_threshold
                                 
                                 water_emoji = '💧' if is_watered_for_display else '➖'
-                                # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
                                 
-                                logger.info(f"Plot ID {plot['id']}: last_watered_kst={last_watered_jst.date()}, today_kst={today_jst_midnight.date()}, days_since={days_since_watered}, has_ability={owner_has_water_ability}, is_watered={is_watered_for_display}, emoji={water_emoji}")
+                                # [로깅 추가] UI 이모지 결정 로직 로깅
+                                logger.info(f"밭 ID {plot['id']}: 마지막 물 준 날짜(KST)={last_watered_jst.date()}, 오늘(KST)={today_jst_midnight.date()}, 경과일={days_since_watered}, 능력 보유={owner_has_water_ability}, 물주기 표시={is_watered_for_display}, 이모지={water_emoji}")
                                 
                                 growth_status_text = ""
                                 if stage >= max_stage:
@@ -885,12 +866,10 @@ class Farm(commands.Cog):
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User, farm_data: Dict, force_new: bool = False, message: discord.Message = None):
         lock = self.thread_locks.setdefault(thread.id, asyncio.Lock())
         async with lock:
-            # ▼▼▼ [핵심 수정] 불필요한 DB 조회를 제거하고, 전달받은 데이터를 즉시 사용하도록 변경 ▼▼▼
             current_farm_data = farm_data 
             if not (user and current_farm_data):
                 logger.warning(f"[UI UPDATE FUNC] 사용자({user.id})의 최신 농장 데이터를 가져올 수 없어 UI 업데이트를 중단합니다.")
                 return
-            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
             logger.info(f"[UI UPDATE FUNC] update_farm_ui 함수 호출됨. 사용자: {user.id}, 스레드: {thread.id}")
 
@@ -934,14 +913,12 @@ class Farm(commands.Cog):
     async def create_new_farm_thread(self, interaction: discord.Interaction, user: discord.Member):
         try:
             farm_name = f"{user.display_name}의 농장"
-            # ▼▼▼ [핵심 수정] 스레드 생성 옵션 추가 ▼▼▼
             thread = await interaction.channel.create_thread(
                 name=f"🌱｜{farm_name}", 
                 type=discord.ChannelType.private_thread,
                 auto_archive_duration=10080,
                 invitable=False
             )
-            # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
             await thread.add_user(user)
 
             await delete_config_from_db(f"farm_state_{user.id}")
