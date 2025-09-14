@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 
 CROP_EMOJI_MAP = {
     'seed':    {0: '🫘', 1: '🌱', 2: '🌿'},
-    'sapling': {0: '🪴', 1: '🌿', 2: '🌳'}
+    # [핵심 수정] 5단계 성장을 위한 나무 전용 맵 추가
+    'sapling_default': {0: '🫘', 1: '🌱', 2: '🪴', 3: '🌿', 4: '🌳'},
+    'sapling_palm': {0: '🫘', 1: '🌱', 2: '🪴', 3: '🌿', 4: '🌴'}
 }
 WEATHER_TYPES = { "sunny": {"emoji": "☀️", "name": "맑음", "water_effect": False}, "cloudy": {"emoji": "☁️", "name": "흐림", "water_effect": False}, "rainy": {"emoji": "🌧️", "name": "비", "water_effect": True}, "stormy": {"emoji": "⛈️", "name": "폭풍", "water_effect": True}, }
 KST = timezone(timedelta(hours=9))
@@ -765,17 +767,24 @@ class Farm(commands.Cog):
                             if info:
                                 stage = plot['growth_stage']
                                 max_stage = info.get('max_growth_stage', 3)
-                                item_type = info.get('item_type', 'seed')
-
-                                if stage >= max_stage:
-                                    emoji = info.get('item_emoji', '❓')
+                                
+                                # [핵심 수정] 나무 성장/열매 상태 표시 로직
+                                if info.get('is_tree', False):
+                                    if stage >= max_stage:
+                                        # 다 자라서 열매가 맺힌 상태
+                                        emoji = info.get('item_emoji', '🌳')
+                                    else:
+                                        # 성장 중이거나 수확 후 재성장 중인 상태
+                                        tree_type = info.get('tree_type', 'default')
+                                        emoji_map_key = f"sapling_{tree_type}"
+                                        emoji = CROP_EMOJI_MAP.get(emoji_map_key, {}).get(stage, '🌳' if tree_type == 'default' else '🌴')
                                 else:
-                                    # [핵심 수정] 재성장 중인 나무도 일반 나무와 동일하게 성장 단계에 맞는 이모지를 표시하도록 수정
-                                    if item_type == 'sapling':
-                                        emoji = CROP_EMOJI_MAP.get('sapling', {}).get(stage, '🪴')
+                                    # 일반 작물 로직
+                                    if stage >= max_stage:
+                                        emoji = info.get('item_emoji', '❓')
                                     else:
                                         emoji = CROP_EMOJI_MAP.get('seed', {}).get(stage, '🌱')
-                                
+
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
                                 last_watered_jst = last_watered_dt.astimezone(KST)
                                 
@@ -786,14 +795,21 @@ class Farm(commands.Cog):
                                 
                                 water_emoji = '💧' if is_watered_for_display else '➖'
                                 
-                                logger.info(f"밭 ID {plot['id']}: 마지막 물 준 날짜(KST)={last_watered_jst.date()}, 오늘(KST)={today_jst_midnight.date()}, 경과일={days_since_watered}, 능력 보유={owner_has_water_ability}, 물주기 표시={is_watered_for_display}, 이모지={water_emoji}")
-                                
                                 growth_status_text = ""
                                 if stage >= max_stage:
                                     growth_status_text = "수확 가능! 🧺"
                                 else:
-                                    days_to_grow = max_stage - stage
-                                    growth_status_text = f"남은 날: {days_to_grow}일"
+                                    # [핵심 수정] 나무와 일반 작물의 남은 시간 계산 분리
+                                    if info.get('is_tree', False):
+                                        if stage >= 4: # 최종 나무 형태
+                                            days_to_fruit = max_stage - stage
+                                            growth_status_text = f"열매까지: {days_to_fruit}일"
+                                        else: # 성장 중
+                                            days_to_grow = 4 - stage
+                                            growth_status_text = f"성장까지: {days_to_grow}일"
+                                    else: # 일반 작물
+                                        days_to_grow = max_stage - stage
+                                        growth_status_text = f"남은 날: {days_to_grow}일"
 
                                 info_text = f"{emoji} **{name}** (물: {water_emoji}): {growth_status_text}"
                                 infos.append(info_text)
