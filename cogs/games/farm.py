@@ -554,7 +554,7 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 농장 관련 영구 View가 정상적으로 등록되었습니다.")
 
-    @tasks.loop(time=KST_MIDNIGHT_UPDATE)
+@tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("--- [CROP UPDATE START] ---")
         try:
@@ -587,7 +587,8 @@ class Farm(commands.Cog):
 
             item_info_results, abilities_results = await asyncio.gather(asyncio.gather(*item_info_tasks), asyncio.gather(*abilities_tasks))
             
-            item_info_map = {info['item_name']: info for info in results if info}
+            # [핵심 수정] 변수명을 'results'에서 'item_info_results'로 수정했습니다.
+            item_info_map = {info['item_name']: info for info in item_info_results if info}
             owner_abilities_map = {uid: set(abilities) for uid, abilities in zip(owner_ids, abilities_results)}
 
             plots_to_update_db = []
@@ -602,7 +603,6 @@ class Farm(commands.Cog):
                 if not owner_id or not item_info:
                     continue
                 
-                # [로깅 추가] 각 밭의 상태를 자세히 기록
                 logger.info(f"  - 확인 중인 밭 ID: {plot['id']} (소유자: {owner_id}, 작물: {plot['planted_item_name']})")
 
                 if not plot.get('last_watered_at'):
@@ -617,7 +617,6 @@ class Farm(commands.Cog):
                 owner_has_water_ability = 'farm_water_retention_1' in owner_abilities
                 should_wither = False
                 
-                # [로깅 추가] 물주기 및 능력 상태 로깅
                 logger.info(f"    > 마지막 물 준 날짜(KST): {last_watered_kst.date()}, 경과일: {days_since_watered}일, 수분 유지 능력: {owner_has_water_ability}")
 
                 if not is_raining:
@@ -636,7 +635,6 @@ class Farm(commands.Cog):
                     continue
 
                 grows_today = False
-                # [핵심 수정] 성장 조건식을 wither_threshold를 사용하도록 변경
                 wither_threshold = 3 if owner_has_water_ability else 2
                 
                 if is_raining:
