@@ -402,10 +402,12 @@ class FarmUIView(ui.View):
         msg = await interaction.followup.send(f"✅ {watered_count}개의 작물에 물을 주었습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_after(msg, 5))
 
+        # [핵심 수정] DB 업데이트 후 최신 데이터를 다시 불러와서 UI를 업데이트하도록 수정합니다.
+        # 이전 코드의 불필요하고 중복된 UI 업데이트 호출을 모두 제거하고 이 부분으로 통합합니다.
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
-            await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
+            await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data, message=interaction.message)
 
     async def on_farm_uproot_click(self, i: discord.Interaction): 
         farm_data = await get_farm_data(self.farm_owner_id)
@@ -778,18 +780,15 @@ class Farm(commands.Cog):
                                 if stage >= max_stage:
                                     emoji = info.get('item_emoji', '❓')
                                 else:
+                                    # [핵심 수정] 재성장 중인 나무도 일반 나무와 동일하게 성장 단계에 맞는 이모지를 표시하도록 수정
                                     if item_type == 'sapling':
-                                        if plot.get('is_regrowing', False):
-                                            emoji = '🌳'
-                                        else:
-                                            emoji = CROP_EMOJI_MAP.get('sapling', {}).get(stage, '🪴')
+                                        emoji = CROP_EMOJI_MAP.get('sapling', {}).get(stage, '🪴')
                                     else:
                                         emoji = CROP_EMOJI_MAP.get('seed', {}).get(stage, '🌱')
                                 
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
                                 last_watered_jst = last_watered_dt.astimezone(KST)
                                 
-                                # [핵심 수정] UI 물주기 표시 로직 수정
                                 days_since_watered = (today_jst_midnight.date() - last_watered_jst.date()).days
                                 
                                 water_display_threshold = 2 if owner_has_water_ability else 1
@@ -797,7 +796,6 @@ class Farm(commands.Cog):
                                 
                                 water_emoji = '💧' if is_watered_for_display else '➖'
                                 
-                                # [로깅 추가] UI 이모지 결정 로직 로깅
                                 logger.info(f"밭 ID {plot['id']}: 마지막 물 준 날짜(KST)={last_watered_jst.date()}, 오늘(KST)={today_jst_midnight.date()}, 경과일={days_since_watered}, 능력 보유={owner_has_water_ability}, 물주기 표시={is_watered_for_display}, 이모지={water_emoji}")
                                 
                                 growth_status_text = ""
