@@ -554,7 +554,7 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 농장 관련 영구 View가 정상적으로 등록되었습니다.")
 
-@tasks.loop(time=KST_MIDNIGHT_UPDATE)
+    @tasks.loop(time=KST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("--- [CROP UPDATE START] ---")
         try:
