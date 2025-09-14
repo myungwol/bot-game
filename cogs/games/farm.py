@@ -419,10 +419,23 @@ class FarmUIView(ui.View):
         await interaction.response.defer(ephemeral=True, thinking=True)
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
+        
         harvested, plots_to_reset, trees_to_update = {}, [], {}
         info_map = await preload_farmable_info(farm_data)
         owner_abilities = await get_user_abilities(self.farm_owner_id)
         yield_bonus = 0.5 if 'farm_yield_up_2' in owner_abilities else 0.0
+        
+        # [핵심 수정] 씨앗 수확 능력을 위한 새로운 변수 추가
+        seeds_to_add = defaultdict(int)
+        has_seed_harvester_ability = 'farm_seed_harvester_2' in owner_abilities
+
+        # [핵심 수정] 수확한 작물 -> 씨앗 이름 매핑 생성
+        all_farm_items_res = await supabase.table('farm_item_details').select('item_name, harvest_item_name').execute()
+        crop_to_seed_map = {
+            item['harvest_item_name']: item['item_name'] 
+            for item in all_farm_items_res.data
+        } if all_farm_items_res.data else {}
+
         for p in farm_data['farm_plots']:
             info = info_map.get(p['planted_item_name'])
             if not info: continue
@@ -433,8 +446,16 @@ class FarmUIView(ui.View):
                 harvest_name = info['harvest_item_name']
                 harvested[harvest_name] = harvested.get(harvest_name, 0) + final_yield
                 
+                # [핵심 수정] 씨앗 수확 능력 로직 추가
+                if has_seed_harvester_ability and harvest_name in crop_to_seed_map:
+                    # 15% 확률로 발동 (수확한 작물 개수만큼 반복)
+                    for _ in range(final_yield):
+                        if random.random() < 0.15:
+                            seed_name = crop_to_seed_map[harvest_name]
+                            seeds_to_add[seed_name] += random.randint(1, 3)
+                            break # 한 번 발동하면 해당 작물 묶음에 대해선 더 이상 시도하지 않음
+                
                 is_regrowing_tree = info.get('is_tree', False) and (info.get('regrowth_days') is not None or info.get('regrowth_hours') is not None)
-
                 if is_regrowing_tree:
                     max_stage = info.get('max_growth_stage', 3)
                     regrowth_days = info.get('regrowth_days', 1) 
@@ -450,36 +471,44 @@ class FarmUIView(ui.View):
             
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if not owner: return
+        
         total_harvested_amount = sum(harvested.values())
         xp_per_crop = get_config("GAME_CONFIG", {}).get("XP_FROM_FARMING", 15)
         total_xp = total_harvested_amount * xp_per_crop
         if total_harvested_amount > 0:
             await log_activity(owner.id, 'farm_harvest', amount=total_harvested_amount, xp_earned=total_xp)
+        
         db_tasks = []
         for name, quantity in harvested.items():
             db_tasks.append(update_inventory(str(owner.id), name, quantity))
+        # [핵심 수정] 획득한 씨앗을 인벤토리에 추가하는 작업 추가
+        for seed_name, quantity in seeds_to_add.items():
+            db_tasks.append(update_inventory(str(owner.id), seed_name, quantity))
+
         if plots_to_reset: db_tasks.append(clear_plots_db(plots_to_reset))
         if trees_to_update:
             now_iso = datetime.now(timezone.utc).isoformat()
             for pid, update_data in trees_to_update.items():
-                db_tasks.append(update_plot(pid, {
-                    'growth_stage': update_data['stage'],
-                    'is_regrowing': update_data['is_regrowing'],
-                    'planted_at': now_iso,
-                    'last_watered_at': now_iso,
-                    'quality': 5
-                }))
+                db_tasks.append(update_plot(pid, { 'growth_stage': update_data['stage'], 'is_regrowing': update_data['is_regrowing'], 'planted_at': now_iso, 'last_watered_at': now_iso, 'quality': 5 }))
         if total_xp > 0:
             db_tasks.append(supabase.rpc('add_xp', {'p_user_id': str(owner.id), 'p_xp_to_add': total_xp, 'p_source': 'farming'}).execute())
+        
         results = await asyncio.gather(*db_tasks, return_exceptions=True)
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         if updated_farm_data:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
+
+        # [핵심 수정] 결과 메시지에 씨앗 수확 정보 추가
         followup_message = f"🎉 **{', '.join([f'{n} {q}개' for n, q in harvested.items()])}**을(를) 수확했습니다!"
         if yield_bonus > 0.0:
             followup_message += "\n✨ **대농**의 능력으로 수확량이 대폭 증가했습니다!"
+        if seeds_to_add:
+            seeds_info = ", ".join([f"'{name}' {qty}개" for name, qty in seeds_to_add.items()])
+            followup_message += f"\n🌱 **씨앗 수확** 능력으로 {seeds_info}를 추가로 획득했습니다!"
+
         msg = await interaction.followup.send(followup_message, ephemeral=True)
-        self.cog.bot.loop.create_task(delete_after(msg, 10))
+        self.cog.bot.loop.create_task(delete_after(msg, 15))
+        
         for res in results:
             if isinstance(res, dict) and 'data' in res and res.data and isinstance(res.data, list) and res.data[0].get('leveled_up'):
                 if (level_cog := self.cog.bot.get_cog("LevelSystem")):
@@ -589,29 +618,20 @@ class Farm(commands.Cog):
 
             item_info_results, abilities_results = await asyncio.gather(asyncio.gather(*item_info_tasks), asyncio.gather(*abilities_tasks))
             
-            # [핵심 수정] 변수명을 'results'에서 'item_info_results'로 수정했습니다.
             item_info_map = {info['item_name']: info for info in item_info_results if info}
             owner_abilities_map = {uid: set(abilities) for uid, abilities in zip(owner_ids, abilities_results)}
 
             plots_to_update_db = []
-            ability_activations_by_user = defaultdict(lambda: {"growth": 0, "water": 0, "thread_id": None})
+            ability_activations_by_user = defaultdict(lambda: {"water": 0, "thread_id": None})
 
             for plot in all_plots:
-                update_payload = plot.copy()
-                del update_payload['farms']
-
+                update_payload = plot.copy(); del update_payload['farms']
                 owner_id = plot.get('farms', {}).get('user_id')
                 item_info = item_info_map.get(plot['planted_item_name'])
-                if not owner_id or not item_info:
-                    continue
+                if not owner_id or not item_info: continue
                 
-                logger.info(f"  - 확인 중인 밭 ID: {plot['id']} (소유자: {owner_id}, 작물: {plot['planted_item_name']})")
-
                 if not plot.get('last_watered_at'):
-                    logger.info(f"    > 밭 {plot['id']}에 물 준 기록이 없어 시들게 처리합니다.")
-                    update_payload['state'] = 'withered'
-                    plots_to_update_db.append(update_payload)
-                    continue
+                    update_payload['state'] = 'withered'; plots_to_update_db.append(update_payload); continue
 
                 last_watered_kst = datetime.fromisoformat(plot['last_watered_at']).astimezone(KST)
                 days_since_watered = (today_jst_midnight.date() - last_watered_kst.date()).days
@@ -619,46 +639,28 @@ class Farm(commands.Cog):
                 owner_has_water_ability = 'farm_water_retention_1' in owner_abilities
                 should_wither = False
                 
-                logger.info(f"    > 마지막 물 준 날짜(KST): {last_watered_kst.date()}, 경과일: {days_since_watered}일, 수분 유지 능력: {owner_has_water_ability}")
-
                 if not is_raining:
                     wither_threshold = 3 if owner_has_water_ability else 2
                     if days_since_watered >= wither_threshold:
                         should_wither = True
-                        logger.info(f"    > 결과: 시듦. (경과일 {days_since_watered}일 >= 시듦 기준 {wither_threshold}일)")
 
                 if should_wither:
-                    update_payload['state'] = 'withered'
-                    plots_to_update_db.append(update_payload)
-                    continue
+                    update_payload['state'] = 'withered'; plots_to_update_db.append(update_payload); continue
 
-                if plot['growth_stage'] >= item_info.get('max_growth_stage', 99):
-                    logger.info(f"    > 밭 {plot['id']}는 이미 성장을 완료하여 성장 로직을 건너뜁니다.")
-                    continue
+                if plot['growth_stage'] >= item_info.get('max_growth_stage', 99): continue
 
                 grows_today = False
                 wither_threshold = 3 if owner_has_water_ability else 2
                 
-                if is_raining:
+                if is_raining or days_since_watered < wither_threshold:
                     grows_today = True
-                    logger.info(f"    > 결과: 성장. (이유: 비)")
-                else:
-                    if days_since_watered < wither_threshold:
-                        grows_today = True
-                        logger.info(f"    > 결과: 성장. (경과일 {days_since_watered}일 < 시듦 기준 {wither_threshold}일)")
-                        if owner_has_water_ability and days_since_watered == 1:
-                            ability_activations_by_user[owner_id]["water"] += 1
-                            ability_activations_by_user[owner_id]["thread_id"] = plot['farms']['thread_id']
-                    else:
-                        logger.info(f"    > 결과: 성장 안 함. (경과일 {days_since_watered}일 >= 시듦 기준 {wither_threshold}일)")
+                    if not is_raining and owner_has_water_ability and days_since_watered == 1:
+                        ability_activations_by_user[owner_id]["water"] += 1
+                        ability_activations_by_user[owner_id]["thread_id"] = plot['farms']['thread_id']
 
                 if grows_today:
+                    # [핵심 수정] 성장 가속 로직을 완전히 제거하고, 항상 1씩만 성장하도록 변경
                     growth_amount = 1
-                    if 'farm_growth_speed_up_2' in owner_abilities and not plot.get('is_regrowing', False):
-                        growth_amount += 1
-                        ability_activations_by_user[owner_id]["growth"] += 1
-                        ability_activations_by_user[owner_id]["thread_id"] = plot['farms']['thread_id']
-                    
                     update_payload['growth_stage'] = min(
                         plot['growth_stage'] + growth_amount,
                         item_info.get('max_growth_stage', 99)
@@ -667,32 +669,20 @@ class Farm(commands.Cog):
 
             if plots_to_update_db:
                 await supabase.table('farm_plots').upsert(plots_to_update_db).execute()
-                logger.info(f"[CROP UPDATE] DB 업데이트 완료. {len(plots_to_update_db)}개의 밭이 영향을 받았습니다.")
-            else:
-                logger.info("[CROP UPDATE] DB 상태를 업데이트할 밭이 없습니다.")
-
+            
             affected_farms = {p['farms']['user_id'] for p in all_plots if p.get('farms')}
-            logger.info(f"[CROP UPDATE] {len(affected_farms)}개의 농장에 대한 UI 업데이트를 요청합니다.")
             for user_id in affected_farms:
                 await self.request_farm_ui_update(user_id)
 
             db_save_tasks = []
             for user_id, data in ability_activations_by_user.items():
-                messages_to_send = []
-                if data['growth'] > 0:
-                    messages_to_send.append(f"**[농장 알림]**\n오늘 농장 업데이트에서 **성장 속도 UP (대)** 능력이 발동하여, {data['growth']}개의 작물이 추가로 성장했습니다!")
-                if data['water'] > 0:
-                    messages_to_send.append(f"**[농장 알림]**\n오늘 농장 업데이트에서 **수분 유지력 UP** 능력이 발동하여, 물을 주지 않은 {data['water']}개의 작물이 시들지 않았습니다!")
-                
-                if messages_to_send and data['thread_id']:
-                    payload = {"thread_id": data['thread_id'], "messages": messages_to_send}
+                if data['water'] > 0 and data['thread_id']:
+                    message = f"**[농장 알림]**\n오늘 농장 업데이트에서 **수분 유지력 UP** 능력이 발동하여, 물을 주지 않은 {data['water']}개의 작물이 시들지 않았습니다!"
+                    payload = {"thread_id": data['thread_id'], "messages": [message]}
                     db_save_tasks.append(save_config_to_db(f"farm_ability_messages_{user_id}", payload))
             
-            if db_save_tasks:
-                await asyncio.gather(*db_save_tasks)
-            
+            if db_save_tasks: await asyncio.gather(*db_save_tasks)
             logger.info("--- [CROP UPDATE END] ---")
-
         except Exception as e:
             logger.error(f"일일 작물 업데이트 중 오류: {e}", exc_info=True)
             logger.info("--- [CROP UPDATE END WITH ERROR] ---")
