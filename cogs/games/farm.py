@@ -768,18 +768,14 @@ class Farm(commands.Cog):
                                 stage = plot['growth_stage']
                                 max_stage = info.get('max_growth_stage', 3)
                                 
-                                # [핵심 수정] 나무 성장/열매 상태 표시 로직
                                 if info.get('is_tree', False):
                                     if stage >= max_stage:
-                                        # 다 자라서 열매가 맺힌 상태
                                         emoji = info.get('item_emoji', '🌳')
                                     else:
-                                        # 성장 중이거나 수확 후 재성장 중인 상태
                                         tree_type = info.get('tree_type', 'default')
                                         emoji_map_key = f"sapling_{tree_type}"
                                         emoji = CROP_EMOJI_MAP.get(emoji_map_key, {}).get(stage, '🌳' if tree_type == 'default' else '🌴')
                                 else:
-                                    # 일반 작물 로직
                                     if stage >= max_stage:
                                         emoji = info.get('item_emoji', '❓')
                                     else:
@@ -799,15 +795,14 @@ class Farm(commands.Cog):
                                 if stage >= max_stage:
                                     growth_status_text = "수확 가능! 🧺"
                                 else:
-                                    # [핵심 수정] 나무와 일반 작물의 남은 시간 계산 분리
                                     if info.get('is_tree', False):
-                                        if stage >= 4: # 최종 나무 형태
+                                        if stage >= 4:
                                             days_to_fruit = max_stage - stage
                                             growth_status_text = f"열매까지: {days_to_fruit}일"
-                                        else: # 성장 중
+                                        else:
                                             days_to_grow = 4 - stage
                                             growth_status_text = f"성장까지: {days_to_grow}일"
-                                    else: # 일반 작물
+                                    else:
                                         days_to_grow = max_stage - stage
                                         growth_status_text = f"남은 날: {days_to_grow}일"
 
@@ -829,20 +824,29 @@ class Farm(commands.Cog):
         all_farm_abilities_map = {}
         job_advancement_data = get_config("JOB_ADVANCEMENT_DATA", {})
         
+        # [핵심 수정] 농업 관련 능력을 찾는 로직 개선
         if isinstance(job_advancement_data, dict):
-            for level, level_data in job_advancement_data.items():
+            for level_data in job_advancement_data.values():
                 for job in level_data:
-                    if 'farmer' in job.get('job_key', ''):
-                        for ability in job.get('abilities', []):
+                    for ability in job.get('abilities', []):
+                        # 직업 이름 대신, 능력 키가 'farm_'으로 시작하는 모든 능력을 가져옵니다.
+                        if ability['ability_key'].startswith('farm_'):
                             all_farm_abilities_map[ability['ability_key']] = {'name': ability['ability_name'], 'description': ability['description']}
         
         active_effects = []
-        EMOJI_MAP = {'seed': '🌱', 'water': '💧', 'yield': '🧺', 'growth': '⏱️'}
+        # [핵심 수정] EMOJI_MAP을 더 명확하게 수정하고 새로운 능력을 추가합니다.
+        EMOJI_MAP = {
+            'farm_seed_saver': '🌱', 
+            'farm_water_retention': '💧', 
+            'farm_yield_up': '🧺', 
+            'farm_seed_harvester': '✨'
+        }
         
         for ability_key in owner_abilities:
             if ability_key in all_farm_abilities_map:
                 ability_info = all_farm_abilities_map[ability_key]
-                emoji = next((e for key, e in EMOJI_MAP.items() if key in ability_key), '✨')
+                # ability_key의 일부와 일치하는 이모지를 찾습니다.
+                emoji = next((e for key, e in EMOJI_MAP.items() if key in ability_key), '🌾')
                 active_effects.append(f"> {emoji} **{ability_info['name']}**: {ability_info['description']}")
         
         if active_effects:
@@ -864,7 +868,6 @@ class Farm(commands.Cog):
         
         embed.description = "\n\n".join(description_parts)
         return embed
-
     async def update_farm_ui(self, thread: discord.Thread, user: discord.User, farm_data: Dict, force_new: bool = False, message: discord.Message = None):
         lock = self.thread_locks.setdefault(thread.id, asyncio.Lock())
         async with lock:
