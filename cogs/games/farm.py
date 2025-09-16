@@ -365,6 +365,9 @@ class FarmUIView(ui.View):
         view = FarmActionView(self.cog, farm_data, i.user, "plant_seed", self.farm_owner_id)
         await view.send_initial_message(i)
 
+# cogs/games/farm.py 파일의 FarmUIView 클래스 안에 있는
+# on_farm_water_click 메소드 전체를 아래 코드로 교체해주세요.
+
     async def on_farm_water_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         gear = await get_user_gear(interaction.user)
@@ -375,7 +378,14 @@ class FarmUIView(ui.View):
             return
             
         power = get_item_database().get(can, {}).get('power', 1)
-        today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # [핵심 수정] daily_crop_update와 동일한 시간 기준을 사용하도록 변경
+        farm_date_str = get_config("farm_current_date")
+        if farm_date_str:
+            today_jst_midnight = datetime.fromisoformat(farm_date_str).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=KST)
+        else:
+            today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+        
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
         
@@ -385,7 +395,9 @@ class FarmUIView(ui.View):
         for p in sorted(farm_data['farm_plots'], key=lambda x: (x['pos_y'], x['pos_x'])):
             if watered_count >= power: break
             last_watered_dt = datetime.fromisoformat(p['last_watered_at']) if p.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
-            if p['state'] == 'planted' and last_watered_dt.astimezone(KST) < today_jst_midnight:
+            
+            # last_watered_dt의 날짜 부분만 가져와서 today_jst_midnight의 날짜와 비교
+            if p['state'] == 'planted' and last_watered_dt.astimezone(KST).date() < today_jst_midnight.date():
                 plots_to_update_db.add(p['id'])
                 watered_count += 1
                 
@@ -394,6 +406,7 @@ class FarmUIView(ui.View):
             self.cog.bot.loop.create_task(delete_after(msg, 5))
             return
         
+        # [핵심 수정] 물을 주는 시간은 '현재 실제 시간'으로 기록합니다.
         now_iso = datetime.now(timezone.utc).isoformat()
         tasks = [
             supabase.table('farm_plots').update({'last_watered_at': now_iso}).in_('id', list(plots_to_update_db)).execute(),
@@ -404,8 +417,6 @@ class FarmUIView(ui.View):
         msg = await interaction.followup.send(f"✅ {watered_count}개의 작물에 물을 주었습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_after(msg, 5))
 
-        # [핵심 수정] DB 업데이트 후 최신 데이터를 다시 불러와서 UI를 업데이트하도록 수정합니다.
-        # 이전 코드의 불필요하고 중복된 UI 업데이트 호출을 모두 제거하고 이 부분으로 통합합니다.
         updated_farm_data = await get_farm_data(self.farm_owner_id)
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
