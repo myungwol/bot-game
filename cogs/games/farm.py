@@ -759,9 +759,6 @@ class Farm(commands.Cog):
         
         owner_abilities = await get_user_abilities(user.id)
         owner_has_water_ability = 'farm_water_retention_1' in owner_abilities
-
-        logger.info("--- [BUILD EMBED LOG START] ---")
-        logger.info(f"유저 {user.id}의 임베드 생성. 기준 KST 날짜: {today_jst_midnight.date()}")
         
         for y in range(sy):
             for x in range(sx):
@@ -825,7 +822,6 @@ class Farm(commands.Cog):
 
                 grid[y][x] = emoji
         
-        logger.info("--- [BUILD EMBED LOG END] ---")
         farm_str = "\n".join("".join(row) for row in grid)
         farm_name = farm_data.get('name') or user.display_name
         embed = discord.Embed(title=f"**{farm_name}님의 농장**", color=0x8BC34A)
@@ -890,8 +886,6 @@ class Farm(commands.Cog):
                 logger.warning(f"[UI UPDATE FUNC] 사용자({user.id})의 최신 농장 데이터를 가져올 수 없어 UI 업데이트를 중단합니다.")
                 return
 
-            logger.info(f"[UI UPDATE FUNC] update_farm_ui 함수 호출됨. 사용자: {user.id}, 스레드: {thread.id}")
-
             try:
                 message_to_edit = message
                 
@@ -915,14 +909,12 @@ class Farm(commands.Cog):
                 view = FarmUIView(self)
                 
                 if message_to_edit:
-                    logger.info(f"[UI UPDATE FUNC] 기존 메시지(ID: {message_to_edit.id})를 수정합니다.")
                     await message_to_edit.edit(embed=embed, view=view)
                 else:
                     if force_new:
                         if embed_data := await get_embed_from_db("farm_thread_welcome"):
                             await thread.send(embed=format_embed_from_db(embed_data, user_name=current_farm_data.get('name') or user.display_name))
                     
-                    logger.info(f"[UI UPDATE FUNC] 새로운 패널 메시지를 생성합니다.")
                     new_message = await thread.send(embed=embed, view=view)
                     await supabase.table('farms').update({'farm_message_id': new_message.id}).eq('id', current_farm_data['id']).execute()
                 
