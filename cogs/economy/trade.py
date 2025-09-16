@@ -252,7 +252,7 @@ class TradeView(ui.View):
     async def fail_trade(self, reason: str):
         if self.message:
             if self.initiator:
-                trade_fee = 50
+                trade_fee = 250  # 50 -> 250으로 상향
                 await update_wallet(self.initiator, trade_fee)
                 reason += f"\n(거래 수수료 {trade_fee}{self.currency_icon} 환불됨)"
             
@@ -301,7 +301,7 @@ class MailComposeView(ui.View):
         self.message_content = ""
         self.attachments = {"items": {}}
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
-        self.shipping_fee = 50
+        self.shipping_fee = 100
         self.message: Optional[discord.WebhookMessage] = None
 
     async def start(self, interaction: discord.Interaction):
@@ -663,7 +663,7 @@ class TradePanelView(ui.View):
     async def direct_trade_button(self, interaction: discord.Interaction):
         initiator = interaction.user
         
-        trade_fee = 50
+        trade_fee = 250 # 50 -> 250으로 상향
         wallet = await get_wallet(initiator.id)
         if wallet.get('balance', 0) < trade_fee:
             return await interaction.response.send_message(f"❌ 거래를 시작하려면 수수료 {trade_fee}{self.cog.currency_icon}가 필요합니다.", ephemeral=True, delete_after=5)
