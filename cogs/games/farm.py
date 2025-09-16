@@ -368,6 +368,9 @@ class FarmUIView(ui.View):
 # cogs/games/farm.py 파일의 FarmUIView 클래스 안에 있는
 # on_farm_water_click 메소드 전체를 아래 코드로 교체해주세요.
 
+# cogs/games/farm.py 파일의 FarmUIView 클래스 안에 있는
+# on_farm_water_click 메소드 전체를 아래 코드로 교체해주세요.
+
     async def on_farm_water_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         gear = await get_user_gear(interaction.user)
@@ -379,7 +382,7 @@ class FarmUIView(ui.View):
             
         power = get_item_database().get(can, {}).get('power', 1)
         
-        # [핵심 수정] daily_crop_update와 동일한 시간 기준을 사용하도록 변경
+        # [핵심 수정] daily_crop_update와 동일한 '게임의 현재 날짜' 기준을 가져옵니다.
         farm_date_str = get_config("farm_current_date")
         if farm_date_str:
             today_jst_midnight = datetime.fromisoformat(farm_date_str).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=KST)
@@ -396,7 +399,6 @@ class FarmUIView(ui.View):
             if watered_count >= power: break
             last_watered_dt = datetime.fromisoformat(p['last_watered_at']) if p.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
             
-            # last_watered_dt의 날짜 부분만 가져와서 today_jst_midnight의 날짜와 비교
             if p['state'] == 'planted' and last_watered_dt.astimezone(KST).date() < today_jst_midnight.date():
                 plots_to_update_db.add(p['id'])
                 watered_count += 1
@@ -406,10 +408,11 @@ class FarmUIView(ui.View):
             self.cog.bot.loop.create_task(delete_after(msg, 5))
             return
         
-        # [핵심 수정] 물을 주는 시간은 '현재 실제 시간'으로 기록합니다.
-        now_iso = datetime.now(timezone.utc).isoformat()
+        # [핵심 수정] DB에 기록하는 시간을 '실제 현재 시간'이 아닌 '게임의 가상 날짜'로 변경합니다.
+        # 이렇게 해야 UI 표시 로직과 시간이 일치하게 됩니다.
+        watered_at_iso = today_jst_midnight.astimezone(timezone.utc).isoformat()
         tasks = [
-            supabase.table('farm_plots').update({'last_watered_at': now_iso}).in_('id', list(plots_to_update_db)).execute(),
+            supabase.table('farm_plots').update({'last_watered_at': watered_at_iso}).in_('id', list(plots_to_update_db)).execute(),
             supabase.rpc('increment_water_count', {'plot_ids': list(plots_to_update_db)}).execute()
         ]
         await asyncio.gather(*tasks)
