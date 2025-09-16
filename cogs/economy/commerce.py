@@ -183,22 +183,75 @@ class BuyItemView(ShopViewBase):
 
         try:
             inventory = await get_inventory(self.user)
-            max_ownable = item_data.get('max_ownable', 999)
-
-            if inventory.get(item_name, 0) >= max_ownable:
-                await interaction.response.send_message(f"❌ '{item_name}'은(는) 최대 {max_ownable}개까지만 보유할 수 있습니다.", ephemeral=True, delete_after=5)
-                return
-
-            price = item_data.get('current_price', item_data.get('price', 0))
             wallet = await get_wallet(self.user.id)
-            if wallet.get('balance', 0) < price:
-                await interaction.response.send_message("❌ 잔액이 부족합니다.", ephemeral=True, delete_after=5)
+            price = item_data.get('current_price', item_data.get('price', 0))
+
+            # [핵심 수정] '밭 확장 허가증'을 위한 특별 구매 로직
+            if item_data.get('instant_use', False) and item_name == '밭 확장 허가증':
+                farm_data = await get_farm_data(self.user.id)
+                if not farm_data:
+                    msg = await interaction.response.send_message("❌ 농장을 먼저 만들어주세요.", ephemeral=True, delete_after=5); return
+
+                current_plots = len(farm_data.get('farm_plots', []))
+                plots_can_add = 25 - current_plots
+                if plots_can_add <= 0:
+                    await interaction.response.send_message("❌ 농장이 이미 최대 크기(25칸)입니다.", ephemeral=True, delete_after=5); return
+                
+                max_from_balance = wallet.get('balance', 0) // price if price > 0 else plots_can_add
+                # 한 번에 최대 24개까지만 구매 가능하도록 제한
+                max_buyable = min(plots_can_add, max_from_balance, 24)
+
+                if max_buyable <= 0:
+                    await interaction.response.send_message("❌ 잔액이 부족하여 밭 확장 허가증을 구매할 수 없습니다.", ephemeral=True, delete_after=5); return
+                
+                modal = QuantityModal(f"'{item_name}' 구매", max_buyable)
+                await interaction.response.send_modal(modal)
+                await modal.wait()
+
+                if modal.value is None: return
+
+                quantity = modal.value
+                total_price = price * quantity
+                
+                await interaction.followup.send(f"⏳ {quantity}칸의 농장 확장을 진행합니다...", ephemeral=True)
+                
+                # DB 작업 수행
+                await update_wallet(self.user, -total_price)
+                
+                success_count = 0
+                for i in range(quantity):
+                    success = await expand_farm_db(farm_data['id'], current_plots + i)
+                    if success:
+                        success_count += 1
+                    else:
+                        # 만약 확장에 실패하면, 루프를 중단하고 비용을 환불
+                        logger.error(f"{self.user.id}의 농장 확장 중 {i+1}번째에서 실패. 구매한 {quantity}개 중 {success_count}개만 적용됨.")
+                        failed_cost = price * (quantity - success_count)
+                        await update_wallet(self.user, failed_cost) # 실패한 부분만큼 환불
+                        break
+                
+                if farm_cog := interaction.client.get_cog("Farm"):
+                    await farm_cog.request_farm_ui_update(self.user.id)
+                
+                final_message = f"✅ 농장이 {success_count}칸 확장되었습니다! (총 비용: {price * success_count:,}{self.currency_icon})"
+                if success_count < quantity:
+                    final_message += f"\n⚠️ 일부 확장에 실패하여 차액이 환불되었습니다."
+
+                msg = await interaction.followup.send(final_message, ephemeral=True)
+                asyncio.create_task(delete_after(msg, 10))
+                
+                await self.update_view(interaction)
                 return
 
-            if item_data.get('instant_use', False):
+            # 기존 단일 즉시 사용 아이템 로직 (현재는 해당 아이템 없음)
+            elif item_data.get('instant_use', False):
                 await self.handle_instant_use_item(interaction, item_name, item_data, price, wallet)
-            elif max_ownable > 1:
+
+            # 기존 스택 가능 아이템 구매 로직
+            elif item_data.get('max_ownable', 1) > 1:
                 await self.handle_quantity_purchase(interaction, item_name, item_data, inventory, wallet)
+            
+            # 기존 단일 아이템 구매 로직
             else:
                 await self.handle_single_purchase(interaction, item_name, item_data, price)
 
