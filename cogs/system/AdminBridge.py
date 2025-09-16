@@ -29,9 +29,6 @@ class AdminBridge(commands.Cog):
 
     @tasks.loop(seconds=20.0)
     async def check_for_admin_requests(self):
-        # [수정] 루프가 실행되고 있음을 명확히 알리기 위해 로그 추가
-        logger.info("[AdminBridge] 관리자 요청을 확인합니다...")
-        
         try:
             server_id_str = get_config("SERVER_ID")
             if not server_id_str:
@@ -53,7 +50,7 @@ class AdminBridge(commands.Cog):
             response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', '%_admin_update_request_%').execute()
             
             if not (response and response.data):
-                logger.info("[AdminBridge] 처리할 새로운 관리자 요청이 없습니다.")
+                # 처리할 요청이 없으면 조용히 종료
                 return
 
             requests_to_process = response.data
