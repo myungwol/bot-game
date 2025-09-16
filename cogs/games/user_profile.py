@@ -185,6 +185,9 @@ class ItemUsageView(ui.View):
                         if success:
                             await update_inventory(self.user.id, item_name_from_db, -1)
                             self.parent_view.status_message = get_string("profile_view.item_usage_view.farm_expand_success", plot_count=current_plots + 1)
+                            
+                            if farm_cog := self.parent_view.cog.bot.get_cog("Farm"):
+                                await farm_cog.request_farm_ui_update(self.user.id)
                         else:
                             raise Exception("DB 농장 확장 실패")
         except Exception as e:
@@ -223,103 +226,6 @@ class ItemUsageView(ui.View):
     async def on_back(self, interaction: Optional[discord.Interaction], reload_data: bool = False):
         await self.parent_view.update_display(interaction, reload_data=reload_data)
 
-
-class FoodConsumptionView(ui.View):
-    def __init__(self, parent_view: 'ProfileView'):
-        super().__init__(timeout=180)
-        self.parent_view = parent_view
-        self.user = parent_view.user
-
-    async def start(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        inventory = await get_inventory(self.user)
-        item_db = get_item_database()
-        
-        usable_foods = []
-        for name, qty in inventory.items():
-            item_data = item_db.get(name)
-            if item_data and item_data.get('category') == '요리' and item_data.get('effect_type'):
-                usable_foods.append({
-                    "name": name,
-                    "description": item_data.get('description', '설명 없음'),
-                    "emoji": item_data.get('emoji', '🍲')
-                })
-
-        if not usable_foods:
-            self.parent_view.status_message = "사용할 수 있는 음식이 없습니다."
-            await self.on_back(interaction)
-            return
-
-        options = [discord.SelectOption(label=f['name'], description=f['description'][:100], emoji=f['emoji'], value=f['name']) for f in usable_foods]
-        select = ui.Select(placeholder="사용할 음식을 선택하세요...", options=options)
-        select.callback = self.on_food_select
-        self.add_item(select)
-
-        back_button = ui.Button(label="뒤로", style=discord.ButtonStyle.grey)
-        back_button.callback = self.on_back
-        self.add_item(back_button)
-
-        embed = discord.Embed(title="🍲 음식 먹기", description="인벤토리에서 먹고 싶은 음식을 선택해주세요.", color=discord.Color.green())
-        await interaction.edit_original_response(embed=embed, view=self)
-
-    async def on_food_select(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        item_name = interaction.data["values"][0]
-        
-        recipe_res = await supabase.table('recipes').select('*').eq('result_item_name', item_name).maybe_single().execute()
-        
-        if not (recipe_res and recipe_res.data and (effect_type := recipe_res.data.get('effect_type'))):
-            self.parent_view.status_message = f"'{item_name}'은(는) 특별한 효과가 없는 음식입니다."
-            return await self.on_back(interaction, reload_data=False)
-
-        try:
-            recipe_data = recipe_res.data
-            duration_hours = recipe_data.get('effect_duration_hours', 2)
-            effect_value_decimal = recipe_data.get('effect_value', 0.25) 
-            
-            expires_at = datetime.now(timezone.utc) + timedelta(hours=duration_hours)
-
-            await supabase.table('active_buffs').upsert({
-                'user_id': self.user.id,
-                'buff_type': effect_type,
-                'value': 1.0 + effect_value_decimal,
-                'expires_at': expires_at.isoformat()
-            }, on_conflict='user_id, buff_type').execute()
-
-            await update_inventory(self.user.id, item_name, -1)
-            
-            duration_minutes = duration_hours * 60
-            effect_percent = effect_value_decimal * 100
-            effect_description = f"{duration_hours}시간 동안 {effect_type.replace('_', ' ').title()} +{effect_percent:.0f}%"
-            await self.log_food_usage(item_name, effect_description)
-
-            self.parent_view.status_message = f"✅ **{item_name}**을(를) 먹었습니다! ({duration_hours}시간 지속)"
-
-        except Exception as e:
-            logger.error(f"음식 사용 중 오류: {e}", exc_info=True)
-            self.parent_view.status_message = "❌ 음식을 사용하는 중 오류가 발생했습니다."
-
-        await self.on_back(interaction, reload_data=True)
-
-    async def log_food_usage(self, item_name: str, effect_description: str):
-        log_channel_id = get_id("log_food_channel_id")
-        if not log_channel_id or not (log_channel := self.user.guild.get_channel(log_channel_id)):
-            return
-
-        embed_data = await get_embed_from_db("log_food_consumption")
-        if not embed_data: return
-        
-        embed = format_embed_from_db(
-            embed_data, 
-            user_mention=self.user.mention, 
-            item_name=item_name, 
-            effect_description=effect_description
-        )
-        embed.set_author(name=self.user.display_name, icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
-        await log_channel.send(embed=embed)
-
-    async def on_back(self, interaction: discord.Interaction, reload_data: bool = False):
-        await self.parent_view.update_display(interaction, reload_data=reload_data)
 
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
@@ -396,7 +302,6 @@ class ProfileView(ui.View):
             description += f"**{self.status_message}**\n\n"
         
         if self.current_page == "info":
-            # ... (info 탭 로직은 그대로 유지)
             embed.add_field(name=get_string("profile_view.info_tab.field_balance", "소지금"), value=f"`{balance:,}`{self.currency_icon}", inline=True)
             job_mention = "`없음`"
             job_system_config = get_config("JOB_SYSTEM_CONFIG", {})
@@ -424,9 +329,7 @@ class ProfileView(ui.View):
             description += get_string("profile_view.info_tab.description", "아래 탭을 선택하여 상세 정보를 확인하세요.")
             embed.description = description
         
-        # ▼▼▼ [핵심 수정] "아이템" 탭의 필터링 로직을 "명시적 포함" 방식으로 변경 ▼▼▼
         elif self.current_page == "item":
-            # 이제 '아이템' 카테고리에 속한 것만 명시적으로 필터링합니다.
             general_items = {
                 name: count for name, count in inventory.items() 
                 if item_db.get(name, {}).get('category') == '아이템'
@@ -434,10 +337,8 @@ class ProfileView(ui.View):
             
             item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`개" for n, c in general_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items", "보유 중인 아이템이 없습니다."))
-        # ▲▲▲ [핵심 수정] 종료 ▲▲▲
         
         elif self.current_page == "gear":
-            # ... (gear 탭 로직은 그대로 유지)
             gear_categories = {
                 "낚시": {"rod": "🎣 낚싯대", "bait": "🐛 미끼"},
                 "농장": {"hoe": "🪓 괭이", "watering_can": "💧 물뿌리개"},
@@ -457,7 +358,6 @@ class ProfileView(ui.View):
             embed.description = description
 
         elif self.current_page == "fish":
-            # ... (fish 탭 로직은 그대로 유지)
             aquarium = self.cached_data.get("aquarium", [])
             if not aquarium:
                 embed.description = description + get_string("profile_view.fish_tab.no_fish", "어항에 물고기가 없습니다.")
@@ -508,10 +408,6 @@ class ProfileView(ui.View):
         if self.current_page == "item":
             use_item_label = get_string("profile_view.item_tab.use_item_button_label", "아이템 사용")
             self.add_item(ui.Button(label=use_item_label, style=discord.ButtonStyle.success, emoji="✨", custom_id="profile_use_item", row=row_counter))
-
-        if self.current_page == "food":
-            use_food_label = get_string("profile_view.food_tab.use_food_button_label", "먹기")
-            self.add_item(ui.Button(label=use_food_label, style=discord.ButtonStyle.success, emoji="🍴", custom_id="profile_use_food", row=row_counter))
 
         if self.current_page == "gear":
             self.add_item(ui.Button(label="낚싯대 변경", style=discord.ButtonStyle.blurple, custom_id="profile_change_rod", emoji="🎣", row=row_counter))
@@ -571,10 +467,6 @@ class ProfileView(ui.View):
             usage_view.add_item(back_button)
             embed = discord.Embed(title=get_string("profile_view.item_usage_view.embed_title"), description=get_string("profile_view.item_usage_view.embed_description"), color=discord.Color.gold())
             await interaction.response.edit_message(embed=embed, view=usage_view)
-
-        elif custom_id == "profile_use_food":
-            food_view = FoodConsumptionView(self)
-            await food_view.start(interaction)
 
         elif custom_id.startswith("profile_change_"):
             gear_key = custom_id.replace("profile_change_", "", 1)
