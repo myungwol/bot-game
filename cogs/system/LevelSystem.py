@@ -33,8 +33,8 @@ def create_xp_bar(current_xp: int, required_xp: int, length: int = 10) -> str:
 
 async def build_level_embed(user: discord.Member) -> discord.Embed:
     try:
-        level_res_task = supabase.table('user_levels').select('*').eq('user_id', user.id).maybe_single().execute()
-        job_res_task = supabase.table('user_jobs').select('jobs(*)').eq('user_id', user.id).maybe_single().execute()
+        level_res_task = supabase.table('user_levels').select('level, xp').eq('user_id', user.id).maybe_single().execute()
+        job_res_task = supabase.table('user_jobs').select('jobs(job_key, job_name)').eq('user_id', user.id).maybe_single().execute()
         xp_logs_res_task = supabase.table('user_activities').select('activity_type, xp_earned').eq('user_id', user.id).gt('xp_earned', 0).execute()
         
         level_res, job_res, xp_logs_res = await asyncio.gather(level_res_task, job_res_task, xp_logs_res_task)
