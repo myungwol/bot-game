@@ -41,28 +41,28 @@ def format_timedelta(delta: timedelta) -> str:
 
 UPGRADE_RECIPES = {
     # 낚싯대
-    "구리 낚싯대":   {"requires_tool": "나무 낚싯대", "requires_items": {"구리 광석": 25}, "requires_coins": 2500},
-    "철 낚싯대":     {"requires_tool": "구리 낚싯대", "requires_items": {"철 광석": 50}, "requires_coins": 10000},
-    "금 낚싯대":      {"requires_tool": "철 낚싯대",   "requires_items": {"금 광석": 75}, "requires_coins": 50000},
-    "다이아 낚싯대":   {"requires_tool": "금 낚싯대",   "requires_items": {"다이아몬드": 100}, "requires_coins": 200000},
+    "구리 낚싯대":   {"requires_tool": "나무 낚싯대", "requires_items": {"구리 광석": 50}, "requires_coins": 5000},
+    "철 낚싯대":     {"requires_tool": "구리 낚싯대", "requires_items": {"철 광석": 100}, "requires_coins": 25000},
+    "금 낚싯대":      {"requires_tool": "철 낚싯대",   "requires_items": {"금 광석": 150}, "requires_coins": 150000},
+    "다이아 낚싯대":   {"requires_tool": "금 낚싯대",   "requires_items": {"다이아몬드": 200}, "requires_coins": 500000},
     
     # 괭이
-    "구리 괭이":   {"requires_tool": "나무 괭이",   "requires_items": {"구리 광석": 25}, "requires_coins": 2500},
-    "철 괭이":     {"requires_tool": "구리 괭이",   "requires_items": {"철 광석": 50}, "requires_coins": 10000},
-    "금 괭이":      {"requires_tool": "철 괭이",     "requires_items": {"금 광석": 75}, "requires_coins": 50000},
-    "다이아 괭이":   {"requires_tool": "금 괭이",     "requires_items": {"다이아몬드": 100}, "requires_coins": 200000},
+    "구리 괭이":   {"requires_tool": "나무 괭이",   "requires_items": {"구리 광석": 50}, "requires_coins": 5000},
+    "철 괭이":     {"requires_tool": "구리 괭이",   "requires_items": {"철 광석": 100}, "requires_coins": 25000},
+    "금 괭이":      {"requires_tool": "철 괭이",     "requires_items": {"금 광석": 150}, "requires_coins": 150000},
+    "다이아 괭이":   {"requires_tool": "금 괭이",     "requires_items": {"다이아몬드": 200}, "requires_coins": 500000},
 
     # 물뿌리개
-    "구리 물뿌리개": {"requires_tool": "나무 물뿌리개", "requires_items": {"구리 광석": 25}, "requires_coins": 2500},
-    "철 물뿌리개":   {"requires_tool": "구리 물뿌리개", "requires_items": {"철 광석": 50}, "requires_coins": 10000},
-    "금 물뿌리개":    {"requires_tool": "철 물뿌리개",   "requires_items": {"금 광석": 75}, "requires_coins": 50000},
-    "다이아 물뿌리개": {"requires_tool": "금 물뿌리개",   "requires_items": {"다이아몬드": 100}, "requires_coins": 200000},
+    "구리 물뿌리개": {"requires_tool": "나무 물뿌리개", "requires_items": {"구리 광석": 50}, "requires_coins": 5000},
+    "철 물뿌리개":   {"requires_tool": "구리 물뿌리개", "requires_items": {"철 광석": 100}, "requires_coins": 25000},
+    "금 물뿌리개":    {"requires_tool": "철 물뿌리개",   "requires_items": {"금 광석": 150}, "requires_coins": 150000},
+    "다이아 물뿌리개": {"requires_tool": "금 물뿌리개",   "requires_items": {"다이아몬드": 200}, "requires_coins": 500000},
     
     # 곡괭이
-    "구리 곡괭이": {"requires_tool": "나무 곡괭이", "requires_items": {"구리 광석": 25}, "requires_coins": 2500},
-    "철 곡괭이":   {"requires_tool": "구리 곡괭이", "requires_items": {"철 광석": 50}, "requires_coins": 10000},
-    "금 곡괭이":    {"requires_tool": "철 곡괭이",   "requires_items": {"금 광석": 75}, "requires_coins": 50000},
-    "다이아 곡괭이": {"requires_tool": "금 곡괭이",   "requires_items": {"다이아몬드": 100}, "requires_coins": 200000},
+    "구리 곡괭이": {"requires_tool": "나무 곡괭이", "requires_items": {"구리 광석": 50}, "requires_coins": 5000},
+    "철 곡괭이":   {"requires_tool": "구리 곡괭이", "requires_items": {"철 광석": 100}, "requires_coins": 25000},
+    "금 곡괭이":    {"requires_tool": "철 곡괭이",   "requires_items": {"금 광석": 150}, "requires_coins": 150000},
+    "다이아 곡괭이": {"requires_tool": "금 곡괭이",   "requires_items": {"다이아몬드": 200}, "requires_coins": 500000},
 }
 
 class ConfirmationView(ui.View):
