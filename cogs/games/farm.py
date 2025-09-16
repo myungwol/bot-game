@@ -693,7 +693,7 @@ class Farm(commands.Cog):
             db_save_tasks = []
             for user_id, data in ability_activations_by_user.items():
                 if data['water'] > 0 and data['thread_id']:
-                    message = f"**[농장 알림]**\n오늘 농장 업데이트에서 **수분 유지력 UP** 능력이 발동하여, 물을 주지 않은 {data['water']}개의 작물이 시들지 않았습니다!"
+                    message = f"**[농장 알림]**\n오늘 농장 업데이트에서 **수분 유지력 UP** 능력이 발동하여, 물을 주지 않은 {data['water']}개의 작물의 수분이 유지되었습니다!"
                     payload = {"thread_id": data['thread_id'], "messages": [message]}
                     db_save_tasks.append(save_config_to_db(f"farm_ability_messages_{user_id}", payload))
             
