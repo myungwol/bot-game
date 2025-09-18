@@ -58,7 +58,8 @@ class MyBot(commands.Bot):
             "DiceGame", "SlotMachine", "RPSGame",
             "DailyCheck", "Quests", "Farm",
             "WorldSystem", "EconomyCore", "LevelSystem",
-            "Mining", "Blacksmith", "Trade", "Cooking"
+            "Mining", "Blacksmith", "Trade", "Cooking",
+            "friend_invite"
         ]
         
         registered_views_count = 0
