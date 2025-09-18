@@ -1,4 +1,4 @@
-# game-bot/cogs/events/friend_invite.py
+# game-bot/cogs/events/friend_invite.py (수정된 코드)
 
 import discord
 from discord.ext import commands
@@ -47,12 +47,16 @@ class FriendInvite(commands.Cog):
         self.panel_key = "panel_friend_invite"
         # 서버의 모든 초대 코드를 {코드: 사용 횟수} 형태로 저장하는 캐시
         self.invite_cache: Dict[str, int] = {}
+        # on_ready 리스너가 여러 번 실행되는 것을 방지하기 위한 플래그
+        self.initial_cache_updated = False
 
-    async def cog_load(self):
-        """Cog가 로드될 때 필요한 설정을 불러옵니다."""
-        # on_ready 리스너가 끝날 때까지 기다린 후 캐시를 초기화합니다.
-        await self.bot.wait_until_ready()
-        
+    # ▼▼▼ [핵심 수정] cog_load 대신 on_ready 리스너를 사용합니다. ▼▼▼
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """봇이 준비되면 서버 정보를 안전하게 가져와 초기화 작업을 수행합니다."""
+        if self.initial_cache_updated:
+            return  # 이미 초기화가 완료되었다면 다시 실행하지 않습니다.
+
         server_id_str = get_config("SERVER_ID")
         if not server_id_str:
             logger.error("[FriendInvite] SERVER_ID가 설정되지 않아 초대 추적을 시작할 수 없습니다.")
@@ -62,8 +66,10 @@ class FriendInvite(commands.Cog):
         if guild:
             await self._update_invite_cache(guild)
             logger.info(f"[FriendInvite] '{guild.name}' 서버의 초대 코드 {len(self.invite_cache)}개를 캐시했습니다.")
+            self.initial_cache_updated = True # 초기화 완료 플래그 설정
         else:
             logger.error(f"[FriendInvite] SERVER_ID({server_id_str})에 해당하는 서버를 찾을 수 없습니다.")
+    # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
     async def _update_invite_cache(self, guild: discord.Guild):
         """서버의 현재 초대 목록을 가져와 캐시를 업데이트합니다."""
@@ -77,7 +83,7 @@ class FriendInvite(commands.Cog):
     async def on_invite_create(self, invite: discord.Invite):
         """새로운 초대가 생성되면 캐시를 업데이트합니다."""
         server_id_str = get_config("SERVER_ID")
-        if not server_id_str or invite.guild.id != int(server_id_str):
+        if not server_id_str or not invite.guild or invite.guild.id != int(server_id_str):
             return
         self.invite_cache[invite.code] = invite.uses
         logger.info(f"[FriendInvite] 새 초대({invite.code})가 생성되어 캐시를 업데이트했습니다.")
@@ -86,7 +92,7 @@ class FriendInvite(commands.Cog):
     async def on_invite_delete(self, invite: discord.Invite):
         """초대가 삭제되면 캐시에서 제거합니다."""
         server_id_str = get_config("SERVER_ID")
-        if not server_id_str or invite.guild.id != int(server_id_str):
+        if not server_id_str or not invite.guild or invite.guild.id != int(server_id_str):
             return
         if invite.code in self.invite_cache:
             del self.invite_cache[invite.code]
@@ -99,10 +105,14 @@ class FriendInvite(commands.Cog):
         if not server_id_str or member.guild.id != int(server_id_str):
             return
 
+        # 봇이 캐시를 채울 시간을 약간 줍니다 (봇 재시작 직후 유저 입장 대비)
+        await asyncio.sleep(5) 
+
         try:
             new_invites = await member.guild.invites()
             used_invite = None
             for invite in new_invites:
+                # 캐시에 없는 새로운 코드이거나, 사용 횟수가 증가한 코드를 찾습니다.
                 if self.invite_cache.get(invite.code, 0) < invite.uses:
                     used_invite = invite
                     break
