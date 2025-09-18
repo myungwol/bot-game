@@ -60,7 +60,7 @@ class MyBot(commands.Bot):
             "WorldSystem", "EconomyCore", "LevelSystem",
             "Mining", "Blacksmith", "Trade", "Cooking"
         ]
-        
+         
         registered_views_count = 0
         for cog_name in cogs_with_persistent_views:
             cog = self.get_cog(cog_name)
