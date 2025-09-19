@@ -7,6 +7,7 @@ import asyncio
 import math
 import time
 from typing import Optional, Dict, List, Any
+from utils.helpers import coerce_item_emoji  # ← 추가
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +148,7 @@ class BuyItemView(ShopViewBase):
                 discord.SelectOption(
                     label=name, value=name,
                     description=f"가격: {data.get('current_price', data.get('price', 0)):,}{self.currency_icon}",
-                    emoji=data.get('emoji')
+                    emoji=coerce_item_emoji(data.get('emoji'))
                 ) for name, data in items_on_page
             ]
             select = ui.Select(placeholder=f"구매할 '{self.category}' 상품을 선택하세요...", options=options)
