@@ -8,6 +8,7 @@ import asyncio
 import math
 from typing import Optional, Dict, List, Any
 from datetime import datetime, timezone, timedelta
+from utils.helpers import coerce_item_emoji  # ← 추가
 
 from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
@@ -509,7 +510,7 @@ class GearSelectView(ui.View):
         for name, count in inventory.items():
             item_data = item_db.get(name)
             if item_data and item_data.get('gear_type') == self.gear_type_db:
-                 options.append(discord.SelectOption(label=f"{name} ({count}개)", value=name, emoji=item_data.get('emoji')))
+                 options.append(discord.SelectOption(label=f"{name} ({count}개)", value=name, emoji=coerce_item_emoji(item_data.get('emoji'))))
 
         select = ui.Select(placeholder=get_string("profile_view.gear_select_view.placeholder", "{category_name} 선택...", category_name=self.display_name), options=options)
         select.callback = self.select_callback
