@@ -637,28 +637,28 @@ class Farm(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.thread_locks: Dict[int, asyncio.Lock] = {}
+        # ✅ 아래 daily_crop_update.start()가 오류 없이 실행되어야 합니다.
         self.daily_crop_update.start()
         self.actor_locks: dict[tuple[int, int], asyncio.Lock] = {}
         self.last_action_ts: dict[tuple[int, int], float] = {}
         self.cooldown_sec: float = 0.8
-async def safe_edit(self, message: discord.Message, **kwargs):
-    backoff = [0.4, 0.8, 1.6, 2.0]
-    for i, sleep_s in enumerate([0.0] + backoff):
-        if sleep_s:
-            await asyncio.sleep(sleep_s)
-        try:
-            return await message.edit(**kwargs)
-        except Exception as e:
-            status = getattr(e, 'status', None)
-            if status in (429, 500, 502, 503):
-                if i == len(backoff):
-                    raise
-                continue
-            raise
 
-    
+    # ✅ safe_edit 메소드는 Farm 클래스 내부에 있어야 합니다.
+    async def safe_edit(self, message: discord.Message, **kwargs):
+        backoff = [0.4, 0.8, 1.6, 2.0]
+        for i, sleep_s in enumerate([0.0] + backoff):
+            if sleep_s:
+                await asyncio.sleep(sleep_s)
+            try:
+                return await message.edit(**kwargs)
+            except Exception as e:
+                status = getattr(e, 'status', None)
+                if status in (429, 500, 502, 503):
+                    if i == len(backoff):
+                        raise
+                    continue
+                raise
 
-        
     def cog_unload(self):
         self.daily_crop_update.cancel()
             
