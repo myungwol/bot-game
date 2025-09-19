@@ -57,10 +57,11 @@ class ConfirmationView(ui.View):
         if interaction.user.id != self.user.id: await interaction.response.send_message("❌ 본인 전용 메뉴입니다.", ephemeral=True); return False
         return True
     @ui.button(label="예", style=discord.ButtonStyle.danger)
-    async def confirm(self, interaction: discord.Interaction, button: ui.Button): self.value = True; if not interaction.response.is_done(): await interaction.response.defer(); self.stop()
-    @ui.button(label="아니요", style=discord.ButtonStyle.grey)
-    async def cancel(self, interaction: discord.Interaction, button: ui.Button): self.value = False; if not interaction.response.is_done(): await interaction.response.defer(); self.stop()
-
+    async def confirm(self, interaction: discord.Interaction, button: ui.Button):
+        self.value = True
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        self.stop()
 class FarmNameModal(ui.Modal, title="농장 이름 변경"):
     farm_name = ui.TextInput(label="새로운 농장 이름", placeholder="새로운 농장 이름을 입력해주세요", required=True, max_length=20)
     def __init__(self, cog: 'Farm', farm_data: Dict):
