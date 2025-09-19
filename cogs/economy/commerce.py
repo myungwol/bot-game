@@ -148,6 +148,7 @@ class BuyItemView(ShopViewBase):
                 discord.SelectOption(
                     label=name, value=name,
                     description=f"가격: {data.get('current_price', data.get('price', 0)):,}{self.currency_icon}",
+                    # ▼▼▼ [수정] 아래 줄을 변경합니다 ▼▼▼
                     emoji=coerce_item_emoji(data.get('emoji'))
                 ) for name, data in items_on_page
             ]
@@ -434,7 +435,9 @@ class SellFishView(ShopViewBase):
                 options.append(discord.SelectOption(
                     label=f"{fish['name']} ({fish['size']}cm)", 
                     value=fish_id, 
-                    description=f"{price}{self.currency_icon}"
+                    description=f"{price}{self.currency_icon}",
+                    # ▼▼▼ [수정] 물고기 이모지도 동일하게 적용합니다 ▼▼▼
+                    emoji=coerce_item_emoji(loot_info.get('emoji'))
                 ))
 
         if options:
