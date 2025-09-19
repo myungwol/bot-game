@@ -57,9 +57,9 @@ class ConfirmationView(ui.View):
         if interaction.user.id != self.user.id: await interaction.response.send_message("❌ 본인 전용 메뉴입니다.", ephemeral=True); return False
         return True
     @ui.button(label="예", style=discord.ButtonStyle.danger)
-    async def confirm(self, interaction: discord.Interaction, button: ui.Button): self.value = True; await interaction.response.defer(); self.stop()
+    async def confirm(self, interaction: discord.Interaction, button: ui.Button): self.value = True; if not interaction.response.is_done(): await interaction.response.defer(); self.stop()
     @ui.button(label="아니요", style=discord.ButtonStyle.grey)
-    async def cancel(self, interaction: discord.Interaction, button: ui.Button): self.value = False; await interaction.response.defer(); self.stop()
+    async def cancel(self, interaction: discord.Interaction, button: ui.Button): self.value = False; if not interaction.response.is_done(): await interaction.response.defer(); self.stop()
 
 class FarmNameModal(ui.Modal, title="농장 이름 변경"):
     farm_name = ui.TextInput(label="새로운 농장 이름", placeholder="새로운 농장 이름을 입력해주세요", required=True, max_length=20)
@@ -67,7 +67,7 @@ class FarmNameModal(ui.Modal, title="농장 이름 변경"):
         super().__init__()
         self.cog, self.farm_data = cog, farm_data
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
         new_name = self.farm_name.value
         thread = self.cog.bot.get_channel(self.farm_data['thread_id'])
         if thread:
@@ -86,7 +86,7 @@ class FarmActionView(ui.View):
         self.cog, self.farm_data, self.user, self.action_type, self.farm_owner_id = parent_cog, farm_data, user, action_type, farm_owner_id
         self.selected_item: Optional[str] = None
     async def send_initial_message(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
         await self.build_components()
         embed = self.build_embed()
         await interaction.followup.send(embed=embed, view=self, ephemeral=True)
@@ -143,7 +143,7 @@ class FarmActionView(ui.View):
         self.add_item(select)
         
     async def on_location_select(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        if not interaction.response.is_done(): await interaction.response.defer()
         
         plot_ids_to_plant = [int(val) for val in interaction.data['values']]
         num_planted = len(plot_ids_to_plant)
@@ -243,13 +243,32 @@ class FarmActionView(ui.View):
         else:
             await interaction.edit_original_response(content="취소되었습니다.", view=None)
     async def cancel_action(self, interaction: discord.Interaction):
-        await interaction.response.defer(); await interaction.delete_original_response()
+        if not interaction.response.is_done(): await interaction.response.defer(); await interaction.delete_original_response()
     async def refresh_view(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        if not interaction.response.is_done(): await interaction.response.defer()
         await self.build_components()
         await interaction.edit_original_response(embed=self.build_embed(), view=self)
 
 class FarmUIView(ui.View):
+
+    async def _disable_all(self, interaction: discord.Interaction):
+        tmp = FarmUIView(self.cog)
+        for child in tmp.children:
+            if isinstance(child, ui.Button):
+                child.disabled = True
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer_update()
+            await self.cog.safe_edit(interaction.message, view=tmp)
+        except Exception:
+            pass
+
+    async def _enable_all(self, interaction: discord.Interaction):
+        try:
+            await self.cog.safe_edit(interaction.message, view=self)
+        except Exception:
+            pass
+
     def __init__(self, cog_instance: 'Farm'):
         super().__init__(timeout=None)
         self.cog = cog_instance
@@ -268,10 +287,36 @@ class FarmUIView(ui.View):
             item.callback = self.dispatch_callback
             self.add_item(item)
     
+    
     async def dispatch_callback(self, interaction: discord.Interaction):
-        method_name = f"on_{interaction.data['custom_id']}_click"
-        if hasattr(self, method_name):
-            await getattr(self, method_name)(interaction)
+        # Immediate ACK to avoid the 3s timeout, since we'll edit the original message
+        if not interaction.response.is_done():
+            await interaction.response.defer_update()
+
+        cid = (interaction.data or {}).get('custom_id')
+        method_name = f"on_{cid}_click" if cid else None
+        if not cid or not hasattr(self, method_name):
+            return
+
+        # Debounce/serialize per (thread_id, user_id)
+        key = (interaction.channel.id, interaction.user.id)
+        now = time.monotonic()
+        last = self.cog.last_action_ts.get(key, 0.0)
+        if now - last < self.cog.cooldown_sec:
+            return
+        self.cog.last_action_ts[key] = now
+
+        lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
+        if lock.locked():
+            return
+
+        async with lock:
+            await self._disable_all(interaction)
+            try:
+                await getattr(self, method_name)(interaction)
+            finally:
+                await self._enable_all(interaction)
+
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         self.farm_owner_id = await get_farm_owner_by_thread(interaction.channel.id)
@@ -315,7 +360,7 @@ class FarmUIView(ui.View):
                 pass
         
     async def on_farm_regenerate_click(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             if interaction.message: await interaction.message.delete()
         except (discord.NotFound, discord.Forbidden) as e:
@@ -328,7 +373,7 @@ class FarmUIView(ui.View):
         await interaction.delete_original_response()
 
     async def on_farm_till_click(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True, thinking=True)
         gear = await get_user_gear(interaction.user)
         hoe = gear.get('hoe', BARE_HANDS)
         if hoe == BARE_HANDS:
@@ -372,7 +417,7 @@ class FarmUIView(ui.View):
 # on_farm_water_click 메소드 전체를 아래 코드로 교체해주세요.
 
     async def on_farm_water_click(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True, thinking=True)
         gear = await get_user_gear(interaction.user)
         can = gear.get('watering_can', BARE_HANDS)
         if can == BARE_HANDS:
@@ -432,7 +477,7 @@ class FarmUIView(ui.View):
         await view.send_initial_message(i)
         
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True, thinking=True)
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
         
@@ -574,7 +619,7 @@ class FarmCreationPanelView(ui.View):
         btn.callback = self.create_farm_callback
         self.add_item(btn)
     async def create_farm_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
         user = interaction.user
         farm_data = await get_farm_data(user.id)
         if not isinstance(interaction.channel, discord.TextChannel):
@@ -592,6 +637,26 @@ class Farm(commands.Cog):
         self.bot = bot
         self.thread_locks: Dict[int, asyncio.Lock] = {}
         self.daily_crop_update.start()
+        self.actor_locks: dict[tuple[int, int], asyncio.Lock] = {}
+        self.last_action_ts: dict[tuple[int, int], float] = {}
+        self.cooldown_sec: float = 0.8
+async def safe_edit(self, message: discord.Message, **kwargs):
+    backoff = [0.4, 0.8, 1.6, 2.0]
+    for i, sleep_s in enumerate([0.0] + backoff):
+        if sleep_s:
+            await asyncio.sleep(sleep_s)
+        try:
+            return await message.edit(**kwargs)
+        except Exception as e:
+            status = getattr(e, 'status', None)
+            if status in (429, 500, 502, 503):
+                if i == len(backoff):
+                    raise
+                continue
+            raise
+
+    
+
         
     def cog_unload(self):
         self.daily_crop_update.cancel()
