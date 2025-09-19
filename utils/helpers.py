@@ -61,3 +61,22 @@ def format_timedelta_minutes_seconds(delta: timedelta) -> str:
     minutes, seconds = divmod(total_seconds, 60)
     return f"{minutes}분 {seconds}초"
 # ▲▲▲ [핵심 수정] ▲▲▲
+
+# ▼ [helpers.py 맨 아래에 추가] ▼
+def coerce_item_emoji(value):
+    """
+    DB에서 읽은 emoji 값이 유니코드('🐟')면 그대로,
+    커스텀 이모지 마크업('<:name:id>' 또는 '<a:name:id>')이면 PartialEmoji로 변환.
+    SelectOption/Button 등 discord.py 컴포넌트의 'emoji' 파라미터에서 안전하게 사용 가능.
+    """
+    if not value:
+        return None
+    try:
+        # discord.PartialEmoji는 '<:name:id>' 형태를 제대로 파싱함
+        if isinstance(value, str) and value.startswith("<") and value.endswith(">"):
+            return discord.PartialEmoji.from_str(value)
+    except Exception:
+        # 문제가 있으면 그냥 원본(유니코드 같은)을 돌려준다
+        return value
+    return value
+# ▲ [helpers.py 추가 끝] ▲
