@@ -224,8 +224,8 @@ class ItemUsageView(ui.View):
         embed.set_author(name=self.user.display_name, icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
         await log_channel.send(embed=embed)
 
-    async def on_back(self, interaction: Optional[discord.Interaction], reload_data: bool = False):
-        await self.parent_view.update_display(interaction, reload_data=reload_data)
+        async def on_back(self, interaction: Optional[discord.Interaction], reload_data: bool = False):
+            await self.parent_view.update_display(interaction, reload_data=reload_data)
 
 
 class ProfileView(ui.View):
