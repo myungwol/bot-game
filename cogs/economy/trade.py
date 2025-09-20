@@ -267,23 +267,19 @@ class MailComposeView(ui.View):
         self.message_content = ""; self.attachments = {"items": {}}
         self.currency_icon = get_config("CURRENCY_ICON", "🪙"); self.shipping_fee = 100
         self.message: Optional[discord.WebhookMessage] = None
-        self.current_state = "composing" # 'composing' or 'selecting_item'
+        self.current_state = "composing" 
         
     async def start(self, interaction: discord.Interaction):
-        embed = await self.build_embed()
-        await self.build_components()
-        target = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
-        self.message = await target(embed=embed, view=self, ephemeral=True)
+        await self.build_and_send(interaction)
 
-    async def update_ui(self, interaction: discord.Interaction):
-        if self.is_finished() or not self.message: return
-        if not interaction.response.is_done(): await interaction.response.defer()
-        
+    async def build_and_send(self, interaction: discord.Interaction):
         embed = await self.build_embed()
         await self.build_components()
-        try:
+        target = interaction.followup if interaction.response.is_done() else interaction
+        if self.message:
             await self.message.edit(embed=embed, view=self)
-        except (discord.NotFound, discord.Forbidden): self.stop()
+        else:
+            self.message = await target.send(embed=embed, view=self, ephemeral=True)
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
@@ -310,25 +306,27 @@ class MailComposeView(ui.View):
             else:
                 options = [ discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in tradeable_items.items() ]
                 item_select = ui.Select(placeholder="첨부할 아이템을 선택하세요", options=options[:25], custom_id="item_select_dropdown")
-                item_select.callback = self.on_item_select
                 self.add_item(item_select)
             
             back_button = ui.Button(label="뒤로", style=discord.ButtonStyle.grey, custom_id="back_to_composing")
-            back_button.callback = self.on_back_to_composing
             self.add_item(back_button)
 
         for item in self.children:
-            if isinstance(item, ui.Button) and not item.callback: item.callback = self.dispatch_callback
-            
+            item.callback = self.dispatch_callback
+
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
+        
         if custom_id == "attach_item_button": await self.handle_attach_item(interaction)
         elif custom_id == "write_message_button": await self.handle_write_message(interaction)
         elif custom_id == "send_button": await self.handle_send(interaction)
+        elif custom_id == "item_select_dropdown": await self.on_item_select(interaction)
+        elif custom_id == "back_to_composing": await self.on_back_to_composing(interaction)
 
     async def handle_attach_item(self, interaction: discord.Interaction):
         self.current_state = "selecting_item"
-        await self.update_ui(interaction)
+        await interaction.response.defer()
+        await self.build_and_send(interaction)
         
     async def on_item_select(self, interaction: discord.Interaction):
         inventory = await get_inventory(self.user)
@@ -343,11 +341,12 @@ class MailComposeView(ui.View):
             self.attachments["items"][item_name] = self.attachments["items"].get(item_name, 0) + modal.quantity
         
         self.current_state = "composing"
-        await self.update_ui(interaction)
+        await self.build_and_send(interaction)
         
     async def on_back_to_composing(self, interaction: discord.Interaction):
         self.current_state = "composing"
-        await self.update_ui(interaction)
+        await interaction.response.defer()
+        await self.build_and_send(interaction)
 
     async def handle_write_message(self, interaction: discord.Interaction):
         modal = MessageModal(self.message_content)
@@ -355,7 +354,7 @@ class MailComposeView(ui.View):
         await modal.wait()
         if modal.message is not None:
             self.message_content = modal.message
-            await self.update_ui(interaction)
+            await self.build_and_send(interaction)
 
     async def handle_send(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -370,7 +369,7 @@ class MailComposeView(ui.View):
             for item, qty in self.attachments["items"].items(): db_tasks.append(update_inventory(self.user.id, item, -qty))
             await asyncio.gather(*db_tasks)
             now, expires_at = datetime.now(timezone.utc), datetime.now(timezone.utc) + timedelta(days=30)
-            mail_res = await supabase.table('mails').insert({"sender_id": str(self.user.id), "recipient_id": str(self.recipient.id), "message": self.message_content, "sent_at": now.isoformat(), "expires_at": expires_at.isoformat()}).select().execute()
+            mail_res = await supabase.table('mails').insert({"sender_id": str(self.user.id), "recipient_id": str(self.recipient.id), "message": self.message_content, "sent_at": now.isoformat(), "expires_at": expires_at.isoformat()}).execute(returning='representation')
             if not mail_res.data:
                 logger.error("메일 레코드 생성 실패. 환불 시도."); refund_tasks = [update_wallet(self.user, self.shipping_fee)]
                 for item, qty in self.attachments["items"].items(): refund_tasks.append(update_inventory(self.user.id, item, qty))
@@ -566,21 +565,13 @@ class MailboxView(ui.View):
         select_view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="편지를 보낼 상대를 선택하세요.")
         async def callback(select_interaction: discord.Interaction):
+            await select_interaction.response.defer(ephemeral=True)
             recipient_id = int(select_interaction.data['values'][0])
             recipient = interaction.guild.get_member(recipient_id)
             if not recipient or recipient.bot or recipient.id == self.user.id:
-                return await select_interaction.response.send_message("잘못된 상대입니다.", ephemeral=True, delete_after=5)
+                return await select_interaction.followup.send("잘못된 상대입니다.", ephemeral=True, delete_after=5)
             
-            try:
-                await interaction.delete_original_response()
-            except discord.NotFound:
-                pass
-            
-            if self.message: 
-                try:
-                    await self.message.delete()
-                except discord.NotFound:
-                    pass
+            await self.message.delete()
                     
             compose_view = MailComposeView(self.cog, self.user, recipient)
             await compose_view.start(select_interaction)
