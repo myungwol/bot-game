@@ -250,6 +250,8 @@ class FarmActionView(ui.View):
         await self.build_components()
         await interaction.edit_original_response(embed=self.build_embed(), view=self)
 
+# (cogs/games/farm.py 파일에서 이 클래스를 찾아 아래 내용으로 전체 교체)
+
 class FarmUIView(ui.View):
 
     async def _disable_all(self, interaction: discord.Interaction):
@@ -259,7 +261,8 @@ class FarmUIView(ui.View):
                 child.disabled = True
         try:
             if not interaction.response.is_done():
-                await interaction.response.defer_update()
+                # ▼▼▼ [핵심 수정] defer_update() -> defer() ▼▼▼
+                await interaction.response.defer()
             await self.cog.safe_edit(interaction.message, view=tmp)
         except Exception:
             pass
@@ -290,16 +293,15 @@ class FarmUIView(ui.View):
     
     
     async def dispatch_callback(self, interaction: discord.Interaction):
-        # Immediate ACK to avoid the 3s timeout, since we'll edit the original message
         if not interaction.response.is_done():
-            await interaction.response.defer_update()
+            # ▼▼▼ [핵심 수정] defer_update() -> defer() ▼▼▼
+            await interaction.response.defer()
 
         cid = (interaction.data or {}).get('custom_id')
         method_name = f"on_{cid}_click" if cid else None
         if not cid or not hasattr(self, method_name):
             return
 
-        # Debounce/serialize per (thread_id, user_id)
         key = (interaction.channel.id, interaction.user.id)
         now = time.monotonic()
         last = self.cog.last_action_ts.get(key, 0.0)
@@ -361,7 +363,6 @@ class FarmUIView(ui.View):
                 pass
         
     async def on_farm_regenerate_click(self, interaction: discord.Interaction):
-        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             if interaction.message: await interaction.message.delete()
         except (discord.NotFound, discord.Forbidden) as e:
@@ -371,10 +372,8 @@ class FarmUIView(ui.View):
         if updated_farm_data and owner:
             updated_farm_data['farm_message_id'] = None
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
-        await interaction.delete_original_response()
 
     async def on_farm_till_click(self, interaction: discord.Interaction):
-        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True, thinking=True)
         gear = await get_user_gear(interaction.user)
         hoe = gear.get('hoe', BARE_HANDS)
         if hoe == BARE_HANDS:
@@ -403,7 +402,6 @@ class FarmUIView(ui.View):
         owner = self.cog.bot.get_user(self.farm_owner_id)
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
-        await interaction.delete_original_response()
     
     async def on_farm_plant_click(self, i: discord.Interaction): 
         farm_data = await get_farm_data(self.farm_owner_id)
@@ -411,14 +409,7 @@ class FarmUIView(ui.View):
         view = FarmActionView(self.cog, farm_data, i.user, "plant_seed", self.farm_owner_id)
         await view.send_initial_message(i)
 
-# cogs/games/farm.py 파일의 FarmUIView 클래스 안에 있는
-# on_farm_water_click 메소드 전체를 아래 코드로 교체해주세요.
-
-# cogs/games/farm.py 파일의 FarmUIView 클래스 안에 있는
-# on_farm_water_click 메소드 전체를 아래 코드로 교체해주세요.
-
     async def on_farm_water_click(self, interaction: discord.Interaction):
-        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True, thinking=True)
         gear = await get_user_gear(interaction.user)
         can = gear.get('watering_can', BARE_HANDS)
         if can == BARE_HANDS:
@@ -428,7 +419,6 @@ class FarmUIView(ui.View):
             
         power = get_item_database().get(can, {}).get('power', 1)
         
-        # [핵심 수정] daily_crop_update와 동일한 '게임의 현재 날짜' 기준을 가져옵니다.
         farm_date_str = get_config("farm_current_date")
         if farm_date_str:
             today_jst_midnight = datetime.fromisoformat(farm_date_str).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=KST)
@@ -454,8 +444,6 @@ class FarmUIView(ui.View):
             self.cog.bot.loop.create_task(delete_after(msg, 5))
             return
         
-        # [핵심 수정] DB에 기록하는 시간을 '실제 현재 시간'이 아닌 '게임의 가상 날짜'로 변경합니다.
-        # 이렇게 해야 UI 표시 로직과 시간이 일치하게 됩니다.
         watered_at_iso = today_jst_midnight.astimezone(timezone.utc).isoformat()
         tasks = [
             supabase.table('farm_plots').update({'last_watered_at': watered_at_iso}).in_('id', list(plots_to_update_db)).execute(),
@@ -478,7 +466,6 @@ class FarmUIView(ui.View):
         await view.send_initial_message(i)
         
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
-        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True, thinking=True)
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
         
@@ -487,11 +474,9 @@ class FarmUIView(ui.View):
         owner_abilities = await get_user_abilities(self.farm_owner_id)
         yield_bonus = 0.5 if 'farm_yield_up_2' in owner_abilities else 0.0
         
-        # [핵심 수정] 씨앗 수확 능력을 위한 새로운 변수 추가
         seeds_to_add = defaultdict(int)
         has_seed_harvester_ability = 'farm_seed_harvester_2' in owner_abilities
 
-        # [핵심 수정] 수확한 작물 -> 씨앗 이름 매핑 생성
         all_farm_items_res = await supabase.table('farm_item_details').select('item_name, harvest_item_name').execute()
         crop_to_seed_map = {
             item['harvest_item_name']: item['item_name'] 
@@ -508,14 +493,12 @@ class FarmUIView(ui.View):
                 harvest_name = info['harvest_item_name']
                 harvested[harvest_name] = harvested.get(harvest_name, 0) + final_yield
                 
-                # [핵심 수정] 씨앗 수확 능력 로직 추가
                 if has_seed_harvester_ability and harvest_name in crop_to_seed_map:
-                    # 15% 확률로 발동 (수확한 작물 개수만큼 반복)
                     for _ in range(final_yield):
                         if random.random() < 0.15:
                             seed_name = crop_to_seed_map[harvest_name]
                             seeds_to_add[seed_name] += random.randint(1, 3)
-                            break # 한 번 발동하면 해당 작물 묶음에 대해선 더 이상 시도하지 않음
+                            break
                 
                 is_regrowing_tree = info.get('is_tree', False) and (info.get('regrowth_days') is not None or info.get('regrowth_hours') is not None)
                 if is_regrowing_tree:
@@ -543,7 +526,6 @@ class FarmUIView(ui.View):
         db_tasks = []
         for name, quantity in harvested.items():
             db_tasks.append(update_inventory(str(owner.id), name, quantity))
-        # [핵심 수정] 획득한 씨앗을 인벤토리에 추가하는 작업 추가
         for seed_name, quantity in seeds_to_add.items():
             db_tasks.append(update_inventory(str(owner.id), seed_name, quantity))
 
@@ -560,7 +542,6 @@ class FarmUIView(ui.View):
         if updated_farm_data:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
-        # [핵심 수정] 결과 메시지에 씨앗 수확 정보 추가
         followup_message = f"🎉 **{', '.join([f'{n} {q}개' for n, q in harvested.items()])}**을(를) 수확했습니다!"
         if yield_bonus > 0.0:
             followup_message += "\n✨ **대농**의 능력으로 수확량이 대폭 증가했습니다!"
