@@ -436,8 +436,7 @@ class SellFishView(ShopViewBase):
                     label=f"{fish['name']} ({fish['size']}cm)", 
                     value=fish_id, 
                     description=f"{price}{self.currency_icon}",
-                    # ▼▼▼ [수정] 물고기 이모지도 동일하게 적용합니다 ▼▼▼
-                    emoji=coerce_item_emoji(loot_info.get('emoji'))
+                    emoji=coerce_item_emoji(loot_info.get('emoji')) # <--- 이 부분을 추가/수정합니다.
                 ))
 
         if options:
