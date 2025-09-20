@@ -275,12 +275,18 @@ class MailComposeView(ui.View):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙"); self.shipping_fee = 100
         self.message: Optional[discord.WebhookMessage] = None
         
-        self.add_item(ui.Button(label="아이템 첨부", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="attach_item_button"))
-        self.add_item(ui.Button(label="메시지 작성", style=discord.ButtonStyle.secondary, emoji="✍️", custom_id="write_message_button"))
-        self.add_item(ui.Button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀", custom_id="send_button"))
-        
-        for item in self.children:
-            if isinstance(item, ui.Button): item.callback = self.dispatch_callback
+        # 버튼 생성 및 콜백 연결
+        self.attach_button = ui.Button(label="아이템 첨부", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="attach_item_button")
+        self.write_button = ui.Button(label="메시지 작성", style=discord.ButtonStyle.secondary, emoji="✍️", custom_id="write_message_button")
+        self.send_button = ui.Button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀", custom_id="send_button")
+
+        self.attach_button.callback = self.dispatch_callback
+        self.write_button.callback = self.dispatch_callback
+        self.send_button.callback = self.dispatch_callback
+
+        self.add_item(self.attach_button)
+        self.add_item(self.write_button)
+        self.add_item(self.send_button)
 
     async def start(self, interaction: discord.Interaction):
         await self.update_view(interaction, new_message=True)
@@ -308,8 +314,9 @@ class MailComposeView(ui.View):
 
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
+        
+        # 모달/선택 메뉴를 띄우는 버튼은 defer를 하지 않음
         buttons_that_send_new_response = ["write_message_button", "attach_item_button"]
-
         if custom_id not in buttons_that_send_new_response and not interaction.response.is_done():
             await interaction.response.defer()
         
@@ -327,10 +334,9 @@ class MailComposeView(ui.View):
             elif custom_id == "send_button": await self.handle_send(interaction)
 
     async def handle_attach_item(self, interaction: discord.Interaction):
-        inventory = await get_inventory(self.user)
-        item_db = get_item_database()
+        inventory, item_db = await get_inventory(self.user), get_item_database()
         tradeable_items = { name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category') in TRADEABLE_CATEGORIES }
-        if not tradeable_items: return await interaction.response.send_message("첨부 가능한 아이템이 없습니다.", ephemeral=True, delete_after=5)
+        if not tradeable_items: return await interaction.response.send_message("첨부 가능한 아이템이 없습니다.", ephemeral=True)
         options = [ discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in tradeable_items.items() ]
         
         select_view = ui.View(timeout=180)
@@ -367,26 +373,34 @@ class MailComposeView(ui.View):
             for item, qty in self.attachments["items"].items():
                 if inventory.get(item, 0) < qty:
                     return await interaction.followup.send(f"아이템 재고가 부족합니다: '{item}'", ephemeral=True)
+            
             db_tasks = [update_wallet(self.user, -self.shipping_fee)]
             for item, qty in self.attachments["items"].items(): db_tasks.append(update_inventory(self.user.id, item, -qty))
             await asyncio.gather(*db_tasks)
+            
             now, expires_at = datetime.now(timezone.utc), datetime.now(timezone.utc) + timedelta(days=30)
             mail_res = await supabase.table('mails').insert({"sender_id": str(self.user.id), "recipient_id": str(self.recipient.id), "message": self.message_content, "sent_at": now.isoformat(), "expires_at": expires_at.isoformat()}).execute()
+            
             if not mail_res.data:
                 logger.error("메일 레코드 생성 실패. 환불 시도."); refund_tasks = [update_wallet(self.user, self.shipping_fee)]
                 for item, qty in self.attachments["items"].items(): refund_tasks.append(update_inventory(self.user.id, item, qty))
                 await asyncio.gather(*refund_tasks)
                 return await interaction.followup.send("우편 발송 실패. 비용이 환불되었습니다.", ephemeral=True)
+            
             new_mail_id = mail_res.data[0]['id']
             if self.attachments["items"]:
                 att_to_insert = [{"mail_id": new_mail_id, "item_name": n, "quantity": q, "is_coin": False} for n, q in self.attachments["items"].items()]
                 await supabase.table('mail_attachments').insert(att_to_insert).execute()
-            await interaction.followup.send("✅ 우편을 성공적으로 보냈습니다.", ephemeral=True)
-            if self.message: await self.message.delete()
+            
+            # ▼▼▼ [핵심 수정] .delete() 대신 UI를 비활성화하고 메시지를 수정합니다. ▼▼▼
+            for item in self.children: item.disabled = True
+            await self.message.edit(content="✅ 우편을 성공적으로 보냈습니다.", view=self, embed=None)
+            
             if (panel_ch_id := get_id("trade_panel_channel_id")) and (panel_ch := self.cog.bot.get_channel(panel_ch_id)):
                 if embed_data := await get_embed_from_db("log_new_mail"):
                     log_embed = format_embed_from_db(embed_data, sender_mention=self.user.mention, recipient_mention=self.recipient.mention)
                     await panel_ch.send(content=self.recipient.mention, embed=log_embed, allowed_mentions=discord.AllowedMentions(users=True), delete_after=60.0)
+            
             self.stop()
         except Exception as e:
             logger.error(f"우편 발송 중 최종 단계에서 예외 발생: {e}", exc_info=True)
@@ -691,20 +705,29 @@ class Trade(commands.Cog):
         logger.info("✅ 거래소의 영구 View가 성공적으로 등록되었습니다.")
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_trade", last_log: Optional[discord.Embed] = None):
+        # ▼▼▼ [핵심 수정] 이제 로그만 보내고 패널은 건드리지 않습니다. ▼▼▼
         if last_log:
-            try: await channel.send(embed=last_log)
-            except discord.HTTPException: pass
+            try:
+                await channel.send(embed=last_log)
+            except discord.HTTPException as e:
+                logger.error(f"거래 로그 전송 실패: {e}")
         
+        # 패널이 이미 있는지 확인
         panel_info = get_panel_id(panel_key)
         if panel_info and panel_info.get("message_id"):
-             return
+            # 이미 패널이 존재하면, 더 이상 아무것도 하지 않고 함수를 종료합니다.
+            return
 
+        # 패널이 없는 경우에만 새로 생성하는 로직 (봇이 처음 시작될 때 등)
         embed_data = await get_embed_from_db(panel_key)
-        if not embed_data: return
+        if not embed_data:
+            return logger.error(f"DB에서 '{panel_key}' 임베드를 찾을 수 없습니다.")
+        
         embed = discord.Embed.from_dict(embed_data)
         view = TradePanelView(self)
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
+        logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
 
 async def setup(bot: commands.Cog):
     await bot.add_cog(Trade(bot))
