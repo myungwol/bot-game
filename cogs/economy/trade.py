@@ -267,72 +267,87 @@ class MailComposeView(ui.View):
         self.message_content = ""; self.attachments = {"items": {}}
         self.currency_icon = get_config("CURRENCY_ICON", "🪙"); self.shipping_fee = 100
         self.message: Optional[discord.WebhookMessage] = None
+        self.current_state = "composing" # 'composing' or 'selecting_item'
         
-        self.add_item(ui.Button(label="아이템 첨부", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="attach_item_button"))
-        self.add_item(ui.Button(label="메시지 작성", style=discord.ButtonStyle.secondary, emoji="✍️", custom_id="write_message_button"))
-        self.add_item(ui.Button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀", custom_id="send_button"))
-        for item in self.children:
-            if isinstance(item, ui.Button): item.callback = self.dispatch_callback
-
     async def start(self, interaction: discord.Interaction):
         embed = await self.build_embed()
+        await self.build_components()
         target = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
         self.message = await target(embed=embed, view=self, ephemeral=True)
 
-    async def update_ui(self):
+    async def update_ui(self, interaction: discord.Interaction):
         if self.is_finished() or not self.message: return
+        if not interaction.response.is_done(): await interaction.response.defer()
+        
         embed = await self.build_embed()
-        try: await self.message.edit(embed=embed, view=self)
+        await self.build_components()
+        try:
+            await self.message.edit(embed=embed, view=self)
         except (discord.NotFound, discord.Forbidden): self.stop()
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
-        att_str = [f"ㄴ {name}: {qty}개" for name, qty in self.attachments["items"].items()]
-        embed.add_field(name="첨부 아이템", value="\n".join(att_str) if att_str else "없음", inline=False)
-        embed.add_field(name="메시지", value=f"```{self.message_content}```" if self.message_content else "메시지 없음", inline=False)
-        embed.set_footer(text=f"배송비: {self.shipping_fee:,}{self.currency_icon}")
+        if self.current_state == "composing":
+            att_str = [f"ㄴ {name}: {qty}개" for name, qty in self.attachments["items"].items()]
+            embed.add_field(name="첨부 아이템", value="\n".join(att_str) if att_str else "없음", inline=False)
+            embed.add_field(name="메시지", value=f"```{self.message_content}```" if self.message_content else "메시지 없음", inline=False)
+            embed.set_footer(text=f"배송비: {self.shipping_fee:,}{self.currency_icon}")
+        elif self.current_state == "selecting_item":
+            embed.description = "첨부할 아이템을 선택해주세요."
         return embed
 
+    async def build_components(self):
+        self.clear_items()
+        if self.current_state == "composing":
+            self.add_item(ui.Button(label="아이템 첨부", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="attach_item_button"))
+            self.add_item(ui.Button(label="메시지 작성", style=discord.ButtonStyle.secondary, emoji="✍️", custom_id="write_message_button"))
+            self.add_item(ui.Button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀", custom_id="send_button"))
+        elif self.current_state == "selecting_item":
+            inventory, item_db = await get_inventory(self.user), get_item_database()
+            tradeable_items = { n: q for n, q in inventory.items() if item_db.get(n, {}).get('category') in TRADEABLE_CATEGORIES }
+            if not tradeable_items:
+                self.add_item(ui.Button(label="첨부 가능한 아이템이 없습니다.", disabled=True))
+            else:
+                options = [ discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in tradeable_items.items() ]
+                item_select = ui.Select(placeholder="첨부할 아이템을 선택하세요", options=options[:25], custom_id="item_select_dropdown")
+                item_select.callback = self.on_item_select
+                self.add_item(item_select)
+            
+            back_button = ui.Button(label="뒤로", style=discord.ButtonStyle.grey, custom_id="back_to_composing")
+            back_button.callback = self.on_back_to_composing
+            self.add_item(back_button)
+
+        for item in self.children:
+            if isinstance(item, ui.Button) and not item.callback: item.callback = self.dispatch_callback
+            
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
-        buttons_that_send_new_response = ["write_message_button", "attach_item_button"]
-        if custom_id not in buttons_that_send_new_response and not interaction.response.is_done():
-            await interaction.response.defer()
-        
-        key = (interaction.channel.id, interaction.user.id)
-        now = time.monotonic()
-        last = self.cog.last_action_ts.get(key, 0.0)
-        if now - last < self.cog.cooldown_sec: return
-        self.cog.last_action_ts[key] = now
-        lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
-        if lock.locked(): return
-
-        async with lock:
-            if custom_id == "attach_item_button": await self.handle_attach_item(interaction)
-            elif custom_id == "write_message_button": await self.handle_write_message(interaction)
-            elif custom_id == "send_button": await self.handle_send(interaction)
+        if custom_id == "attach_item_button": await self.handle_attach_item(interaction)
+        elif custom_id == "write_message_button": await self.handle_write_message(interaction)
+        elif custom_id == "send_button": await self.handle_send(interaction)
 
     async def handle_attach_item(self, interaction: discord.Interaction):
-        inventory, item_db = await get_inventory(self.user), get_item_database()
-        tradeable_items = { n: q for n, q in inventory.items() if item_db.get(n, {}).get('category') in TRADEABLE_CATEGORIES }
-        if not tradeable_items: return await interaction.response.send_message("첨부 가능한 아이템이 없습니다.", ephemeral=True, delete_after=5)
-        options = [ discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in tradeable_items.items() ]
-        select_view = ui.View(timeout=180)
-        item_select = ui.Select(placeholder="첨부할 아이템을 선택하세요", options=options[:25])
+        self.current_state = "selecting_item"
+        await self.update_ui(interaction)
         
-        async def select_callback(si: discord.Interaction):
-            item_name, max_qty = si.data['values'][0], tradeable_items.get(si.data['values'][0], 0)
-            modal = ItemSelectModal(f"'{item_name}' 수량 입력", max_qty)
-            await si.response.send_modal(modal); await modal.wait()
-            if modal.quantity is not None:
-                self.attachments["items"][item_name] = self.attachments["items"].get(item_name, 0) + modal.quantity
-                await self.update_ui()
-            try: await si.delete_original_response()
-            except discord.NotFound: pass
+    async def on_item_select(self, interaction: discord.Interaction):
+        inventory = await get_inventory(self.user)
+        item_name = interaction.data['values'][0]
+        max_qty = inventory.get(item_name, 0)
         
-        item_select.callback = select_callback
-        select_view.add_item(item_select)
-        await interaction.response.send_message(view=select_view, ephemeral=True)
+        modal = ItemSelectModal(f"'{item_name}' 수량 입력", max_qty)
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+        
+        if modal.quantity is not None:
+            self.attachments["items"][item_name] = self.attachments["items"].get(item_name, 0) + modal.quantity
+        
+        self.current_state = "composing"
+        await self.update_ui(interaction)
+        
+    async def on_back_to_composing(self, interaction: discord.Interaction):
+        self.current_state = "composing"
+        await self.update_ui(interaction)
 
     async def handle_write_message(self, interaction: discord.Interaction):
         modal = MessageModal(self.message_content)
@@ -340,16 +355,17 @@ class MailComposeView(ui.View):
         await modal.wait()
         if modal.message is not None:
             self.message_content = modal.message
-            await self.update_ui()
+            await self.update_ui(interaction)
 
     async def handle_send(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         try:
             wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(self.user))
             if wallet.get('balance', 0) < self.shipping_fee:
-                return await interaction.followup.send(f"코인이 부족합니다. (배송비: {self.shipping_fee:,}{self.currency_icon})", ephemeral=True)
+                return await interaction.followup.send(f"코인이 부족합니다. (배송비: {self.shipping_fee:,}{self.currency_icon})", ephemeral=True, delete_after=5)
             for item, qty in self.attachments["items"].items():
                 if inventory.get(item, 0) < qty:
-                    return await interaction.followup.send(f"아이템 재고가 부족합니다: '{item}'", ephemeral=True)
+                    return await interaction.followup.send(f"아이템 재고가 부족합니다: '{item}'", ephemeral=True, delete_after=5)
             db_tasks = [update_wallet(self.user, -self.shipping_fee)]
             for item, qty in self.attachments["items"].items(): db_tasks.append(update_inventory(self.user.id, item, -qty))
             await asyncio.gather(*db_tasks)
@@ -366,8 +382,7 @@ class MailComposeView(ui.View):
                 att_to_insert = [{"mail_id": new_mail_id, "item_name": n, "quantity": q, "is_coin": False} for n, q in self.attachments["items"].items()]
                 await supabase.table('mail_attachments').insert(att_to_insert).execute()
             
-            for item in self.children: item.disabled = True
-            await interaction.edit_original_response(content="✅ 우편을 성공적으로 보냈습니다.", view=self, embed=None)
+            await self.message.edit(content="✅ 우편을 성공적으로 보냈습니다.", view=None, embed=None)
             
             if (panel_ch_id := get_id("trade_panel_channel_id")) and (panel_ch := self.cog.bot.get_channel(panel_ch_id)):
                 if embed_data := await get_embed_from_db("log_new_mail"):
