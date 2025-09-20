@@ -367,19 +367,16 @@ class ProfileView(ui.View):
                 self.fish_page_index = max(0, min(self.fish_page_index, total_pages - 1))
                 fish_on_page = aquarium[self.fish_page_index * 10 : self.fish_page_index * 10 + 10]
                 
-                # ▼▼▼ [핵심 수정] ▼▼▼
-                # 어항에서 가져온 이모지를 표시하기 전에 coerce_item_emoji 함수를 통과시킵니다.
                 fish_lines = []
                 for f in fish_on_page:
-                    # coerce_item_emoji는 PartialEmoji 객체 또는 문자열을 반환하므로 str()로 감싸줍니다.
                     emoji_display = str(coerce_item_emoji(f.get('emoji', '🐠')))
                     fish_lines.append(f"{emoji_display} **{f['name']}**: `{f['size']}`cm")
                 
                 embed.description = description + "\n".join(fish_lines)
-                # ▲▲▲ [핵심 수정] ▲▲▲
                 
-                embed.set_footer(text=get_string("profile_view.fish_tab.pagination_footer", "페이지 {current_page} / {total_pages}", current_page=self.fish_page_index + 1, total_pages=total_pages)
-                
+                # ▼▼▼ [핵심 수정] 이 줄의 맨 끝에 닫는 괄호 ')'가 추가되었습니다. ▼▼▼
+                embed.set_footer(text=get_string("profile_view.fish_tab.pagination_footer", "페이지 {current_page} / {total_pages}", current_page=self.fish_page_index + 1, total_pages=total_pages))
+        
         elif self.current_page == "mineral":
             mineral_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "광물"}
             item_list = [f"{item_db.get(n,{}).get('emoji','💎')} **{n}**: `{c}`개" for n, c in mineral_items.items()]
