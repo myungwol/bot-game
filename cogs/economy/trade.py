@@ -210,18 +210,14 @@ class TradeView(ui.View):
         
         if self.message:
             log_channel_id = get_id("trade_panel_channel_id")
-            if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
+            if log_channel_id and (log_channel := self.cog.bot.get_channel(log_channel_id)):
                 if log_embed_data := await get_embed_from_db("log_trade_success"):
                     log_embed = format_embed_from_db(log_embed_data, user1_mention=user1.mention, user2_mention=user2.mention, commission=commission, currency_icon=self.currency_icon)
                     offer1_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer1['items'].items()] + ([f"💰 {offer1['coins']:,}{self.currency_icon}"] if offer1['coins'] > 0 else [])) or "없음"
                     offer2_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer2['items'].items()] + ([f"💰 {offer2['coins']:,}{self.currency_icon}"] if offer2['coins'] > 0 else [])) or "없음"
                     log_embed.add_field(name=f"{user1.display_name} 제공", value=offer1_str, inline=True)
                     log_embed.add_field(name=f"{user2.display_name} 제공", value=offer2_str, inline=True)
-
-                    # ▼▼▼ [핵심 수정] 최종 로그에 거래세와 신청 수수료 안내를 모두 포함 ▼▼▼
                     log_embed.set_footer(text=f"거래세: {commission}{self.currency_icon} (신청 수수료 250코인은 환불되지 않음)")
-                    # ▲▲▲ [핵심 수정] ▲▲▲
-
                     await self.cog.regenerate_panel(log_channel, last_log=log_embed)
             
             await self.message.channel.send("✅ 거래가 성공적으로 완료되었습니다. 이 채널은 10초 후에 삭제됩니다.")
@@ -270,6 +266,7 @@ class MailComposeView(ui.View):
         self.cog = cog; self.user = user; self.recipient = recipient
         self.message_content = ""; self.attachments = {"items": {}}
         self.currency_icon = get_config("CURRENCY_ICON", "🪙"); self.shipping_fee = 100
+        self.message: Optional[discord.WebhookMessage] = None
         
         self.add_item(ui.Button(label="아이템 첨부", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="attach_item_button"))
         self.add_item(ui.Button(label="메시지 작성", style=discord.ButtonStyle.secondary, emoji="✍️", custom_id="write_message_button"))
@@ -280,7 +277,13 @@ class MailComposeView(ui.View):
     async def start(self, interaction: discord.Interaction):
         embed = await self.build_embed()
         target = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
-        await target(embed=embed, view=self, ephemeral=True)
+        self.message = await target(embed=embed, view=self, ephemeral=True)
+
+    async def update_ui(self):
+        if self.is_finished() or not self.message: return
+        embed = await self.build_embed()
+        try: await self.message.edit(embed=embed, view=self)
+        except (discord.NotFound, discord.Forbidden): self.stop()
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
@@ -323,7 +326,7 @@ class MailComposeView(ui.View):
             await si.response.send_modal(modal); await modal.wait()
             if modal.quantity is not None:
                 self.attachments["items"][item_name] = self.attachments["items"].get(item_name, 0) + modal.quantity
-                await interaction.edit_original_response(embed=await self.build_embed(), view=self)
+                await self.update_ui()
             try: await si.delete_original_response()
             except discord.NotFound: pass
         
@@ -337,7 +340,7 @@ class MailComposeView(ui.View):
         await modal.wait()
         if modal.message is not None:
             self.message_content = modal.message
-            await interaction.edit_original_response(embed=await self.build_embed(), view=self)
+            await self.update_ui()
 
     async def handle_send(self, interaction: discord.Interaction):
         try:
@@ -699,7 +702,7 @@ class Trade(commands.Cog):
                 logger.info(f"이전 거래소 패널(ID: {panel_info['message_id']})을 삭제했습니다.")
             except (discord.NotFound, discord.Forbidden):
                 logger.warning(f"이전 거래소 패널을 찾거나 삭제할 수 없습니다.")
-        
+
         embed_data = await get_embed_from_db(panel_key)
         if not embed_data:
             logger.error(f"DB에서 '{panel_key}' 임베드를 찾을 수 없어 패널을 생성할 수 없습니다.")
