@@ -312,7 +312,8 @@ class MailComposeView(ui.View):
             self.add_item(back_button)
 
         for item in self.children:
-            item.callback = self.dispatch_callback
+            if not hasattr(item, 'callback') or item.callback is None:
+                item.callback = self.dispatch_callback
 
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
@@ -369,7 +370,10 @@ class MailComposeView(ui.View):
             for item, qty in self.attachments["items"].items(): db_tasks.append(update_inventory(self.user.id, item, -qty))
             await asyncio.gather(*db_tasks)
             now, expires_at = datetime.now(timezone.utc), datetime.now(timezone.utc) + timedelta(days=30)
-            mail_res = await supabase.table('mails').insert({"sender_id": str(self.user.id), "recipient_id": str(self.recipient.id), "message": self.message_content, "sent_at": now.isoformat(), "expires_at": expires_at.isoformat()}).execute(returning='representation')
+            
+            # ▼▼▼ [핵심 수정] .execute()에서 잘못된 인수를 제거합니다. ▼▼▼
+            mail_res = await supabase.table('mails').insert({"sender_id": str(self.user.id), "recipient_id": str(self.recipient.id), "message": self.message_content, "sent_at": now.isoformat(), "expires_at": expires_at.isoformat()}).execute()
+
             if not mail_res.data:
                 logger.error("메일 레코드 생성 실패. 환불 시도."); refund_tasks = [update_wallet(self.user, self.shipping_fee)]
                 for item, qty in self.attachments["items"].items(): refund_tasks.append(update_inventory(self.user.id, item, qty))
