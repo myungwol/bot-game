@@ -59,10 +59,12 @@ class MiningGameView(ui.View):
         self.ui_lock = asyncio.Lock()
         self.ui_update_task = self.cog.bot.loop.create_task(self.ui_updater())
         self.initial_load_task = self.cog.bot.loop.create_task(self.load_initial_data())
-        # 모든 버튼의 콜백을 dispatch_callback으로 통일
-        for item in self.children:
-            if isinstance(item, ui.Button):
-                item.callback = self.dispatch_callback
+
+        # ▼▼▼ [핵심 수정] 버튼을 생성하고 콜백을 dispatch로 연결합니다. ▼▼▼
+        action_button = ui.Button(label="광석 찾기", style=discord.ButtonStyle.secondary, emoji="🔍", custom_id="mine_action_button")
+        action_button.callback = self.dispatch_callback
+        self.add_item(action_button)
+
 
     async def load_initial_data(self):
         user_abilities = await get_user_abilities(self.user.id)
@@ -113,21 +115,20 @@ class MiningGameView(ui.View):
         async with lock:
             if self.on_cooldown:
                 return await interaction.followup.send("⏳ 아직 주변을 살피고 있습니다.", ephemeral=True, delete_after=5)
-            await self.action_button(interaction, self.children[0])
+            
+            # ▼▼▼ [핵심 수정] 이름이 변경된 실제 로직 함수를 호출합니다. ▼▼▼
+            await self.handle_action_button(interaction, self.children[0])
 
     def build_embed(self) -> discord.Embed:
-        # ... (이 메소드의 내용은 변경 없습니다) ...
+        # 이 메소드의 내용은 변경 없습니다.
         embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", color=0x607D8B)
         item_db = get_item_database()
-
         if self.state == "idle":
             description_parts = ["## 앞으로 나아가 광물을 찾아보자"]
             if self.last_result_text: description_parts.append(f"## 채굴 결과\n{self.last_result_text}")
-            
             remaining_time = self.end_time - datetime.now(timezone.utc)
             timer_str = f"광산 닫힘까지: **{discord.utils.format_dt(self.end_time, 'R')}**" if remaining_time.total_seconds() > 0 else f"광산 닫힘까지: **종료됨**"
             description_parts.append(timer_str)
-
             active_abilities = []
             if self.duration_doubled: active_abilities.append("> ✨ 집중 탐사 (시간 2배)")
             if self.time_reduction > 0: active_abilities.append("> ⚡ 신속한 채굴 (쿨타임 감소)")
@@ -136,26 +137,21 @@ class MiningGameView(ui.View):
             if active_abilities: description_parts.append(f"**--- 활성화된 능력 ---**\n" + "\n".join(active_abilities))
             description_parts.append(f"**사용 중인 장비:** {self.pickaxe}")
             embed.description = "\n\n".join(description_parts)
-
         elif self.state == "discovered":
             ore_info = item_db.get(self.discovered_ore, {})
             ore_emoji = str(coerce_item_emoji(ore_info.get('emoji', '💎')))
-            
             desc_text = f"### {ore_emoji} {self.discovered_ore}을(를) 발견했다!" if self.discovered_ore != "꽝" else "### 아무것도 발견하지 못했다..."
             embed.description = desc_text
             embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url'])
-
         elif self.state == "mining":
             ore_info = item_db.get(self.discovered_ore, {})
             ore_emoji = str(coerce_item_emoji(ore_info.get('emoji', '💎')))
-            
             embed.description = f"**{self.pickaxe}**(으)로 열심히 **{ore_emoji} {self.discovered_ore}**을(를) 캐는 중입니다..."
             embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url'])
-            
         return embed
 
-    @ui.button(label="광석 찾기", style=discord.ButtonStyle.secondary, emoji="🔍", custom_id="mine_action_button")
-    async def action_button(self, interaction: discord.Interaction, button: ui.Button):
+    # ▼▼▼ [핵심 수정] 데코레이터를 제거하고 함수 이름을 변경하여 일반 메소드로 만듭니다. ▼▼▼
+    async def handle_action_button(self, interaction: discord.Interaction, button: ui.Button):
         async with self.ui_lock:
             if self.state == "idle":
                 self.last_result_text = None
@@ -201,7 +197,7 @@ class MiningGameView(ui.View):
                             elif isinstance(current_ores_raw, dict): current_ores = current_ores_raw
                             current_ores[self.discovered_ore] = current_ores.get(self.discovered_ore, 0) + quantity
                             await supabase.table('mining_sessions').update({'mined_ores_json': current_ores}).eq('user_id', str(self.user.id)).execute()
-                    except Exception as db_error: logger.error(f"광산 채굴량 DB 업데이트 중 오류: {db_error}", exc_info=True)
+                    except Exception as db_error: logger.error(f"광산 채굴량 DB 업데이트 중 오류 발생: {db_error}", exc_info=True)
                     await update_inventory(self.user.id, self.discovered_ore, quantity)
                     await log_activity(self.user.id, 'mining', amount=quantity, xp_earned=xp_earned)
                     ore_info = get_item_database().get(self.discovered_ore, {}); ore_emoji = str(coerce_item_emoji(ore_info.get('emoji', '💎')))
