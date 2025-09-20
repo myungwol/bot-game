@@ -220,49 +220,43 @@ class MiningPanelView(ui.View):
     def __init__(self, cog_instance: 'Mining'):
         super().__init__(timeout=None)
         self.cog = cog_instance
-        # ▼▼▼ [핵심 수정 1] 버튼의 콜백을 새로운 dispatch_callback으로 지정합니다. ▼▼▼
+        
         enter_button = ui.Button(label="입장하기", style=discord.ButtonStyle.secondary, emoji="⛏️", custom_id="enter_mine")
-        enter_button.callback = self.dispatch_callback # 콜백을 dispatch로 변경
+        enter_button.callback = self.dispatch_callback
         self.add_item(enter_button)
 
     async def dispatch_callback(self, interaction: discord.Interaction):
-        # defer는 이제 여기서 처리하지 않습니다. 각 콜백에서 직접 처리하거나 followup을 사용합니다.
+        # mining.py의 `handle_enter_mine`은 defer 후 followup을 사용하므로, 여기서 미리 defer합니다.
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         
         key = (interaction.channel.id, interaction.user.id)
         now = time.monotonic()
         last = self.cog.last_action_ts.get(key, 0.0)
         if now - last < self.cog.cooldown_sec:
-            # 빠른 클릭은 조용히 무시
-            if not interaction.response.is_done():
-                await interaction.response.defer()
             return
             
         self.cog.last_action_ts[key] = now
         lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
         if lock.locked():
-            if not interaction.response.is_done():
-                await interaction.response.defer()
             return
         
         async with lock:
-            # ▼▼▼ [핵심 수정 2] 실제 로직을 담은 새로운 메소드를 호출합니다. ▼▼▼
-            await self.handle_enter_mine_interaction(interaction)
-
-    # ▼▼▼ [핵심 수정 3] 기존 버튼 콜백 함수의 이름을 변경하여 이름 충돌을 피합니다. ▼▼▼
-    async def handle_enter_mine_interaction(self, interaction: discord.Interaction):
-        # 이 함수는 이제 dispatch_callback에 의해 안전하게 호출됩니다.
-        # 여기서 interaction에 대한 응답(defer, send_message 등)을 처리합니다.
-        await self.cog.handle_enter_mine(interaction))
+            # ▼▼▼ [핵심 수정] 오타가 있었던 부분을 올바르게 수정합니다. ▼▼▼
+            await self.cog.handle_enter_mine(interaction)
 
 class Mining(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_sessions: Dict[int, Dict] = {}
         self.active_abilities_cache: Dict[int, List[str]] = {}
+        self.check_expired_mines_from_db.start()
+        
+        # ▼▼▼ [핵심 수정] 디바운싱/락킹을 위한 변수를 여기에 추가합니다. ▼▼▼
         self.actor_locks: dict[tuple[int, int], asyncio.Lock] = {}
         self.last_action_ts: dict[tuple[int, int], float] = {}
-        self.cooldown_sec: float = 1.0
-        self.check_expired_mines_from_db.start()
+        self.cooldown_sec: float = 1.5 # 광산 입장은 작업이 많으므로 쿨타임을 1.5초로 넉넉하게 설정
+        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
     # ... (이하 Mining Cog의 나머지 메소드는 변경 없습니다) ...
     def cog_unload(self):
