@@ -461,7 +461,8 @@ class MailboxView(ui.View):
         self.selected_mail_ids: List[str] = []
 
     async def start(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        # ▼▼▼ [핵심 수정] response.defer() -> followup.send() 로 변경 ▼▼▼
+        # dispatch_callback에서 이미 defer()로 응답했으므로, followup으로 새 메시지를 보냅니다.
         embed = await self.build_embed()
         await self.build_components()
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
@@ -495,7 +496,7 @@ class MailboxView(ui.View):
         if not self.mails_on_page:
             embed.description = "받은 편지가 없습니다."
         else:
-            embed.set_footer(text=f"페이지 {self.page + 1} / {math.ceil(res.count / 5)}")
+            embed.set_footer(text=f"페이지 {self.page + 1} / {math.ceil((res.count or 0) / 5)}")
             for i, mail in enumerate(self.mails_on_page):
                 sender_id_int = int(mail['sender_id'])
                 sender = self.cog.bot.get_user(sender_id_int)
