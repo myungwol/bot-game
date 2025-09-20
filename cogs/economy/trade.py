@@ -115,10 +115,9 @@ class TradeView(ui.View):
         except (discord.NotFound, discord.Forbidden): self.stop()
 
     async def dispatch_callback(self, interaction: discord.Interaction):
-        custom_id = interaction.data['custom_id']
-        buttons_that_send_new_response = ["add_item_button", "add_coin_button"]
-        if custom_id not in buttons_that_send_new_response and not interaction.response.is_done():
-            await interaction.response.defer()
+        # [핵심 수정] 무조건 defer를 먼저 호출하여 "상호작용 실패" 방지
+        await interaction.response.defer()
+        
         key = (interaction.channel.id, interaction.user.id)
         now = time.monotonic()
         last = self.cog.last_action_ts.get(key, 0.0)
@@ -127,6 +126,7 @@ class TradeView(ui.View):
         lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
         if lock.locked(): return
         async with lock:
+            custom_id = interaction.data['custom_id']
             if custom_id == "add_item_button": await self.handle_add_item(interaction)
             elif custom_id == "add_coin_button": await self.handle_add_coin(interaction)
             elif custom_id == "ready_button": await self.handle_ready(interaction)
@@ -134,10 +134,10 @@ class TradeView(ui.View):
 
     async def handle_add_item(self, interaction: discord.Interaction):
         user_id = interaction.user.id
-        if self.offers[user_id]["ready"]: return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
+        if self.offers[user_id]["ready"]: return await interaction.followup.send("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
         inventory, item_db = await get_inventory(interaction.user), get_item_database()
         tradeable_items = { n: q for n, q in inventory.items() if item_db.get(n, {}).get('category') in TRADEABLE_CATEGORIES }
-        if not tradeable_items: return await interaction.response.send_message("거래 가능한 아이템이 없습니다.", ephemeral=True, delete_after=5)
+        if not tradeable_items: return await interaction.followup.send("거래 가능한 아이템이 없습니다.", ephemeral=True, delete_after=5)
         options = [ discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in tradeable_items.items() ]
         select_view = ui.View(timeout=180); item_select = ui.Select(placeholder="추가할 아이템을 선택하세요", options=options[:25])
         async def select_callback(si: discord.Interaction):
@@ -147,14 +147,12 @@ class TradeView(ui.View):
             if modal.quantity is not None:
                 self.offers[user_id]["items"][item_name] = modal.quantity
                 await self.update_ui()
-            try: await si.delete_original_response()
-            except discord.NotFound: pass
         item_select.callback = select_callback; select_view.add_item(item_select)
-        await interaction.response.send_message(view=select_view, ephemeral=True)
+        await interaction.followup.send(view=select_view, ephemeral=True)
 
     async def handle_add_coin(self, interaction: discord.Interaction):
         user_id = interaction.user.id
-        if self.offers[user_id]["ready"]: return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
+        if self.offers[user_id]["ready"]: return await interaction.followup.send("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
         wallet = await get_wallet(user_id); max_coins = wallet.get('balance', 0)
         modal = CoinInputModal("거래 코인 입력", max_coins)
         await interaction.response.send_modal(modal); await modal.wait()
@@ -312,11 +310,14 @@ class MailComposeView(ui.View):
             self.add_item(back_button)
 
         for item in self.children:
-            if not hasattr(item, 'callback') or item.callback is None:
-                item.callback = self.dispatch_callback
+            # [수정] 콜백을 모두 dispatch로 통합
+            item.callback = self.dispatch_callback
 
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
+        
+        # [수정] 모든 버튼 클릭 시 defer를 먼저 호출
+        await interaction.response.defer()
         
         if custom_id == "attach_item_button": await self.handle_attach_item(interaction)
         elif custom_id == "write_message_button": await self.handle_write_message(interaction)
@@ -326,7 +327,6 @@ class MailComposeView(ui.View):
 
     async def handle_attach_item(self, interaction: discord.Interaction):
         self.current_state = "selecting_item"
-        await interaction.response.defer()
         await self.build_and_send(interaction)
         
     async def on_item_select(self, interaction: discord.Interaction):
@@ -334,6 +334,7 @@ class MailComposeView(ui.View):
         item_name = interaction.data['values'][0]
         max_qty = inventory.get(item_name, 0)
         
+        # [수정] 모달을 보내는 interaction을 si -> interaction으로 변경
         modal = ItemSelectModal(f"'{item_name}' 수량 입력", max_qty)
         await interaction.response.send_modal(modal)
         await modal.wait()
@@ -342,11 +343,11 @@ class MailComposeView(ui.View):
             self.attachments["items"][item_name] = self.attachments["items"].get(item_name, 0) + modal.quantity
         
         self.current_state = "composing"
+        # [수정] modal의 interaction이 아닌, 원래의 interaction으로 UI 업데이트
         await self.build_and_send(interaction)
         
     async def on_back_to_composing(self, interaction: discord.Interaction):
         self.current_state = "composing"
-        await interaction.response.defer()
         await self.build_and_send(interaction)
 
     async def handle_write_message(self, interaction: discord.Interaction):
@@ -358,7 +359,6 @@ class MailComposeView(ui.View):
             await self.build_and_send(interaction)
 
     async def handle_send(self, interaction: discord.Interaction):
-        await interaction.response.defer()
         try:
             wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(self.user))
             if wallet.get('balance', 0) < self.shipping_fee:
@@ -371,7 +371,6 @@ class MailComposeView(ui.View):
             await asyncio.gather(*db_tasks)
             now, expires_at = datetime.now(timezone.utc), datetime.now(timezone.utc) + timedelta(days=30)
             
-            # ▼▼▼ [핵심 수정] .execute()에서 잘못된 인수를 제거합니다. ▼▼▼
             mail_res = await supabase.table('mails').insert({"sender_id": str(self.user.id), "recipient_id": str(self.recipient.id), "message": self.message_content, "sent_at": now.isoformat(), "expires_at": expires_at.isoformat()}).execute()
 
             if not mail_res.data:
@@ -398,6 +397,7 @@ class MailComposeView(ui.View):
             await interaction.followup.send("우편 발송 중 오류가 발생했습니다. 재료 소모 여부를 확인해주세요.", ephemeral=True)
             self.stop()
 
+# ... (MailboxView, TradePanelView, Trade Cog는 이전과 동일) ...
 class MailboxView(ui.View):
     def __init__(self, cog: 'Trade', user: discord.Member):
         super().__init__(timeout=180)
@@ -603,16 +603,15 @@ class TradePanelView(ui.View):
         self.add_item(mailbox_button)
 
     async def dispatch_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         key = (interaction.channel.id, interaction.user.id)
         now = time.monotonic()
         last = self.cog.last_action_ts.get(key, 0.0)
         if now - last < self.cog.cooldown_sec:
-            if not interaction.response.is_done(): await interaction.response.defer()
             return
         self.cog.last_action_ts[key] = now
         lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
         if lock.locked():
-            if not interaction.response.is_done(): await interaction.response.defer()
             return
         
         async with lock:
@@ -623,7 +622,6 @@ class TradePanelView(ui.View):
                 await self.handle_mailbox(interaction)
 
     async def handle_direct_trade(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
         initiator = interaction.user
         trade_fee = 250
         wallet = await get_wallet(initiator.id)
@@ -671,7 +669,6 @@ class TradePanelView(ui.View):
         await interaction.followup.send("누구와 거래하시겠습니까?", view=view, ephemeral=True)
 
     async def handle_mailbox(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
         mailbox_view = MailboxView(self.cog, interaction.user)
         await mailbox_view.start(interaction)
         
