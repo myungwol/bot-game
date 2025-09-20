@@ -250,8 +250,6 @@ class FarmActionView(ui.View):
         await self.build_components()
         await interaction.edit_original_response(embed=self.build_embed(), view=self)
 
-# (cogs/games/farm.py 파일에서 이 클래스를 찾아 아래 내용으로 전체 교체)
-
 class FarmUIView(ui.View):
 
     async def _disable_all(self, interaction: discord.Interaction):
@@ -261,7 +259,6 @@ class FarmUIView(ui.View):
                 child.disabled = True
         try:
             if not interaction.response.is_done():
-                # ▼▼▼ [핵심 수정] defer_update() -> defer() ▼▼▼
                 await interaction.response.defer()
             await self.cog.safe_edit(interaction.message, view=tmp)
         except Exception:
@@ -291,10 +288,10 @@ class FarmUIView(ui.View):
             item.callback = self.dispatch_callback
             self.add_item(item)
     
-    
+    # ▼▼▼ [핵심 수정] 모든 버튼 클릭이 이 dispatch_callback을 통하도록 변경 ▼▼▼
     async def dispatch_callback(self, interaction: discord.Interaction):
+        # 즉시 응답하여 3초 타임아웃 방지
         if not interaction.response.is_done():
-            # ▼▼▼ [핵심 수정] defer_update() -> defer() ▼▼▼
             await interaction.response.defer()
 
         cid = (interaction.data or {}).get('custom_id')
@@ -302,6 +299,7 @@ class FarmUIView(ui.View):
         if not cid or not hasattr(self, method_name):
             return
 
+        # 디바운싱: 마지막 클릭 후 0.8초가 지나지 않았으면 무시
         key = (interaction.channel.id, interaction.user.id)
         now = time.monotonic()
         last = self.cog.last_action_ts.get(key, 0.0)
@@ -309,19 +307,23 @@ class FarmUIView(ui.View):
             return
         self.cog.last_action_ts[key] = now
 
+        # 락: 현재 이 사용자의 다른 요청이 처리 중이면 무시
         lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
         if lock.locked():
             return
 
         async with lock:
+            # 처리 시작 전 모든 버튼 비활성화
             await self._disable_all(interaction)
             try:
+                # 실제 버튼 로직 실행
                 await getattr(self, method_name)(interaction)
             finally:
+                # 처리가 끝나면 다시 모든 버튼 활성화
                 await self._enable_all(interaction)
 
-
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # ... (이 메소드의 내용은 변경 없습니다) ...
         self.farm_owner_id = await get_farm_owner_by_thread(interaction.channel.id)
         if not self.farm_owner_id: 
             if not interaction.response.is_done():
@@ -374,6 +376,7 @@ class FarmUIView(ui.View):
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
     async def on_farm_till_click(self, interaction: discord.Interaction):
+        gear = await get_user_gear(interaction.user)
         gear = await get_user_gear(interaction.user)
         hoe = gear.get('hoe', BARE_HANDS)
         if hoe == BARE_HANDS:
@@ -618,13 +621,15 @@ class Farm(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.thread_locks: Dict[int, asyncio.Lock] = {}
-        # ✅ 아래 daily_crop_update.start()가 오류 없이 실행되어야 합니다.
         self.daily_crop_update.start()
+        
+        # ▼▼▼ [핵심 수정] 락과 디바운싱을 위한 변수 추가 ▼▼▼
         self.actor_locks: dict[tuple[int, int], asyncio.Lock] = {}
         self.last_action_ts: dict[tuple[int, int], float] = {}
-        self.cooldown_sec: float = 0.8
+        self.cooldown_sec: float = 0.8  # 0.8초의 버튼 클릭 쿨타임 설정
+        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
-    # ✅ safe_edit 메소드는 Farm 클래스 내부에 있어야 합니다.
+    # [핵심 수정] safe_edit 헬퍼 메소드를 클래스 내부로 이동
     async def safe_edit(self, message: discord.Message, **kwargs):
         backoff = [0.4, 0.8, 1.6, 2.0]
         for i, sleep_s in enumerate([0.0] + backoff):
