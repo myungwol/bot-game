@@ -74,10 +74,12 @@ class TradeView(ui.View):
         self.offers = { initiator.id: {"items": {}, "coins": 0, "ready": False}, partner.id: {"items": {}, "coins": 0, "ready": False} }
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.message: Optional[discord.Message] = None
+        
         self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="add_item_button"))
         self.add_item(ui.Button(label="코인 추가", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin_button"))
         self.add_item(ui.Button(label="준비/확정", style=discord.ButtonStyle.success, emoji="✅", custom_id="ready_button"))
         self.add_item(ui.Button(label="취소", style=discord.ButtonStyle.danger, emoji="✖️", custom_id="cancel_button"))
+
         for item in self.children:
             if isinstance(item, ui.Button): item.callback = self.dispatch_callback
 
@@ -185,13 +187,21 @@ class TradeView(ui.View):
             for item, qty in offer2['items'].items():
                 if user2_inv.get(item, 0) < qty: return await self.fail_trade(f"{user2.mention}님의 '{item}' 재고가 부족합니다.")
             
-            commission = math.ceil((offer1['coins'] + offer2['coins']) * 0.05)
+            commission_rate = 0.05
+            commission = math.ceil((offer1['coins'] + offer2['coins']) * commission_rate)
+
             tasks = []
             user1_coin_change = offer2['coins'] - offer1['coins']
             user2_coin_change = offer1['coins'] - offer2['coins']
             if user1_coin_change != 0: tasks.append(update_wallet(user1, int(user1_coin_change)))
             if user2_coin_change != 0: tasks.append(update_wallet(user2, int(user2_coin_change)))
-            if commission > 0: tasks.append(update_wallet(self.bot.user, commission)) # This assumes bot has a wallet row
+            
+            if commission > 0:
+                # 거래세는 양쪽이 똑같이 나눠서 내도록 수정
+                half_commission = math.ceil(commission / 2)
+                tasks.append(update_wallet(user1, -half_commission))
+                tasks.append(update_wallet(user2, -half_commission))
+
             for item, qty in offer1['items'].items(): tasks.extend([update_inventory(user1.id, item, -qty), update_inventory(user2.id, item, qty)])
             for item, qty in offer2['items'].items(): tasks.extend([update_inventory(user2.id, item, -qty), update_inventory(user1.id, item, qty)])
             if tasks: await asyncio.gather(*tasks)
@@ -245,6 +255,7 @@ class MailComposeView(ui.View):
         self.cog = cog; self.user = user; self.recipient = recipient
         self.message_content = ""; self.attachments = {"items": {}}
         self.currency_icon = get_config("CURRENCY_ICON", "🪙"); self.shipping_fee = 100
+        
         self.add_item(ui.Button(label="아이템 첨부", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="attach_item_button"))
         self.add_item(ui.Button(label="메시지 작성", style=discord.ButtonStyle.secondary, emoji="✍️", custom_id="write_message_button"))
         self.add_item(ui.Button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀", custom_id="send_button"))
@@ -266,17 +277,18 @@ class MailComposeView(ui.View):
 
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
+        buttons_that_send_new_response = ["write_message_button", "attach_item_button"]
+        if custom_id not in buttons_that_send_new_response and not interaction.response.is_done():
+            await interaction.response.defer()
+        
         key = (interaction.channel.id, interaction.user.id)
         now = time.monotonic()
         last = self.cog.last_action_ts.get(key, 0.0)
-        if now - last < self.cog.cooldown_sec:
-            if not interaction.response.is_done(): await interaction.response.defer()
-            return
+        if now - last < self.cog.cooldown_sec: return
         self.cog.last_action_ts[key] = now
         lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
-        if lock.locked(): 
-            if not interaction.response.is_done(): await interaction.response.defer()
-            return
+        if lock.locked(): return
+
         async with lock:
             if custom_id == "attach_item_button": await self.handle_attach_item(interaction)
             elif custom_id == "write_message_button": await self.handle_write_message(interaction)
@@ -289,6 +301,7 @@ class MailComposeView(ui.View):
         options = [ discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in tradeable_items.items() ]
         select_view = ui.View(timeout=180)
         item_select = ui.Select(placeholder="첨부할 아이템을 선택하세요", options=options[:25])
+        
         async def select_callback(si: discord.Interaction):
             item_name, max_qty = si.data['values'][0], tradeable_items.get(si.data['values'][0], 0)
             modal = ItemSelectModal(f"'{item_name}' 수량 입력", max_qty)
@@ -298,6 +311,7 @@ class MailComposeView(ui.View):
                 await interaction.edit_original_response(embed=await self.build_embed(), view=self)
             try: await si.delete_original_response()
             except discord.NotFound: pass
+        
         item_select.callback = select_callback
         select_view.add_item(item_select)
         await interaction.response.send_message(view=select_view, ephemeral=True)
@@ -311,7 +325,6 @@ class MailComposeView(ui.View):
             await interaction.edit_original_response(embed=await self.build_embed(), view=self)
 
     async def handle_send(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
         try:
             wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(self.user))
             if wallet.get('balance', 0) < self.shipping_fee:
@@ -342,7 +355,7 @@ class MailComposeView(ui.View):
                 if embed_data := await get_embed_from_db("log_new_mail"):
                     log_embed = format_embed_from_db(embed_data, sender_mention=self.user.mention, recipient_mention=self.recipient.mention)
                     await panel_ch.send(content=self.recipient.mention, embed=log_embed, allowed_mentions=discord.AllowedMentions(users=True), delete_after=60.0)
-                await self.cog.regenerate_panel(panel_ch) # 패널 재생성 호출
+                await self.cog.regenerate_panel(panel_ch)
             self.stop()
         except Exception as e:
             logger.error(f"우편 발송 중 최종 단계에서 예외 발생: {e}", exc_info=True)
@@ -649,37 +662,19 @@ class Trade(commands.Cog):
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_trade", last_log: Optional[discord.Embed] = None):
         if last_log:
-            try:
-                await channel.send(embed=last_log)
-            except discord.HTTPException as e:
-                logger.error(f"거래 로그 전송 실패: {e}")
+            try: await channel.send(embed=last_log)
+            except discord.HTTPException: pass
+        
+        panel_info = get_panel_id(panel_key)
+        if panel_info and panel_info.get("message_id"):
+             return
 
-        # ▼▼▼ [핵심 수정] 기존 패널을 찾아서 삭제하는 로직을 다시 추가합니다. ▼▼▼
-        panel_name = panel_key.replace("panel_", "")
-        if panel_info := get_panel_id(panel_name):
-            try:
-                # 패널이 다른 채널에 있더라도 ID로 찾아서 삭제 시도
-                if old_channel := self.bot.get_channel(panel_info['channel_id']):
-                    msg = await old_channel.fetch_message(panel_info['message_id'])
-                    await msg.delete()
-                    logger.info(f"이전 '{panel_key}' 패널(ID: {panel_info['message_id']})을 삭제했습니다.")
-            except (discord.NotFound, discord.Forbidden):
-                # 메시지를 찾을 수 없거나 삭제 권한이 없으면 그냥 넘어감
-                logger.warning(f"이전 '{panel_key}' 패널을 찾을 수 없거나 삭제할 수 없습니다.")
-                pass
-        
-        # 이제 새로운 패널을 생성합니다.
         embed_data = await get_embed_from_db(panel_key)
-        if not embed_data:
-            return logger.error(f"DB에서 '{panel_key}' 임베드를 찾을 수 없습니다.")
-        
+        if not embed_data: return
         embed = discord.Embed.from_dict(embed_data)
         view = TradePanelView(self)
         new_message = await channel.send(embed=embed, view=view)
-        
-        # 새로운 패널 정보를 DB에 저장합니다.
-        await save_panel_id(panel_name, new_message.id, channel.id)
-        logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
+        await save_panel_id(panel_key, new_message.id, channel.id)
 
 async def setup(bot: commands.Cog):
     await bot.add_cog(Trade(bot))
