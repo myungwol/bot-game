@@ -324,7 +324,8 @@ class ProfileView(ui.View):
             if rank_roles_config:
                 user_role_ids = {role.id for role in self.user.roles}
                 for rank_info in rank_roles_config:
-                    if (role_key := rank_info.get("role_key")) and (rank_role_id := get_id(rank_key)) and rank_role_id in user_role_ids:
+                    # ▼▼▼ [핵심 수정] 오타를 수정합니다 (rank_key -> role_key) ▼▼▼
+                    if (role_key := rank_info.get("role_key")) and (rank_role_id := get_id(role_key)) and rank_role_id in user_role_ids:
                         user_rank_mention = f"<@&{rank_role_id}>"; break
             embed.add_field(name=get_string("profile_view.info_tab.field_rank", "등급"), value=user_rank_mention, inline=True)
             description += get_string("profile_view.info_tab.description", "아래 탭을 선택하여 상세 정보를 확인하세요.")
@@ -586,7 +587,7 @@ class UserProfile(commands.Cog):
                 except (discord.NotFound, discord.Forbidden): pass
         
         if not (embed_data := await get_embed_from_db(panel_key)): 
-            logger.warning(f"DB에서 '{panel_key}' 임베드 데이터를 찾지 못해 패널 생성을 건너뜁니다.")
+            logger.warning(f"DB에서 '{panel_key}' 임베드 데이터를 찾을 수 없어 패널 생성을 건너뜁니다.")
             return
             
         embed = discord.Embed.from_dict(embed_data)
