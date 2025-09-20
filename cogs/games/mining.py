@@ -14,9 +14,9 @@ from datetime import datetime, timezone, timedelta
 from utils.database import (
     get_inventory, update_inventory, get_user_gear, BARE_HANDS,
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
-    log_activity, get_user_abilities, supabase
+    log_activity, get_user_abilities, supabase, get_item_database
 )
-from utils.helpers import format_embed_from_db, format_timedelta_minutes_seconds
+from utils.helpers import format_embed_from_db, format_timedelta_minutes_seconds, coerce_item_emoji
 
 logger = logging.getLogger(__name__)
 
@@ -120,20 +120,14 @@ class MiningGameView(ui.View):
 
     def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", color=0x607D8B)
-        
-        # ▼▼▼ [핵심 수정] build_embed 함수 내부의 로직을 아래와 같이 수정합니다. ▼▼▼
+        item_db = get_item_database()
+
         if self.state == "idle":
             description_parts = ["## 앞으로 나아가 광물을 찾아보자"]
             if self.last_result_text: description_parts.append(f"## 채굴 결과\n{self.last_result_text}")
             
-            # 타이머 로직 수정
             remaining_time = self.end_time - datetime.now(timezone.utc)
-            if remaining_time.total_seconds() > 0:
-                # 남은 시간이 0초 이상일 때, 디스코드 타임스탬프 사용
-                timer_str = f"광산 닫힘까지: **{discord.utils.format_dt(self.end_time, 'R')}**"
-            else:
-                # 시간이 만료되면 헬퍼 함수를 사용하여 "종료됨" 표시
-                timer_str = f"광산 닫힘까지: **{format_timedelta_minutes_seconds(remaining_time)}**"
+            timer_str = f"광산 닫힘까지: **{discord.utils.format_dt(self.end_time, 'R')}**" if remaining_time.total_seconds() > 0 else f"광산 닫힘까지: **종료됨**"
             description_parts.append(timer_str)
 
             active_abilities = []
@@ -144,15 +138,22 @@ class MiningGameView(ui.View):
             if active_abilities: description_parts.append(f"**--- 활성화된 능력 ---**\n" + "\n".join(active_abilities))
             description_parts.append(f"**사용 중인 장비:** {self.pickaxe}")
             embed.description = "\n\n".join(description_parts)
-        # ▲▲▲ [핵심 수정] ▲▲▲
 
         elif self.state == "discovered":
-            desc_text = f"### {self.discovered_ore}을(를) 발견했다!" if self.discovered_ore != "꽝" else "### 아무것도 발견하지 못했다..."
+            ore_info = item_db.get(self.discovered_ore, {})
+            ore_emoji = str(coerce_item_emoji(ore_info.get('emoji', '💎')))
+            
+            desc_text = f"### {ore_emoji} {self.discovered_ore}을(를) 발견했다!" if self.discovered_ore != "꽝" else "### 아무것도 발견하지 못했다..."
             embed.description = desc_text
             embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url'])
+
         elif self.state == "mining":
-            embed.description = f"**{self.pickaxe}**(으)로 열심히 **{self.discovered_ore}**을(를) 캐는 중입니다..."
+            ore_info = item_db.get(self.discovered_ore, {})
+            ore_emoji = str(coerce_item_emoji(ore_info.get('emoji', '💎')))
+            
+            embed.description = f"**{self.pickaxe}**(으)로 열심히 **{ore_emoji} {self.discovered_ore}**을(를) 캐는 중입니다..."
             embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url'])
+            
         return embed
 
     @ui.button(label="광석 찾기", style=discord.ButtonStyle.secondary, emoji="🔍", custom_id="mine_action_button")
@@ -197,7 +198,6 @@ class MiningGameView(ui.View):
                     try:
                         session_res = await supabase.table('mining_sessions').select('mined_ores_json').eq('user_id', str(self.user.id)).maybe_single().execute()
                         if session_res and session_res.data:
-                            # --- FIX START: DB에서 가져온 JSON 문자열을 파싱 ---
                             current_ores_raw = session_res.data.get('mined_ores_json')
                             current_ores = {}
                             if isinstance(current_ores_raw, str):
@@ -207,7 +207,6 @@ class MiningGameView(ui.View):
                                     logger.warning(f"DB의 mined_ores_json이 잘못된 형식의 문자열입니다 (유저: {self.user.id}). 새로 시작합니다.")
                             elif isinstance(current_ores_raw, dict):
                                 current_ores = current_ores_raw
-                            # --- FIX END ---
                             
                             current_ores[self.discovered_ore] = current_ores.get(self.discovered_ore, 0) + quantity
                             await supabase.table('mining_sessions').update({'mined_ores_json': current_ores}).eq('user_id', str(self.user.id)).execute()
@@ -219,7 +218,11 @@ class MiningGameView(ui.View):
                     await update_inventory(self.user.id, self.discovered_ore, quantity)
                     await log_activity(self.user.id, 'mining', amount=quantity, xp_earned=xp_earned)
 
-                    self.last_result_text = f"✅ **{self.discovered_ore}** {quantity}개를 획득했습니다! (`+{xp_earned} XP`)"
+                    ore_info = get_item_database().get(self.discovered_ore, {})
+                    ore_emoji = str(coerce_item_emoji(ore_info.get('emoji', '💎')))
+                    
+                    self.last_result_text = f"✅ {ore_emoji} **{self.discovered_ore}** {quantity}개를 획득했습니다! (`+{xp_earned} XP`)"
+
                     if quantity > 1: self.last_result_text += f"\n\n✨ **풍부한 광맥** 능력으로 광석을 2개 획득했습니다!"
                     if xp_earned > 0:
                         res = await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': xp_earned, 'p_source': 'mining'}).execute()
@@ -352,7 +355,15 @@ class Mining(commands.Cog):
             elif isinstance(mined_ores_raw, dict):
                 mined_ores = mined_ores_raw
 
-            mined_ores_text = "\n".join([f"> {ore}: {qty}개" for ore, qty in mined_ores.items()]) or "> 채굴한 광물이 없습니다."
+            item_db = get_item_database()
+            mined_ores_lines = []
+            for ore, qty in mined_ores.items():
+                ore_info = item_db.get(ore, {})
+                ore_emoji = str(coerce_item_emoji(ore_info.get('emoji', '💎')))
+                mined_ores_lines.append(f"> {ore_emoji} {ore}: {qty}개")
+
+            mined_ores_text = "\n".join(mined_ores_lines) or "> 채굴한 광물이 없습니다."
+            
             embed_data = await get_embed_from_db("log_mining_result") or {"title": "⛏️ 광산 탐사 결과", "color": 0x607D8B}
             log_embed = format_embed_from_db(embed_data, user_mention=user.mention, pickaxe_name=session_data.get('pickaxe_name'), mined_ores=mined_ores_text)
             if user.display_avatar: log_embed.set_thumbnail(url=user.display_avatar.url)
