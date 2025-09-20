@@ -604,7 +604,7 @@ class MailboxView(ui.View):
     async def next_page_callback(self, interaction: discord.Interaction):
         self.page += 1
         await self.update_view(interaction)
-        
+
 class TradePanelView(ui.View):
     def __init__(self, cog_instance: 'Trade'):
         super().__init__(timeout=None)
@@ -664,8 +664,12 @@ class TradePanelView(ui.View):
                 await thread.add_user(partner)
                 trade_view = TradeView(self.cog, initiator, partner, trade_id)
                 await trade_view.start_in_thread(thread)
+                
                 await si.followup.send(f"✅ 거래 채널을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
-                await interaction.delete_original_response()
+                
+                # ▼▼▼ [핵심 수정] 패널을 삭제하던 이 라인을 제거(또는 주석 처리)합니다. ▼▼▼
+                # await interaction.delete_original_response() 
+
             except Exception as e:
                 logger.error(f"거래 스레드 생성 중 오류: {e}", exc_info=True)
                 await update_wallet(initiator, trade_fee)
