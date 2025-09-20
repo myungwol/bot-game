@@ -8,7 +8,7 @@ import asyncio
 import math
 from typing import Optional, Dict, List, Any
 from datetime import datetime, timezone, timedelta
-from utils.helpers import coerce_item_emoji  # ← 추가
+from utils.helpers import coerce_item_emoji
 
 from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
@@ -224,8 +224,8 @@ class ItemUsageView(ui.View):
         embed.set_author(name=self.user.display_name, icon_url=self.user.display_avatar.url if self.user.display_avatar else None)
         await log_channel.send(embed=embed)
 
-        async def on_back(self, interaction: Optional[discord.Interaction], reload_data: bool = False):
-            await self.parent_view.update_display(interaction, reload_data=reload_data)
+    async def on_back(self, interaction: Optional[discord.Interaction], reload_data: bool = False):
+        await self.parent_view.update_display(interaction, reload_data=reload_data)
 
 
 class ProfileView(ui.View):
@@ -324,7 +324,7 @@ class ProfileView(ui.View):
             if rank_roles_config:
                 user_role_ids = {role.id for role in self.user.roles}
                 for rank_info in rank_roles_config:
-                    if (role_key := rank_info.get("role_key")) and (rank_role_id := get_id(role_key)) and rank_role_id in user_role_ids:
+                    if (role_key := rank_info.get("role_key")) and (rank_role_id := get_id(rank_key)) and rank_role_id in user_role_ids:
                         user_rank_mention = f"<@&{rank_role_id}>"; break
             embed.add_field(name=get_string("profile_view.info_tab.field_rank", "등급"), value=user_rank_mention, inline=True)
             description += get_string("profile_view.info_tab.description", "아래 탭을 선택하여 상세 정보를 확인하세요.")
@@ -335,8 +335,7 @@ class ProfileView(ui.View):
                 name: count for name, count in inventory.items() 
                 if item_db.get(name, {}).get('category') == '아이템'
             }
-            
-            item_list = [f"{item_db.get(n,{}).get('emoji','📦')} **{n}**: `{c}`개" for n, c in general_items.items()]
+            item_list = [f"{str(coerce_item_emoji(item_db.get(n,{}).get('emoji','📦')))} **{n}**: `{c}`개" for n, c in general_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items", "보유 중인 아이템이 없습니다."))
         
         elif self.current_page == "gear":
@@ -346,13 +345,20 @@ class ProfileView(ui.View):
                 "광산": {"pickaxe": "⛏️ 곡괭이"}
             }
             for category_name, items in gear_categories.items():
-                field_lines = [f"**{label}:** `{gear.get(key, BARE_HANDS)}`" for key, label in items.items()]
+                field_lines = []
+                for key, label in items.items():
+                    item_name = gear.get(key, BARE_HANDS)
+                    item_data = item_db.get(item_name, {})
+                    emoji = str(coerce_item_emoji(item_data.get('emoji', '')))
+                    field_lines.append(f"**{label}:** {emoji} `{item_name}`")
                 embed.add_field(name=f"**[ 현재 장비: {category_name} ]**", value="\n".join(field_lines), inline=False)
+            
             equipped_gear_names = set(gear.values())
             owned_gear_categories = [GEAR_CATEGORY, BAIT_CATEGORY]
             owned_gear_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') in owned_gear_categories and name not in equipped_gear_names}
+            
             if owned_gear_items:
-                gear_list = [f"{item_db.get(n,{}).get('emoji','🔧')} **{n}**: `{c}`개" for n, c in sorted(owned_gear_items.items())]
+                gear_list = [f"{str(coerce_item_emoji(item_db.get(n,{}).get('emoji','🔧')))} **{n}**: `{c}`개" for n, c in sorted(owned_gear_items.items())]
                 embed.add_field(name="\n**[ 보유 중인 장비 ]**", value="\n".join(gear_list), inline=False)
             else:
                 embed.add_field(name="\n**[ 보유 중인 장비 ]**", value=get_string("profile_view.gear_tab.no_owned_gear", "보유 중인 장비가 없습니다."), inline=False)
@@ -373,28 +379,26 @@ class ProfileView(ui.View):
                     fish_lines.append(f"{emoji_display} **{f['name']}**: `{f['size']}`cm")
                 
                 embed.description = description + "\n".join(fish_lines)
-                
-                # ▼▼▼ [핵심 수정] 이 줄의 맨 끝에 닫는 괄호 ')'가 추가되었습니다. ▼▼▼
                 embed.set_footer(text=get_string("profile_view.fish_tab.pagination_footer", "페이지 {current_page} / {total_pages}", current_page=self.fish_page_index + 1, total_pages=total_pages))
-        
+                
         elif self.current_page == "mineral":
             mineral_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "광물"}
-            item_list = [f"{item_db.get(n,{}).get('emoji','💎')} **{n}**: `{c}`개" for n, c in mineral_items.items()]
+            item_list = [f"{str(coerce_item_emoji(item_db.get(n,{}).get('emoji','💎')))} **{n}**: `{c}`개" for n, c in mineral_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.mineral_tab.no_items", "보유 중인 광물이 없습니다."))
         
         elif self.current_page == "seed":
             seed_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "농장_씨앗"}
-            item_list = [f"{item_db.get(n,{}).get('emoji','🌱')} **{n}**: `{c}`개" for n, c in seed_items.items()]
+            item_list = [f"{str(coerce_item_emoji(item_db.get(n,{}).get('emoji','🌱')))} **{n}**: `{c}`개" for n, c in seed_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.seed_tab.no_items", "보유 중인 씨앗이 없습니다."))
         
         elif self.current_page == "crop":
             crop_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "농장_작물"}
-            item_list = [f"{item_db.get(n,{}).get('emoji','🌾')} **{n}**: `{c}`개" for n, c in crop_items.items()]
+            item_list = [f"{str(coerce_item_emoji(item_db.get(n,{}).get('emoji','🌾')))} **{n}**: `{c}`개" for n, c in crop_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.crop_tab.no_items", "보유 중인 작물이 없습니다."))
 
         elif self.current_page == "food":
             food_items = {name: count for name, count in inventory.items() if item_db.get(name, {}).get('category') == "요리"}
-            item_list = [f"{item_db.get(n,{}).get('emoji','🍲')} **{n}**: `{c}`개" for n, c in food_items.items()]
+            item_list = [f"{str(coerce_item_emoji(item_db.get(n,{}).get('emoji','🍲')))} **{n}**: `{c}`개" for n, c in food_items.items()]
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.food_tab.no_items", "보유 중인 음식이 없습니다."))
         
         else:
@@ -485,8 +489,6 @@ class ProfileView(ui.View):
             else: self.fish_page_index += 1
             await self.update_display(interaction)
             
-# (user_profile.py 파일에서 이 클래스를 찾아서 아래 내용으로 전체 교체)
-
 class GearSelectView(ui.View):
     def __init__(self, parent_view: ProfileView, gear_key: str):
         super().__init__(timeout=180)
