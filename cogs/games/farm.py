@@ -972,6 +972,18 @@ class Farm(commands.Cog):
                 
     async def create_new_farm_thread(self, interaction: discord.Interaction, user: discord.Member):
         try:
+            # ▼▼▼ [핵심 수정] 농장을 생성하기 전에 DB에 정보가 있는지 먼저 확인합니다. ▼▼▼
+            farm_data = await get_farm_data(user.id)
+
+            # DB에 농장 정보가 없으면, 새로 생성합니다.
+            if not farm_data:
+                logger.info(f"{user.name}님의 농장 데이터가 없어 새로 생성합니다.")
+                farm_data = await create_farm(user.id)
+                if not farm_data:
+                    await interaction.followup.send("❌ 농장을 초기화하는 데 실패했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
+                    return
+            
+            # 이제 farm_data가 무조건 존재함을 보장할 수 있습니다.
             farm_name = f"{user.display_name}의 농장"
             thread = await interaction.channel.create_thread(
                 name=f"🌱｜{farm_name}", 
@@ -983,21 +995,33 @@ class Farm(commands.Cog):
 
             await delete_config_from_db(f"farm_state_{user.id}")
 
-            farm_data = await create_farm(user.id)
-            if not farm_data:
-                await interaction.followup.send("❌ 농장을 초기화하는 데 실패했습니다.", ephemeral=True)
-                await thread.delete()
-                return
+            # 기존 또는 새로 생성된 농장 데이터에 새 스레드 ID와 이름을 업데이트합니다.
+            await supabase.table('farms').update({'thread_id': thread.id, 'name': farm_name}).eq('user_id', str(user.id)).execute()
             
-            await supabase.table('farms').update({'thread_id': thread.id, 'name': farm_name}).eq('user_id', user.id).execute()
-            
+            # UI 생성을 위해 최신 정보로 다시 불러옵니다.
             updated_farm_data = await get_farm_data(user.id)
             if updated_farm_data:
                 await self.update_farm_ui(thread, user, updated_farm_data, force_new=True)
 
             await interaction.followup.send(f"✅ 당신만의 농장을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
+
+        except APIError as e:
+            # 만약의 경우를 대비한 추가 예외 처리
+            if '23505' in str(e.code): # Duplicate key
+                 logger.warning(f"농장 생성 시도 중 중복 키 오류가 재발생했습니다 (User: {user.id}). 스레드를 연결하는 로직으로 넘어갑니다.")
+                 # 이 경우, 이미 다른 요청으로 농장이 생성되었을 수 있으므로 UI 업데이트만 시도합니다.
+                 updated_farm_data = await get_farm_data(user.id)
+                 if updated_farm_data and (thread_id := updated_farm_data.get('thread_id')):
+                     if thread := self.bot.get_channel(thread_id):
+                         await self.update_farm_ui(thread, user, updated_farm_data, force_new=True)
+                         await interaction.followup.send(f"✅ 농장을 찾았습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
+                 else:
+                    await interaction.followup.send("❌ 농장을 생성하는 중 문제가 발생했습니다. 관리자에게 문의해주세요.", ephemeral=True)
+            else:
+                logger.error(f"농장 생성 중 API 오류 발생: {e}", exc_info=True)
+                await interaction.followup.send("❌ 농장을 만드는 중 데이터베이스 오류가 발생했습니다.", ephemeral=True)
         except Exception as e:
-            logger.error(f"농장 생성 중 오류 발생: {e}", exc_info=True)
+            logger.error(f"농장 생성 중 예기치 않은 오류 발생: {e}", exc_info=True)
             await interaction.followup.send("❌ 농장을 만드는 중 오류가 발생했습니다.", ephemeral=True)
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_farm_creation", **kwargs):
