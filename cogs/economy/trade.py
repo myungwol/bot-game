@@ -119,11 +119,10 @@ class TradeView(ui.View):
         embed.set_footer(text="5분 후 만료됩니다.")
         return embed
 
-    async def update_ui(self, interaction: discord.Interaction):
+    async def update_ui(self):
         if self.is_finished() or not self.message: return
         embed = await self.build_embed()
         try:
-            # ▼▼▼ [핵심 수정] edit_original_response -> message.edit ▼▼▼
             await self.message.edit(embed=embed, view=self)
         except (discord.NotFound, discord.Forbidden) as e:
             logger.warning(f"거래 UI 업데이트 실패 (Message ID: {self.message.id}): {e}")
@@ -176,7 +175,7 @@ class TradeView(ui.View):
             await modal.wait()
             if modal.quantity is not None:
                 self.offers[user_id]["items"][item_name] = modal.quantity
-                await self.update_ui(interaction)
+                await self.update_ui()
             try: await select_interaction.delete_original_response()
             except discord.NotFound: pass
         
@@ -195,7 +194,7 @@ class TradeView(ui.View):
         await modal.wait()
         if modal.coins is not None:
             self.offers[user_id]["coins"] = modal.coins
-            await self.update_ui(interaction)
+            await self.update_ui()
 
     async def handle_ready(self, interaction: discord.Interaction):
         user_id = interaction.user.id
@@ -204,54 +203,40 @@ class TradeView(ui.View):
         if self.offers[self.initiator.id]["ready"] and self.offers[self.partner.id]["ready"]:
             await self.process_trade(interaction)
         else:
-            await self.update_ui(interaction)
+            await self.update_ui()
 
     async def handle_cancel(self, interaction: discord.Interaction):
         await interaction.followup.send("거래를 취소했습니다.", ephemeral=True, delete_after=10)
         await self.on_timeout(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
-        for item in self.children:
-            item.disabled = True
+        for item in self.children: item.disabled = True
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=None)
 
         user1, user2 = self.initiator, self.partner
         offer1, offer2 = self.offers[user1.id], self.offers[user2.id]
-
         try:
             user1_wallet, user1_inv = await asyncio.gather(get_wallet(user1.id), get_inventory(user1))
             user2_wallet, user2_inv = await asyncio.gather(get_wallet(user2.id), get_inventory(user2))
 
-            if user1_wallet.get('balance', 0) < offer1['coins']:
-                return await self.fail_trade(f"{user1.mention}님의 코인이 부족합니다.")
-            if user2_wallet.get('balance', 0) < offer2['coins']:
-                return await self.fail_trade(f"{user2.mention}님의 코인이 부족합니다.")
+            if user1_wallet.get('balance', 0) < offer1['coins']: return await self.fail_trade(f"{user1.mention}님의 코인이 부족합니다.")
+            if user2_wallet.get('balance', 0) < offer2['coins']: return await self.fail_trade(f"{user2.mention}님의 코인이 부족합니다.")
 
             for item, qty in offer1['items'].items():
-                if user1_inv.get(item, 0) < qty:
-                    return await self.fail_trade(f"{user1.mention}님의 '{item}' 재고가 부족합니다.")
+                if user1_inv.get(item, 0) < qty: return await self.fail_trade(f"{user1.mention}님의 '{item}' 재고가 부족합니다.")
             for item, qty in offer2['items'].items():
-                if user2_inv.get(item, 0) < qty:
-                    return await self.fail_trade(f"{user2.mention}님의 '{item}' 재고가 부족합니다.")
+                if user2_inv.get(item, 0) < qty: return await self.fail_trade(f"{user2.mention}님의 '{item}' 재고가 부족합니다.")
 
             tasks = []
-            user1_coin_change = offer2['coins'] - offer1['coins']
-            user2_coin_change = offer1['coins'] - offer2['coins']
-            if user1_coin_change != 0:
-                tasks.append(update_wallet(user1, int(user1_coin_change)))
-            if user2_coin_change != 0:
-                tasks.append(update_wallet(user2, int(user2_coin_change)))
+            user1_coin_change, user2_coin_change = offer2['coins'] - offer1['coins'], offer1['coins'] - offer2['coins']
+            if user1_coin_change != 0: tasks.append(update_wallet(user1, int(user1_coin_change)))
+            if user2_coin_change != 0: tasks.append(update_wallet(user2, int(user2_coin_change)))
 
             for item, qty in offer1['items'].items():
-                tasks.append(update_inventory(user1.id, item, -qty))
-                tasks.append(update_inventory(user2.id, item, qty))
-
+                tasks.extend([update_inventory(user1.id, item, -qty), update_inventory(user2.id, item, qty)])
             for item, qty in offer2['items'].items():
-                tasks.append(update_inventory(user2.id, item, -qty))
-                tasks.append(update_inventory(user1.id, item, qty))
-
-            if tasks:
-                await asyncio.gather(*tasks)
+                tasks.extend([update_inventory(user2.id, item, -qty), update_inventory(user1.id, item, qty)])
+            if tasks: await asyncio.gather(*tasks)
 
         except Exception as e:
             logger.error(f"거래 처리 중 예외 발생: {e}", exc_info=True)
@@ -259,13 +244,8 @@ class TradeView(ui.View):
 
         log_channel = self.message.channel
         if self.message: await self.message.delete()
-        
-        log_embed_data = await get_embed_from_db("log_trade_success")
-        if log_embed_data:
-            log_embed = format_embed_from_db(
-                log_embed_data, user1_mention=user1.mention, user2_mention=user2.mention,
-                commission=0, currency_icon=self.currency_icon
-            )
+        if log_embed_data := await get_embed_from_db("log_trade_success"):
+            log_embed = format_embed_from_db(log_embed_data, user1_mention=user1.mention, user2_mention=user2.mention, commission=0, currency_icon=self.currency_icon)
             offer1_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer1['items'].items()] + ([f"💰 {offer1['coins']:,}{self.currency_icon}"] if offer1['coins'] > 0 else [])) or "없음"
             offer2_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer2['items'].items()] + ([f"💰 {offer2['coins']:,}{self.currency_icon}"] if offer2['coins'] > 0 else [])) or "없음"
             log_embed.add_field(name=f"{user1.display_name} 제공", value=offer1_str, inline=True)
@@ -279,7 +259,6 @@ class TradeView(ui.View):
                 trade_fee = 250
                 await update_wallet(self.initiator, trade_fee)
                 reason += f"\n(거래 수수료 {trade_fee}{self.currency_icon} 환불됨)"
-            
             await self.message.channel.send(f"❌ 거래 실패: {reason}", delete_after=10)
             await self.message.delete()
         self.stop()
@@ -292,20 +271,14 @@ class TradeView(ui.View):
                 if self.initiator:
                     trade_fee = 50
                     await update_wallet(self.initiator, trade_fee)
-                    
                     message_content = ""
-                    if cancelled_by:
-                        if self.initiator.id == cancelled_by.id:
-                             message_content = f"거래를 취소하여 수수료 {trade_fee}{self.currency_icon}를 환불해드렸습니다."
-                    else:
+                    if cancelled_by and self.initiator.id == cancelled_by.id:
+                        message_content = f"거래를 취소하여 수수료 {trade_fee}{self.currency_icon}를 환불해드렸습니다."
+                    elif not cancelled_by:
                         message_content = f"거래가 시간 초과로 취소되어 수수료 {trade_fee}{self.currency_icon}를 환불해드렸습니다."
-                    
                     if message_content:
-                        try:
-                            await self.initiator.send(message_content)
-                        except discord.Forbidden:
-                            logger.warning(f"{self.initiator.id}에게 거래 취소 DM을 보낼 수 없습니다.")
-
+                        try: await self.initiator.send(message_content)
+                        except discord.Forbidden: logger.warning(f"{self.initiator.id}에게 거래 취소 DM을 보낼 수 없습니다.")
                 await self.message.edit(content="거래가 종료되었습니다.", view=None, embed=None)
                 await asyncio.sleep(10)
                 await self.message.delete()
@@ -315,7 +288,7 @@ class TradeView(ui.View):
         if self.trade_id in self.cog.active_trades:
             self.cog.active_trades.pop(self.trade_id)
         super().stop()
-        
+
 class MailComposeView(ui.View):
     def __init__(self, cog: 'Trade', user: discord.Member, recipient: discord.Member):
         super().__init__(timeout=300)
@@ -677,38 +650,24 @@ class TradePanelView(ui.View):
     def __init__(self, cog_instance: 'Trade'):
         super().__init__(timeout=None)
         self.cog = cog_instance
-
         trade_button = ui.Button(label="1:1 거래하기", style=discord.ButtonStyle.success, emoji="🤝", custom_id="trade_panel_direct_trade")
         trade_button.callback = self.dispatch_callback
         self.add_item(trade_button)
-
         mailbox_button = ui.Button(label="우편함", style=discord.ButtonStyle.primary, emoji="📫", custom_id="trade_panel_mailbox")
         mailbox_button.callback = self.dispatch_callback
         self.add_item(mailbox_button)
 
     async def dispatch_callback(self, interaction: discord.Interaction):
-        # 모달/새 메시지를 보내는 버튼들이므로, 각 콜백에서 직접 응답을 처리합니다.
-        # 따라서 여기서 defer()를 호출하지 않습니다.
-
         key = (interaction.channel.id, interaction.user.id)
         now = time.monotonic()
         last = self.cog.last_action_ts.get(key, 0.0)
         if now - last < self.cog.cooldown_sec:
-            if not interaction.response.is_done():
-                try:
-                    await interaction.response.defer()
-                except discord.InteractionResponded:
-                    pass
+            if not interaction.response.is_done(): await interaction.response.defer()
             return
-        
         self.cog.last_action_ts[key] = now
         lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
         if lock.locked():
-            if not interaction.response.is_done():
-                try:
-                    await interaction.response.defer()
-                except discord.InteractionResponded:
-                    pass
+            if not interaction.response.is_done(): await interaction.response.defer()
             return
         
         async with lock:
@@ -718,10 +677,8 @@ class TradePanelView(ui.View):
             elif custom_id == "trade_panel_mailbox":
                 await self.handle_mailbox(interaction)
 
-    # ▼▼▼ [핵심 수정] 기존 버튼 콜백 함수의 이름을 변경하여 이름 충돌을 피합니다. ▼▼▼
     async def handle_direct_trade(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        
         initiator = interaction.user
         trade_fee = 250
         wallet = await get_wallet(initiator.id)
@@ -742,10 +699,8 @@ class TradePanelView(ui.View):
             await select_interaction.response.send_message(f"거래 수수료 {trade_fee}{self.cog.currency_icon}를 지불하고 거래를 시작합니다.", ephemeral=True, delete_after=5)
             await update_wallet(initiator, -trade_fee)
             
-            try:
-                await interaction.delete_original_response()
-            except discord.NotFound:
-                pass
+            try: await interaction.delete_original_response()
+            except discord.NotFound: pass
             
             trade_view = TradeView(self.cog, initiator, partner)
             await trade_view.start_in_channel(select_interaction.channel)
@@ -754,7 +709,7 @@ class TradePanelView(ui.View):
         await interaction.followup.send("누구와 거래하시겠습니까?", view=view, ephemeral=True)
 
     async def handle_mailbox(self, interaction: discord.Interaction):
-        # defer는 dispatch_callback에서 이미 처리됨
+        await interaction.response.defer(ephemeral=True)
         mailbox_view = MailboxView(self.cog, interaction.user)
         await mailbox_view.start(interaction)
         
