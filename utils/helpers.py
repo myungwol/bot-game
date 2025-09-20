@@ -3,7 +3,8 @@ import discord
 import copy
 import logging
 from typing import Any, Dict
-from datetime import datetime, timezone, timedelta # ◀ timedelta 추가
+from datetime import datetime, timezone, timedelta
+import re  # <--- 이 줄을 추가하세요
 
 logger = logging.getLogger(__name__)
 
@@ -62,21 +63,33 @@ def format_timedelta_minutes_seconds(delta: timedelta) -> str:
     return f"{minutes}분 {seconds}초"
 # ▲▲▲ [핵심 수정] ▲▲▲
 
-# ▼ [helpers.py 맨 아래에 추가] ▼
+# ▼▼▼ 기존 coerce_item_emoji 함수를 아래 코드로 전체 교체 ▼▼▼
 def coerce_item_emoji(value):
     """
-    DB에서 읽은 emoji 값이 유니코드('🐟')면 그대로,
-    커스텀 이모지 마크업('<:name:id>' 또는 '<a:name:id>')이면 PartialEmoji로 변환.
-    SelectOption/Button 등 discord.py 컴포넌트의 'emoji' 파라미터에서 안전하게 사용 가능.
+    [강화된 버전]
+    DB에서 읽은 emoji 값에서 유효한 Discord 커스텀 이모지 패턴(<:name:id>)을
+    정규식으로 추출하거나, 유니코드 이모지인 경우 그대로 반환합니다.
+    데이터에 포함된 보이지 않는 문자나 불필요한 공백을 완벽하게 무시합니다.
     """
-    if not value:
+    if not value or not isinstance(value, str):
         return None
-    try:
-        # discord.PartialEmoji는 '<:name:id>' 형태를 제대로 파싱함
-        if isinstance(value, str) and value.startswith("<") and value.endswith(">"):
-            return discord.PartialEmoji.from_str(value)
-    except Exception:
-        # 문제가 있으면 그냥 원본(유니코드 같은)을 돌려준다
-        return value
-    return value
-# ▲ [helpers.py 추가 끝] ▲
+    
+    cleaned_value = value.strip()
+
+    # 정규 표현식을 사용하여 유효한 커스텀 이모지 패턴을 찾습니다.
+    # <:이름:ID> 또는 <a:이름:ID> 형식
+    match = re.search(r'<a?:\w+:\d+>', cleaned_value)
+    
+    if match:
+        # 유효한 패턴을 찾았으면 해당 부분만 사용합니다.
+        emoji_str = match.group(0)
+        try:
+            return discord.PartialEmoji.from_str(emoji_str)
+        except Exception:
+            # 만약의 경우 파싱 실패 시, 찾은 문자열이라도 반환
+            return emoji_str
+            
+    # 정규식에 맞지 않으면, 유니코드 이모지이거나 잘못된 데이터일 수 있으므로
+    # 원본 값을 그대로 반환합니다.
+    return cleaned_value
+# ▲▲▲ 함수 교체 끝 ▲▲▲
