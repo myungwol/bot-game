@@ -258,7 +258,7 @@ class FarmUIView(ui.View):
             if isinstance(child, ui.Button):
                 child.disabled = True
         try:
-            # defer()는 이제 dispatch_callback에서 조건부로 처리되므로 여기서 호출하지 않습니다.
+            # defer()는 dispatch_callback에서 처리하므로 여기서 응답하지 않음
             await self.cog.safe_edit(interaction.message, view=tmp)
         except Exception:
             pass
@@ -289,15 +289,11 @@ class FarmUIView(ui.View):
     
     
     async def dispatch_callback(self, interaction: discord.Interaction):
-        cid = (interaction.data or {}).get('custom_id')
-        
-        # ▼▼▼ [핵심 수정] 새 응답을 보내는 버튼들은 defer()를 하지 않도록 예외 처리 ▼▼▼
-        buttons_that_send_new_response = ["farm_invite", "farm_share", "farm_rename", "farm_plant", "farm_uproot"]
-        if cid not in buttons_that_send_new_response:
-            if not interaction.response.is_done():
-                await interaction.response.defer()
-        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
+        # 모든 상호작용에 대해 우선 defer로 응답하여 3초 제한을 피함
+        if not interaction.response.is_done():
+            await interaction.response.defer()
 
+        cid = (interaction.data or {}).get('custom_id')
         method_name = f"on_{cid}_click" if cid else None
         if not cid or not hasattr(self, method_name):
             return
@@ -318,8 +314,8 @@ class FarmUIView(ui.View):
             try:
                 await getattr(self, method_name)(interaction)
             finally:
-                if cid not in buttons_that_send_new_response:
-                    await self._enable_all(interaction)
+                # ▼▼▼ [핵심 수정] 어떤 버튼이든 작업이 끝나면 무조건 버튼을 다시 활성화 ▼▼▼
+                await self._enable_all(interaction)
 
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -355,14 +351,15 @@ class FarmUIView(ui.View):
         logger.error(f"FarmUIView 오류 (item: {item.custom_id}): {e}", exc_info=True)
         msg_content = "❌ 처리 중 예기치 않은 오류가 발생했습니다."
         if not i.response.is_done():
-            await i.response.send_message(msg_content, ephemeral=True, delete_after=5)
-        else:
+            # defer()가 이미 호출되었을 수 있으므로 followup 사용
             try:
                 msg = await i.followup.send(msg_content, ephemeral=True)
                 self.cog.bot.loop.create_task(delete_after(msg, 5))
             except discord.HTTPException:
                 pass
-        
+        else:
+             await i.response.send_message(msg_content, ephemeral=True, delete_after=5)
+
     async def on_farm_regenerate_click(self, interaction: discord.Interaction):
         try:
             if interaction.message: await interaction.message.delete()
@@ -569,10 +566,11 @@ class FarmUIView(ui.View):
                     user = self.cog.bot.get_user(int(user_id_str))
                     if user: await i.channel.add_user(user)
                 except Exception: pass
-            await i.edit_original_response(content="초대가 완료되었습니다.", view=None)
+            await si.edit_original_response(content="초대가 완료되었습니다.", view=None)
         select.callback = cb
         view.add_item(select)
-        await i.response.send_message("누구를 농장에 초대하시겠습니까?", view=view, ephemeral=True)
+        # ▼▼▼ [핵심 수정] response -> followup ▼▼▼
+        await i.followup.send("누구를 농장에 초대하시겠습니까?", view=view, ephemeral=True)
 
     async def on_farm_share_click(self, i: discord.Interaction):
         view = ui.View(timeout=180)
@@ -584,10 +582,11 @@ class FarmUIView(ui.View):
             users_to_grant = [self.cog.bot.get_user(int(uid)) for uid in si.data.get('values', [])]
             for user in users_to_grant:
                 if user: await grant_farm_permission(farm_data['id'], user.id)
-            await i.edit_original_response(content=f"{', '.join(u.display_name for u in users_to_grant if u)}님에게 권한을 부여했습니다.", view=None)
+            await si.edit_original_response(content=f"{', '.join(u.display_name for u in users_to_grant if u)}님에게 권한을 부여했습니다.", view=None)
         select.callback = cb
         view.add_item(select)
-        await i.response.send_message("누구에게 농장 권한을 주시겠습니까?", view=view, ephemeral=True)
+        # ▼▼▼ [핵심 수정] response -> followup ▼▼▼
+        await i.followup.send("누구에게 농장 권한을 주시겠습니까?", view=view, ephemeral=True)
 
     async def on_farm_rename_click(self, i: discord.Interaction): 
         farm_data = await get_farm_data(self.farm_owner_id)
