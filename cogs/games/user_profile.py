@@ -324,7 +324,6 @@ class ProfileView(ui.View):
             if rank_roles_config:
                 user_role_ids = {role.id for role in self.user.roles}
                 for rank_info in rank_roles_config:
-                    # ▼▼▼ [핵심 수정] 오타를 수정합니다 (rank_key -> role_key) ▼▼▼
                     if (role_key := rank_info.get("role_key")) and (rank_role_id := get_id(role_key)) and rank_role_id in user_role_ids:
                         user_rank_mention = f"<@&{rank_role_id}>"; break
             embed.add_field(name=get_string("profile_view.info_tab.field_rank", "등급"), value=user_rank_mention, inline=True)
@@ -340,10 +339,11 @@ class ProfileView(ui.View):
             embed.description = description + ("\n".join(item_list) or get_string("profile_view.item_tab.no_items", "보유 중인 아이템이 없습니다."))
         
         elif self.current_page == "gear":
+            # ▼▼▼ [핵심 수정 1] 하드코딩된 이모지를 제거합니다. ▼▼▼
             gear_categories = {
-                "낚시": {"rod": "🎣 낚싯대", "bait": "🐛 미끼"},
-                "농장": {"hoe": "🪓 괭이", "watering_can": "💧 물뿌리개"},
-                "광산": {"pickaxe": "⛏️ 곡괭이"}
+                "낚시": {"rod": "낚싯대", "bait": "미끼"},
+                "농장": {"hoe": "괭이", "watering_can": "물뿌리개"},
+                "광산": {"pickaxe": "곡괭이"}
             }
             for category_name, items in gear_categories.items():
                 field_lines = []
@@ -351,7 +351,8 @@ class ProfileView(ui.View):
                     item_name = gear.get(key, BARE_HANDS)
                     item_data = item_db.get(item_name, {})
                     emoji = str(coerce_item_emoji(item_data.get('emoji', '')))
-                    field_lines.append(f"**{label}:** {emoji} `{item_name}`")
+                    # ▼▼▼ [핵심 수정 2] 출력 형식을 변경하여 이모지를 라벨 앞으로 보냅니다. ▼▼▼
+                    field_lines.append(f"{emoji} **{label}:** `{item_name}`")
                 embed.add_field(name=f"**[ 현재 장비: {category_name} ]**", value="\n".join(field_lines), inline=False)
             
             equipped_gear_names = set(gear.values())
