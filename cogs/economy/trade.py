@@ -66,6 +66,8 @@ class MessageModal(ui.Modal, title="메시지 작성"):
         await interaction.response.defer()
         self.stop()
 
+# (cogs/economy/trade.py 파일에서 이 클래스를 찾아 아래 내용으로 전체 교체)
+
 class TradeView(ui.View):
     def __init__(self, cog: 'Trade', initiator: discord.Member, partner: discord.Member):
         super().__init__(timeout=300)
@@ -119,7 +121,7 @@ class TradeView(ui.View):
         embed.set_footer(text="5분 후 만료됩니다.")
         return embed
 
-    async def update_ui(self):
+    async def update_ui(self, interaction: discord.Interaction):
         if self.is_finished() or not self.message: return
         embed = await self.build_embed()
         try:
@@ -156,12 +158,12 @@ class TradeView(ui.View):
     async def handle_add_item(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         if self.offers[user_id]["ready"]:
-            return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
+            return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True)
         inventory = await get_inventory(interaction.user)
         item_db = get_item_database()
         tradeable_items = { name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category') in TRADEABLE_CATEGORIES }
         if not tradeable_items:
-            return await interaction.response.send_message("거래 가능한 아이템이 없습니다.", ephemeral=True, delete_after=5)
+            return await interaction.response.send_message("거래 가능한 아이템이 없습니다.", ephemeral=True)
         options = [ discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in tradeable_items.items() ]
         
         select_view = ui.View(timeout=180)
@@ -175,7 +177,7 @@ class TradeView(ui.View):
             await modal.wait()
             if modal.quantity is not None:
                 self.offers[user_id]["items"][item_name] = modal.quantity
-                await self.update_ui()
+                await self.update_ui(interaction)
             try: await select_interaction.delete_original_response()
             except discord.NotFound: pass
         
@@ -186,7 +188,7 @@ class TradeView(ui.View):
     async def handle_add_coin(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         if self.offers[user_id]["ready"]:
-            return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
+            return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True)
         wallet = await get_wallet(user_id)
         max_coins = wallet.get('balance', 0)
         modal = CoinInputModal("거래 코인 입력", max_coins)
@@ -194,7 +196,7 @@ class TradeView(ui.View):
         await modal.wait()
         if modal.coins is not None:
             self.offers[user_id]["coins"] = modal.coins
-            await self.update_ui()
+            await self.update_ui(interaction)
 
     async def handle_ready(self, interaction: discord.Interaction):
         user_id = interaction.user.id
@@ -203,10 +205,11 @@ class TradeView(ui.View):
         if self.offers[self.initiator.id]["ready"] and self.offers[self.partner.id]["ready"]:
             await self.process_trade(interaction)
         else:
-            await self.update_ui()
+            await self.update_ui(interaction)
 
     async def handle_cancel(self, interaction: discord.Interaction):
-        await interaction.followup.send("거래를 취소했습니다.", ephemeral=True, delete_after=10)
+        # ▼▼▼ [핵심 수정] delete_after 제거 ▼▼▼
+        await interaction.followup.send("거래를 취소했습니다.", ephemeral=True)
         await self.on_timeout(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
@@ -273,7 +276,7 @@ class TradeView(ui.View):
                     await update_wallet(self.initiator, trade_fee)
                     message_content = ""
                     if cancelled_by and self.initiator.id == cancelled_by.id:
-                        message_content = f"거래를 취소하여 수수료 {trade_fee}{self.currency_icon}를 환불해드렸습니다."
+                         message_content = f"거래를 취소하여 수수료 {trade_fee}{self.currency_icon}를 환불해드렸습니다."
                     elif not cancelled_by:
                         message_content = f"거래가 시간 초과로 취소되어 수수료 {trade_fee}{self.currency_icon}를 환불해드렸습니다."
                     if message_content:
