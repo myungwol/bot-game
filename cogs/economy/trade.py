@@ -66,6 +66,8 @@ class MessageModal(ui.Modal, title="메시지 작성"):
         await interaction.response.defer()
         self.stop()
 
+# (cogs/economy/trade.py 파일에서 이 클래스를 찾아 아래 내용으로 전체 교체)
+
 class TradeView(ui.View):
     def __init__(self, cog: 'Trade', initiator: discord.Member, partner: discord.Member, trade_id: str):
         super().__init__(timeout=300)
@@ -126,7 +128,6 @@ class TradeView(ui.View):
 
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
-        
         buttons_that_send_new_response = ["add_item_button", "add_coin_button"]
         if custom_id not in buttons_that_send_new_response and not interaction.response.is_done():
             await interaction.response.defer()
@@ -198,43 +199,60 @@ class TradeView(ui.View):
         await self.on_timeout(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
+        logger.info(f"거래 처리 시작: {self.trade_id}")
         for item in self.children: item.disabled = True
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=None)
+
         user1, user2, offer1, offer2 = self.initiator, self.partner, self.offers[self.initiator.id], self.offers[self.partner.id]
         try:
             user1_wallet, user1_inv = await asyncio.gather(get_wallet(user1.id), get_inventory(user1))
             user2_wallet, user2_inv = await asyncio.gather(get_wallet(user2.id), get_inventory(user2))
+
             if user1_wallet.get('balance', 0) < offer1['coins']: return await self.fail_trade(f"{user1.mention}님의 코인이 부족합니다.")
             if user2_wallet.get('balance', 0) < offer2['coins']: return await self.fail_trade(f"{user2.mention}님의 코인이 부족합니다.")
+
             for item, qty in offer1['items'].items():
                 if user1_inv.get(item, 0) < qty: return await self.fail_trade(f"{user1.mention}님의 '{item}' 재고가 부족합니다.")
             for item, qty in offer2['items'].items():
                 if user2_inv.get(item, 0) < qty: return await self.fail_trade(f"{user2.mention}님의 '{item}' 재고가 부족합니다.")
+
             tasks = []
             user1_coin_change, user2_coin_change = offer2['coins'] - offer1['coins'], offer1['coins'] - offer2['coins']
             if user1_coin_change != 0: tasks.append(update_wallet(user1, int(user1_coin_change)))
             if user2_coin_change != 0: tasks.append(update_wallet(user2, int(user2_coin_change)))
             for item, qty in offer1['items'].items(): tasks.extend([update_inventory(user1.id, item, -qty), update_inventory(user2.id, item, qty)])
             for item, qty in offer2['items'].items(): tasks.extend([update_inventory(user2.id, item, -qty), update_inventory(user1.id, item, qty)])
+            
+            logger.info(f"거래 DB 작업 실행: {len(tasks)}개")
             if tasks: await asyncio.gather(*tasks)
+            logger.info("거래 DB 작업 완료.")
+
         except Exception as e:
-            logger.error(f"거래 처리 중 예외 발생: {e}", exc_info=True)
+            logger.error(f"거래 처리 중 DB 예외 발생: {e}", exc_info=True)
             return await self.fail_trade("알 수 없는 오류가 발생했습니다. 관리자에게 문의하세요.")
         
-        if self.message:
-            log_channel_id = get_id("log_trade_channel_id")
-            if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
-                if log_embed_data := await get_embed_from_db("log_trade_success"):
-                    log_embed = format_embed_from_db(log_embed_data, user1_mention=user1.mention, user2_mention=user2.mention, commission=0, currency_icon=self.currency_icon)
-                    offer1_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer1['items'].items()] + ([f"💰 {offer1['coins']:,}{self.currency_icon}"] if offer1['coins'] > 0 else [])) or "없음"
-                    offer2_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer2['items'].items()] + ([f"💰 {offer2['coins']:,}{self.currency_icon}"] if offer2['coins'] > 0 else [])) or "없음"
-                    log_embed.add_field(name=f"{user1.display_name} 제공", value=offer1_str, inline=True)
-                    log_embed.add_field(name=f"{user2.display_name} 제공", value=offer2_str, inline=True)
-                    await log_channel.send(embed=log_embed)
+        try:
+            # ▼▼▼ [핵심 수정] 로그 채널을 스레드의 부모 채널로 명확히 지정합니다. ▼▼▼
+            log_channel = self.message.channel.parent
+            if self.message: await self.message.delete()
+            
+            log_embed_data = await get_embed_from_db("log_trade_success")
+            if log_embed_data:
+                log_embed = format_embed_from_db(log_embed_data, user1_mention=user1.mention, user2_mention=user2.mention, commission=0, currency_icon=self.currency_icon)
+                offer1_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer1['items'].items()] + ([f"💰 {offer1['coins']:,}{self.currency_icon}"] if offer1['coins'] > 0 else [])) or "없음"
+                offer2_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer2['items'].items()] + ([f"💰 {offer2['coins']:,}{self.currency_icon}"] if offer2['coins'] > 0 else [])) or "없음"
+                log_embed.add_field(name=f"{user1.display_name} 제공", value=offer1_str, inline=True)
+                log_embed.add_field(name=f"{user2.display_name} 제공", value=offer2_str, inline=True)
+                
+                logger.info(f"거래 성공 로그를 채널 '{log_channel.name}'에 전송합니다.")
+                await self.cog.regenerate_panel(log_channel, last_log=log_embed)
             
             await self.message.channel.send("✅ 거래가 성공적으로 완료되었습니다. 이 채널은 10초 후에 삭제됩니다.")
             await asyncio.sleep(10)
             await self.message.channel.delete()
+
+        except Exception as e:
+            logger.error(f"거래 성공 후처리(로그, 채널 삭제) 중 오류 발생: {e}", exc_info=True)
 
         self.stop()
     
