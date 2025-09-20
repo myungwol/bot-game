@@ -250,6 +250,8 @@ class FarmActionView(ui.View):
         await self.build_components()
         await interaction.edit_original_response(embed=self.build_embed(), view=self)
 
+# (cogs/games/farm.py 파일에서 이 클래스를 찾아 아래 내용으로 전체 교체)
+
 class FarmUIView(ui.View):
 
     async def _disable_all(self, interaction: discord.Interaction):
@@ -258,7 +260,7 @@ class FarmUIView(ui.View):
             if isinstance(child, ui.Button):
                 child.disabled = True
         try:
-            # defer()는 dispatch_callback에서 처리하므로 여기서 응답하지 않음
+            # defer()는 이제 dispatch_callback에서 조건부로 처리되므로 여기서 응답하지 않음
             await self.cog.safe_edit(interaction.message, view=tmp)
         except Exception:
             pass
@@ -289,11 +291,16 @@ class FarmUIView(ui.View):
     
     
     async def dispatch_callback(self, interaction: discord.Interaction):
-        # 모든 상호작용에 대해 우선 defer로 응답하여 3초 제한을 피함
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-
         cid = (interaction.data or {}).get('custom_id')
+        
+        # ▼▼▼ [핵심 수정] 새 응답(메시지/모달)을 보내는 버튼들은 defer()를 하지 않도록 예외 처리 ▼▼▼
+        buttons_that_send_new_response = ["farm_invite", "farm_share", "farm_rename", "farm_plant", "farm_uproot"]
+        
+        # 이 버튼들이 아니면서, 아직 응답되지 않은 경우에만 defer()를 호출
+        if cid not in buttons_that_send_new_response and not interaction.response.is_done():
+            await interaction.response.defer()
+        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
+
         method_name = f"on_{cid}_click" if cid else None
         if not cid or not hasattr(self, method_name):
             return
@@ -314,7 +321,7 @@ class FarmUIView(ui.View):
             try:
                 await getattr(self, method_name)(interaction)
             finally:
-                # ▼▼▼ [핵심 수정] 어떤 버튼이든 작업이 끝나면 무조건 버튼을 다시 활성화 ▼▼▼
+                # 작업이 끝나면 무조건 버튼을 다시 활성화
                 await self._enable_all(interaction)
 
 
@@ -350,16 +357,15 @@ class FarmUIView(ui.View):
     async def on_error(self, i: discord.Interaction, e: Exception, item: ui.Item) -> None:
         logger.error(f"FarmUIView 오류 (item: {item.custom_id}): {e}", exc_info=True)
         msg_content = "❌ 처리 중 예기치 않은 오류가 발생했습니다."
-        if not i.response.is_done():
-            # defer()가 이미 호출되었을 수 있으므로 followup 사용
-            try:
+        try:
+            if i.response.is_done():
                 msg = await i.followup.send(msg_content, ephemeral=True)
                 self.cog.bot.loop.create_task(delete_after(msg, 5))
-            except discord.HTTPException:
-                pass
-        else:
-             await i.response.send_message(msg_content, ephemeral=True, delete_after=5)
-
+            else:
+                await i.response.send_message(msg_content, ephemeral=True, delete_after=5)
+        except discord.HTTPException:
+            pass
+        
     async def on_farm_regenerate_click(self, interaction: discord.Interaction):
         try:
             if interaction.message: await interaction.message.delete()
@@ -569,7 +575,7 @@ class FarmUIView(ui.View):
             await si.edit_original_response(content="초대가 완료되었습니다.", view=None)
         select.callback = cb
         view.add_item(select)
-        # ▼▼▼ [핵심 수정] response -> followup ▼▼▼
+        # ▼▼▼ [핵심 수정] defer()가 이미 호출되었으므로 followup.send 사용 ▼▼▼
         await i.followup.send("누구를 농장에 초대하시겠습니까?", view=view, ephemeral=True)
 
     async def on_farm_share_click(self, i: discord.Interaction):
@@ -585,12 +591,13 @@ class FarmUIView(ui.View):
             await si.edit_original_response(content=f"{', '.join(u.display_name for u in users_to_grant if u)}님에게 권한을 부여했습니다.", view=None)
         select.callback = cb
         view.add_item(select)
-        # ▼▼▼ [핵심 수정] response -> followup ▼▼▼
+        # ▼▼▼ [핵심 수정] defer()가 이미 호출되었으므로 followup.send 사용 ▼▼▼
         await i.followup.send("누구에게 농장 권한을 주시겠습니까?", view=view, ephemeral=True)
 
     async def on_farm_rename_click(self, i: discord.Interaction): 
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
+        # ▼▼▼ [핵심 수정] defer() 없이 바로 모달을 보냅니다. ▼▼▼
         await i.response.send_modal(FarmNameModal(self.cog, farm_data))
 
 class FarmCreationPanelView(ui.View):
