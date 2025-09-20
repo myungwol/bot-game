@@ -224,9 +224,11 @@ class TradeView(ui.View):
     
     async def fail_trade(self, reason: str):
         if self.message:
+            # ▼▼▼ [핵심 수정] 거래 실패 시 신청자에게 수수료를 환불하는 로직 추가 ▼▼▼
             if self.initiator:
                 await update_wallet(self.initiator, 250)
                 reason += f"\n(거래 신청 수수료 250{self.currency_icon} 환불됨)"
+            # ▲▲▲ [핵심 수정] ▲▲▲
             await self.message.channel.send(f"❌ 거래 실패: {reason}\n이 채널은 10초 후에 삭제됩니다.")
             await asyncio.sleep(10); await self.message.channel.delete()
         self.stop()
@@ -236,11 +238,15 @@ class TradeView(ui.View):
         self.stop()
         if self.message:
             try:
+                # ▼▼▼ [핵심 수정] 거래 취소/타임아웃 시 신청자에게 수수료를 환불하는 로직 추가 ▼▼▼
                 if self.initiator:
                     await update_wallet(self.initiator, 250)
                     message_content = "거래가 취소되어 신청 수수료를 환불해드렸습니다."
-                    try: await self.initiator.send(message_content)
-                    except discord.Forbidden: pass
+                    try: 
+                        await self.initiator.send(message_content)
+                    except discord.Forbidden: 
+                        pass # 유저가 DM을 막아둔 경우
+                # ▲▲▲ [핵심 수정] ▲▲▲
                 await self.message.channel.send("거래가 종료되었습니다. 이 채널은 10초 후에 삭제됩니다.")
                 await asyncio.sleep(10); await self.message.channel.delete()
             except (discord.NotFound, discord.Forbidden): pass
@@ -299,8 +305,7 @@ class MailComposeView(ui.View):
         tradeable_items = { n: q for n, q in inventory.items() if item_db.get(n, {}).get('category') in TRADEABLE_CATEGORIES }
         if not tradeable_items: return await interaction.response.send_message("첨부 가능한 아이템이 없습니다.", ephemeral=True, delete_after=5)
         options = [ discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in tradeable_items.items() ]
-        select_view = ui.View(timeout=180)
-        item_select = ui.Select(placeholder="첨부할 아이템을 선택하세요", options=options[:25])
+        select_view = ui.View(timeout=180); item_select = ui.Select(placeholder="첨부할 아이템을 선택하세요", options=options[:25])
         
         async def select_callback(si: discord.Interaction):
             item_name, max_qty = si.data['values'][0], tradeable_items.get(si.data['values'][0], 0)
@@ -308,8 +313,11 @@ class MailComposeView(ui.View):
             await si.response.send_modal(modal); await modal.wait()
             if modal.quantity is not None:
                 self.attachments["items"][item_name] = self.attachments["items"].get(item_name, 0) + modal.quantity
+                # ▼▼▼ [핵심 수정] UI를 새로고침하는 코드를 추가합니다. ▼▼▼
                 await interaction.edit_original_response(embed=await self.build_embed(), view=self)
-            try: await si.delete_original_response()
+                # ▲▲▲ [핵심 수정] ▲▲▲
+            try: 
+                await si.delete_original_response()
             except discord.NotFound: pass
         
         item_select.callback = select_callback
@@ -665,16 +673,30 @@ class Trade(commands.Cog):
             try: await channel.send(embed=last_log)
             except discord.HTTPException: pass
         
+        # ▼▼▼ [핵심 수정] 아래 로직 전체를 교체합니다. ▼▼▼
         panel_info = get_panel_id(panel_key)
         if panel_info and panel_info.get("message_id"):
-             return
+            try:
+                # 패널이 설치된 원래 채널을 찾아서 메시지를 삭제합니다.
+                original_channel_id = panel_info.get("channel_id")
+                if original_channel_id and (original_channel := self.bot.get_channel(original_channel_id)):
+                     msg = await original_channel.fetch_message(panel_info["message_id"])
+                     await msg.delete()
+            except (discord.NotFound, discord.Forbidden):
+                # 메시지를 찾을 수 없으면 그냥 넘어갑니다.
+                pass
 
         embed_data = await get_embed_from_db(panel_key)
-        if not embed_data: return
+        if not embed_data: 
+            logger.error(f"DB에서 '{panel_key}' 임베드를 찾을 수 없어 패널 생성을 건너뜁니다.")
+            return
+
         embed = discord.Embed.from_dict(embed_data)
         view = TradePanelView(self)
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
+        logger.info(f"✅ {panel_key} 패널을 성공적으로 재생성했습니다. (채널: #{channel.name})")
+        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
 async def setup(bot: commands.Cog):
     await bot.add_cog(Trade(bot))
