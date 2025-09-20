@@ -25,11 +25,8 @@ DEFAULT_MINE_DURATION_SECONDS = 600
 MINING_COOLDOWN_SECONDS = 10
 
 PICKAXE_LUCK_BONUS = {
-    "나무 곡괭이": 1.0,
-    "구리 곡괭이": 1.1,
-    "철 곡괭이": 1.25,
-    "금 곡괭이": 1.5,
-    "다이아 곡괭이": 2.0,
+    "나무 곡괭이": 1.0, "구리 곡괭이": 1.1, "철 곡괭이": 1.25,
+    "금 곡괭이": 1.5, "다이아 곡괭이": 2.0,
 }
 
 ORE_DATA = {
@@ -40,12 +37,7 @@ ORE_DATA = {
     "다이아몬드": {"weight": 2,  "image_url": "https://saewayvzcyzueviasftu.supabase.co/storage/v1/object/public/game_assets/diamond.jpg"}
 }
 
-ORE_XP_MAP = {
-    "구리 광석": 10,
-    "철 광석": 15,
-    "금 광석": 30,
-    "다이아몬드": 75
-}
+ORE_XP_MAP = { "구리 광석": 10, "철 광석": 15, "금 광석": 30, "다이아몬드": 75 }
 
 class MiningGameView(ui.View):
     def __init__(self, cog_instance: 'Mining', user: discord.Member, pickaxe: str, duration: int, end_time: datetime, duration_doubled: bool):
@@ -56,20 +48,21 @@ class MiningGameView(ui.View):
         self.end_time = end_time
         self.duration_doubled = duration_doubled
         self.mined_ores: Dict[str, int] = {}
-        
         self.luck_bonus = PICKAXE_LUCK_BONUS.get(pickaxe, 1.0)
         self.time_reduction = 0
         self.can_double_yield = False
-
         self.state = "idle"
         self.discovered_ore: Optional[str] = None
         self.last_result_text: Optional[str] = None
         self.message: Optional[discord.Message] = None
         self.on_cooldown = False
-
         self.ui_lock = asyncio.Lock()
         self.ui_update_task = self.cog.bot.loop.create_task(self.ui_updater())
         self.initial_load_task = self.cog.bot.loop.create_task(self.load_initial_data())
+        # 모든 버튼의 콜백을 dispatch_callback으로 통일
+        for item in self.children:
+            if isinstance(item, ui.Button):
+                item.callback = self.dispatch_callback
 
     async def load_initial_data(self):
         user_abilities = await get_user_abilities(self.user.id)
@@ -95,30 +88,35 @@ class MiningGameView(ui.View):
             await asyncio.sleep(10)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if self.on_cooldown:
-            await interaction.response.send_message("⏳ 아직 주변을 살피고 있습니다.", ephemeral=True, delete_after=5); return False
         if interaction.user.id != self.user.id:
             await interaction.response.send_message("본인만 채굴할 수 있습니다.", ephemeral=True, delete_after=5); return False
         if self.user.id not in self.cog.active_sessions:
             if self.message: await self.message.edit(content="만료된 광산입니다.", view=None, embed=None)
-            self.stop()
-            return False
+            self.stop(); return False
         return True
         
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: ui.Item[Any]) -> None:
         logger.error(f"MiningGameView에서 오류 발생 (Item: {item.custom_id}): {error}", exc_info=True)
-        message_content = "처리 중 오류가 발생했습니다."
-        if interaction.response.is_done():
-            try:
-                msg = await interaction.followup.send(message_content, ephemeral=True)
-                await asyncio.sleep(5)
-                await msg.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
-        else:
-            await interaction.response.send_message(message_content, ephemeral=True, delete_after=5)
+
+    async def dispatch_callback(self, interaction: discord.Interaction):
+        if not interaction.response.is_done(): await interaction.response.defer()
+
+        key = (interaction.channel.id, interaction.user.id)
+        now = time.monotonic()
+        last = self.cog.last_action_ts.get(key, 0.0)
+        if now - last < self.cog.cooldown_sec: return
+        self.cog.last_action_ts[key] = now
+
+        lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
+        if lock.locked(): return
+
+        async with lock:
+            if self.on_cooldown:
+                return await interaction.followup.send("⏳ 아직 주변을 살피고 있습니다.", ephemeral=True, delete_after=5)
+            await self.action_button(interaction, self.children[0])
 
     def build_embed(self) -> discord.Embed:
+        # ... (이 메소드의 내용은 변경 없습니다) ...
         embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", color=0x607D8B)
         item_db = get_item_database()
 
@@ -162,7 +160,7 @@ class MiningGameView(ui.View):
             if self.state == "idle":
                 self.last_result_text = None
                 button.disabled = True; button.label = "탐색 중..."
-                await interaction.response.edit_message(embed=self.build_embed(), view=self)
+                await interaction.edit_original_response(embed=self.build_embed(), view=self)
                 try:
                     await asyncio.sleep(1)
                     ores, weights = zip(*[(k, v['weight']) for k, v in ORE_DATA.items()])
@@ -176,53 +174,38 @@ class MiningGameView(ui.View):
             elif self.state == "discovered":
                 if self.discovered_ore == "꽝":
                     self.on_cooldown = True; button.disabled = True
-                    await interaction.response.edit_message(view=self)
+                    await interaction.edit_original_response(view=self)
                     await asyncio.sleep(MINING_COOLDOWN_SECONDS - self.time_reduction)
                     self.on_cooldown = False
                     if self.is_finished(): return
                     self.state = "idle"; self.last_result_text = "### 아무것도 발견하지 못했다..."
                     button.label = "광석 찾기"; button.emoji = "🔍"; button.disabled = False
                     await interaction.edit_original_response(embed=self.build_embed(), view=self)
-                else: # 채굴하기
+                else:
                     self.state = "mining"; button.disabled = True
                     mining_duration = max(3, MINING_COOLDOWN_SECONDS - self.time_reduction)
                     button.label = f"채굴 중... ({mining_duration}초)"
-                    await interaction.response.edit_message(embed=self.build_embed(), view=self)
+                    await interaction.edit_original_response(embed=self.build_embed(), view=self)
                     await asyncio.sleep(mining_duration)
                     if self.is_finished(): return
                     quantity = 2 if self.can_double_yield and random.random() < 0.20 else 1
                     xp_earned = ORE_XP_MAP.get(self.discovered_ore, 0) * quantity
-                    
                     self.mined_ores[self.discovered_ore] = self.mined_ores.get(self.discovered_ore, 0) + quantity
-                    
                     try:
                         session_res = await supabase.table('mining_sessions').select('mined_ores_json').eq('user_id', str(self.user.id)).maybe_single().execute()
                         if session_res and session_res.data:
-                            current_ores_raw = session_res.data.get('mined_ores_json')
-                            current_ores = {}
+                            current_ores_raw = session_res.data.get('mined_ores_json'); current_ores = {}
                             if isinstance(current_ores_raw, str):
-                                try:
-                                    current_ores = json.loads(current_ores_raw)
-                                except json.JSONDecodeError:
-                                    logger.warning(f"DB의 mined_ores_json이 잘못된 형식의 문자열입니다 (유저: {self.user.id}). 새로 시작합니다.")
-                            elif isinstance(current_ores_raw, dict):
-                                current_ores = current_ores_raw
-                            
+                                try: current_ores = json.loads(current_ores_raw)
+                                except json.JSONDecodeError: pass
+                            elif isinstance(current_ores_raw, dict): current_ores = current_ores_raw
                             current_ores[self.discovered_ore] = current_ores.get(self.discovered_ore, 0) + quantity
                             await supabase.table('mining_sessions').update({'mined_ores_json': current_ores}).eq('user_id', str(self.user.id)).execute()
-                        else:
-                            logger.warning(f"채굴 중인 유저({self.user.id})의 mining_sessions를 찾을 수 없어 DB 집계가 누락되었습니다.")
-                    except Exception as db_error:
-                        logger.error(f"광산 채굴량 DB 업데이트 중 오류 발생: {db_error}", exc_info=True)
-
+                    except Exception as db_error: logger.error(f"광산 채굴량 DB 업데이트 중 오류: {db_error}", exc_info=True)
                     await update_inventory(self.user.id, self.discovered_ore, quantity)
                     await log_activity(self.user.id, 'mining', amount=quantity, xp_earned=xp_earned)
-
-                    ore_info = get_item_database().get(self.discovered_ore, {})
-                    ore_emoji = str(coerce_item_emoji(ore_info.get('emoji', '💎')))
-                    
+                    ore_info = get_item_database().get(self.discovered_ore, {}); ore_emoji = str(coerce_item_emoji(ore_info.get('emoji', '💎')))
                     self.last_result_text = f"✅ {ore_emoji} **{self.discovered_ore}** {quantity}개를 획득했습니다! (`+{xp_earned} XP`)"
-
                     if quantity > 1: self.last_result_text += f"\n\n✨ **풍부한 광맥** 능력으로 광석을 2개 획득했습니다!"
                     if xp_earned > 0:
                         res = await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': xp_earned, 'p_source': 'mining'}).execute()
@@ -237,6 +220,21 @@ class MiningPanelView(ui.View):
     def __init__(self, cog_instance: 'Mining'):
         super().__init__(timeout=None)
         self.cog = cog_instance
+        self.children[0].callback = self.dispatch_callback
+
+    async def dispatch_callback(self, interaction: discord.Interaction):
+        if not interaction.response.is_done(): await interaction.response.defer()
+        
+        key = (interaction.channel.id, interaction.user.id)
+        now = time.monotonic()
+        last = self.cog.last_action_ts.get(key, 0.0)
+        if now - last < self.cog.cooldown_sec: return
+        self.cog.last_action_ts[key] = now
+        lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
+        if lock.locked(): return
+        
+        async with lock:
+            await self.enter_mine_button(interaction, self.children[0])
 
     @ui.button(label="입장하기", style=discord.ButtonStyle.secondary, emoji="⛏️", custom_id="enter_mine")
     async def enter_mine_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -247,8 +245,12 @@ class Mining(commands.Cog):
         self.bot = bot
         self.active_sessions: Dict[int, Dict] = {}
         self.active_abilities_cache: Dict[int, List[str]] = {}
+        self.actor_locks: dict[tuple[int, int], asyncio.Lock] = {}
+        self.last_action_ts: dict[tuple[int, int], float] = {}
+        self.cooldown_sec: float = 1.0
         self.check_expired_mines_from_db.start()
 
+    # ... (이하 Mining Cog의 나머지 메소드는 변경 없습니다) ...
     def cog_unload(self):
         self.check_expired_mines_from_db.cancel()
 
@@ -269,7 +271,7 @@ class Mining(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def handle_enter_mine(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        # defer는 dispatch_callback에서 이미 처리됨
         user = interaction.user
 
         if user.id in self.active_sessions:
