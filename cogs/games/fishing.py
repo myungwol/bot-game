@@ -97,14 +97,10 @@ class FishingGameView(ui.View):
             size = round(random.uniform(min_s, max_s), 1)
             if is_whale_catch: await set_whale_caught()
 
-            # ▼▼▼ [핵심 수정] ▼▼▼
-            # DB에 저장하기 전에 이모지 값을 정제합니다.
             emoji_to_save = catch_proto.get('emoji', '🐠')
             if isinstance(emoji_to_save, str):
                 emoji_to_save = emoji_to_save.strip()
-
             await add_to_aquarium(self.player.id, {"name": catch_proto['name'], "size": size, "emoji": emoji_to_save})
-            # ▲▲▲ [핵심 수정] ▲▲▲
 
             is_big_catch = size >= self.big_catch_threshold
             title = "🏆 월척이다! 🏆" if is_big_catch else "🎉 낚시 성공! 🎉"
@@ -170,127 +166,136 @@ class FishingPanelView(ui.View):
         self.bot = bot
         self.fishing_cog = cog_instance
         self.panel_key = panel_key
-        self.user_locks: Dict[int, asyncio.Lock] = {}
-
+        
+        # ▼▼▼ [핵심 수정] 모든 버튼의 콜백을 dispatch_callback으로 지정합니다. ▼▼▼
         if panel_key == "panel_fishing_river":
             river_button = ui.Button(label="강에서 낚시하기", style=discord.ButtonStyle.primary, emoji="🏞️", custom_id="start_fishing_river")
-            river_button.callback = self._start_fishing_callback
+            river_button.callback = self.dispatch_callback
             self.add_item(river_button)
         elif panel_key == "panel_fishing_sea":
             sea_button = ui.Button(label="바다에서 낚시하기", style=discord.ButtonStyle.primary, emoji="🌊", custom_id="start_fishing_sea")
-            sea_button.callback = self._start_fishing_callback
+            sea_button.callback = self.dispatch_callback
             self.add_item(sea_button)
     
-    async def _start_fishing_callback(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        lock = self.user_locks.setdefault(user_id, asyncio.Lock())
-        if lock.locked():
-            await interaction.response.send_message("현재 이전 요청을 처리 중입니다. 잠시만 기다려주세요.", ephemeral=True)
+    async def dispatch_callback(self, interaction: discord.Interaction):
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+
+        key = (interaction.channel.id, interaction.user.id)
+        now = time.monotonic()
+        last = self.fishing_cog.last_action_ts.get(key, 0.0)
+        if now - last < self.fishing_cog.cooldown_sec:
             return
 
+        self.fishing_cog.last_action_ts[key] = now
+        lock = self.fishing_cog.actor_locks.setdefault(key, asyncio.Lock())
+        if lock.locked():
+            return
+        
         async with lock:
-            if user_id in self.fishing_cog.active_fishing_sessions_by_user:
-                await interaction.response.send_message("이미 낚시를 진행 중입니다.", ephemeral=True)
+            await self.handle_start_fishing(interaction)
+
+    async def handle_start_fishing(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        
+        if user_id in self.fishing_cog.active_fishing_sessions_by_user:
+            await interaction.followup.send("이미 낚시를 진행 중입니다.", ephemeral=True)
+            return
+
+        if last_message := self.fishing_cog.last_result_messages.pop(user_id, None):
+            try: await last_message.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException): pass
+        
+        try:
+            location_type = interaction.data['custom_id'].split('_')[-1]
+            user = interaction.user
+            
+            gear, inventory, user_abilities = await asyncio.gather(
+                get_user_gear(user), 
+                get_inventory(user),
+                get_user_abilities(user.id)
+            )
+            
+            rod, item_db = gear.get('rod', BARE_HANDS), get_item_database()
+            if rod == BARE_HANDS:
+                if any('낚싯대' in item_name for item_name in inventory if item_db.get(item_name, {}).get('category') == '장비'):
+                    await interaction.followup.send("❌ 프로필 화면에서 낚싯대를 먼저 장착해주세요.", ephemeral=True)
+                else:
+                    await interaction.followup.send(f"❌ 낚시를 하려면 먼저 상점에서 '{DEFAULT_ROD}'을(를) 구매해야 합니다.", ephemeral=True)
                 return
-
-            await interaction.response.defer(ephemeral=True)
             
-            if last_message := self.fishing_cog.last_result_messages.pop(user_id, None):
-                try:
-                    await last_message.delete()
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    pass
-            
-            try:
-                location_type = interaction.data['custom_id'].split('_')[-1]
-                user = interaction.user
-                
-                gear, inventory, user_abilities = await asyncio.gather(
-                    get_user_gear(user), 
-                    get_inventory(user),
-                    get_user_abilities(user.id)
-                )
-                
-                rod, item_db = gear.get('rod', BARE_HANDS), get_item_database()
-                if rod == BARE_HANDS:
-                    if any('낚싯대' in item_name for item_name in inventory if item_db.get(item_name, {}).get('category') == '장비'):
-                        await interaction.followup.send("❌ 프로필 화면에서 낚싯대를 먼저 장착해주세요.", ephemeral=True)
-                    else:
-                        await interaction.followup.send(f"❌ 낚시를 하려면 먼저 상점에서 '{DEFAULT_ROD}'을(를) 구매해야 합니다.", ephemeral=True)
-                    return
-                
-                game_config = get_config("GAME_CONFIG", {})
-                if location_type == 'sea':
-                    rod_data = item_db.get(rod, {})
-                    req_tier = game_config.get("FISHING_SEA_REQ_TIER", 3)
-                    if rod_data.get('tier', 0) < req_tier:
-                        await interaction.followup.send(f"❌ 바다 낚시를 하려면 '{INTERMEDIATE_ROD_NAME}'(등급 {req_tier}) 이상의 낚싯대를 **장착**해야 합니다.", ephemeral=True)
-                        return
-
-                self.fishing_cog.active_fishing_sessions_by_user.add(user.id)
-                bait = gear.get('bait', '미끼 없음')
-                
-                bait_saved = False
-                if bait != "미끼 없음" and 'fish_bait_saver_1' in user_abilities:
-                    if random.random() < 0.2:
-                        bait_saved = True
-
-                if bait != "미끼 없음" and not bait_saved:
-                    if inventory.get(bait, 0) > 0:
-                        await update_inventory(user.id, bait, -1)
-                        inventory[bait] = max(0, inventory.get(bait, 0) - 1)
-                    else:
-                        bait = "미끼 없음"
-                        await set_user_gear(user.id, bait="미끼 없음")
-
-                location_name = "강" if location_type == "river" else "바다"
-                
+            game_config = get_config("GAME_CONFIG", {})
+            if location_type == 'sea':
                 rod_data = item_db.get(rod, {})
-                loot_bonus = rod_data.get('loot_bonus', 0.0)
-                
-                default_times = { "미끼 없음": [10.0, 15.0], "일반 낚시 미끼": [7.0, 12.0], "고급 낚시 미끼": [5.0, 10.0] }
-                bite_times_config = game_config.get("FISHING_BITE_TIMES_BY_BAIT", default_times)
+                req_tier = game_config.get("FISHING_SEA_REQ_TIER", 3)
+                if rod_data.get('tier', 0) < req_tier:
+                    await interaction.followup.send(f"❌ 바다 낚시를 하려면 '{INTERMEDIATE_ROD_NAME}'(등급 {req_tier}) 이상의 낚싯대를 **장착**해야 합니다.", ephemeral=True)
+                    return
 
-                bite_range = bite_times_config.get(bait, bite_times_config.get("미끼 없음", [10.0, 15.0]))
-                
-                if 'fish_bite_time_down_1' in user_abilities:
-                    bite_range = [max(0.5, t - 2.0) for t in bite_range]
+            self.fishing_cog.active_fishing_sessions_by_user.add(user.id)
+            bait = gear.get('bait', '미끼 없음')
+            
+            bait_saved = False
+            if bait != "미끼 없음" and 'fish_bait_saver_1' in user_abilities:
+                if random.random() < 0.2:
+                    bait_saved = True
 
-                desc_lines = [
-                    f"### {location_name}에 낚싯대를 던졌습니다.",
-                    f"**🎣 사용 중인 낚싯대:** `{rod}` (보너스 +{loot_bonus:.0%})",
-                    f"**🐛 사용 중인 미끼:** `{bait}` (입질 시간: `{bite_range[0]:.1f}`～`{bite_range[1]:.1f}`초)"
-                ]
+            if bait != "미끼 없음" and not bait_saved:
+                if inventory.get(bait, 0) > 0:
+                    await update_inventory(user.id, bait, -1)
+                    inventory[bait] = max(0, inventory.get(bait, 0) - 1)
+                else:
+                    bait = "미끼 없음"
+                    await set_user_gear(user.id, bait="미끼 없음")
 
-                if bait_saved:
-                    desc_lines.append("\n✨ **미끼 절약술** 효과로 미끼를 소모하지 않았습니다!")
+            location_name = "강" if location_type == "river" else "바다"
+            
+            rod_data = item_db.get(rod, {})
+            loot_bonus = rod_data.get('loot_bonus', 0.0)
+            
+            default_times = { "미끼 없음": [10.0, 15.0], "일반 낚시 미끼": [7.0, 12.0], "고급 낚시 미끼": [5.0, 10.0] }
+            bite_times_config = game_config.get("FISHING_BITE_TIMES_BY_BAIT", default_times)
 
-                active_effects = []
-                if 'fish_bite_time_down_1' in user_abilities:
-                    active_effects.append("> ⏱️ **날렵한 챔질**: 물고기가 더 빨리 입질합니다.")
-                if 'fish_rare_up_2' in user_abilities:
-                    active_effects.append("> ⭐ **희귀 어종 전문가**: 희귀한 물고기를 낚을 확률이 증가합니다.")
-                if 'fish_size_up_2' in user_abilities:
-                    active_effects.append("> 📏 **월척 전문가**: 더 큰 물고기가 낚입니다.")
-                if 'fish_bait_saver_1' in user_abilities and not bait_saved:
-                    active_effects.append("> ✨ **미끼 절약술**: 확률적으로 미끼를 소모하지 않습니다.")
-                
-                if active_effects:
-                    desc_lines.append("\n**--- 발동 중인 효과 ---**")
-                    desc_lines.extend(active_effects)
+            bite_range = bite_times_config.get(bait, bite_times_config.get("미끼 없음", [10.0, 15.0]))
+            
+            if 'fish_bite_time_down_1' in user_abilities:
+                bite_range = [max(0.5, t - 2.0) for t in bite_range]
 
-                desc = "\n".join(desc_lines)
-                embed = discord.Embed(title=f"🎣 {location_name}에서 낚시 시작!", description=desc, color=discord.Color.light_grey())
-                
-                if image_url := get_config("FISHING_WAITING_IMAGE_URL"):
-                    embed.set_thumbnail(url=str(image_url).strip('"'))
-                
-                view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type, bite_range)
-                await view.start_game(interaction, embed)
-            except Exception as e:
-                self.fishing_cog.active_fishing_sessions_by_user.discard(user_id)
-                logger.error(f"낚시 게임 시작 중 예기치 못한 오류가 발생했습니다: {e}", exc_info=True)
-                await interaction.followup.send(f"❌ 낚시를 시작하는 중 오류가 발생했습니다.", ephemeral=True)
+            desc_lines = [
+                f"### {location_name}에 낚싯대를 던졌습니다.",
+                f"**🎣 사용 중인 낚싯대:** `{rod}` (보너스 +{loot_bonus:.0%})",
+                f"**🐛 사용 중인 미끼:** `{bait}` (입질 시간: `{bite_range[0]:.1f}`～`{bite_range[1]:.1f}`초)"
+            ]
+
+            if bait_saved:
+                desc_lines.append("\n✨ **미끼 절약술** 효과로 미끼를 소모하지 않았습니다!")
+
+            active_effects = []
+            if 'fish_bite_time_down_1' in user_abilities:
+                active_effects.append("> ⏱️ **날렵한 챔질**: 물고기가 더 빨리 입질합니다.")
+            if 'fish_rare_up_2' in user_abilities:
+                active_effects.append("> ⭐ **희귀 어종 전문가**: 희귀한 물고기를 낚을 확률이 증가합니다.")
+            if 'fish_size_up_2' in user_abilities:
+                active_effects.append("> 📏 **월척 전문가**: 더 큰 물고기가 낚입니다.")
+            if 'fish_bait_saver_1' in user_abilities and not bait_saved:
+                active_effects.append("> ✨ **미끼 절약술**: 확률적으로 미끼를 소모하지 않습니다.")
+            
+            if active_effects:
+                desc_lines.append("\n**--- 발동 중인 효과 ---**")
+                desc_lines.extend(active_effects)
+
+            desc = "\n".join(desc_lines)
+            embed = discord.Embed(title=f"🎣 {location_name}에서 낚시 시작!", description=desc, color=discord.Color.light_grey())
+            
+            if image_url := get_config("FISHING_WAITING_IMAGE_URL"):
+                embed.set_thumbnail(url=str(image_url).strip('"'))
+            
+            view = FishingGameView(self.bot, interaction.user, rod, bait, inventory, self.fishing_cog, location_type, bite_range)
+            await view.start_game(interaction, embed)
+        except Exception as e:
+            self.fishing_cog.active_fishing_sessions_by_user.discard(user_id)
+            logger.error(f"낚시 게임 시작 중 예기치 못한 오류가 발생했습니다: {e}", exc_info=True)
+            await interaction.followup.send(f"❌ 낚시를 시작하는 중 오류가 발생했습니다.", ephemeral=True)
 
 class Fishing(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -298,8 +303,15 @@ class Fishing(commands.Cog):
         self.active_fishing_sessions_by_user: Set[int] = set()
         self.fishing_log_channel_id: Optional[int] = None
         self.last_result_messages: Dict[int, discord.Message] = {}
+        
+        # ▼▼▼ [핵심 수정] 락과 디바운싱을 위한 변수 추가 ▼▼▼
+        self.actor_locks: dict[tuple[int, int], asyncio.Lock] = {}
+        self.last_action_ts: dict[tuple[int, int], float] = {}
+        self.cooldown_sec: float = 2.0  # 게임 시작 버튼은 쿨타임을 넉넉하게 설정
+        
         logger.info("Fishing Cog가 성공적으로 초기화되었습니다.")
     
+    # ... (이하 Fishing Cog의 나머지 메소드는 변경 없습니다) ...
     async def cog_load(self): await self.load_configs()
     async def load_configs(self): self.fishing_log_channel_id = get_id("fishing_log_channel_id")
 
