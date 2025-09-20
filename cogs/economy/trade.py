@@ -709,20 +709,27 @@ class Trade(commands.Cog):
         logger.info("✅ 거래소의 영구 View가 성공적으로 등록되었습니다.")
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_trade", last_log: Optional[discord.Embed] = None):
-        # ▼▼▼ [핵심 수정] 이제 로그만 보내고 패널은 건드리지 않습니다. ▼▼▼
         if last_log:
             try:
                 await channel.send(embed=last_log)
             except discord.HTTPException as e:
                 logger.error(f"거래 로그 전송 실패: {e}")
-        
-        # 패널이 이미 있는지 확인
-        panel_info = get_panel_id(panel_key)
-        if panel_info and panel_info.get("message_id"):
-            # 이미 패널이 존재하면, 더 이상 아무것도 하지 않고 함수를 종료합니다.
-            return
 
-        # 패널이 없는 경우에만 새로 생성하는 로직 (봇이 처음 시작될 때 등)
+        # ▼▼▼ [핵심 수정] 기존 패널을 찾아서 삭제하는 로직을 다시 추가합니다. ▼▼▼
+        panel_name = panel_key.replace("panel_", "")
+        if panel_info := get_panel_id(panel_name):
+            try:
+                # 패널이 다른 채널에 있더라도 ID로 찾아서 삭제 시도
+                if old_channel := self.bot.get_channel(panel_info['channel_id']):
+                    msg = await old_channel.fetch_message(panel_info['message_id'])
+                    await msg.delete()
+                    logger.info(f"이전 '{panel_key}' 패널(ID: {panel_info['message_id']})을 삭제했습니다.")
+            except (discord.NotFound, discord.Forbidden):
+                # 메시지를 찾을 수 없거나 삭제 권한이 없으면 그냥 넘어감
+                logger.warning(f"이전 '{panel_key}' 패널을 찾을 수 없거나 삭제할 수 없습니다.")
+                pass
+        
+        # 이제 새로운 패널을 생성합니다.
         embed_data = await get_embed_from_db(panel_key)
         if not embed_data:
             return logger.error(f"DB에서 '{panel_key}' 임베드를 찾을 수 없습니다.")
@@ -730,7 +737,9 @@ class Trade(commands.Cog):
         embed = discord.Embed.from_dict(embed_data)
         view = TradePanelView(self)
         new_message = await channel.send(embed=embed, view=view)
-        await save_panel_id(panel_key, new_message.id, channel.id)
+        
+        # 새로운 패널 정보를 DB에 저장합니다.
+        await save_panel_id(panel_name, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
 
 async def setup(bot: commands.Cog):
