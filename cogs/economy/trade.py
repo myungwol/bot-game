@@ -675,32 +675,50 @@ class TradePanelView(ui.View):
     def __init__(self, cog_instance: 'Trade'):
         super().__init__(timeout=None)
         self.cog = cog_instance
-        self.children[0].callback = self.dispatch_callback
-        self.children[1].callback = self.dispatch_callback
+
+        trade_button = ui.Button(label="1:1 거래하기", style=discord.ButtonStyle.success, emoji="🤝", custom_id="trade_panel_direct_trade")
+        trade_button.callback = self.dispatch_callback
+        self.add_item(trade_button)
+
+        mailbox_button = ui.Button(label="우편함", style=discord.ButtonStyle.primary, emoji="📫", custom_id="trade_panel_mailbox")
+        mailbox_button.callback = self.dispatch_callback
+        self.add_item(mailbox_button)
 
     async def dispatch_callback(self, interaction: discord.Interaction):
+        # 모달/새 메시지를 보내는 버튼들이므로, 각 콜백에서 직접 응답을 처리합니다.
+        # 따라서 여기서 defer()를 호출하지 않습니다.
+
         key = (interaction.channel.id, interaction.user.id)
         now = time.monotonic()
         last = self.cog.last_action_ts.get(key, 0.0)
         if now - last < self.cog.cooldown_sec:
-            if not interaction.response.is_done(): await interaction.response.defer()
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.defer()
+                except discord.InteractionResponded:
+                    pass
             return
+        
         self.cog.last_action_ts[key] = now
         lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
         if lock.locked():
-            if not interaction.response.is_done(): await interaction.response.defer()
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.defer()
+                except discord.InteractionResponded:
+                    pass
             return
         
         async with lock:
             custom_id = interaction.data['custom_id']
             if custom_id == "trade_panel_direct_trade":
-                await self.direct_trade_button(interaction, self.children[0])
+                await self.handle_direct_trade(interaction)
             elif custom_id == "trade_panel_mailbox":
-                await self.mailbox_button(interaction, self.children[1])
+                await self.handle_mailbox(interaction)
 
-    @ui.button(label="1:1 거래하기", style=discord.ButtonStyle.success, emoji="🤝", custom_id="trade_panel_direct_trade")
-    async def direct_trade_button(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
+    # ▼▼▼ [핵심 수정] 기존 버튼 콜백 함수의 이름을 변경하여 이름 충돌을 피합니다. ▼▼▼
+    async def handle_direct_trade(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         
         initiator = interaction.user
         trade_fee = 250
@@ -722,8 +740,10 @@ class TradePanelView(ui.View):
             await select_interaction.response.send_message(f"거래 수수료 {trade_fee}{self.cog.currency_icon}를 지불하고 거래를 시작합니다.", ephemeral=True, delete_after=5)
             await update_wallet(initiator, -trade_fee)
             
-            try: await interaction.delete_original_response()
-            except discord.NotFound: pass
+            try:
+                await interaction.delete_original_response()
+            except discord.NotFound:
+                pass
             
             trade_view = TradeView(self.cog, initiator, partner)
             await trade_view.start_in_channel(select_interaction.channel)
@@ -731,9 +751,8 @@ class TradePanelView(ui.View):
         view.add_item(user_select)
         await interaction.followup.send("누구와 거래하시겠습니까?", view=view, ephemeral=True)
 
-    @ui.button(label="우편함", style=discord.ButtonStyle.primary, emoji="📫", custom_id="trade_panel_mailbox")
-    async def mailbox_button(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
+    async def handle_mailbox(self, interaction: discord.Interaction):
+        # defer는 dispatch_callback에서 이미 처리됨
         mailbox_view = MailboxView(self.cog, interaction.user)
         await mailbox_view.start(interaction)
         
