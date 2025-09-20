@@ -217,6 +217,11 @@ class TradeView(ui.View):
                     offer2_str = "\n".join([f"ㄴ {n}: {q}개" for n, q in offer2['items'].items()] + ([f"💰 {offer2['coins']:,}{self.currency_icon}"] if offer2['coins'] > 0 else [])) or "없음"
                     log_embed.add_field(name=f"{user1.display_name} 제공", value=offer1_str, inline=True)
                     log_embed.add_field(name=f"{user2.display_name} 제공", value=offer2_str, inline=True)
+
+                    # ▼▼▼ [핵심 수정] 최종 로그에 거래세와 신청 수수료 안내를 모두 포함 ▼▼▼
+                    log_embed.set_footer(text=f"거래세: {commission}{self.currency_icon} (신청 수수료 250코인은 환불되지 않음)")
+                    # ▲▲▲ [핵심 수정] ▲▲▲
+
                     await self.cog.regenerate_panel(log_channel, last_log=log_embed)
             
             await self.message.channel.send("✅ 거래가 성공적으로 완료되었습니다. 이 채널은 10초 후에 삭제됩니다.")
@@ -630,6 +635,7 @@ class TradePanelView(ui.View):
                 return await si.followup.send(f"❌ 수수료({trade_fee}{self.cog.currency_icon})를 지불하는데 실패했습니다. 잔액을 확인해주세요.", ephemeral=True)
             
             logger.info(f"{initiator.id}에게서 거래 수수료 250코인 차감 완료.")
+            await si.followup.send(f"✅ 거래 신청 수수료 {trade_fee}{self.cog.currency_icon}를 지불했습니다.", ephemeral=True)
 
             try:
                 thread_name = f"🤝｜{initiator.display_name}↔️{partner.display_name}"
@@ -693,7 +699,7 @@ class Trade(commands.Cog):
                 logger.info(f"이전 거래소 패널(ID: {panel_info['message_id']})을 삭제했습니다.")
             except (discord.NotFound, discord.Forbidden):
                 logger.warning(f"이전 거래소 패널을 찾거나 삭제할 수 없습니다.")
-
+        
         embed_data = await get_embed_from_db(panel_key)
         if not embed_data:
             logger.error(f"DB에서 '{panel_key}' 임베드를 찾을 수 없어 패널을 생성할 수 없습니다.")
