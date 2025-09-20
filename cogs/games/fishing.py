@@ -96,7 +96,16 @@ class FishingGameView(ui.View):
             min_s, max_s = catch_proto["min_size"] * size_multiplier, catch_proto["max_size"] * size_multiplier
             size = round(random.uniform(min_s, max_s), 1)
             if is_whale_catch: await set_whale_caught()
-            await add_to_aquarium(self.player.id, {"name": catch_proto['name'], "size": size, "emoji": catch_proto.get('emoji', '🐠')})
+
+            # ▼▼▼ [핵심 수정] ▼▼▼
+            # DB에 저장하기 전에 이모지 값을 정제합니다.
+            emoji_to_save = catch_proto.get('emoji', '🐠')
+            if isinstance(emoji_to_save, str):
+                emoji_to_save = emoji_to_save.strip()
+
+            await add_to_aquarium(self.player.id, {"name": catch_proto['name'], "size": size, "emoji": emoji_to_save})
+            # ▲▲▲ [핵심 수정] ▲▲▲
+
             is_big_catch = size >= self.big_catch_threshold
             title = "🏆 월척이다! 🏆" if is_big_catch else "🎉 낚시 성공! 🎉"
             if is_whale_catch: title = "🐋 전설의 시작, 고래를 낚다! 🐋"
