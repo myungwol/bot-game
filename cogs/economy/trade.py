@@ -271,6 +271,8 @@ class TradeView(ui.View):
         if self.trade_id in self.cog.active_trades: self.cog.active_trades.pop(self.trade_id)
         super().stop()
 
+# (cogs/economy/trade.py 파일에서 이 클래스를 찾아 아래 내용으로 전체 교체)
+
 class MailComposeView(ui.View):
     def __init__(self, cog: 'Trade', user: discord.Member, recipient: discord.Member):
         super().__init__(timeout=300)
@@ -279,12 +281,17 @@ class MailComposeView(ui.View):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙"); self.shipping_fee = 100
         self.message: Optional[discord.WebhookMessage] = None
         
-        self.add_item(ui.Button(label="아이템 첨부", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="attach_item_button"))
-        self.add_item(ui.Button(label="메시지 작성", style=discord.ButtonStyle.secondary, emoji="✍️", custom_id="write_message_button"))
-        self.add_item(ui.Button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀", custom_id="send_button"))
+        self.attach_button = ui.Button(label="아이템 첨부", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="attach_item_button")
+        self.write_button = ui.Button(label="메시지 작성", style=discord.ButtonStyle.secondary, emoji="✍️", custom_id="write_message_button")
+        self.send_button = ui.Button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀", custom_id="send_button")
 
-        for item in self.children:
-            if isinstance(item, ui.Button): item.callback = self.dispatch_callback
+        self.attach_button.callback = self.dispatch_callback
+        self.write_button.callback = self.dispatch_callback
+        self.send_button.callback = self.dispatch_callback
+
+        self.add_item(self.attach_button)
+        self.add_item(self.write_button)
+        self.add_item(self.send_button)
 
     async def start(self, interaction: discord.Interaction):
         await self.update_view(interaction, new_message=True)
@@ -292,15 +299,12 @@ class MailComposeView(ui.View):
     async def update_view(self, interaction: discord.Interaction, new_message=False):
         embed = await self.build_embed()
         if new_message:
+            # ▼▼▼ [핵심 수정] 이제 self.message에 상호작용 객체를 직접 저장하지 않습니다. ▼▼▼
             target = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
-            self.message = await target(embed=embed, view=self, ephemeral=True)
+            await target(embed=embed, view=self, ephemeral=True)
         else:
-            if self.message: await self.message.edit(embed=embed, view=self)
-
-    async def refresh_ui(self, interaction: discord.Interaction):
-        if self.is_finished() or not self.message: return
-        embed = await self.build_embed()
-        await self.message.edit(embed=embed, view=self)
+            # 메시지 수정은 이제 interaction 객체를 통해 이루어집니다.
+            await interaction.edit_original_response(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
@@ -335,6 +339,7 @@ class MailComposeView(ui.View):
         tradeable_items = { name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category') in TRADEABLE_CATEGORIES }
         if not tradeable_items: return await interaction.response.send_message("첨부 가능한 아이템이 없습니다.", ephemeral=True, delete_after=5)
         options = [ discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in tradeable_items.items() ]
+        
         select_view = ui.View(timeout=180)
         item_select = ui.Select(placeholder="첨부할 아이템을 선택하세요", options=options[:25])
         
@@ -345,7 +350,8 @@ class MailComposeView(ui.View):
             await modal.wait()
             if modal.quantity is not None:
                 self.attachments["items"][item_name] = self.attachments["items"].get(item_name, 0) + modal.quantity
-                await self.refresh_ui(interaction)
+                # ▼▼▼ [핵심 수정] refresh_ui 대신 update_view를 interaction과 함께 호출합니다. ▼▼▼
+                await self.update_view(interaction)
             try: await si.delete_original_response()
             except discord.NotFound: pass
         
@@ -359,9 +365,10 @@ class MailComposeView(ui.View):
         await modal.wait()
         if modal.message is not None:
             self.message_content = modal.message
-            await self.refresh_ui(interaction)
+            await self.update_view(interaction)
 
     async def handle_send(self, interaction: discord.Interaction):
+        # defer는 dispatch_callback에서 이미 처리됨
         try:
             wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(self.user))
             if wallet.get('balance', 0) < self.shipping_fee:
@@ -385,9 +392,9 @@ class MailComposeView(ui.View):
                 att_to_insert = [{"mail_id": new_mail_id, "item_name": n, "quantity": q, "is_coin": False} for n, q in self.attachments["items"].items()]
                 await supabase.table('mail_attachments').insert(att_to_insert).execute()
             
+            # ▼▼▼ [핵심 수정] self.message.edit 대신 interaction.edit_original_response 사용 ▼▼▼
             for item in self.children: item.disabled = True
-            await interaction.followup.send("✅ 우편을 성공적으로 보냈습니다.", ephemeral=True)
-            if self.message: await self.message.edit(content="✅ 우편을 성공적으로 보냈습니다.", view=self, embed=None)
+            await interaction.edit_original_response(content="✅ 우편을 성공적으로 보냈습니다.", view=self, embed=None)
             
             if (panel_ch_id := get_id("trade_panel_channel_id")) and (panel_ch := self.cog.bot.get_channel(panel_ch_id)):
                 if embed_data := await get_embed_from_db("log_new_mail"):
