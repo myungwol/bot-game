@@ -113,7 +113,6 @@ class TradeView(ui.View):
             await interaction.response.send_message("거래 당사자만 이용할 수 있습니다.", ephemeral=True)
             return False
         
-        # 거래 확정 버튼은 신청자만 누를 수 있도록 별도 체크
         if interaction.data and interaction.data.get('custom_id') == "confirm_trade_button":
             if interaction.user.id != self.initiator.id:
                 await interaction.response.send_message("거래 신청자만 확정할 수 있습니다.", ephemeral=True, delete_after=5)
@@ -176,14 +175,11 @@ class TradeView(ui.View):
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
         
-        # 모달을 띄우는 상호작용은 여기서 직접 처리
         if custom_id in ["add_item_button", "remove_item_button", "add_coin_button"]:
-            # defer는 각 핸들러에서 필요에 따라 처리
             pass
         elif not interaction.response.is_done():
             await interaction.response.defer()
 
-        # 실제 로직 호출
         if custom_id == "add_item_button": await self.handle_add_item(interaction)
         elif custom_id == "remove_item_button": await self.handle_remove_item(interaction)
         elif custom_id == "add_coin_button": await self.handle_add_coin(interaction)
@@ -669,14 +665,12 @@ class MailboxView(ui.View):
                 await select_interaction.response.send_message("잘못된 상대입니다.", ephemeral=True, delete_after=5)
                 return
             
-            # 여기서 MailboxView의 원래 메시지를 수정하여 MailComposeView로 전환합니다.
             compose_view = MailComposeView(self.cog, self.user, recipient, select_interaction)
             await compose_view.start()
 
         user_select.callback = callback
         view.add_item(user_select)
         await interaction.response.edit_message(content="누구에게 편지를 보내시겠습니까?", view=view, embed=None)
-
     
     async def prev_page_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -730,7 +724,7 @@ class TradePanelView(ui.View):
         async def select_callback(si: discord.Interaction):
             await si.response.defer(ephemeral=True)
             partner_id = int(si.data['values'][0])
-            partner = interaction.guild.get_member(partner_id)
+            partner = si.guild.get_member(partner_id)
             if not partner or partner.bot or partner.id == initiator.id:
                 return await si.followup.send("잘못된 상대입니다.", ephemeral=True)
             trade_id = f"{min(initiator.id, partner.id)}-{max(initiator.id, partner.id)}"
@@ -747,7 +741,7 @@ class TradePanelView(ui.View):
 
             try:
                 thread_name = f"🤝｜{initiator.display_name}↔️{partner.display_name}"
-                thread = await interaction.channel.create_thread(name=thread_name, type=discord.ChannelType.private_thread)
+                thread = await si.channel.create_thread(name=thread_name, type=discord.ChannelType.private_thread)
                 await thread.add_user(initiator)
                 await thread.add_user(partner)
                 trade_view = TradeView(self.cog, initiator, partner, trade_id)
