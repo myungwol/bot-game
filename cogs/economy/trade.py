@@ -147,7 +147,9 @@ class TradeView(ui.View):
         self.add_item(ui.Button(label="코인 추가", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin_button", row=0, disabled=both_ready))
 
         if not both_ready:
-            self.add_item(ui.Button(label="준비/해제", style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
+            # 준비 버튼 텍스트를 현재 상태에 따라 동적으로 변경
+            ready_button_label = "준비 해제" if self.offers[self.initiator.id]["ready"] or self.offers[self.partner.id]["ready"] else "준비"
+            self.add_item(ui.Button(label=ready_button_label, style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
         else:
             self.add_item(ui.Button(label="거래 확정", style=discord.ButtonStyle.success, emoji="🤝", custom_id="confirm_trade_button", row=1))
             self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="ready_button", row=1))
@@ -740,8 +742,9 @@ class TradePanelView(ui.View):
             await si.followup.send(f"✅ 거래 신청 수수료 {trade_fee}{self.cog.currency_icon}를 지불했습니다.", ephemeral=True)
 
             try:
+                # [핵심 수정] 스레드를 생성할 때, 원본 패널이 있는 채널을 사용합니다.
                 thread_name = f"🤝｜{initiator.display_name}↔️{partner.display_name}"
-                thread = await si.channel.create_thread(name=thread_name, type=discord.ChannelType.private_thread)
+                thread = await interaction.channel.create_thread(name=thread_name, type=discord.ChannelType.private_thread)
                 await thread.add_user(initiator)
                 await thread.add_user(partner)
                 trade_view = TradeView(self.cog, initiator, partner, trade_id)
