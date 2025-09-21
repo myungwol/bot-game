@@ -261,7 +261,8 @@ class TradeView(ui.View):
 
     async def handle_cancel(self, interaction: discord.Interaction):
         await interaction.followup.send("거래 취소를 요청했습니다.", ephemeral=True)
-        await self.on_timeout(cancelled_by=interaction.user)
+        # ▼▼▼ [핵심 수정] 아래 호출되는 함수 이름을 변경합니다. ▼▼▼
+        await self._end_trade(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
         self.build_components(interaction.user)
@@ -329,7 +330,7 @@ class TradeView(ui.View):
             await asyncio.sleep(10); await self.message.channel.delete()
         self.stop()
 
-    async def on_timeout(self, cancelled_by: Optional[discord.User] = None):
+    async def _end_trade(self, cancelled_by: Optional[discord.User] = None):
         if self.is_finished(): return
         self.stop()
         if not self.message: return
@@ -359,6 +360,11 @@ class TradeView(ui.View):
             logger.warning(f"거래 종료/삭제 중 오류: {e}")
         except Exception as e:
             logger.error(f"거래 종료 중 예외 발생: {e}", exc_info=True)
+    
+    # ▼▼▼ [핵심 수정] 라이브러리 표준 on_timeout 함수를 추가합니다. ▼▼▼
+    async def on_timeout(self):
+        await self._end_trade()
+    # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
     
     def stop(self):
         if self.trade_id in self.cog.active_trades: self.cog.active_trades.pop(self.trade_id)
@@ -757,7 +763,8 @@ class TradePanelView(ui.View):
                 await trade_view.start_in_thread(thread)
                 
                 await si.followup.send(f"✅ 거래 채널을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
-                await interaction.edit_original_response(content=f"거래 상대({partner.mention}) 선택 완료.", view=None)
+                # ▼▼▼ [핵심 수정] 아래 1줄을 삭제합니다. ▼▼▼
+                # await interaction.edit_original_response(content=f"거래 상대({partner.mention}) 선택 완료.", view=None)
 
             except Exception as e:
                 logger.error(f"거래 스레드 생성 중 오류: {e}", exc_info=True)
