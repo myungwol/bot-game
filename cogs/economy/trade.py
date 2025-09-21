@@ -301,16 +301,16 @@ class TradeView(ui.View):
         super().stop()
 
 class MailComposeView(ui.View):
-    def __init__(self, cog: 'Trade', user: discord.Member, recipient: discord.Member):
+    def __init__(self, cog: 'Trade', user: discord.Member, recipient: discord.Member, original_interaction: discord.Interaction):
         super().__init__(timeout=300)
         self.cog = cog; self.user = user; self.recipient = recipient
+        self.original_interaction = original_interaction
         self.message_content = ""; self.attachments = {"items": {}}
         self.currency_icon = get_config("CURRENCY_ICON", "🪙"); self.shipping_fee = 100
-        self.message: Optional[discord.WebhookMessage] = None
         self.current_state = "composing" 
         
-    async def start(self, interaction: discord.Interaction):
-        await self.update_message(interaction)
+    async def start(self):
+        await self.update_message(self.original_interaction)
 
     async def update_message(self, interaction: discord.Interaction):
         if not interaction.response.is_done():
@@ -319,10 +319,7 @@ class MailComposeView(ui.View):
         embed = await self.build_embed()
         await self.build_components()
         
-        target_message = await interaction.original_response()
-        await target_message.edit(embed=embed, view=self)
-        self.message = target_message
-
+        await interaction.edit_original_response(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
@@ -423,7 +420,7 @@ class MailComposeView(ui.View):
                 att_to_insert = [{"mail_id": new_mail_id, "item_name": n, "quantity": q, "is_coin": False} for n, q in self.attachments["items"].items()]
                 await supabase.table('mail_attachments').insert(att_to_insert).execute()
             
-            await self.message.edit(content="✅ 우편을 성공적으로 보냈습니다.", view=None, embed=None)
+            await interaction.edit_original_response(content="✅ 우편을 성공적으로 보냈습니다.", view=None, embed=None)
             
             if (panel_ch_id := get_id("trade_panel_channel_id")) and (panel_ch := self.cog.bot.get_channel(panel_ch_id)):
                 if embed_data := await get_embed_from_db("log_new_mail"):
@@ -457,9 +454,7 @@ class MailboxView(ui.View):
             await interaction.response.defer()
 
         if not self.message:
-            logger.error("MailboxView 업데이트가 요청되었지만 self.message가 설정되지 않았습니다.")
-            await interaction.followup.send("오류: UI를 찾을 수 없습니다. 우편함을 다시 열어주세요.", ephemeral=True, delete_after=5)
-            return
+            self.message = await interaction.original_response()
 
         embed = await self.build_embed()
         await self.build_components()
@@ -615,8 +610,8 @@ class MailboxView(ui.View):
                 await select_interaction.response.send_message("잘못된 상대입니다.", ephemeral=True, delete_after=5)
                 return
             
-            compose_view = MailComposeView(self.cog, self.user, recipient)
-            await compose_view.start(select_interaction)
+            compose_view = MailComposeView(self.cog, self.user, recipient, select_interaction)
+            await compose_view.start()
 
         user_select.callback = callback
         select_view.add_item(user_select)
