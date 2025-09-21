@@ -49,33 +49,49 @@ BOT_VERSION = "v2.3-game-stable-ko"
 class MyBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.interaction_handler_cog: Optional['InteractionHandler'] = None # 타입 힌트 구체화
+        self.interaction_handler_cog = None
 
-    async def process_application_commands(self, interaction: discord.Interaction):
-        # ... (이하 내용은 이전과 동일하게 유지) ...
+    # ▼▼▼ [핵심 수정] process_application_commands를 삭제하고 on_interaction으로 교체합니다. ▼▼▼
+    async def on_interaction(self, interaction: discord.Interaction):
+        # 이 로그가 보이면, 봇이 상호작용을 정상적으로 받고 있다는 의미입니다.
+        logger.critical(f"==================== [!!! on_interaction 이벤트 발생 !!!] ====================")
+        logger.info(f"[진단 on_interaction] 사용자: {interaction.user} ({interaction.user.id})")
+        logger.info(f"[진단 on_interaction] 타입: {interaction.type}")
+        if interaction.data:
+             logger.info(f"[진단 on_interaction] Custom ID: {interaction.data.get('custom_id', 'N/A')}")
+        
+        # InteractionHandler Cog가 로드되었는지 확인합니다.
         if self.interaction_handler_cog:
-            logger.info("[진단] process_application_commands: 'interaction_handler_cog'를 찾았습니다. 쿨다운 검사를 시작합니다.")
+            logger.info("[진단 on_interaction] 'interaction_handler_cog'를 찾았습니다. 쿨다운 검사를 시작합니다.")
+            
+            # 쿨다운 검사를 실행합니다.
+            can_proceed = await self.interaction_handler_cog.check_cooldown(interaction)
+            
+            if not can_proceed:
+                # 쿨다운에 걸렸으면 여기서 처리를 중단합니다.
+                logger.warning("[진단 on_interaction] 쿨다운에 걸려 상호작용 처리를 중단합니다.")
+                logger.critical("==================== [!!! on_interaction 처리 종료 (차단) !!!] ====================")
+                return
+            
+            logger.info("[진단 on_interaction] 쿨다운 검사를 통과했습니다. 기본 상호작용 처리를 계속합니다.")
         else:
-            logger.error("[진단] process_application_commands: 'interaction_handler_cog'가 'None'입니다! 쿨다운을 검사할 수 없습니다.")
-            await super().process_application_commands(interaction)
-            return
+            # 이 에러가 보인다면 Cog가 로드되지 않았거나 할당되지 않은 것입니다.
+            logger.error("[진단 on_interaction] 'interaction_handler_cog'가 'None'입니다! 쿨다운을 검사할 수 없습니다.")
 
-        can_proceed = await self.interaction_handler_cog.check_cooldown(interaction)
-        if not can_proceed:
-            return
-
-        await super().process_application_commands(interaction)
+        # 쿨다운을 통과했거나 핸들러가 없으면, discord.py의 기본 처리 로직을 호출합니다.
+        # 이 부분이 있어야 버튼의 원래 기능이 실행됩니다.
+        await super().on_interaction(interaction)
+        logger.critical("==================== [!!! on_interaction 처리 완료 !!!] ====================")
+    # ▲▲▲ 핵심 수정 끝 ▲▲▲
                 
     async def setup_hook(self):
         await self.load_all_extensions()
         
-        # ▼▼▼ [진단용 로깅 추가] ▼▼▼
-        # 모든 Cog를 로드한 후, 핸들러가 제대로 설정되었는지 확인합니다.
+        # (이하 setup_hook 및 다른 부분은 이전과 동일)
         if self.interaction_handler_cog:
             logger.info("✅ [진단] setup_hook 완료 후: 'bot.interaction_handler_cog'가 성공적으로 설정되었습니다.")
         else:
             logger.error("❌ [진단] setup_hook 완료 후: 'bot.interaction_handler_cog'가 설정되지 않았습니다!")
-        # ▲▲▲ 진단용 로깅 끝 ▲▲▲
          
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
