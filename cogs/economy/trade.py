@@ -374,7 +374,7 @@ class MailComposeView(ui.View):
             await interaction.response.defer(ephemeral=True)
 
         embed = await self.build_embed()
-        self.build_components() # build_components first
+        self.build_components()
         
         await interaction.edit_original_response(embed=embed, view=self)
 
@@ -742,7 +742,6 @@ class TradePanelView(ui.View):
             await si.followup.send(f"✅ 거래 신청 수수료 {trade_fee}{self.cog.currency_icon}를 지불했습니다.", ephemeral=True)
 
             try:
-                # [핵심 수정] 스레드를 생성할 때, 원본 패널이 있는 채널을 사용합니다.
                 thread_name = f"🤝｜{initiator.display_name}↔️{partner.display_name}"
                 thread = await interaction.channel.create_thread(name=thread_name, type=discord.ChannelType.private_thread)
                 await thread.add_user(initiator)
@@ -751,6 +750,7 @@ class TradePanelView(ui.View):
                 await trade_view.start_in_thread(thread)
                 
                 await si.followup.send(f"✅ 거래 채널을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
+                await interaction.edit_original_response(content="거래 상대 선택 완료.", view=None)
 
             except Exception as e:
                 logger.error(f"거래 스레드 생성 중 오류: {e}", exc_info=True)
