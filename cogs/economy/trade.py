@@ -101,7 +101,8 @@ class TradeView(ui.View):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.message: Optional[discord.Message] = None
         
-        self.build_components(None)
+        # Build components initially for the initiator
+        self.build_components(self.initiator)
 
     async def start_in_thread(self, thread: discord.Thread):
         self.cog.active_trades[self.trade_id] = self
@@ -138,8 +139,6 @@ class TradeView(ui.View):
     def build_components(self, interaction_user: Optional[discord.User]):
         self.clear_items()
         
-        # Determine the user ID to check readiness against.
-        # Fallback to initiator if interaction_user is not available (e.g., initial build).
         user_id_to_check = interaction_user.id if interaction_user else self.initiator.id
         
         initiator_ready = self.offers[self.initiator.id]["ready"]
@@ -148,20 +147,18 @@ class TradeView(ui.View):
         
         user_is_ready = self.offers[user_id_to_check]["ready"]
 
-        # Add/Remove/Coin buttons are disabled if the specific user interacting is ready.
         self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="add_item_button", row=0, disabled=user_is_ready))
         self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="remove_item_button", row=0, disabled=user_is_ready))
         self.add_item(ui.Button(label="코인 추가", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin_button", row=0, disabled=user_is_ready))
 
-        # Ready/Unready/Confirm buttons logic
-        if both_ready:
+        if not both_ready:
+            if not user_is_ready:
+                self.add_item(ui.Button(label="준비", style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
+            else:
+                self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="unready_button", row=1))
+        else:
             self.add_item(ui.Button(label="거래 확정", style=discord.ButtonStyle.success, emoji="🤝", custom_id="confirm_trade_button", row=1))
             self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="unready_button", row=1))
-        else:
-            if user_is_ready:
-                self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="unready_button", row=1))
-            else:
-                self.add_item(ui.Button(label="준비", style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
         
         self.add_item(ui.Button(label="거래 취소", style=discord.ButtonStyle.danger, emoji="✖️", custom_id="cancel_button", row=2))
 
@@ -174,24 +171,21 @@ class TradeView(ui.View):
         self.build_components(interaction.user)
         embed = await self.build_embed()
         
-        # Always defer if not already done.
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-        
-        # Always edit the main message in the thread. Ephemeral updates can cause issues.
         try:
+            # We always edit the main message, not the interaction's original response
+            # because the interaction might be from an ephemeral message.
             await self.message.edit(embed=embed, view=self)
+            # If the interaction hasn't been responded to, we acknowledge it quietly.
+            if not interaction.response.is_done():
+                await interaction.response.defer()
         except (discord.NotFound, discord.Forbidden):
             self.stop()
 
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
         
-        if custom_id in ["add_item_button", "remove_item_button", "add_coin_button"]:
-            # These open modals/views which handle their own responses.
-            pass
-        elif not interaction.response.is_done():
-            # Defer for buttons that will update the main message.
+        # Defer immediately for actions that will update the main UI
+        if custom_id in ["ready_button", "unready_button", "confirm_trade_button", "cancel_button"]:
             await interaction.response.defer()
 
         if custom_id == "add_item_button": await self.handle_add_item(interaction)
@@ -240,8 +234,10 @@ class TradeView(ui.View):
             item_name_to_remove = si.data['values'][0]
             if item_name_to_remove in self.offers[user_id]["items"]:
                 del self.offers[user_id]["items"][item_name_to_remove]
+                # Use the original interaction to update the main view
                 await self.update_ui(interaction)
             try:
+                # This is a new interaction, it needs a response
                 await si.response.defer()
                 await si.delete_original_response()
             except discord.NotFound:
@@ -757,7 +753,7 @@ class TradePanelView(ui.View):
 
             try:
                 thread_name = f"🤝｜{initiator.display_name}↔️{partner.display_name}"
-                thread = await si.channel.create_thread(name=thread_name, type=discord.ChannelType.private_thread)
+                thread = await interaction.channel.create_thread(name=thread_name, type=discord.ChannelType.private_thread)
                 await thread.add_user(initiator)
                 await thread.add_user(partner)
                 trade_view = TradeView(self.cog, initiator, partner, trade_id)
