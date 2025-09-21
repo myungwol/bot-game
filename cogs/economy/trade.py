@@ -101,7 +101,7 @@ class TradeView(ui.View):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.message: Optional[discord.Message] = None
         
-        self.build_components()
+        self.build_components(None)
 
     async def start_in_thread(self, thread: discord.Thread):
         self.cog.active_trades[self.trade_id] = self
@@ -135,21 +135,22 @@ class TradeView(ui.View):
         embed.set_footer(text="5분 후 만료됩니다.")
         return embed
 
-    def build_components(self):
+    def build_components(self, interaction_user: Optional[discord.User]):
         self.clear_items()
         
-        # This is a simplified check. A proper check would need the interaction object.
-        # We'll rely on the interaction_check to disable buttons for the wrong user.
+        user_id = interaction_user.id if interaction_user else self.initiator.id
+        
         initiator_ready = self.offers[self.initiator.id]["ready"]
         partner_ready = self.offers[self.partner.id]["ready"]
         both_ready = initiator_ready and partner_ready
 
-        self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="add_item_button", row=0, disabled=both_ready))
-        self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="remove_item_button", row=0, disabled=both_ready))
-        self.add_item(ui.Button(label="코인 추가", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin_button", row=0, disabled=both_ready))
+        self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="add_item_button", row=0, disabled=self.offers[user_id]["ready"]))
+        self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="remove_item_button", row=0, disabled=self.offers[user_id]["ready"]))
+        self.add_item(ui.Button(label="코인 추가", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin_button", row=0, disabled=self.offers[user_id]["ready"]))
 
         if not both_ready:
-            self.add_item(ui.Button(label="준비/해제", style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
+            ready_button_label = "준비 해제" if self.offers[user_id]["ready"] else "준비"
+            self.add_item(ui.Button(label=ready_button_label, style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
         else:
             self.add_item(ui.Button(label="거래 확정", style=discord.ButtonStyle.success, emoji="🤝", custom_id="confirm_trade_button", row=1))
             self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="ready_button", row=1))
@@ -162,28 +163,22 @@ class TradeView(ui.View):
     async def update_ui(self, interaction: discord.Interaction):
         if self.is_finished() or not self.message: return
         
-        self.build_components()
+        self.build_components(interaction.user)
         embed = await self.build_embed()
         
-        # Use the interaction that is passed to update the message
-        target_interaction = interaction
-        if not target_interaction.response.is_done():
-            await target_interaction.response.defer()
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         
         try:
-            await target_interaction.edit_original_response(embed=embed, view=self)
+            await self.message.edit(embed=embed, view=self)
         except (discord.NotFound, discord.Forbidden):
-            # Fallback to editing the main message if ephemeral fails or is from a modal
-            try:
-                await self.message.edit(embed=embed, view=self)
-            except (discord.NotFound, discord.Forbidden):
-                self.stop()
-
+            self.stop()
 
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
         
         if custom_id in ["add_item_button", "remove_item_button", "add_coin_button"]:
+            # These open new ephemeral views/modals, so no defer needed here.
             pass
         elif not interaction.response.is_done():
             await interaction.response.defer()
@@ -209,7 +204,7 @@ class TradeView(ui.View):
             await si.response.send_modal(modal); await modal.wait()
             if modal.quantity is not None:
                 self.offers[user_id]["items"][item_name] = modal.quantity
-                await self.update_ui(self.message.channel.last_message.interactions[0] if self.message.channel.last_message else si)
+                await self.update_ui(interaction)
             try: await si.delete_original_response()
             except discord.NotFound: pass
         item_select.callback = select_callback; select_view.add_item(item_select)
@@ -263,7 +258,7 @@ class TradeView(ui.View):
         await self.on_timeout(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
-        self.build_components()
+        self.build_components(interaction.user)
         for item in self.children: item.disabled = True
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=await self.build_embed())
         user1, user2, offer1, offer2 = self.initiator, self.partner, self.offers[self.initiator.id], self.offers[self.partner.id]
@@ -756,7 +751,6 @@ class TradePanelView(ui.View):
                 await trade_view.start_in_thread(thread)
                 
                 await si.followup.send(f"✅ 거래 채널을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
-                # [핵심 수정] 원래 패널을 건드리지 않고, ephemeral 메시지를 수정합니다.
                 await interaction.edit_original_response(content="거래 상대 선택 완료.", view=None)
 
             except Exception as e:
