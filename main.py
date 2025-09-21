@@ -48,7 +48,22 @@ BOT_VERSION = "v2.3-game-stable-ko" # 게임 봇 안정화 버전 (한국어)
 class MyBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # InteractionHandler Cog를 저장할 변수
+        self.interaction_handler_cog = None
 
+    # ▼▼▼ [핵심 수정] 아래 메서드를 MyBot 클래스 안에 추가합니다. ▼▼▼
+    async def process_application_commands(self, interaction: discord.Interaction):
+        # InteractionHandler Cog가 로드되었고, 쿨다운 검사를 통과해야만 원래 로직 실행
+        if self.interaction_handler_cog:
+            # 쿨다운 검사를 통과하면 True, 아니면 False 반환
+            can_proceed = await self.interaction_handler_cog.check_cooldown(interaction)
+            if not can_proceed:
+                return # 쿨다운에 걸리면 여기서 처리 중단
+
+        # 쿨다운을 통과한 상호작용은 원래의 명령 처리기로 전달
+        await super().process_application_commands(interaction)
+    # ▲▲▲ 추가 끝 ▲▲▲
+                
     async def setup_hook(self):
         await self.load_all_extensions()
         
