@@ -21,6 +21,15 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
+async def delete_after(message: discord.WebhookMessage, delay: int):
+    """메시지를 보낸 후 지정된 시간 뒤에 삭제하는 헬퍼 함수"""
+    await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except (discord.NotFound, discord.Forbidden):
+        pass
+# ▲▲▲ 추가 끝 ▲▲▲
+
 TRADEABLE_CATEGORIES = ["농장_작물", "농장_씨앗", "광물", "미끼", "아이템"]
 
 class ItemSelectModal(ui.Modal, title="수량 입력"):
@@ -252,15 +261,18 @@ class TradeView(ui.View):
     async def handle_ready(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         if self.offers[user_id]["ready"]:
-            await interaction.followup.send("이미 준비 완료 상태입니다.", ephemeral=True, delete_after=5)
+            msg = await interaction.followup.send("이미 준비 완료 상태입니다.", ephemeral=True)
+            self.cog.bot.loop.create_task(delete_after(msg, 5))
             return
         self.offers[user_id]["ready"] = True
         await self.update_ui(interaction)
 
+    # ▼▼▼ [핵심 수정] handle_unready 메서드를 아래 코드로 수정합니다. (오류 수정) ▼▼▼
     async def handle_unready(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         if not self.offers[user_id]["ready"]:
-            await interaction.followup.send("아직 준비 완료 상태가 아닙니다.", ephemeral=True, delete_after=5)
+            msg = await interaction.followup.send("아직 준비 완료 상태가 아닙니다.", ephemeral=True)
+            self.cog.bot.loop.create_task(delete_after(msg, 5))
             return
         self.offers[user_id]["ready"] = False
         await self.update_ui(interaction)
@@ -428,24 +440,39 @@ class MailComposeView(ui.View):
             if not hasattr(item, 'callback') or item.callback is None:
                 item.callback = self.dispatch_callback
 
+    # ▼▼▼ [핵심 수정] dispatch_callback 메서드를 아래 코드로 전체 교체합니다. ▼▼▼
     async def dispatch_callback(self, interaction: discord.Interaction):
-        custom_id = interaction.data['custom_id']
+        # --- 연타 방지 로직 시작 ---
+        key = (interaction.channel.id, interaction.user.id)
+        now = time.monotonic()
+        last = self.cog.last_action_ts.get(key, 0.0)
+        if now - last < self.cog.cooldown_sec:
+            # 쿨다운 중에는 아무런 응답 없이 조용히 무시
+            return
         
-        if custom_id in ["write_message_button", "item_select_dropdown"]:
-            pass
-        elif not interaction.response.is_done():
-            await interaction.response.defer()
+        lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
+        if lock.locked():
+            return # 다른 작업이 이미 진행 중이면 무시
 
-        if custom_id == "attach_item_button":
-            await self.handle_attach_item(interaction)
-        elif custom_id == "write_message_button":
-            await self.handle_write_message(interaction)
-        elif custom_id == "send_button":
-            await self.handle_send(interaction)
-        elif custom_id == "item_select_dropdown":
-            await self.on_item_select(interaction)
-        elif custom_id == "back_to_composing":
-            await self.on_back_to_composing(interaction)
+        async with lock:
+            # 쿨다운 통과 시, 현재 시간을 기록
+            self.cog.last_action_ts[key] = now
+            
+            # --- 기존 로직 시작 ---
+            action = interaction.data['custom_id']
+
+            if action in ["add_item", "remove_item", "add_coin"]:
+                pass # 모달을 여는 작업은 defer가 필요 없음
+            elif not interaction.response.is_done():
+                await interaction.response.defer()
+
+            if action == "add_item": await self.handle_add_item(interaction)
+            elif action == "remove_item": await self.handle_remove_item(interaction)
+            elif action == "add_coin": await self.handle_add_coin(interaction)
+            elif action == "ready": await self.handle_ready(interaction)
+            elif action == "unready": await self.handle_unready(interaction)
+            elif action == "confirm_trade_button": await self.process_trade(interaction)
+            elif action == "cancel_button": await self.handle_cancel(interaction)
 
     async def handle_attach_item(self, interaction: discord.Interaction):
         self.current_state = "selecting_item"
@@ -705,25 +732,31 @@ class TradePanelView(ui.View):
         super().__init__(timeout=None)
         self.cog = cog_instance
         trade_button = ui.Button(label="1:1 거래하기", style=discord.ButtonStyle.success, emoji="🤝", custom_id="trade_panel_direct_trade")
-        trade_button.callback = self.dispatch_callback
+        trade_button.callback = self.dispatch_callback # <--- 콜백을 dispatch_callback으로 변경
         self.add_item(trade_button)
         mailbox_button = ui.Button(label="우편함", style=discord.ButtonStyle.primary, emoji="📫", custom_id="trade_panel_mailbox")
-        mailbox_button.callback = self.dispatch_callback
+        mailbox_button.callback = self.dispatch_callback # <--- 콜백을 dispatch_callback으로 변경
         self.add_item(mailbox_button)
 
+    # ▼▼▼ [핵심 수정] dispatch_callback 메서드를 추가합니다. ▼▼▼
     async def dispatch_callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        
+        # --- 연타 방지 로직 시작 ---
         key = (interaction.channel.id, interaction.user.id)
         now = time.monotonic()
         last = self.cog.last_action_ts.get(key, 0.0)
         if now - last < self.cog.cooldown_sec:
             return
-        self.cog.last_action_ts[key] = now
+        
         lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
         if lock.locked():
             return
         
         async with lock:
+            self.cog.last_action_ts[key] = now
+            
+            # --- 기존 로직 시작 ---
             custom_id = interaction.data['custom_id']
             if custom_id == "trade_panel_direct_trade":
                 await self.handle_direct_trade(interaction)
@@ -788,9 +821,11 @@ class Trade(commands.Cog):
         self.bot = bot
         self.active_trades: Dict[str, TradeView] = {}
         self.currency_icon = "🪙" 
+        # ▼▼▼ [핵심 수정] 아래 3줄을 추가합니다. ▼▼▼
         self.actor_locks: dict[tuple[int, int], asyncio.Lock] = {}
         self.last_action_ts: dict[tuple[int, int], float] = {}
-        self.cooldown_sec: float = 2.0
+        self.cooldown_sec: float = 1.0 # 버튼 연타 방지 쿨다운 (1초)
+        # ▲▲▲ 추가 끝 ▲▲▲
 
     async def cog_load(self):
         self.bot.loop.create_task(self.cleanup_stale_trades())
