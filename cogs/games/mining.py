@@ -60,11 +60,9 @@ class MiningGameView(ui.View):
         self.ui_update_task = self.cog.bot.loop.create_task(self.ui_updater())
         self.initial_load_task = self.cog.bot.loop.create_task(self.load_initial_data())
 
-        # ▼▼▼ [핵심 수정] 버튼을 생성하고 콜백을 dispatch로 연결합니다. ▼▼▼
         action_button = ui.Button(label="광석 찾기", style=discord.ButtonStyle.secondary, emoji="🔍", custom_id="mine_action_button")
         action_button.callback = self.dispatch_callback
         self.add_item(action_button)
-
 
     async def load_initial_data(self):
         user_abilities = await get_user_abilities(self.user.id)
@@ -102,25 +100,13 @@ class MiningGameView(ui.View):
 
     async def dispatch_callback(self, interaction: discord.Interaction):
         if not interaction.response.is_done(): await interaction.response.defer()
-
-        key = (interaction.channel.id, interaction.user.id)
-        now = time.monotonic()
-        last = self.cog.last_action_ts.get(key, 0.0)
-        if now - last < self.cog.cooldown_sec: return
-        self.cog.last_action_ts[key] = now
-
-        lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
-        if lock.locked(): return
-
-        async with lock:
-            if self.on_cooldown:
-                return await interaction.followup.send("⏳ 아직 주변을 살피고 있습니다.", ephemeral=True, delete_after=5)
-            
-            # ▼▼▼ [핵심 수정] 이름이 변경된 실제 로직 함수를 호출합니다. ▼▼▼
-            await self.handle_action_button(interaction, self.children[0])
+        
+        if self.on_cooldown:
+            return await interaction.followup.send("⏳ 아직 주변을 살피고 있습니다.", ephemeral=True, delete_after=5)
+        
+        await self.handle_action_button(interaction, self.children[0])
 
     def build_embed(self) -> discord.Embed:
-        # 이 메소드의 내용은 변경 없습니다.
         embed = discord.Embed(title=f"{self.user.display_name}님의 광산 채굴", color=0x607D8B)
         item_db = get_item_database()
         if self.state == "idle":
@@ -150,7 +136,6 @@ class MiningGameView(ui.View):
             embed.set_image(url=ORE_DATA[self.discovered_ore]['image_url'])
         return embed
 
-    # ▼▼▼ [핵심 수정] 데코레이터를 제거하고 함수 이름을 변경하여 일반 메소드로 만듭니다. ▼▼▼
     async def handle_action_button(self, interaction: discord.Interaction, button: ui.Button):
         async with self.ui_lock:
             if self.state == "idle":
@@ -222,24 +207,10 @@ class MiningPanelView(ui.View):
         self.add_item(enter_button)
 
     async def dispatch_callback(self, interaction: discord.Interaction):
-        # mining.py의 `handle_enter_mine`은 defer 후 followup을 사용하므로, 여기서 미리 defer합니다.
         if not interaction.response.is_done():
             await interaction.response.defer()
         
-        key = (interaction.channel.id, interaction.user.id)
-        now = time.monotonic()
-        last = self.cog.last_action_ts.get(key, 0.0)
-        if now - last < self.cog.cooldown_sec:
-            return
-            
-        self.cog.last_action_ts[key] = now
-        lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
-        if lock.locked():
-            return
-        
-        async with lock:
-            # ▼▼▼ [핵심 수정] 오타가 있었던 부분을 올바르게 수정합니다. ▼▼▼
-            await self.cog.handle_enter_mine(interaction)
+        await self.cog.handle_enter_mine(interaction)
 
 class Mining(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -247,8 +218,7 @@ class Mining(commands.Cog):
         self.active_sessions: Dict[int, Dict] = {}
         self.active_abilities_cache: Dict[int, List[str]] = {}
         self.check_expired_mines_from_db.start()
-
-    # ... (이하 Mining Cog의 나머지 메소드는 변경 없습니다) ...
+        
     def cog_unload(self):
         self.check_expired_mines_from_db.cancel()
 
@@ -269,7 +239,6 @@ class Mining(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def handle_enter_mine(self, interaction: discord.Interaction):
-        # defer는 dispatch_callback에서 이미 처리됨
         user = interaction.user
 
         if user.id in self.active_sessions:
