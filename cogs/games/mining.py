@@ -247,12 +247,6 @@ class Mining(commands.Cog):
         self.active_sessions: Dict[int, Dict] = {}
         self.active_abilities_cache: Dict[int, List[str]] = {}
         self.check_expired_mines_from_db.start()
-        
-        # ▼▼▼ [핵심 수정] 디바운싱/락킹을 위한 변수를 여기에 추가합니다. ▼▼▼
-        self.actor_locks: dict[tuple[int, int], asyncio.Lock] = {}
-        self.last_action_ts: dict[tuple[int, int], float] = {}
-        self.cooldown_sec: float = 1.5 # 광산 입장은 작업이 많으므로 쿨타임을 1.5초로 넉넉하게 설정
-        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
     # ... (이하 Mining Cog의 나머지 메소드는 변경 없습니다) ...
     def cog_unload(self):
