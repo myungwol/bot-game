@@ -424,7 +424,8 @@ class MailComposeView(ui.View):
         self.cog = cog
         self.user = user
         self.recipient = recipient
-        self.original_interaction = original_interaction
+        # 이 상호작용은 이제 UserSelect의 상호작용이 됩니다.
+        self.original_interaction = original_interaction 
         self.message_content = ""
         self.attachments = {"items": {}}
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
@@ -435,8 +436,10 @@ class MailComposeView(ui.View):
         # 시작할 때 첫 메시지를 보냅니다.
         embed = await self.build_embed()
         await self.build_components()
-        # UserSelect에 대한 응답으로 ephemeral 메시지를 보냅니다.
+        
+        # ▼▼▼ [핵심 수정] original_interaction이 defer되었으므로 followup.send를 사용합니다. ▼▼▼
         self.message = await self.original_interaction.followup.send(embed=embed, view=self, ephemeral=True)
+        # ▲▲▲ 수정 끝 ▲▲▲
 
     async def refresh(self, interaction: Optional[discord.Interaction] = None):
         # View를 새로고침하는 중앙 함수
@@ -719,19 +722,34 @@ class MailboxView(ui.View):
         view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="편지를 보낼 상대를 선택하세요.")
         
+        # ▼▼▼ [핵심 수정] 아래 select_callback 함수를 교체합니다. ▼▼▼
         async def callback(select_interaction: discord.Interaction):
+            # 1. 먼저 UserSelect 상호작용에 응답하여 "상호작용 실패"를 방지합니다.
+            #    여기서는 아무것도 하지 않는 defer()를 사용합니다.
+            #    MailComposeView가 이 상호작용을 수정할 것이기 때문입니다.
+            await select_interaction.response.defer(ephemeral=True)
+            
             recipient_id = int(select_interaction.data['values'][0])
             recipient = interaction.guild.get_member(recipient_id)
             if not recipient or recipient.bot or recipient.id == self.user.id:
-                await select_interaction.response.send_message("잘못된 상대입니다.", ephemeral=True, delete_after=5)
+                await select_interaction.followup.send("잘못된 상대입니다.", ephemeral=True, delete_after=5)
                 return
             
+            # 2. MailComposeView를 생성할 때, UserSelect의 상호작용(select_interaction)을 넘겨줍니다.
             compose_view = MailComposeView(self.cog, self.user, recipient, select_interaction)
+            # 3. MailComposeView의 start 메서드가 이제 새 메시지를 보내거나 기존 메시지를 수정합니다.
             await compose_view.start()
+
+            # 4. "누구에게 편지를 보내시겠습니까?" 메시지를 수정하여 UI를 정리합니다.
+            try:
+                await interaction.edit_original_response(content="편지 작성 UI가 열렸습니다.", view=None)
+            except discord.NotFound:
+                pass
+        # ▲▲▲ 수정 끝 ▲▲▲
 
         user_select.callback = callback
         view.add_item(user_select)
-        await interaction.response.edit_message(content="누구에게 편지를 보내시겠습니까?", view=view, embed=None)
+        await interaction.edit_original_response(content="누구에게 편지를 보내시겠습니까?", view=view, embed=None)
     
     async def prev_page_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
