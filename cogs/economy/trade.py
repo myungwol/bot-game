@@ -101,7 +101,7 @@ class TradeView(ui.View):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.message: Optional[discord.Message] = None
         
-        self.build_components() # __init__에서 한 번 호출
+        self.build_components()
 
     async def start_in_thread(self, thread: discord.Thread):
         self.cog.active_trades[self.trade_id] = self
@@ -113,16 +113,7 @@ class TradeView(ui.View):
             await interaction.response.send_message("거래 당사자만 이용할 수 있습니다.", ephemeral=True)
             return False
         
-        # 각 플레이어는 자신의 버튼만 누를 수 있도록 제한
-        custom_id = interaction.data.get('custom_id', '')
-        if custom_id.startswith('initiator_') and interaction.user.id != self.initiator.id:
-            await interaction.response.send_message("자신의 거래 UI만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
-            return False
-        if custom_id.startswith('partner_') and interaction.user.id != self.partner.id:
-            await interaction.response.send_message("자신의 거래 UI만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
-            return False
-        
-        if custom_id == "confirm_trade_button" and interaction.user.id != self.initiator.id:
+        if interaction.data.get('custom_id') == "confirm_trade_button" and interaction.user.id != self.initiator.id:
             await interaction.response.send_message("거래 신청자만 확정할 수 있습니다.", ephemeral=True, delete_after=5)
             return False
         return True
@@ -143,7 +134,6 @@ class TradeView(ui.View):
         embed.set_footer(text="5분 후 만료됩니다.")
         return embed
 
-    # ▼▼▼ [핵심 수정] build_components 메서드를 아래 코드로 전체 교체합니다. ▼▼▼
     def build_components(self):
         self.clear_items()
         
@@ -151,25 +141,16 @@ class TradeView(ui.View):
         partner_ready = self.offers[self.partner.id]["ready"]
         both_ready = initiator_ready and partner_ready
 
-        # --- Initiator (신청자) 버튼 ---
-        self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="initiator_add_item", row=0, disabled=initiator_ready))
-        self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="initiator_remove_item", row=0, disabled=initiator_ready))
-        self.add_item(ui.Button(label="코인 설정", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="initiator_add_coin", row=0, disabled=initiator_ready))
-        if not initiator_ready:
-            self.add_item(ui.Button(label="준비", style=discord.ButtonStyle.primary, emoji="✅", custom_id="initiator_ready", row=0))
-        else:
-            self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="initiator_unready", row=0))
+        # --- 액션 버튼 ---
+        self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="add_item", row=0))
+        self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="remove_item", row=0))
+        self.add_item(ui.Button(label="코인 설정", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin", row=0))
 
-        # --- Partner (파트너) 버튼 ---
-        self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="partner_add_item", row=1, disabled=partner_ready))
-        self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="partner_remove_item", row=1, disabled=partner_ready))
-        self.add_item(ui.Button(label="코인 설정", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="partner_add_coin", row=1, disabled=partner_ready))
-        if not partner_ready:
-            self.add_item(ui.Button(label="준비", style=discord.ButtonStyle.primary, emoji="✅", custom_id="partner_ready", row=1))
-        else:
-            self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="partner_unready", row=1))
+        # --- 준비/해제 버튼 ---
+        self.add_item(ui.Button(label="준비", style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready", row=1))
+        self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="unready", row=1))
         
-        # --- 공용 버튼 ---
+        # --- 최종 결정 버튼 ---
         confirm_button = ui.Button(label="거래 확정", style=discord.ButtonStyle.success, emoji="🤝", custom_id="confirm_trade_button", row=2, disabled=not both_ready)
         self.add_item(confirm_button)
         
@@ -178,7 +159,6 @@ class TradeView(ui.View):
 
         for item in self.children:
             item.callback = self.dispatch_callback
-    # ▲▲▲ build_components 교체 끝 ▲▲▲
 
     async def update_ui(self, interaction: discord.Interaction):
         if self.is_finished() or not self.message: return
@@ -187,7 +167,6 @@ class TradeView(ui.View):
         embed = await self.build_embed()
         
         try:
-            # defer가 이미 호출되었을 수 있으므로 is_done()으로 확인
             if not interaction.response.is_done():
                 await interaction.response.edit_message(embed=embed, view=self)
             else:
@@ -195,43 +174,26 @@ class TradeView(ui.View):
         except (discord.NotFound, discord.Forbidden):
             self.stop()
 
-    # ▼▼▼ [핵심 수정] dispatch_callback 메서드를 아래 코드로 전체 교체합니다. ▼▼▼
     async def dispatch_callback(self, interaction: discord.Interaction):
-        custom_id = interaction.data['custom_id']
-        
-        # custom_id 분석
-        parts = custom_id.split('_')
-        target_user_key = parts[0] # 'initiator', 'partner', 또는 버튼 이름
-        action = "_".join(parts[1:]) if len(parts) > 1 else target_user_key
+        action = interaction.data['custom_id']
 
-        # 대상 유저 결정
-        target_user = None
-        if target_user_key == 'initiator':
-            target_user = self.initiator
-        elif target_user_key == 'partner':
-            target_user = self.partner
-
-        # 모달을 여는 작업은 defer를 하지 않음
         if action in ["add_item", "remove_item", "add_coin"]:
             pass
         elif not interaction.response.is_done():
             await interaction.response.defer()
 
-        # 액션에 따라 함수 호출
-        if action == "add_item": await self.handle_add_item(interaction, target_user)
-        elif action == "remove_item": await self.handle_remove_item(interaction, target_user)
-        elif action == "add_coin": await self.handle_add_coin(interaction, target_user)
-        elif action == "ready": await self.handle_ready(interaction, target_user, True)
-        elif action == "unready": await self.handle_ready(interaction, target_user, False)
+        if action == "add_item": await self.handle_add_item(interaction)
+        elif action == "remove_item": await self.handle_remove_item(interaction)
+        elif action == "add_coin": await self.handle_add_coin(interaction)
+        elif action == "ready": await self.handle_ready(interaction)
+        elif action == "unready": await self.handle_unready(interaction)
         elif action == "confirm_trade_button": await self.process_trade(interaction)
         elif action == "cancel_button": await self.handle_cancel(interaction)
-    # ▲▲▲ dispatch_callback 교체 끝 ▲▲▲
 
-    # ▼▼▼ [핵심 수정] handle_... 메서드들이 target_user를 인자로 받도록 수정합니다. ▼▼▼
-    async def handle_add_item(self, interaction: discord.Interaction, target_user: discord.Member):
-        user_id = target_user.id
+    async def handle_add_item(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
         if self.offers[user_id]["ready"]: return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
-        inventory, item_db = await get_inventory(target_user), get_item_database()
+        inventory, item_db = await get_inventory(interaction.user), get_item_database()
         tradeable_items = { n: q for n, q in inventory.items() if item_db.get(n, {}).get('category') in TRADEABLE_CATEGORIES }
         if not tradeable_items: return await interaction.response.send_message("거래 가능한 아이템이 없습니다.", ephemeral=True, delete_after=5)
         options = [ discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in tradeable_items.items() ]
@@ -248,8 +210,8 @@ class TradeView(ui.View):
         item_select.callback = select_callback; select_view.add_item(item_select)
         await interaction.response.send_message(view=select_view, ephemeral=True)
 
-    async def handle_remove_item(self, interaction: discord.Interaction, target_user: discord.Member):
-        user_id = target_user.id
+    async def handle_remove_item(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
         if self.offers[user_id]["ready"]:
             return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
         
@@ -277,8 +239,8 @@ class TradeView(ui.View):
         select_view.add_item(item_select)
         await interaction.response.send_message("제거할 아이템을 선택하세요.", view=select_view, ephemeral=True)
 
-    async def handle_add_coin(self, interaction: discord.Interaction, target_user: discord.Member):
-        user_id = target_user.id
+    async def handle_add_coin(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
         if self.offers[user_id]["ready"]: return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
         wallet = await get_wallet(user_id); max_coins = wallet.get('balance', 0)
         modal = CoinInputModal("거래 코인 설정", max_coins)
@@ -287,23 +249,30 @@ class TradeView(ui.View):
             self.offers[user_id]["coins"] = modal.coins
             await self.update_ui(interaction)
 
-    async def handle_ready(self, interaction: discord.Interaction, target_user: discord.Member, ready_status: bool):
-        user_id = target_user.id
-        self.offers[user_id]["ready"] = ready_status
+    async def handle_ready(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        if self.offers[user_id]["ready"]:
+            await interaction.followup.send("이미 준비 완료 상태입니다.", ephemeral=True, delete_after=5)
+            return
+        self.offers[user_id]["ready"] = True
         await self.update_ui(interaction)
-    # ▲▲▲ handle_... 메서드 수정 끝 ▲▲▲
+
+    async def handle_unready(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        if not self.offers[user_id]["ready"]:
+            await interaction.followup.send("아직 준비 완료 상태가 아닙니다.", ephemeral=True, delete_after=5)
+            return
+        self.offers[user_id]["ready"] = False
+        await self.update_ui(interaction)
 
     async def handle_cancel(self, interaction: discord.Interaction):
-        # 이 메서드는 변경 없습니다.
         await interaction.followup.send("거래 취소를 요청했습니다.", ephemeral=True)
         await self._end_trade(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
-        # ▼▼▼ [핵심 수정] 상호작용 후 UI가 즉시 비활성화되도록 수정합니다. ▼▼▼
         self.build_components()
         for item in self.children: item.disabled = True
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=await self.build_embed())
-        # ▲▲▲ 수정 끝 ▲▲▲
         user1, user2, offer1, offer2 = self.initiator, self.partner, self.offers[self.initiator.id], self.offers[self.partner.id]
         try:
             user1_wallet, user1_inv = await asyncio.gather(get_wallet(user1.id), get_inventory(user1))
@@ -351,7 +320,7 @@ class TradeView(ui.View):
             await self.message.channel.send("✅ 거래가 성공적으로 완료되었습니다. 이 채널은 10초 후에 삭제됩니다.")
             await asyncio.sleep(10); await self.message.channel.delete()
         self.stop()
-    
+
     async def fail_trade(self, reason: str):
         if self.message:
             if self.initiator:
@@ -397,10 +366,8 @@ class TradeView(ui.View):
         except Exception as e:
             logger.error(f"거래 종료 중 예외 발생: {e}", exc_info=True)
     
-    # ▼▼▼ [핵심 수정] 라이브러리 표준 on_timeout 함수를 추가합니다. ▼▼▼
     async def on_timeout(self):
         await self._end_trade()
-    # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
     
     def stop(self):
         if self.trade_id in self.cog.active_trades: self.cog.active_trades.pop(self.trade_id)
