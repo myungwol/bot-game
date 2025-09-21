@@ -751,23 +751,32 @@ class TradePanelView(ui.View):
         wallet = await get_wallet(initiator.id)
         if wallet.get('balance', 0) < trade_fee:
             return await interaction.followup.send(f"❌ 거래를 시작하려면 수수료 {trade_fee}{self.cog.currency_icon}가 필요합니다.", ephemeral=True)
+
         view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="거래할 상대를 선택하세요.")
+        
+        # ▼▼▼ [핵심 수정] 아래 select_callback 함수를 교체합니다. ▼▼▼
         async def select_callback(si: discord.Interaction):
-            await si.response.defer(ephemeral=True)
+            # UserSelect 상호작용에 대해 먼저 응답하여 타임아웃을 방지합니다.
+            await si.response.defer(ephemeral=True, thinking=False)
+
             partner_id = int(si.data['values'][0])
             partner = si.guild.get_member(partner_id)
             if not partner or partner.bot or partner.id == initiator.id:
-                return await si.followup.send("잘못된 상대입니다.", ephemeral=True)
+                return await si.followup.send("❌ 잘못된 상대입니다.", ephemeral=True, delete_after=5)
+            
             trade_id = f"{min(initiator.id, partner.id)}-{max(initiator.id, partner.id)}"
             if trade_id in self.cog.active_trades:
                  return await si.followup.send("상대방 또는 본인이 이미 다른 거래에 참여 중입니다.", ephemeral=True)
+            
             result = await update_wallet(initiator, -trade_fee)
             if not result:
                 logger.error(f"{initiator.id}의 거래 수수료 차감 실패. 잔액 부족 가능성.")
                 return await si.followup.send(f"❌ 수수료({trade_fee}{self.cog.currency_icon})를 지불하는데 실패했습니다. 잔액을 확인해주세요.", ephemeral=True)
+            
             logger.info(f"{initiator.id}에게서 거래 수수료 250코인 차감 완료.")
             await si.followup.send(f"✅ 거래 신청 수수료 {trade_fee}{self.cog.currency_icon}를 지불했습니다.", ephemeral=True)
+
             try:
                 thread_name = f"🤝｜{initiator.display_name}↔️{partner.display_name}"
                 thread = await si.channel.create_thread(name=thread_name, type=discord.ChannelType.private_thread)
@@ -775,13 +784,21 @@ class TradePanelView(ui.View):
                 await thread.add_user(partner)
                 trade_view = TradeView(self.cog, initiator, partner, trade_id)
                 await trade_view.start_in_thread(thread)
+                
                 await si.followup.send(f"✅ 거래 채널을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
-                await interaction.edit_original_response(content="거래 상대 선택이 완료되었습니다.", view=None)
+                
+                # ▼▼▼ [핵심 수정] 원본 메시지를 수정하는 코드를 삭제하고, UserSelect 메시지를 삭제합니다. ▼▼▼
+                try:
+                    await interaction.delete_original_response()
+                except discord.NotFound:
+                    pass # 이미 삭제되었거나 다른 이유로 찾을 수 없으면 무시
+
             except Exception as e:
                 logger.error(f"거래 스레드 생성 중 오류: {e}", exc_info=True)
                 await update_wallet(initiator, trade_fee)
                 logger.info(f"거래 스레드 생성 오류로 {initiator.id}에게 수수료 250코인 환불 완료.")
                 await si.followup.send("❌ 거래 채널을 만드는 중 오류가 발생했습니다.", ephemeral=True)
+        
         user_select.callback = select_callback
         view.add_item(user_select)
         await interaction.followup.send("누구와 거래하시겠습니까?", view=view, ephemeral=True)
