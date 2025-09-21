@@ -147,9 +147,7 @@ class TradeView(ui.View):
         self.add_item(ui.Button(label="코인 추가", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin_button", row=0, disabled=both_ready))
 
         if not both_ready:
-            # 준비 버튼 텍스트를 현재 상태에 따라 동적으로 변경
-            ready_button_label = "준비 해제" if self.offers[self.initiator.id]["ready"] or self.offers[self.partner.id]["ready"] else "준비"
-            self.add_item(ui.Button(label=ready_button_label, style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
+            self.add_item(ui.Button(label="준비/해제", style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
         else:
             self.add_item(ui.Button(label="거래 확정", style=discord.ButtonStyle.success, emoji="🤝", custom_id="confirm_trade_button", row=1))
             self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="ready_button", row=1))
@@ -374,7 +372,7 @@ class MailComposeView(ui.View):
             await interaction.response.defer(ephemeral=True)
 
         embed = await self.build_embed()
-        self.build_components()
+        await self.build_components()
         
         await interaction.edit_original_response(embed=embed, view=self)
 
@@ -389,7 +387,7 @@ class MailComposeView(ui.View):
             embed.description = "첨부할 아이템을 선택해주세요."
         return embed
 
-    def build_components(self):
+    async def build_components(self):
         self.clear_items()
         if self.current_state == "composing":
             self.add_item(ui.Button(label="아이템 첨부", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="attach_item_button"))
@@ -503,7 +501,7 @@ class MailboxView(ui.View):
 
     async def start(self, interaction: discord.Interaction):
         embed = await self.build_embed()
-        await self.build_components()
+        self.build_components() # build_components first
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     async def update_view(self, interaction: discord.Interaction):
@@ -514,7 +512,7 @@ class MailboxView(ui.View):
             self.message = await interaction.original_response()
 
         embed = await self.build_embed()
-        await self.build_components()
+        self.build_components()
         
         try:
             await self.message.edit(embed=embed, view=self)
