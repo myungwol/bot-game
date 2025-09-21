@@ -147,7 +147,8 @@ class TradeView(ui.View):
         self.add_item(ui.Button(label="코인 추가", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin_button", row=0, disabled=both_ready))
 
         if not both_ready:
-            self.add_item(ui.Button(label="준비/해제", style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
+            ready_button_label = "준비 해제" if self.offers[self.initiator.id]["ready"] or self.offers[self.partner.id]["ready"] else "준비"
+            self.add_item(ui.Button(label=ready_button_label, style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
         else:
             self.add_item(ui.Button(label="거래 확정", style=discord.ButtonStyle.success, emoji="🤝", custom_id="confirm_trade_button", row=1))
             self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="ready_button", row=1))
@@ -501,7 +502,7 @@ class MailboxView(ui.View):
 
     async def start(self, interaction: discord.Interaction):
         embed = await self.build_embed()
-        self.build_components() # build_components first
+        await self.build_components()
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     async def update_view(self, interaction: discord.Interaction):
@@ -512,7 +513,7 @@ class MailboxView(ui.View):
             self.message = await interaction.original_response()
 
         embed = await self.build_embed()
-        self.build_components()
+        await self.build_components()
         
         try:
             await self.message.edit(embed=embed, view=self)
@@ -549,7 +550,7 @@ class MailboxView(ui.View):
                     embed.add_field(name="\u200b", value="━━━━━━━━━━━━━━━━━━", inline=False)
         return embed
 
-    def build_components(self):
+    async def build_components(self):
         self.clear_items()
         
         mail_options = [
@@ -741,7 +742,7 @@ class TradePanelView(ui.View):
 
             try:
                 thread_name = f"🤝｜{initiator.display_name}↔️{partner.display_name}"
-                thread = await interaction.channel.create_thread(name=thread_name, type=discord.ChannelType.private_thread)
+                thread = await si.channel.create_thread(name=thread_name, type=discord.ChannelType.private_thread)
                 await thread.add_user(initiator)
                 await thread.add_user(partner)
                 trade_view = TradeView(self.cog, initiator, partner, trade_id)
