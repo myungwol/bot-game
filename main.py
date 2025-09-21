@@ -53,14 +53,16 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         await self.load_all_extensions()
         
-        # PanelUpdater가 목록에 없는 원래 상태로 되돌립니다.
+        # ▼▼▼ [수정] cogs_with_persistent_views 리스트에 'FriendInvite'를 추가합니다. ▼▼▼
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
             "DiceGame", "SlotMachine", "RPSGame",
             "DailyCheck", "Quests", "Farm",
             "WorldSystem", "EconomyCore", "LevelSystem",
-            "Mining", "Blacksmith", "Trade", "Cooking"
+            "Mining", "Blacksmith", "Trade", "Cooking",
+            "FriendInvite" # <--- 여기에 추가
         ]
+        # ▲▲▲ [수정] 완료 ▲▲▲
          
         registered_views_count = 0
         for cog_name in cogs_with_persistent_views:
