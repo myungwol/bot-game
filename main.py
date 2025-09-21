@@ -12,7 +12,6 @@ from typing import Optional
 from utils.database import load_all_data_from_db
 
 # --- 중앙 로깅 설정 ---
-# (생략, 기존과 동일)
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(name)s:%(lineno)d] %(message)s')
 log_handler = logging.StreamHandler()
 log_handler.setFormatter(log_formatter)
@@ -29,14 +28,12 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # --- 환경 변수 및 인텐트 설정 ---
-# (생략, 기존과 동일)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 RAW_TEST_GUILD_ID = os.environ.get('TEST_GUILD_ID')
 TEST_GUILD_ID: Optional[int] = None
 if RAW_TEST_GUILD_ID:
     try:
         TEST_GUILD_ID = int(RAW_TEST_GUILD_ID)
-        logger.info(f"테스트 서버 ID가 '{TEST_GUILD_ID}'(으)로 설정되었습니다.")
     except ValueError:
         logger.error(f"❌ TEST_GUILD_ID 환경 변수가 유효한 숫자가 아닙니다: '{RAW_TEST_GUILD_ID}'")
 
@@ -51,24 +48,23 @@ class MyBot(commands.Bot):
         super().__init__(*args, **kwargs)
         self.interaction_handler_cog = None
 
+    # ▼▼▼ [최종 수정] on_interaction을 유일한 상호작용 처리 관문으로 사용합니다. ▼▼▼
     async def on_interaction(self, interaction: discord.Interaction):
         if self.interaction_handler_cog:
+            # InteractionHandler에게 쿨다운 검사를 위임합니다.
+            # can_proceed가 False이면, InteractionHandler가 이미 사용자에게 응답하고
+            # 처리를 중단해야 함을 의미합니다.
             can_proceed = await self.interaction_handler_cog.check_cooldown(interaction)
             if not can_proceed:
-                return
-        
-        # discord.py 내부적으로 상호작용을 처리하는 로직을 직접 호출합니다.
+                return  # 여기서 즉시 종료하여 더 이상 상호작용이 전파되지 않도록 합니다.
+
+        # 쿨다운을 통과한 상호작용만 discord.py의 기본 처리 로직으로 전달합니다.
         self.dispatch('interaction', interaction)
+    # ▲▲▲ 최종 수정 끝 ▲▲▲
                 
     async def setup_hook(self):
-        # (이하 setup_hook 및 다른 모든 코드는 이전과 동일하게 유지)
         await self.load_all_extensions()
         
-        if self.interaction_handler_cog:
-            logger.info("✅ [진단] setup_hook 완료 후: 'bot.interaction_handler_cog'가 성공적으로 설정되었습니다.")
-        else:
-            logger.error("❌ [진단] setup_hook 완료 후: 'bot.interaction_handler_cog'가 설정되지 않았습니다!")
-         
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
             "DiceGame", "SlotMachine", "RPSGame",
@@ -76,7 +72,7 @@ class MyBot(commands.Bot):
             "WorldSystem", "EconomyCore", "LevelSystem",
             "Mining", "Blacksmith", "Trade", "Cooking"
         ]
-        
+         
         registered_views_count = 0
         for cog_name in cogs_with_persistent_views:
             cog = self.get_cog(cog_name)
@@ -89,19 +85,15 @@ class MyBot(commands.Bot):
         logger.info(f"✅ 총 {registered_views_count}개의 Cog에서 영구 View를 성공적으로 등록했습니다.")
 
     async def load_all_extensions(self):
-        # (이하 load_all_extensions 함수는 기존과 동일)
         logger.info("------ [ Cog 로드 시작 ] ------")
         cogs_dir = 'cogs'
         if not os.path.isdir(cogs_dir):
             logger.critical(f"❌ Cogs 디렉토리를 찾을 수 없습니다: {cogs_dir}")
             return
-
-        loaded_count = 0
-        failed_count = 0
+        loaded_count, failed_count = 0, 0
         from glob import glob
         for path in glob(f'{cogs_dir}/**/*.py', recursive=True):
-            if '__init__' in path:
-                continue
+            if '__init__' in path: continue
             extension_path = path.replace('.py', '').replace(os.path.sep, '.')
             try:
                 await self.load_extension(extension_path)
@@ -116,15 +108,12 @@ bot = MyBot(command_prefix="/", intents=intents)
 
 @bot.event
 async def on_ready():
-    # (이하 on_ready 및 main 함수는 기존과 동일)
     logger.info("==================================================")
     logger.info(f"✅ {bot.user.name}(이)가 성공적으로 로그인했습니다.")
     logger.info(f"✅ 봇 버전: {BOT_VERSION}")
     logger.info(f"✅ 현재 UTC 시간: {datetime.now(timezone.utc)}")
     logger.info("==================================================")
-    
     await load_all_data_from_db()
-    
     logger.info("------ [ 모든 Cog 설정 새로고침 시작 ] ------")
     refreshed_cogs_count = 0
     for cog_name, cog in bot.cogs.items():
@@ -136,7 +125,6 @@ async def on_ready():
                 logger.error(f"❌ '{cog_name}' Cog 설정 새로고침 중 오류: {e}", exc_info=True)
     logger.info(f"✅ 총 {refreshed_cogs_count}개의 Cog 설정이 새로고침되었습니다.")
     logger.info("------ [ 모든 Cog 설정 새로고침 완료 ] ------")
-    
     try:
         if TEST_GUILD_ID:
             guild = discord.Object(id=TEST_GUILD_ID)
