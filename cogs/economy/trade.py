@@ -64,8 +64,8 @@ class MailItemSelectModal(ui.Modal):
             await interaction.response.send_message("숫자만 입력해주세요.", ephemeral=True, delete_after=5)
 
 
-class CoinInputModal(ui.Modal, title="코인 입력"):
-    coin_input = ui.TextInput(label="코인", placeholder="코인을 입력하세요.", required=True)
+class CoinInputModal(ui.Modal, title="코인 설정"):
+    coin_input = ui.TextInput(label="코인", placeholder="설정할 코인 액수를 입력하세요 (제거는 0 입력)", required=True)
     def __init__(self, title:str, max_coins: int):
         super().__init__(title=title)
         self.max_coins = max_coins
@@ -101,7 +101,7 @@ class TradeView(ui.View):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.message: Optional[discord.Message] = None
         
-        self.build_components(self.initiator)
+        self.build_components() # __init__에서 한 번 호출
 
     async def start_in_thread(self, thread: discord.Thread):
         self.cog.active_trades[self.trade_id] = self
@@ -113,10 +113,18 @@ class TradeView(ui.View):
             await interaction.response.send_message("거래 당사자만 이용할 수 있습니다.", ephemeral=True)
             return False
         
-        if interaction.data and interaction.data.get('custom_id') == "confirm_trade_button":
-            if interaction.user.id != self.initiator.id:
-                await interaction.response.send_message("거래 신청자만 확정할 수 있습니다.", ephemeral=True, delete_after=5)
-                return False
+        # 각 플레이어는 자신의 버튼만 누를 수 있도록 제한
+        custom_id = interaction.data.get('custom_id', '')
+        if custom_id.startswith('initiator_') and interaction.user.id != self.initiator.id:
+            await interaction.response.send_message("자신의 거래 UI만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
+            return False
+        if custom_id.startswith('partner_') and interaction.user.id != self.partner.id:
+            await interaction.response.send_message("자신의 거래 UI만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
+            return False
+        
+        if custom_id == "confirm_trade_button" and interaction.user.id != self.initiator.id:
+            await interaction.response.send_message("거래 신청자만 확정할 수 있습니다.", ephemeral=True, delete_after=5)
+            return False
         return True
         
     async def build_embed(self) -> discord.Embed:
@@ -135,42 +143,51 @@ class TradeView(ui.View):
         embed.set_footer(text="5분 후 만료됩니다.")
         return embed
 
-    def build_components(self, interaction_user: discord.User):
+    # ▼▼▼ [핵심 수정] build_components 메서드를 아래 코드로 전체 교체합니다. ▼▼▼
+    def build_components(self):
         self.clear_items()
-        
-        user_id = interaction_user.id
         
         initiator_ready = self.offers[self.initiator.id]["ready"]
         partner_ready = self.offers[self.partner.id]["ready"]
         both_ready = initiator_ready and partner_ready
-        
-        user_is_ready = self.offers[user_id]["ready"]
 
-        self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="add_item_button", row=0, disabled=user_is_ready))
-        self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="remove_item_button", row=0, disabled=user_is_ready))
-        self.add_item(ui.Button(label="코인 추가", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin_button", row=0, disabled=user_is_ready))
-
-        if not both_ready:
-            if not user_is_ready:
-                self.add_item(ui.Button(label="준비", style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
-            else:
-                self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="unready_button", row=1))
+        # --- Initiator (신청자) 버튼 ---
+        self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="initiator_add_item", row=0, disabled=initiator_ready))
+        self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="initiator_remove_item", row=0, disabled=initiator_ready))
+        self.add_item(ui.Button(label="코인 설정", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="initiator_add_coin", row=0, disabled=initiator_ready))
+        if not initiator_ready:
+            self.add_item(ui.Button(label="준비", style=discord.ButtonStyle.primary, emoji="✅", custom_id="initiator_ready", row=0))
         else:
-            self.add_item(ui.Button(label="거래 확정", style=discord.ButtonStyle.success, emoji="🤝", custom_id="confirm_trade_button", row=1))
-            self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="unready_button", row=1))
+            self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="initiator_unready", row=0))
+
+        # --- Partner (파트너) 버튼 ---
+        self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="partner_add_item", row=1, disabled=partner_ready))
+        self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="partner_remove_item", row=1, disabled=partner_ready))
+        self.add_item(ui.Button(label="코인 설정", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="partner_add_coin", row=1, disabled=partner_ready))
+        if not partner_ready:
+            self.add_item(ui.Button(label="준비", style=discord.ButtonStyle.primary, emoji="✅", custom_id="partner_ready", row=1))
+        else:
+            self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="partner_unready", row=1))
         
-        self.add_item(ui.Button(label="거래 취소", style=discord.ButtonStyle.danger, emoji="✖️", custom_id="cancel_button", row=2))
+        # --- 공용 버튼 ---
+        confirm_button = ui.Button(label="거래 확정", style=discord.ButtonStyle.success, emoji="🤝", custom_id="confirm_trade_button", row=2, disabled=not both_ready)
+        self.add_item(confirm_button)
+        
+        cancel_button = ui.Button(label="거래 취소", style=discord.ButtonStyle.danger, emoji="✖️", custom_id="cancel_button", row=2)
+        self.add_item(cancel_button)
 
         for item in self.children:
             item.callback = self.dispatch_callback
+    # ▲▲▲ build_components 교체 끝 ▲▲▲
 
     async def update_ui(self, interaction: discord.Interaction):
         if self.is_finished() or not self.message: return
         
-        self.build_components(interaction.user)
+        self.build_components()
         embed = await self.build_embed()
         
         try:
+            # defer가 이미 호출되었을 수 있으므로 is_done()으로 확인
             if not interaction.response.is_done():
                 await interaction.response.edit_message(embed=embed, view=self)
             else:
@@ -178,27 +195,43 @@ class TradeView(ui.View):
         except (discord.NotFound, discord.Forbidden):
             self.stop()
 
+    # ▼▼▼ [핵심 수정] dispatch_callback 메서드를 아래 코드로 전체 교체합니다. ▼▼▼
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
         
-        if custom_id in ["add_item_button", "remove_item_button", "add_coin_button"]:
-            # These open modals/views which handle their own responses.
+        # custom_id 분석
+        parts = custom_id.split('_')
+        target_user_key = parts[0] # 'initiator', 'partner', 또는 버튼 이름
+        action = "_".join(parts[1:]) if len(parts) > 1 else target_user_key
+
+        # 대상 유저 결정
+        target_user = None
+        if target_user_key == 'initiator':
+            target_user = self.initiator
+        elif target_user_key == 'partner':
+            target_user = self.partner
+
+        # 모달을 여는 작업은 defer를 하지 않음
+        if action in ["add_item", "remove_item", "add_coin"]:
             pass
         elif not interaction.response.is_done():
             await interaction.response.defer()
 
-        if custom_id == "add_item_button": await self.handle_add_item(interaction)
-        elif custom_id == "remove_item_button": await self.handle_remove_item(interaction)
-        elif custom_id == "add_coin_button": await self.handle_add_coin(interaction)
-        elif custom_id == "ready_button": await self.handle_ready(interaction, True)
-        elif custom_id == "unready_button": await self.handle_ready(interaction, False)
-        elif custom_id == "confirm_trade_button": await self.process_trade(interaction)
-        elif custom_id == "cancel_button": await self.handle_cancel(interaction)
+        # 액션에 따라 함수 호출
+        if action == "add_item": await self.handle_add_item(interaction, target_user)
+        elif action == "remove_item": await self.handle_remove_item(interaction, target_user)
+        elif action == "add_coin": await self.handle_add_coin(interaction, target_user)
+        elif action == "ready": await self.handle_ready(interaction, target_user, True)
+        elif action == "unready": await self.handle_ready(interaction, target_user, False)
+        elif action == "confirm_trade_button": await self.process_trade(interaction)
+        elif action == "cancel_button": await self.handle_cancel(interaction)
+    # ▲▲▲ dispatch_callback 교체 끝 ▲▲▲
 
-    async def handle_add_item(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
+    # ▼▼▼ [핵심 수정] handle_... 메서드들이 target_user를 인자로 받도록 수정합니다. ▼▼▼
+    async def handle_add_item(self, interaction: discord.Interaction, target_user: discord.Member):
+        user_id = target_user.id
         if self.offers[user_id]["ready"]: return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
-        inventory, item_db = await get_inventory(interaction.user), get_item_database()
+        inventory, item_db = await get_inventory(target_user), get_item_database()
         tradeable_items = { n: q for n, q in inventory.items() if item_db.get(n, {}).get('category') in TRADEABLE_CATEGORIES }
         if not tradeable_items: return await interaction.response.send_message("거래 가능한 아이템이 없습니다.", ephemeral=True, delete_after=5)
         options = [ discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in tradeable_items.items() ]
@@ -215,8 +248,8 @@ class TradeView(ui.View):
         item_select.callback = select_callback; select_view.add_item(item_select)
         await interaction.response.send_message(view=select_view, ephemeral=True)
 
-    async def handle_remove_item(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
+    async def handle_remove_item(self, interaction: discord.Interaction, target_user: discord.Member):
+        user_id = target_user.id
         if self.offers[user_id]["ready"]:
             return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
         
@@ -244,30 +277,33 @@ class TradeView(ui.View):
         select_view.add_item(item_select)
         await interaction.response.send_message("제거할 아이템을 선택하세요.", view=select_view, ephemeral=True)
 
-    async def handle_add_coin(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
+    async def handle_add_coin(self, interaction: discord.Interaction, target_user: discord.Member):
+        user_id = target_user.id
         if self.offers[user_id]["ready"]: return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
         wallet = await get_wallet(user_id); max_coins = wallet.get('balance', 0)
-        modal = CoinInputModal("거래 코인 입력", max_coins)
+        modal = CoinInputModal("거래 코인 설정", max_coins)
         await interaction.response.send_modal(modal); await modal.wait()
         if modal.coins is not None:
             self.offers[user_id]["coins"] = modal.coins
             await self.update_ui(interaction)
 
-    async def handle_ready(self, interaction: discord.Interaction, ready_status: bool):
-        user_id = interaction.user.id
+    async def handle_ready(self, interaction: discord.Interaction, target_user: discord.Member, ready_status: bool):
+        user_id = target_user.id
         self.offers[user_id]["ready"] = ready_status
         await self.update_ui(interaction)
+    # ▲▲▲ handle_... 메서드 수정 끝 ▲▲▲
 
     async def handle_cancel(self, interaction: discord.Interaction):
+        # 이 메서드는 변경 없습니다.
         await interaction.followup.send("거래 취소를 요청했습니다.", ephemeral=True)
-        # ▼▼▼ [핵심 수정] 아래 호출되는 함수 이름을 변경합니다. ▼▼▼
         await self._end_trade(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
-        self.build_components(interaction.user)
+        # ▼▼▼ [핵심 수정] 상호작용 후 UI가 즉시 비활성화되도록 수정합니다. ▼▼▼
+        self.build_components()
         for item in self.children: item.disabled = True
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=await self.build_embed())
+        # ▲▲▲ 수정 끝 ▲▲▲
         user1, user2, offer1, offer2 = self.initiator, self.partner, self.offers[self.initiator.id], self.offers[self.partner.id]
         try:
             user1_wallet, user1_inv = await asyncio.gather(get_wallet(user1.id), get_inventory(user1))
