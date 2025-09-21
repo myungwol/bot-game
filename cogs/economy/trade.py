@@ -50,6 +50,7 @@ class MailItemSelectModal(ui.Modal):
         self.quantity_input.placeholder = f"최대 {max_quantity}개"
 
     async def on_submit(self, interaction: discord.Interaction):
+        logger.info(f"[TRADE DEBUG] MailItemSelectModal on_submit triggered by {interaction.user.id}. Interaction ID: {interaction.id}")
         try:
             qty = int(self.quantity_input.value)
             if not 1 <= qty <= self.max_quantity:
@@ -59,9 +60,12 @@ class MailItemSelectModal(ui.Modal):
             self.parent_view.attachments["items"][self.item_name] = self.parent_view.attachments["items"].get(self.item_name, 0) + qty
             self.parent_view.current_state = "composing"
             await self.parent_view.update_message(interaction)
+            logger.info(f"[TRADE DEBUG] MailItemSelectModal on_submit successful for {interaction.user.id}")
 
         except ValueError:
             await interaction.response.send_message("숫자만 입력해주세요.", ephemeral=True, delete_after=5)
+        except Exception as e:
+            logger.error(f"[TRADE DEBUG] Error in MailItemSelectModal on_submit: {e}", exc_info=True)
 
 
 class CoinInputModal(ui.Modal, title="코인 입력"):
@@ -87,8 +91,10 @@ class MessageModal(ui.Modal, title="메시지 작성"):
         self.message_input.default = current_message
         self.parent_view = parent_view
     async def on_submit(self, interaction: discord.Interaction):
+        logger.info(f"[TRADE DEBUG] MessageModal on_submit triggered by {interaction.user.id}. Interaction ID: {interaction.id}")
         self.parent_view.message_content = self.message_input.value
         await self.parent_view.update_message(interaction)
+        logger.info(f"[TRADE DEBUG] MessageModal on_submit successful for {interaction.user.id}")
 
 class TradeView(ui.View):
     def __init__(self, cog: 'Trade', initiator: discord.Member, partner: discord.Member, trade_id: str):
@@ -310,18 +316,23 @@ class MailComposeView(ui.View):
         self.current_state = "composing" 
         
     async def start(self, interaction: discord.Interaction):
+        logger.info(f"[TRADE DEBUG] MailComposeView starting for {interaction.user.id}. Interaction ID: {interaction.id}")
         await self.update_message(interaction)
 
     async def update_message(self, interaction: discord.Interaction):
+        logger.info(f"[TRADE DEBUG] update_message called by {interaction.user.id}. Interaction ID: {interaction.id}, is_done: {interaction.response.is_done()}")
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
+            logger.info(f"[TRADE DEBUG] Interaction deferred.")
 
         embed = await self.build_embed()
         await self.build_components()
         
         if self.message:
+            logger.info(f"[TRADE DEBUG] Editing existing message {self.message.id}")
             await self.message.edit(embed=embed, view=self)
         else:
+            logger.info(f"[TRADE DEBUG] Sending new followup message")
             self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     async def build_embed(self) -> discord.Embed:
@@ -360,6 +371,7 @@ class MailComposeView(ui.View):
 
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
+        logger.info(f"[TRADE DEBUG] MailComposeView dispatch_callback triggered by {interaction.user.id} with custom_id: {custom_id}. Interaction ID: {interaction.id}")
         
         if custom_id in ["write_message_button", "item_select_dropdown"]:
             pass
