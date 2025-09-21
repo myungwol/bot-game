@@ -39,6 +39,30 @@ class ItemSelectModal(ui.Modal, title="수량 입력"):
             await interaction.response.send_message(f"1에서 {self.max_quantity} 사이의 숫자만 입력해주세요.", ephemeral=True, delete_after=5)
         self.stop()
 
+# ▼▼▼ [핵심 수정] 우편용 아이템 선택 모달을 새로 추가합니다. ▼▼▼
+class MailItemSelectModal(ui.Modal):
+    quantity_input = ui.TextInput(label="수량", placeholder="수량을 입력하세요.", required=True)
+
+    def __init__(self, title: str, max_quantity: int, item_name: str, parent_view: 'MailComposeView'):
+        super().__init__(title=title)
+        self.max_quantity = max_quantity
+        self.item_name = item_name
+        self.parent_view = parent_view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            qty = int(self.quantity_input.value)
+            if not 1 <= qty <= self.max_quantity:
+                await interaction.response.send_message(f"1에서 {self.max_quantity} 사이의 숫자만 입력해주세요.", ephemeral=True, delete_after=5)
+                return
+
+            self.parent_view.attachments["items"][self.item_name] = self.parent_view.attachments["items"].get(self.item_name, 0) + qty
+            self.parent_view.current_state = "composing"
+            await self.parent_view.build_and_send(interaction)
+
+        except ValueError:
+            await interaction.response.send_message("숫자만 입력해주세요.", ephemeral=True, delete_after=5)
+
 class CoinInputModal(ui.Modal, title="코인 입력"):
     coin_input = ui.TextInput(label="코인", placeholder="코인을 입력하세요.", required=True)
     def __init__(self, title:str, max_coins: int):
@@ -57,14 +81,16 @@ class CoinInputModal(ui.Modal, title="코인 입력"):
 
 class MessageModal(ui.Modal, title="메시지 작성"):
     message_input = ui.TextInput(label="메시지 (최대 100자)", style=discord.TextStyle.paragraph, max_length=100, required=False)
-    def __init__(self, current_message: str):
+    
+    # ▼▼▼ [핵심 수정] 부모 View를 받도록 __init__을 수정합니다. ▼▼▼
+    def __init__(self, current_message: str, parent_view: 'MailComposeView'):
         super().__init__()
         self.message_input.default = current_message
-        self.message: Optional[str] = None
+        self.parent_view = parent_view
+
     async def on_submit(self, interaction: discord.Interaction):
-        self.message = self.message_input.value
-        await interaction.response.defer()
-        self.stop()
+        self.parent_view.message_content = self.message_input.value
+        await self.parent_view.build_and_send(interaction)
 
 class TradeView(ui.View):
     def __init__(self, cog: 'Trade', initiator: discord.Member, partner: discord.Member, trade_id: str):
@@ -171,9 +197,10 @@ class TradeView(ui.View):
             await self.process_trade(interaction)
         else: await self.update_ui()
 
+    # ▼▼▼ [핵심 수정] delete_after 인자를 제거하고, 사용자에게 명확한 피드백을 주도록 수정합니다. ▼▼▼
     async def handle_cancel(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        await interaction.followup.send("거래를 취소했습니다.", ephemeral=True, delete_after=5)
+        await interaction.followup.send("거래 취소 절차를 시작합니다...", ephemeral=True)
         await self.on_timeout(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
@@ -276,14 +303,14 @@ class MailComposeView(ui.View):
         await self.build_and_send(interaction)
 
     async def build_and_send(self, interaction: discord.Interaction):
+        # ▼▼▼ [핵심 수정] 상호작용이 이미 응답되었는지 확인하고, 그렇지 않으면 defer 합니다. ▼▼▼
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+
         embed = await self.build_embed()
         await self.build_components()
         
-        # defer가 이미 호출되었다면 followup으로, 아니면 원래 interaction으로 응답
-        if interaction.response.is_done():
-            target = interaction.followup
-        else:
-            target = interaction.response
+        target = interaction.followup
             
         if self.message:
             await self.message.edit(embed=embed, view=self)
@@ -327,7 +354,7 @@ class MailComposeView(ui.View):
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
         
-        # 모달을 띄우는 경우는 defer를 하지 않음
+        # ▼▼▼ [핵심 수정] 모달을 띄우는 버튼은 defer하지 않도록 처리합니다. ▼▼▼
         if custom_id in ["write_message_button", "item_select_dropdown"]:
              pass
         elif not interaction.response.is_done():
@@ -343,36 +370,23 @@ class MailComposeView(ui.View):
         self.current_state = "selecting_item"
         await self.build_and_send(interaction)
         
+    # ▼▼▼ [핵심 수정] 아이템 선택 로직을 새 모달 클래스를 사용하도록 변경합니다. ▼▼▼
     async def on_item_select(self, interaction: discord.Interaction):
         inventory = await get_inventory(self.user)
         item_name = interaction.data['values'][0]
         max_qty = inventory.get(item_name, 0)
         
-        modal = ItemSelectModal(f"'{item_name}' 수량 입력", max_qty)
+        modal = MailItemSelectModal(f"'{item_name}' 수량 입력", max_qty, item_name, self)
         await interaction.response.send_modal(modal)
-        await modal.wait()
-        
-        # 모달이 닫힌 후의 상호작용은 modal.interaction 이 아니라,
-        # 우리가 가진 원래 interaction으로 후속 처리를 해야 함.
-        # 모달은 그 자체로 상호작용을 소모함.
-        if modal.quantity is not None:
-            self.attachments["items"][item_name] = self.attachments["items"].get(item_name, 0) + modal.quantity
-        
-        self.current_state = "composing"
-        # 새 응답을 보낼 수 없으므로, self.message를 직접 수정.
-        await self.build_and_send(interaction)
         
     async def on_back_to_composing(self, interaction: discord.Interaction):
         self.current_state = "composing"
         await self.build_and_send(interaction)
 
+    # ▼▼▼ [핵심 수정] 메시지 작성 로직을 수정된 모달 클래스를 사용하도록 변경합니다. ▼▼▼
     async def handle_write_message(self, interaction: discord.Interaction):
-        modal = MessageModal(self.message_content)
+        modal = MessageModal(self.message_content, self)
         await interaction.response.send_modal(modal)
-        await modal.wait()
-        if modal.message is not None:
-            self.message_content = modal.message
-            await self.build_and_send(interaction)
 
     async def handle_send(self, interaction: discord.Interaction):
         try:
