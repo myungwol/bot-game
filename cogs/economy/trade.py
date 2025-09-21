@@ -115,16 +115,17 @@ class TradeView(ui.View):
         except (discord.NotFound, discord.Forbidden): self.stop()
 
     async def dispatch_callback(self, interaction: discord.Interaction):
-        # [핵심 수정] 무조건 defer를 먼저 호출하여 "상호작용 실패" 방지
-        await interaction.response.defer()
-        
         key = (interaction.channel.id, interaction.user.id)
         now = time.monotonic()
         last = self.cog.last_action_ts.get(key, 0.0)
-        if now - last < self.cog.cooldown_sec: return
+        if now - last < self.cog.cooldown_sec: 
+            if not interaction.response.is_done(): await interaction.response.defer()
+            return
         self.cog.last_action_ts[key] = now
         lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
-        if lock.locked(): return
+        if lock.locked(): 
+            if not interaction.response.is_done(): await interaction.response.defer()
+            return
         async with lock:
             custom_id = interaction.data['custom_id']
             if custom_id == "add_item_button": await self.handle_add_item(interaction)
@@ -134,10 +135,10 @@ class TradeView(ui.View):
 
     async def handle_add_item(self, interaction: discord.Interaction):
         user_id = interaction.user.id
-        if self.offers[user_id]["ready"]: return await interaction.followup.send("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
+        if self.offers[user_id]["ready"]: return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
         inventory, item_db = await get_inventory(interaction.user), get_item_database()
         tradeable_items = { n: q for n, q in inventory.items() if item_db.get(n, {}).get('category') in TRADEABLE_CATEGORIES }
-        if not tradeable_items: return await interaction.followup.send("거래 가능한 아이템이 없습니다.", ephemeral=True, delete_after=5)
+        if not tradeable_items: return await interaction.response.send_message("거래 가능한 아이템이 없습니다.", ephemeral=True, delete_after=5)
         options = [ discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in tradeable_items.items() ]
         select_view = ui.View(timeout=180); item_select = ui.Select(placeholder="추가할 아이템을 선택하세요", options=options[:25])
         async def select_callback(si: discord.Interaction):
@@ -147,12 +148,14 @@ class TradeView(ui.View):
             if modal.quantity is not None:
                 self.offers[user_id]["items"][item_name] = modal.quantity
                 await self.update_ui()
+            try: await si.delete_original_response()
+            except discord.NotFound: pass
         item_select.callback = select_callback; select_view.add_item(item_select)
-        await interaction.followup.send(view=select_view, ephemeral=True)
+        await interaction.response.send_message(view=select_view, ephemeral=True)
 
     async def handle_add_coin(self, interaction: discord.Interaction):
         user_id = interaction.user.id
-        if self.offers[user_id]["ready"]: return await interaction.followup.send("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
+        if self.offers[user_id]["ready"]: return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
         wallet = await get_wallet(user_id); max_coins = wallet.get('balance', 0)
         modal = CoinInputModal("거래 코인 입력", max_coins)
         await interaction.response.send_modal(modal); await modal.wait()
@@ -161,6 +164,7 @@ class TradeView(ui.View):
             await self.update_ui()
 
     async def handle_ready(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         user_id = interaction.user.id
         self.offers[user_id]["ready"] = not self.offers[user_id]["ready"]
         if self.offers[self.initiator.id]["ready"] and self.offers[self.partner.id]["ready"]:
@@ -168,6 +172,7 @@ class TradeView(ui.View):
         else: await self.update_ui()
 
     async def handle_cancel(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         await interaction.followup.send("거래를 취소했습니다.", ephemeral=True, delete_after=5)
         await self.on_timeout(cancelled_by=interaction.user)
 
@@ -273,7 +278,13 @@ class MailComposeView(ui.View):
     async def build_and_send(self, interaction: discord.Interaction):
         embed = await self.build_embed()
         await self.build_components()
-        target = interaction.followup if interaction.response.is_done() else interaction
+        
+        # defer가 이미 호출되었다면 followup으로, 아니면 원래 interaction으로 응답
+        if interaction.response.is_done():
+            target = interaction.followup
+        else:
+            target = interaction.response
+            
         if self.message:
             await self.message.edit(embed=embed, view=self)
         else:
@@ -310,15 +321,18 @@ class MailComposeView(ui.View):
             self.add_item(back_button)
 
         for item in self.children:
-            # [수정] 콜백을 모두 dispatch로 통합
-            item.callback = self.dispatch_callback
+            if not hasattr(item, 'callback') or item.callback is None:
+                item.callback = self.dispatch_callback
 
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
         
-        # [수정] 모든 버튼 클릭 시 defer를 먼저 호출
-        await interaction.response.defer()
-        
+        # 모달을 띄우는 경우는 defer를 하지 않음
+        if custom_id in ["write_message_button", "item_select_dropdown"]:
+             pass
+        elif not interaction.response.is_done():
+             await interaction.response.defer()
+
         if custom_id == "attach_item_button": await self.handle_attach_item(interaction)
         elif custom_id == "write_message_button": await self.handle_write_message(interaction)
         elif custom_id == "send_button": await self.handle_send(interaction)
@@ -334,16 +348,18 @@ class MailComposeView(ui.View):
         item_name = interaction.data['values'][0]
         max_qty = inventory.get(item_name, 0)
         
-        # [수정] 모달을 보내는 interaction을 si -> interaction으로 변경
         modal = ItemSelectModal(f"'{item_name}' 수량 입력", max_qty)
         await interaction.response.send_modal(modal)
         await modal.wait()
         
+        # 모달이 닫힌 후의 상호작용은 modal.interaction 이 아니라,
+        # 우리가 가진 원래 interaction으로 후속 처리를 해야 함.
+        # 모달은 그 자체로 상호작용을 소모함.
         if modal.quantity is not None:
             self.attachments["items"][item_name] = self.attachments["items"].get(item_name, 0) + modal.quantity
         
         self.current_state = "composing"
-        # [수정] modal의 interaction이 아닌, 원래의 interaction으로 UI 업데이트
+        # 새 응답을 보낼 수 없으므로, self.message를 직접 수정.
         await self.build_and_send(interaction)
         
     async def on_back_to_composing(self, interaction: discord.Interaction):
@@ -397,7 +413,6 @@ class MailComposeView(ui.View):
             await interaction.followup.send("우편 발송 중 오류가 발생했습니다. 재료 소모 여부를 확인해주세요.", ephemeral=True)
             self.stop()
 
-# ... (MailboxView, TradePanelView, Trade Cog는 이전과 동일) ...
 class MailboxView(ui.View):
     def __init__(self, cog: 'Trade', user: discord.Member):
         super().__init__(timeout=180)
@@ -504,6 +519,7 @@ class MailboxView(ui.View):
         self.add_item(next_button)
 
     async def on_mail_select(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         self.selected_mail_ids = interaction.data['values']
         await self.update_view(interaction)
 
@@ -566,6 +582,7 @@ class MailboxView(ui.View):
         await self.update_view(interaction)
         
     async def send_mail(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         select_view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="편지를 보낼 상대를 선택하세요.")
         async def callback(select_interaction: discord.Interaction):
@@ -581,13 +598,15 @@ class MailboxView(ui.View):
             await compose_view.start(select_interaction)
         user_select.callback = callback
         select_view.add_item(user_select)
-        await interaction.response.send_message("누구에게 편지를 보내시겠습니까?", view=select_view, ephemeral=True)
+        await interaction.followup.send("누구에게 편지를 보내시겠습니까?", view=select_view, ephemeral=True)
     
     async def prev_page_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         self.page -= 1
         await self.update_view(interaction)
 
     async def next_page_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         self.page += 1
         await self.update_view(interaction)
 
