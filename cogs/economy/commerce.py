@@ -7,7 +7,7 @@ import asyncio
 import math
 import time
 from typing import Optional, Dict, List, Any
-from utils.helpers import coerce_item_emoji  # ← 추가
+from utils.helpers import coerce_item_emoji
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +97,8 @@ class BuyItemView(ShopViewBase):
         all_ui_strings = get_config("strings", {})
         commerce_strings = all_ui_strings.get("commerce", {})
         
-        category_display_names = { "아이템": "잡화점", "장비": "장비점", "미끼": "미끼가게", "농장_씨앗": "씨앗가게" }
-        display_name = category_display_names.get(self.category, self.category)
+        category_display_names = { "아이템": "잡화점", "장비": "장비점", "미끼": "미끼가게", "농장_씨앗": "씨앗가게", "pet_item": "펫 상점", "egg": "알 상점", "조미료": "조미료 가게" }
+        display_name = category_display_names.get(self.category, self.category.replace("_", " "))
         
         description_template = commerce_strings.get("item_view_desc", "현재 소지금: `{balance}`{currency_icon}\n구매하고 싶은 상품을 선택해주세요.")
 
@@ -148,7 +148,6 @@ class BuyItemView(ShopViewBase):
                 discord.SelectOption(
                     label=name, value=name,
                     description=f"가격: {data.get('current_price', data.get('price', 0)):,}{self.currency_icon}",
-                    # ▼▼▼ [수정] 아래 줄을 변경합니다 ▼▼▼
                     emoji=coerce_item_emoji(data.get('emoji'))
                 ) for name, data in items_on_page
             ]
@@ -188,7 +187,6 @@ class BuyItemView(ShopViewBase):
             wallet = await get_wallet(self.user.id)
             price = item_data.get('current_price', item_data.get('price', 0))
 
-            # [핵심 수정] '밭 확장 허가증'을 위한 특별 구매 로직
             if item_data.get('instant_use', False) and item_name == '밭 확장 허가증':
                 farm_data = await get_farm_data(self.user.id)
                 if not farm_data:
@@ -200,7 +198,6 @@ class BuyItemView(ShopViewBase):
                     await interaction.response.send_message("❌ 농장이 이미 최대 크기(25칸)입니다.", ephemeral=True, delete_after=5); return
                 
                 max_from_balance = wallet.get('balance', 0) // price if price > 0 else plots_can_add
-                # 한 번에 최대 24개까지만 구매 가능하도록 제한
                 max_buyable = min(plots_can_add, max_from_balance, 24)
 
                 if max_buyable <= 0:
@@ -217,7 +214,6 @@ class BuyItemView(ShopViewBase):
                 
                 await interaction.followup.send(f"⏳ {quantity}칸의 농장 확장을 진행합니다...", ephemeral=True)
                 
-                # DB 작업 수행
                 await update_wallet(self.user, -total_price)
                 
                 success_count = 0
@@ -226,10 +222,9 @@ class BuyItemView(ShopViewBase):
                     if success:
                         success_count += 1
                     else:
-                        # 만약 확장에 실패하면, 루프를 중단하고 비용을 환불
                         logger.error(f"{self.user.id}의 농장 확장 중 {i+1}번째에서 실패. 구매한 {quantity}개 중 {success_count}개만 적용됨.")
                         failed_cost = price * (quantity - success_count)
-                        await update_wallet(self.user, failed_cost) # 실패한 부분만큼 환불
+                        await update_wallet(self.user, failed_cost)
                         break
                 
                 if farm_cog := interaction.client.get_cog("Farm"):
@@ -245,15 +240,12 @@ class BuyItemView(ShopViewBase):
                 await self.update_view(interaction)
                 return
 
-            # 기존 단일 즉시 사용 아이템 로직 (현재는 해당 아이템 없음)
             elif item_data.get('instant_use', False):
                 await self.handle_instant_use_item(interaction, item_name, item_data, price, wallet)
 
-            # 기존 스택 가능 아이템 구매 로직
             elif item_data.get('max_ownable', 1) > 1:
                 await self.handle_quantity_purchase(interaction, item_name, item_data, inventory, wallet)
             
-            # 기존 단일 아이템 구매 로직
             else:
                 await self.handle_single_purchase(interaction, item_name, item_data, price)
 
@@ -356,6 +348,7 @@ class BuyCategoryView(ShopViewBase):
         embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         return embed
     
+    # ▼▼▼ [수정] build_components 메서드 수정 ▼▼▼
     async def build_components(self):
         self.clear_items()
         item_db = get_item_database()
@@ -363,23 +356,47 @@ class BuyCategoryView(ShopViewBase):
         available_categories = set(
             d.get('category', '').strip() for d in item_db.values() if d.get('buyable') and d.get('category')
         )
-        preferred_order = ["아이템", "장비", "미끼", "농장_씨앗", "농장_도구"]
         
+        # 선호/후순위 정렬 및 한글 이름 매핑 추가
+        preferred_order = ["아이템", "장비", "미끼", "농장_씨앗", "농장_도구"]
+        last_order = ["pet_item", "egg"] # 펫 아이템과 알을 맨 뒤로
+        category_display_map = {
+            "pet_item": "펫 아이템",
+            "egg": "알",
+            "농장_씨앗": "농장 씨앗" # 언더스코어를 띄어쓰기로 변경
+        }
+        
+        # 1. 선호 순서대로 정렬
         sorted_categories = []
         for category in preferred_order:
             if category in available_categories:
                 sorted_categories.append(category)
                 available_categories.remove(category)
+
+        # 2. 후순위 아이템을 available_categories에서 임시 제거
+        last_items = []
+        for category in last_order:
+            if category in available_categories:
+                last_items.append(category)
+                available_categories.remove(category)
+                
+        # 3. 나머지 아이템을 가나다순으로 정렬
         sorted_categories.extend(sorted(list(available_categories)))
+
+        # 4. 후순위 아이템을 맨 뒤에 추가
+        sorted_categories.extend(last_items)
 
         if not sorted_categories:
             self.add_item(ui.Button(label="판매 중인 상품이 없습니다.", disabled=True))
             return
 
         for category_name in sorted_categories:
-            button = ui.Button(label=category_name, custom_id=f"buy_category_{category_name}")
+            # 매핑된 이름이 있으면 사용하고, 없으면 원래 이름에서 _를 공백으로 변경
+            display_name = category_display_map.get(category_name, category_name.replace("_", " "))
+            button = ui.Button(label=display_name, custom_id=f"buy_category_{category_name}")
             button.callback = self.category_callback
             self.add_item(button)
+    # ▲▲▲ [수정] 완료 ▲▲▲
     
     async def category_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -409,14 +426,12 @@ class SellFishView(ShopViewBase):
         self.clear_items()
         aquarium = await get_aquarium(str(self.user.id))
         
-        # ▼▼▼ [수정] DB 직접 호출 대신 캐시된 함수 사용 ▼▼▼
-        all_loot_data = get_fishing_loot() 
-        if not all_loot_data:
-            logger.error("캐시된 낚시 아이템 정보를 불러오는 데 실패했습니다.")
+        loot_res = await supabase.table('fishing_loots').select('*').execute()
+        if not (loot_res and loot_res.data):
+            logger.error("데이터베이스에서 낚시 아이템 정보를 불러오는 데 실패했습니다.")
             self.add_item(ui.Button(label="오류: 가격 정보를 불러올 수 없습니다.", disabled=True))
             return
-        loot_db = {loot['name']: loot for loot in all_loot_data}
-            # [핵심 수정] 여기까지
+        loot_db = {loot['name']: loot for loot in loot_res.data}
         
         self.fish_data_map.clear()
         
@@ -426,7 +441,6 @@ class SellFishView(ShopViewBase):
                 fish_id = str(fish['id'])
                 loot_info = loot_db.get(fish['name'], {})
                 
-                # 이제 항상 최신 current_base_value를 사용합니다.
                 base_value = loot_info.get('current_base_value', loot_info.get('base_value', 0))
                 size_multiplier = loot_info.get('size_multiplier', 0)
                 price = int(base_value + (fish['size'] * size_multiplier))
@@ -436,7 +450,7 @@ class SellFishView(ShopViewBase):
                     label=f"{fish['name']} ({fish['size']}cm)", 
                     value=fish_id, 
                     description=f"{price}{self.currency_icon}",
-                    emoji=coerce_item_emoji(loot_info.get('emoji')) # <--- 이 부분을 추가/수정합니다.
+                    emoji=coerce_item_emoji(loot_info.get('emoji'))
                 ))
 
         if options:
