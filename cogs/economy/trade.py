@@ -138,26 +138,30 @@ class TradeView(ui.View):
     def build_components(self, interaction_user: Optional[discord.User]):
         self.clear_items()
         
-        user_id = interaction_user.id if interaction_user else self.initiator.id
+        # Determine the user ID to check readiness against.
+        # Fallback to initiator if interaction_user is not available (e.g., initial build).
+        user_id_to_check = interaction_user.id if interaction_user else self.initiator.id
         
         initiator_ready = self.offers[self.initiator.id]["ready"]
         partner_ready = self.offers[self.partner.id]["ready"]
         both_ready = initiator_ready and partner_ready
         
-        user_is_ready = self.offers[user_id]["ready"]
+        user_is_ready = self.offers[user_id_to_check]["ready"]
 
+        # Add/Remove/Coin buttons are disabled if the specific user interacting is ready.
         self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="add_item_button", row=0, disabled=user_is_ready))
         self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="remove_item_button", row=0, disabled=user_is_ready))
         self.add_item(ui.Button(label="코인 추가", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin_button", row=0, disabled=user_is_ready))
 
-        if not both_ready:
-            if not user_is_ready:
-                self.add_item(ui.Button(label="준비", style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
-            else:
-                self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="unready_button", row=1))
-        else:
+        # Ready/Unready/Confirm buttons logic
+        if both_ready:
             self.add_item(ui.Button(label="거래 확정", style=discord.ButtonStyle.success, emoji="🤝", custom_id="confirm_trade_button", row=1))
             self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="unready_button", row=1))
+        else:
+            if user_is_ready:
+                self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="unready_button", row=1))
+            else:
+                self.add_item(ui.Button(label="준비", style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
         
         self.add_item(ui.Button(label="거래 취소", style=discord.ButtonStyle.danger, emoji="✖️", custom_id="cancel_button", row=2))
 
@@ -170,11 +174,13 @@ class TradeView(ui.View):
         self.build_components(interaction.user)
         embed = await self.build_embed()
         
+        # Always defer if not already done.
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        
+        # Always edit the main message in the thread. Ephemeral updates can cause issues.
         try:
-            if not interaction.response.is_done():
-                await interaction.response.edit_message(embed=embed, view=self)
-            else:
-                await self.message.edit(embed=embed, view=self)
+            await self.message.edit(embed=embed, view=self)
         except (discord.NotFound, discord.Forbidden):
             self.stop()
 
@@ -182,9 +188,10 @@ class TradeView(ui.View):
         custom_id = interaction.data['custom_id']
         
         if custom_id in ["add_item_button", "remove_item_button", "add_coin_button"]:
-            # These open new ephemeral views/modals, so no defer needed here.
+            # These open modals/views which handle their own responses.
             pass
         elif not interaction.response.is_done():
+            # Defer for buttons that will update the main message.
             await interaction.response.defer()
 
         if custom_id == "add_item_button": await self.handle_add_item(interaction)
@@ -235,6 +242,7 @@ class TradeView(ui.View):
                 del self.offers[user_id]["items"][item_name_to_remove]
                 await self.update_ui(interaction)
             try:
+                await si.response.defer()
                 await si.delete_original_response()
             except discord.NotFound:
                 pass
@@ -259,7 +267,7 @@ class TradeView(ui.View):
         await self.update_ui(interaction)
 
     async def handle_cancel(self, interaction: discord.Interaction):
-        await interaction.followup.send("거래 취소를 요청했습니다.", ephemeral=True)
+        await interaction.followup.send("거래 취소를 요청했습니다.", ephemeral=True, delete_after=5)
         await self.on_timeout(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
@@ -756,7 +764,7 @@ class TradePanelView(ui.View):
                 await trade_view.start_in_thread(thread)
                 
                 await si.followup.send(f"✅ 거래 채널을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
-                await interaction.edit_original_response(content="거래 상대 선택 완료.", view=None)
+                await interaction.edit_original_response(content=f"거래 상대({partner.mention}) 선택 완료.", view=None)
 
             except Exception as e:
                 logger.error(f"거래 스레드 생성 중 오류: {e}", exc_info=True)
