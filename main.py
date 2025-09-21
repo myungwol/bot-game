@@ -49,20 +49,16 @@ BOT_VERSION = "v2.3-game-stable-ko"
 class MyBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.interaction_handler_cog = None
+        self.interaction_handler_cog: Optional['InteractionHandler'] = None # 타입 힌트 구체화
 
     async def process_application_commands(self, interaction: discord.Interaction):
-        # ▼▼▼ [진단용 로깅 추가] ▼▼▼
-        # 상호작용이 발생할 때마다 핸들러의 상태를 확인합니다.
+        # ... (이하 내용은 이전과 동일하게 유지) ...
         if self.interaction_handler_cog:
             logger.info("[진단] process_application_commands: 'interaction_handler_cog'를 찾았습니다. 쿨다운 검사를 시작합니다.")
         else:
-            # 이 에러 로그가 보인다면, 쿨다운 시스템이 작동하지 않는 원인입니다.
             logger.error("[진단] process_application_commands: 'interaction_handler_cog'가 'None'입니다! 쿨다운을 검사할 수 없습니다.")
-            # 핸들러가 없으면 원래 로직을 그냥 실행합니다.
             await super().process_application_commands(interaction)
             return
-        # ▲▲▲ 진단용 로깅 끝 ▲▲▲
 
         can_proceed = await self.interaction_handler_cog.check_cooldown(interaction)
         if not can_proceed:
