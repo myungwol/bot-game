@@ -8,6 +8,8 @@ import asyncio
 import math
 import time
 from typing import Optional, Dict, List, Any
+# ▼▼▼ [핵심 수정] 아래 datetime 관련 import를 추가합니다. ▼▼▼
+from datetime import datetime, timezone, timedelta
 from postgrest.exceptions import APIError
 import json
 
@@ -445,14 +447,19 @@ class TradeView(ui.View):
         super().stop()
 
 class MailComposeView(ui.View):
+    # ... (__init__ 부터 handle_write_message 까지의 메서드는 이전과 동일) ...
     def __init__(self, cog: 'Trade', user: discord.Member, recipient: discord.Member, original_interaction: discord.Interaction):
         super().__init__(timeout=300)
-        self.cog = cog; self.user = user; self.recipient = recipient
+        self.cog = cog
+        self.user = user
+        self.recipient = recipient
         self.original_interaction = original_interaction
-        self.message_content = ""; self.attachments = {"items": {}}
-        self.currency_icon = get_config("CURRENCY_ICON", "🪙"); self.shipping_fee = 100
+        self.message_content = ""
+        self.attachments = {"items": {}}
+        self.currency_icon = get_config("CURRENCY_ICON", "🪙")
+        self.shipping_fee = 100
         self.message: Optional[discord.WebhookMessage] = None
-        
+    
     async def start_from_selection(self):
         embed = await self.build_embed()
         await self.build_components()
@@ -468,7 +475,6 @@ class MailComposeView(ui.View):
             await self.message.edit(embed=embed, view=self)
 
     async def build_embed(self) -> discord.Embed:
-        # ... (이전과 동일, 변경 없음)
         embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
         att_items = self.attachments.get("items", {})
         att_str = [f"ㄴ {name}: {qty}개" for name, qty in att_items.items()]
@@ -478,7 +484,6 @@ class MailComposeView(ui.View):
         return embed
 
     async def build_components(self):
-        # ... (이전과 동일, 변경 없음)
         self.clear_items()
         self.add_item(ui.Button(label="아이템 첨부", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="attach_item", row=0))
         remove_disabled = not self.attachments.get("items")
@@ -490,7 +495,6 @@ class MailComposeView(ui.View):
             item.callback = self.dispatch_callback
 
     async def dispatch_callback(self, interaction: discord.Interaction):
-        # ... (이전과 동일, 변경 없음)
         custom_id = interaction.data['custom_id']
         if custom_id == "write_message":
             return await self.handle_write_message(interaction)
@@ -504,68 +508,87 @@ class MailComposeView(ui.View):
             await self.handle_send(interaction)
 
     async def handle_attach_item(self, interaction: discord.Interaction):
-        # ... (이전과 동일, 변경 없음)
         view = IngredientSelectView(self)
         await view.start(interaction)
 
     async def add_attachment(self, interaction: discord.Interaction, item_name: str, quantity: int):
-        # ... (이전과 동일, 변경 없음)
         self.attachments['items'][item_name] = self.attachments['items'].get(item_name, 0) + quantity
         await self.refresh(interaction)
     
     async def handle_remove_item(self, interaction: discord.Interaction):
-        # ... (이전과 동일, 변경 없음)
         view = RemoveItemSelectView(self)
         await view.start(interaction)
 
     async def handle_write_message(self, interaction: discord.Interaction):
-        # ... (이전과 동일, 변경 없음)
         modal = MessageModal(self.message_content, self)
         await interaction.response.send_modal(modal)
 
+    # ▼▼▼ [핵심 수정] handle_send 메서드를 아래 코드로 교체합니다. ▼▼▼
     async def handle_send(self, interaction: discord.Interaction):
-        # ... (이전과 동일, 변경 없음)
         try:
             if not self.attachments.get("items") and not self.message_content:
                 msg = await interaction.followup.send("❌ 아이템이나 메시지 중 하나는 반드시 포함되어야 합니다.", ephemeral=True)
                 return await delete_after(msg, 5)
+
             wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(self.user))
             if wallet.get('balance', 0) < self.shipping_fee:
                 msg = await interaction.followup.send(f"코인이 부족합니다. (배송비: {self.shipping_fee:,}{self.currency_icon})", ephemeral=True)
                 return await delete_after(msg, 5)
+            
             for item, qty in self.attachments["items"].items():
                 if inventory.get(item, 0) < qty:
                     msg = await interaction.followup.send(f"아이템 재고가 부족합니다: '{item}'", ephemeral=True)
                     return await delete_after(msg, 5)
+            
+            # --- DB 작업 시작 ---
             db_tasks = [update_wallet(self.user, -self.shipping_fee)]
-            for item, qty in self.attachments["items"].items(): db_tasks.append(update_inventory(self.user.id, item, -qty))
+            for item, qty in self.attachments["items"].items():
+                db_tasks.append(update_inventory(self.user.id, item, -qty))
             await asyncio.gather(*db_tasks)
+            
             now, expires_at = datetime.now(timezone.utc), datetime.now(timezone.utc) + timedelta(days=30)
-            mail_res = await supabase.table('mails').insert({"sender_id": str(self.user.id), "recipient_id": str(self.recipient.id), "message": self.message_content, "sent_at": now.isoformat(), "expires_at": expires_at.isoformat()}).execute()
+            
+            mail_res = await supabase.table('mails').insert({
+                "sender_id": str(self.user.id), 
+                "recipient_id": str(self.recipient.id), 
+                "message": self.message_content, 
+                "sent_at": now.isoformat(), 
+                "expires_at": expires_at.isoformat()
+            }).execute()
+
             if not mail_res.data:
-                logger.error("메일 레코드 생성 실패. 환불 시도."); refund_tasks = [update_wallet(self.user, self.shipping_fee)]
-                for item, qty in self.attachments["items"].items(): refund_tasks.append(update_inventory(self.user.id, item, qty))
+                logger.error("메일 레코드 생성 실패. 비용 및 아이템 환불 시도."); 
+                refund_tasks = [update_wallet(self.user, self.shipping_fee)]
+                for item, qty in self.attachments["items"].items():
+                    refund_tasks.append(update_inventory(self.user.id, item, qty))
                 await asyncio.gather(*refund_tasks)
-                return await self.original_interaction.edit_original_response(content="우편 발송 실패. 비용이 환불되었습니다.", view=None, embed=None)
+                await self.original_interaction.edit_original_response(content="❌ 우편 발송에 실패했습니다. 비용과 아이템이 모두 환불되었습니다.", view=None, embed=None)
+                return
+            
             new_mail_id = mail_res.data[0]['id']
             if self.attachments["items"]:
                 att_to_insert = [{"mail_id": new_mail_id, "item_name": n, "quantity": q, "is_coin": False} for n, q in self.attachments["items"].items()]
                 await supabase.table('mail_attachments').insert(att_to_insert).execute()
+            
             await self.original_interaction.edit_original_response(content="✅ 우편을 성공적으로 보냈습니다.", view=None, embed=None)
+            
             if (panel_ch_id := get_id("trade_panel_channel_id")) and (panel_ch := self.cog.bot.get_channel(panel_ch_id)):
                 if embed_data := await get_embed_from_db("log_new_mail"):
                     log_embed = format_embed_from_db(embed_data, sender_mention=self.user.mention, recipient_mention=self.recipient.mention)
                     await panel_ch.send(content=self.recipient.mention, embed=log_embed, allowed_mentions=discord.AllowedMentions(users=True), delete_after=60.0)
                 await self.cog.regenerate_panel(panel_ch)
-            self.stop()
+            
         except Exception as e:
             logger.error(f"우편 발송 중 최종 단계에서 예외 발생: {e}", exc_info=True)
             try:
+                # original_interaction은 이미 만료되었을 수 있으므로, 현재 interaction에 followup으로 응답
                 await interaction.followup.send("우편 발송 중 오류가 발생했습니다. 재료 소모 여부를 확인해주세요.", ephemeral=True)
             except discord.NotFound:
                 pass
+        finally:
+            # 성공하든 실패하든 View를 중지하여 더 이상 상호작용할 수 없게 만듭니다.
             self.stop()
-
+            
 class MailboxView(ui.View):
     # ▼▼▼ [핵심 수정] __init__ 메서드를 추가합니다. ▼▼▼
     def __init__(self, cog: 'Trade', user: discord.Member):
