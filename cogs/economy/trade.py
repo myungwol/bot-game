@@ -523,21 +523,34 @@ class MailComposeView(ui.View):
         modal = MessageModal(self.message_content, self)
         await interaction.response.send_modal(modal)
 
-    # ▼▼▼ [핵심 수정] handle_send 메서드를 아래 코드로 교체합니다. ▼▼▼
+    # ▼▼▼ [수정] handle_send 메서드를 아래 코드로 전체 교체합니다. ▼▼▼
     async def handle_send(self, interaction: discord.Interaction):
+        # 1. 즉시 모든 버튼을 비활성화하고 로딩 메시지를 표시합니다.
+        for item in self.children:
+            item.disabled = True
+        
+        # 'original_interaction'은 RecipientSelectView에서 온 것이므로,
+        # MailComposeView를 표시하고 있는 메시지를 직접 수정해야 합니다.
+        if self.message:
+            await self.message.edit(content="우편을 보내는 중입니다...", view=self, embed=None)
+
         try:
             if not self.attachments.get("items") and not self.message_content:
                 msg = await interaction.followup.send("❌ 아이템이나 메시지 중 하나는 반드시 포함되어야 합니다.", ephemeral=True)
+                # 실패 시 View를 다시 활성화하기 위해 되돌립니다.
+                await self.refresh()
                 return await delete_after(msg, 5)
 
             wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(self.user))
             if wallet.get('balance', 0) < self.shipping_fee:
                 msg = await interaction.followup.send(f"코인이 부족합니다. (배송비: {self.shipping_fee:,}{self.currency_icon})", ephemeral=True)
+                await self.refresh()
                 return await delete_after(msg, 5)
             
             for item, qty in self.attachments["items"].items():
                 if inventory.get(item, 0) < qty:
                     msg = await interaction.followup.send(f"아이템 재고가 부족합니다: '{item}'", ephemeral=True)
+                    await self.refresh()
                     return await delete_after(msg, 5)
             
             # --- DB 작업 시작 ---
@@ -562,7 +575,7 @@ class MailComposeView(ui.View):
                 for item, qty in self.attachments["items"].items():
                     refund_tasks.append(update_inventory(self.user.id, item, qty))
                 await asyncio.gather(*refund_tasks)
-                await self.original_interaction.edit_original_response(content="❌ 우편 발송에 실패했습니다. 비용과 아이템이 모두 환불되었습니다.", view=None, embed=None)
+                await self.message.edit(content="❌ 우편 발송에 실패했습니다. 비용과 아이템이 모두 환불되었습니다.", view=None, embed=None)
                 return
             
             new_mail_id = mail_res.data[0]['id']
@@ -570,7 +583,7 @@ class MailComposeView(ui.View):
                 att_to_insert = [{"mail_id": new_mail_id, "item_name": n, "quantity": q, "is_coin": False} for n, q in self.attachments["items"].items()]
                 await supabase.table('mail_attachments').insert(att_to_insert).execute()
             
-            await self.original_interaction.edit_original_response(content="✅ 우편을 성공적으로 보냈습니다.", view=None, embed=None)
+            await self.message.edit(content="✅ 우편을 성공적으로 보냈습니다.", view=None, embed=None)
             
             if (panel_ch_id := get_id("trade_panel_channel_id")) and (panel_ch := self.cog.bot.get_channel(panel_ch_id)):
                 if embed_data := await get_embed_from_db("log_new_mail"):
@@ -586,8 +599,8 @@ class MailComposeView(ui.View):
             except discord.NotFound:
                 pass
         finally:
-            # 성공하든 실패하든 View를 중지하여 더 이상 상호작용할 수 없게 만듭니다.
             self.stop()
+    # ▲▲▲ [수정] 완료 ▲▲▲
             
 class MailboxView(ui.View):
     # ▼▼▼ [핵심 수정] __init__ 메서드를 추가합니다. ▼▼▼
