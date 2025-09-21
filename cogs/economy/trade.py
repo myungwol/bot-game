@@ -101,7 +101,6 @@ class TradeView(ui.View):
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.message: Optional[discord.Message] = None
         
-        # Build components initially for the initiator
         self.build_components(self.initiator)
 
     async def start_in_thread(self, thread: discord.Thread):
@@ -136,16 +135,16 @@ class TradeView(ui.View):
         embed.set_footer(text="5분 후 만료됩니다.")
         return embed
 
-    def build_components(self, interaction_user: Optional[discord.User]):
+    def build_components(self, interaction_user: discord.User):
         self.clear_items()
         
-        user_id_to_check = interaction_user.id if interaction_user else self.initiator.id
+        user_id = interaction_user.id
         
         initiator_ready = self.offers[self.initiator.id]["ready"]
         partner_ready = self.offers[self.partner.id]["ready"]
         both_ready = initiator_ready and partner_ready
         
-        user_is_ready = self.offers[user_id_to_check]["ready"]
+        user_is_ready = self.offers[user_id]["ready"]
 
         self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="add_item_button", row=0, disabled=user_is_ready))
         self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="remove_item_button", row=0, disabled=user_is_ready))
@@ -172,20 +171,20 @@ class TradeView(ui.View):
         embed = await self.build_embed()
         
         try:
-            # We always edit the main message, not the interaction's original response
-            # because the interaction might be from an ephemeral message.
-            await self.message.edit(embed=embed, view=self)
-            # If the interaction hasn't been responded to, we acknowledge it quietly.
             if not interaction.response.is_done():
-                await interaction.response.defer()
+                await interaction.response.edit_message(embed=embed, view=self)
+            else:
+                await self.message.edit(embed=embed, view=self)
         except (discord.NotFound, discord.Forbidden):
             self.stop()
 
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
         
-        # Defer immediately for actions that will update the main UI
-        if custom_id in ["ready_button", "unready_button", "confirm_trade_button", "cancel_button"]:
+        if custom_id in ["add_item_button", "remove_item_button", "add_coin_button"]:
+            # These open modals/views which handle their own responses.
+            pass
+        elif not interaction.response.is_done():
             await interaction.response.defer()
 
         if custom_id == "add_item_button": await self.handle_add_item(interaction)
@@ -210,7 +209,7 @@ class TradeView(ui.View):
             await si.response.send_modal(modal); await modal.wait()
             if modal.quantity is not None:
                 self.offers[user_id]["items"][item_name] = modal.quantity
-                await self.update_ui(interaction)
+                await self.update_ui(si)
             try: await si.delete_original_response()
             except discord.NotFound: pass
         item_select.callback = select_callback; select_view.add_item(item_select)
@@ -234,10 +233,8 @@ class TradeView(ui.View):
             item_name_to_remove = si.data['values'][0]
             if item_name_to_remove in self.offers[user_id]["items"]:
                 del self.offers[user_id]["items"][item_name_to_remove]
-                # Use the original interaction to update the main view
                 await self.update_ui(interaction)
             try:
-                # This is a new interaction, it needs a response
                 await si.response.defer()
                 await si.delete_original_response()
             except discord.NotFound:
@@ -263,7 +260,7 @@ class TradeView(ui.View):
         await self.update_ui(interaction)
 
     async def handle_cancel(self, interaction: discord.Interaction):
-        await interaction.followup.send("거래 취소를 요청했습니다.", ephemeral=True, delete_after=5)
+        await interaction.followup.send("거래 취소를 요청했습니다.", ephemeral=True)
         await self.on_timeout(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
@@ -753,7 +750,7 @@ class TradePanelView(ui.View):
 
             try:
                 thread_name = f"🤝｜{initiator.display_name}↔️{partner.display_name}"
-                thread = await interaction.channel.create_thread(name=thread_name, type=discord.ChannelType.private_thread)
+                thread = await si.channel.create_thread(name=thread_name, type=discord.ChannelType.private_thread)
                 await thread.add_user(initiator)
                 await thread.add_user(partner)
                 trade_view = TradeView(self.cog, initiator, partner, trade_id)
