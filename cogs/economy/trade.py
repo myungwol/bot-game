@@ -755,9 +755,8 @@ class TradePanelView(ui.View):
         view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="거래할 상대를 선택하세요.")
         
-        # ▼▼▼ [핵심 수정] 아래 select_callback 함수를 교체합니다. ▼▼▼
         async def select_callback(si: discord.Interaction):
-            # UserSelect 상호작용에 대해 먼저 응답하여 타임아웃을 방지합니다.
+            # UserSelect 상호작용(si)에 대해 응답합니다.
             await si.response.defer(ephemeral=True, thinking=False)
 
             partner_id = int(si.data['values'][0])
@@ -785,13 +784,8 @@ class TradePanelView(ui.View):
                 trade_view = TradeView(self.cog, initiator, partner, trade_id)
                 await trade_view.start_in_thread(thread)
                 
-                await si.followup.send(f"✅ 거래 채널을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
-                
-                # ▼▼▼ [핵심 수정] 원본 메시지를 수정하는 코드를 삭제하고, UserSelect 메시지를 삭제합니다. ▼▼▼
-                try:
-                    await interaction.delete_original_response()
-                except discord.NotFound:
-                    pass # 이미 삭제되었거나 다른 이유로 찾을 수 없으면 무시
+                # 원본 메시지가 아닌, UserSelect가 있던 메시지를 수정합니다.
+                await si.edit_original_response(content=f"✅ 거래 채널을 만들었습니다! {thread.mention} 채널을 확인해주세요.", view=None)
 
             except Exception as e:
                 logger.error(f"거래 스레드 생성 중 오류: {e}", exc_info=True)
