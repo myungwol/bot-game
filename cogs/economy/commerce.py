@@ -409,14 +409,14 @@ class SellFishView(ShopViewBase):
         self.clear_items()
         aquarium = await get_aquarium(str(self.user.id))
         
-        # [핵심 수정] 메모리 캐시 대신 DB에서 직접 최신 낚시 정보를 불러옵니다.
-        loot_res = await supabase.table('fishing_loots').select('*').execute()
-        if not (loot_res and loot_res.data):
-            logger.error("데이터베이스에서 낚시 아이템 정보를 불러오는 데 실패했습니다.")
+        # ▼▼▼ [수정] DB 직접 호출 대신 캐시된 함수 사용 ▼▼▼
+        all_loot_data = get_fishing_loot() 
+        if not all_loot_data:
+            logger.error("캐시된 낚시 아이템 정보를 불러오는 데 실패했습니다.")
             self.add_item(ui.Button(label="오류: 가격 정보를 불러올 수 없습니다.", disabled=True))
             return
-        loot_db = {loot['name']: loot for loot in loot_res.data}
-        # [핵심 수정] 여기까지
+        loot_db = {loot['name']: loot for loot in all_loot_data}
+            # [핵심 수정] 여기까지
         
         self.fish_data_map.clear()
         
