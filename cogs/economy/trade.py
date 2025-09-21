@@ -93,21 +93,15 @@ class MessageModal(ui.Modal, title="메시지 작성"):
 class TradeView(ui.View):
     def __init__(self, cog: 'Trade', initiator: discord.Member, partner: discord.Member, trade_id: str):
         super().__init__(timeout=300)
-        self.cog = cog; self.initiator = initiator; self.partner = partner
+        self.cog = cog
+        self.initiator = initiator
+        self.partner = partner
         self.trade_id = trade_id
         self.offers = { initiator.id: {"items": {}, "coins": 0, "ready": False}, partner.id: {"items": {}, "coins": 0, "ready": False} }
         self.currency_icon = get_config("CURRENCY_ICON", "🪙")
         self.message: Optional[discord.Message] = None
         
-        self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="add_item_button"))
-        # ▼▼▼ [핵심 추가] '아이템 제거' 버튼을 추가합니다. ▼▼▼
-        self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="remove_item_button"))
-        self.add_item(ui.Button(label="코인 추가", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin_button"))
-        self.add_item(ui.Button(label="준비/확정", style=discord.ButtonStyle.success, emoji="✅", custom_id="ready_button"))
-        self.add_item(ui.Button(label="취소", style=discord.ButtonStyle.danger, emoji="✖️", custom_id="cancel_button"))
-
-        for item in self.children:
-            if isinstance(item, ui.Button): item.callback = self.dispatch_callback
+        self.build_components()
 
     async def start_in_thread(self, thread: discord.Thread):
         self.cog.active_trades[self.trade_id] = self
@@ -116,8 +110,14 @@ class TradeView(ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id not in [self.initiator.id, self.partner.id]:
-            await interaction.response.send_message("거래 당사자만 이용할 수 있습니다.", ephemeral=True); return False
-        if self.offers[self.initiator.id]["ready"] and self.offers[self.partner.id]["ready"]: return False
+            await interaction.response.send_message("거래 당사자만 이용할 수 있습니다.", ephemeral=True)
+            return False
+        
+        # 거래 확정 버튼은 신청자만 누를 수 있도록 별도 체크
+        if interaction.data and interaction.data.get('custom_id') == "confirm_trade_button":
+            if interaction.user.id != self.initiator.id:
+                await interaction.response.send_message("거래 신청자만 확정할 수 있습니다.", ephemeral=True, delete_after=5)
+                return False
         return True
         
     async def build_embed(self) -> discord.Embed:
@@ -126,39 +126,70 @@ class TradeView(ui.View):
             offer = self.offers[user.id]
             status = "✅ 준비 완료" if offer["ready"] else "⏳ 준비 중"
             field_value_parts = [f"**{user.mention}** ({status})"]
-            if offer["items"]: field_value_parts.extend([f"ㄴ {name}: {qty}개" for name, qty in offer["items"].items()])
-            if offer["coins"] > 0: field_value_parts.append(f"💰 {offer['coins']:,}{self.currency_icon}")
-            if len(field_value_parts) == 1: field_value_parts.append("제안 없음")
+            if offer["items"]:
+                field_value_parts.extend([f"ㄴ {name}: {qty}개" for name, qty in offer["items"].items()])
+            if offer["coins"] > 0:
+                field_value_parts.append(f"💰 {offer['coins']:,}{self.currency_icon}")
+            if len(field_value_parts) == 1:
+                field_value_parts.append("제안 없음")
             embed.add_field(name=f"참가자 {i+1}", value="\n".join(field_value_parts), inline=True)
         embed.set_footer(text="5분 후 만료됩니다.")
         return embed
 
-    async def update_ui(self):
+    def build_components(self):
+        self.clear_items()
+        
+        initiator_ready = self.offers[self.initiator.id]["ready"]
+        partner_ready = self.offers[self.partner.id]["ready"]
+        both_ready = initiator_ready and partner_ready
+
+        self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="add_item_button", row=0, disabled=both_ready))
+        self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="remove_item_button", row=0, disabled=both_ready))
+        self.add_item(ui.Button(label="코인 추가", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin_button", row=0, disabled=both_ready))
+
+        if not both_ready:
+            self.add_item(ui.Button(label="준비/해제", style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
+        else:
+            self.add_item(ui.Button(label="거래 확정", style=discord.ButtonStyle.success, emoji="🤝", custom_id="confirm_trade_button", row=1))
+            self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="ready_button", row=1))
+        
+        self.add_item(ui.Button(label="거래 취소", style=discord.ButtonStyle.danger, emoji="✖️", custom_id="cancel_button", row=2))
+
+        for item in self.children:
+            if isinstance(item, ui.Button):
+                item.callback = self.dispatch_callback
+
+    async def update_ui(self, interaction: discord.Interaction):
         if self.is_finished() or not self.message: return
+        
+        self.build_components()
         embed = await self.build_embed()
+        
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        
         try:
-            await self.message.edit(embed=embed, view=self)
-        except (discord.NotFound, discord.Forbidden): self.stop()
+            await interaction.edit_original_response(embed=embed, view=self)
+        except (discord.NotFound, discord.Forbidden):
+            self.stop()
 
     async def dispatch_callback(self, interaction: discord.Interaction):
-        key = (interaction.channel.id, interaction.user.id)
-        now = time.monotonic()
-        last = self.cog.last_action_ts.get(key, 0.0)
-        if now - last < self.cog.cooldown_sec: 
-            if not interaction.response.is_done(): await interaction.response.defer()
-            return
-        self.cog.last_action_ts[key] = now
-        lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
-        if lock.locked(): 
-            if not interaction.response.is_done(): await interaction.response.defer()
-            return
-        async with lock:
-            custom_id = interaction.data['custom_id']
-            if custom_id == "add_item_button": await self.handle_add_item(interaction)
-            elif custom_id == "remove_item_button": await self.handle_remove_item(interaction)
-            elif custom_id == "add_coin_button": await self.handle_add_coin(interaction)
-            elif custom_id == "ready_button": await self.handle_ready(interaction)
-            elif custom_id == "cancel_button": await self.handle_cancel(interaction)
+        custom_id = interaction.data['custom_id']
+        
+        # 모달을 띄우는 상호작용은 여기서 직접 처리
+        if custom_id in ["add_item_button", "remove_item_button", "add_coin_button"]:
+            # defer는 각 핸들러에서 필요에 따라 처리
+            pass
+        elif not interaction.response.is_done():
+            await interaction.response.defer()
+
+        # 실제 로직 호출
+        if custom_id == "add_item_button": await self.handle_add_item(interaction)
+        elif custom_id == "remove_item_button": await self.handle_remove_item(interaction)
+        elif custom_id == "add_coin_button": await self.handle_add_coin(interaction)
+        elif custom_id == "ready_button": await self.handle_ready(interaction)
+        elif custom_id == "confirm_trade_button": await self.process_trade(interaction)
+        elif custom_id == "cancel_button": await self.handle_cancel(interaction)
 
     async def handle_add_item(self, interaction: discord.Interaction):
         user_id = interaction.user.id
@@ -174,13 +205,12 @@ class TradeView(ui.View):
             await si.response.send_modal(modal); await modal.wait()
             if modal.quantity is not None:
                 self.offers[user_id]["items"][item_name] = modal.quantity
-                await self.update_ui()
+                await self.update_ui(si)
             try: await si.delete_original_response()
             except discord.NotFound: pass
         item_select.callback = select_callback; select_view.add_item(item_select)
         await interaction.response.send_message(view=select_view, ephemeral=True)
 
-    # ▼▼▼ [핵심 추가] 아이템 제거를 처리하는 함수입니다. ▼▼▼
     async def handle_remove_item(self, interaction: discord.Interaction):
         user_id = interaction.user.id
         if self.offers[user_id]["ready"]:
@@ -196,11 +226,10 @@ class TradeView(ui.View):
         item_select = ui.Select(placeholder="제거할 아이템을 선택하세요", options=options)
 
         async def select_callback(si: discord.Interaction):
-            await si.response.defer()
             item_name_to_remove = si.data['values'][0]
             if item_name_to_remove in self.offers[user_id]["items"]:
                 del self.offers[user_id]["items"][item_name_to_remove]
-                await self.update_ui()
+                await self.update_ui(si)
             try:
                 await si.delete_original_response()
             except discord.NotFound:
@@ -218,22 +247,19 @@ class TradeView(ui.View):
         await interaction.response.send_modal(modal); await modal.wait()
         if modal.coins is not None:
             self.offers[user_id]["coins"] = modal.coins
-            await self.update_ui()
+            await self.update_ui(interaction)
 
     async def handle_ready(self, interaction: discord.Interaction):
-        await interaction.response.defer()
         user_id = interaction.user.id
         self.offers[user_id]["ready"] = not self.offers[user_id]["ready"]
-        if self.offers[self.initiator.id]["ready"] and self.offers[self.partner.id]["ready"]:
-            await self.process_trade(interaction)
-        else: await self.update_ui()
+        await self.update_ui(interaction)
 
     async def handle_cancel(self, interaction: discord.Interaction):
-        await interaction.response.defer()
         await interaction.followup.send("거래 취소를 요청했습니다.", ephemeral=True)
         await self.on_timeout(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
+        self.build_components()
         for item in self.children: item.disabled = True
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=await self.build_embed())
         user1, user2, offer1, offer2 = self.initiator, self.partner, self.offers[self.initiator.id], self.offers[self.partner.id]
@@ -350,10 +376,9 @@ class MailComposeView(ui.View):
             await interaction.response.defer(ephemeral=True)
 
         embed = await self.build_embed()
-        await self.build_components()
+        self.build_components() # build_components first
         
         await interaction.edit_original_response(embed=embed, view=self)
-
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
@@ -366,7 +391,7 @@ class MailComposeView(ui.View):
             embed.description = "첨부할 아이템을 선택해주세요."
         return embed
 
-    async def build_components(self):
+    def build_components(self):
         self.clear_items()
         if self.current_state == "composing":
             self.add_item(ui.Button(label="아이템 첨부", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="attach_item_button"))
@@ -528,7 +553,7 @@ class MailboxView(ui.View):
                     embed.add_field(name="\u200b", value="━━━━━━━━━━━━━━━━━━", inline=False)
         return embed
 
-    async def build_components(self):
+    def build_components(self):
         self.clear_items()
         
         mail_options = [
@@ -634,9 +659,9 @@ class MailboxView(ui.View):
         await self.update_view(interaction)
         
     async def send_mail(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        select_view = ui.View(timeout=180)
+        view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="편지를 보낼 상대를 선택하세요.")
+        
         async def callback(select_interaction: discord.Interaction):
             recipient_id = int(select_interaction.data['values'][0])
             recipient = interaction.guild.get_member(recipient_id)
@@ -644,12 +669,14 @@ class MailboxView(ui.View):
                 await select_interaction.response.send_message("잘못된 상대입니다.", ephemeral=True, delete_after=5)
                 return
             
+            # 여기서 MailboxView의 원래 메시지를 수정하여 MailComposeView로 전환합니다.
             compose_view = MailComposeView(self.cog, self.user, recipient, select_interaction)
             await compose_view.start()
 
         user_select.callback = callback
-        select_view.add_item(user_select)
-        await interaction.followup.send("누구에게 편지를 보내시겠습니까?", view=select_view, ephemeral=True)
+        view.add_item(user_select)
+        await interaction.response.edit_message(content="누구에게 편지를 보내시겠습니까?", view=view, embed=None)
+
     
     async def prev_page_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
