@@ -143,17 +143,21 @@ class TradeView(ui.View):
         initiator_ready = self.offers[self.initiator.id]["ready"]
         partner_ready = self.offers[self.partner.id]["ready"]
         both_ready = initiator_ready and partner_ready
+        
+        user_is_ready = self.offers[user_id]["ready"]
 
-        self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="add_item_button", row=0, disabled=self.offers[user_id]["ready"]))
-        self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="remove_item_button", row=0, disabled=self.offers[user_id]["ready"]))
-        self.add_item(ui.Button(label="코인 추가", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin_button", row=0, disabled=self.offers[user_id]["ready"]))
+        self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="add_item_button", row=0, disabled=user_is_ready))
+        self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="remove_item_button", row=0, disabled=user_is_ready))
+        self.add_item(ui.Button(label="코인 추가", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin_button", row=0, disabled=user_is_ready))
 
         if not both_ready:
-            ready_button_label = "준비 해제" if self.offers[user_id]["ready"] else "준비"
-            self.add_item(ui.Button(label=ready_button_label, style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
+            if not user_is_ready:
+                self.add_item(ui.Button(label="준비", style=discord.ButtonStyle.primary, emoji="✅", custom_id="ready_button", row=1))
+            else:
+                self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="unready_button", row=1))
         else:
             self.add_item(ui.Button(label="거래 확정", style=discord.ButtonStyle.success, emoji="🤝", custom_id="confirm_trade_button", row=1))
-            self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="ready_button", row=1))
+            self.add_item(ui.Button(label="준비 해제", style=discord.ButtonStyle.grey, emoji="↩️", custom_id="unready_button", row=1))
         
         self.add_item(ui.Button(label="거래 취소", style=discord.ButtonStyle.danger, emoji="✖️", custom_id="cancel_button", row=2))
 
@@ -166,11 +170,11 @@ class TradeView(ui.View):
         self.build_components(interaction.user)
         embed = await self.build_embed()
         
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-        
         try:
-            await self.message.edit(embed=embed, view=self)
+            if not interaction.response.is_done():
+                await interaction.response.edit_message(embed=embed, view=self)
+            else:
+                await self.message.edit(embed=embed, view=self)
         except (discord.NotFound, discord.Forbidden):
             self.stop()
 
@@ -186,7 +190,8 @@ class TradeView(ui.View):
         if custom_id == "add_item_button": await self.handle_add_item(interaction)
         elif custom_id == "remove_item_button": await self.handle_remove_item(interaction)
         elif custom_id == "add_coin_button": await self.handle_add_coin(interaction)
-        elif custom_id == "ready_button": await self.handle_ready(interaction)
+        elif custom_id == "ready_button": await self.handle_ready(interaction, True)
+        elif custom_id == "unready_button": await self.handle_ready(interaction, False)
         elif custom_id == "confirm_trade_button": await self.process_trade(interaction)
         elif custom_id == "cancel_button": await self.handle_cancel(interaction)
 
@@ -248,9 +253,9 @@ class TradeView(ui.View):
             self.offers[user_id]["coins"] = modal.coins
             await self.update_ui(interaction)
 
-    async def handle_ready(self, interaction: discord.Interaction):
+    async def handle_ready(self, interaction: discord.Interaction, ready_status: bool):
         user_id = interaction.user.id
-        self.offers[user_id]["ready"] = not self.offers[user_id]["ready"]
+        self.offers[user_id]["ready"] = ready_status
         await self.update_ui(interaction)
 
     async def handle_cancel(self, interaction: discord.Interaction):
