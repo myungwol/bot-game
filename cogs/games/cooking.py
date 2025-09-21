@@ -634,6 +634,7 @@ class Cooking(commands.Cog):
         await save_panel_id(panel_key, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다.")
 
+    # ▼▼▼ [수정] create_kitchen_thread 메서드 수정 ▼▼▼
     async def create_kitchen_thread(self, interaction: discord.Interaction):
         user = interaction.user
         try:
@@ -653,7 +654,12 @@ class Cooking(commands.Cog):
                 await interaction.followup.send("❌ 이 채널에서는 스레드를 생성할 수 없습니다.", ephemeral=True)
                 return
 
-            thread = await interaction.channel.create_thread(name=f"🍲｜{user.display_name}의 부엌", type=discord.ChannelType.private_thread)
+            thread = await interaction.channel.create_thread(
+                name=f"🍲｜{user.display_name}의 부엌",
+                type=discord.ChannelType.private_thread,
+                auto_archive_duration=10080, # 1주일 (60 * 24 * 7)
+                invitable=False
+            )
             await thread.add_user(user)
             await delete_config_from_db(f"kitchen_state_{user.id}")
             await supabase.table('user_settings').upsert({'user_id': str(user.id), 'kitchen_thread_id': thread.id, 'kitchen_selected_slots': []}).execute()
@@ -674,6 +680,7 @@ class Cooking(commands.Cog):
         except Exception as e:
             logger.error(f"부엌 생성 중 오류: {e}", exc_info=True)
             await interaction.followup.send("❌ 부엌을 만드는 중 오류가 발생했습니다.", ephemeral=True)
+    # ▲▲▲ [수정] 완료 ▲▲▲
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Cooking(bot))
