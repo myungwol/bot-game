@@ -51,37 +51,14 @@ class MyBot(commands.Bot):
         super().__init__(*args, **kwargs)
         self.interaction_handler_cog = None
 
-    # ▼▼▼ [핵심 수정] 이 메서드의 마지막 부분을 수정합니다. ▼▼▼
     async def on_interaction(self, interaction: discord.Interaction):
-        # (이하 진단 로그는 그대로 유지합니다)
-        logger.critical(f"==================== [!!! on_interaction 이벤트 발생 !!!] ====================")
-        logger.info(f"[진단 on_interaction] 사용자: {interaction.user} ({interaction.user.id})")
-        logger.info(f"[진단 on_interaction] 타입: {interaction.type}")
-        if interaction.data:
-             logger.info(f"[진단 on_interaction] Custom ID: {interaction.data.get('custom_id', 'N/A')}")
-        
         if self.interaction_handler_cog:
-            logger.info("[진단 on_interaction] 'interaction_handler_cog'를 찾았습니다. 쿨다운 검사를 시작합니다.")
-            
             can_proceed = await self.interaction_handler_cog.check_cooldown(interaction)
-            
             if not can_proceed:
-                logger.warning("[진단 on_interaction] 쿨다운에 걸려 상호작용 처리를 중단합니다.")
-                logger.critical("==================== [!!! on_interaction 처리 종료 (차단) !!!] ====================")
                 return
-            
-            logger.info("[진단 on_interaction] 쿨다운 검사를 통과했습니다. 기본 상호작용 처리를 계속합니다.")
-        else:
-            logger.error("[진단 on_interaction] 'interaction_handler_cog'가 'None'입니다! 쿨다운을 검사할 수 없습니다.")
-
-        # ▼▼▼ [핵심 수정] super().on_interaction(interaction) 대신 아래 코드를 사용합니다. ▼▼▼
-        # discord.py 내부적으로 상호작용을 처리하는 로직을 직접 호출합니다.
-        # 슬래시 명령어, 버튼 클릭, 선택 메뉴 등을 모두 이곳에서 분배합니다.
-        self.dispatch('interaction', interaction)
-        # ▲▲▲ 핵심 수정 끝 ▲▲▲
         
-        logger.critical("==================== [!!! on_interaction 처리 완료 !!!] ====================")
-    # ▲▲▲ on_interaction 메서드 수정 끝 ▲▲▲
+        # discord.py 내부적으로 상호작용을 처리하는 로직을 직접 호출합니다.
+        self.dispatch('interaction', interaction)
                 
     async def setup_hook(self):
         # (이하 setup_hook 및 다른 모든 코드는 이전과 동일하게 유지)
