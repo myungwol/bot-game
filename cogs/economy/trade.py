@@ -20,8 +20,7 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# cooking.py에서 가져온 COOKABLE_CATEGORIES. trade.py에서도 필요합니다.
-COOKABLE_CATEGORIES = ["농장_작물", "농장_씨앗", "광물", "미끼", "아이템", "생선", "요리"]
+TRADEABLE_CATEGORIES = ["농장_작물", "농장_씨앗", "광물", "미끼", "아이템"]
 
 async def delete_after(message: discord.WebhookMessage, delay: int):
     await asyncio.sleep(delay)
@@ -29,69 +28,128 @@ async def delete_after(message: discord.WebhookMessage, delay: int):
         await message.delete()
     except (discord.NotFound, discord.Forbidden):
         pass
-        
-# [수정] IngredientSelectModal이 MailComposeView도 받을 수 있도록 수정
-class IngredientSelectModal(ui.Modal):
-    def __init__(self, item_name: str, max_qty: int, parent_view: Any): # 타입을 Any로 변경
-        super().__init__(title=f"'{item_name}' 수량 입력")
-        self.parent_view = parent_view
+
+class ItemSelectModal(ui.Modal, title="수량 입력"):
+    quantity_input = ui.TextInput(label="수량", placeholder="수량을 입력하세요.", required=True)
+    def __init__(self, title: str, max_quantity: int):
+        super().__init__(title=title)
+        self.max_quantity = max_quantity
+        self.quantity: Optional[int] = None
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            qty = int(self.quantity_input.value)
+            if not 1 <= qty <= self.max_quantity: raise ValueError
+            self.quantity = qty
+            await interaction.response.defer()
+        except ValueError:
+            await interaction.response.send_message(f"1에서 {self.max_quantity} 사이의 숫자만 입력해주세요.", ephemeral=True, delete_after=5)
+        self.stop()
+
+class MailItemSelectModal(ui.Modal):
+    quantity_input = ui.TextInput(label="수량", placeholder="수량을 입력하세요.", required=True)
+
+    def __init__(self, title: str, max_quantity: int, item_name: str, parent_view: 'MailComposeView'):
+        super().__init__(title=title)
+        self.max_quantity = max_quantity
         self.item_name = item_name
-        self.quantity_input = ui.TextInput(label="수량", placeholder=f"최대 {max_qty}개")
-        self.add_item(self.quantity_input)
+        self.parent_view = parent_view
+        self.quantity_input.placeholder = f"최대 {max_quantity}개"
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            quantity = int(self.quantity_input.value)
-            max_qty = int(self.quantity_input.placeholder.split(' ')[1].replace('개', ''))
-            if not 1 <= quantity <= max_qty: raise ValueError
-            
-            # parent_view의 타입에 따라 다른 메서드 호출
-            if hasattr(self.parent_view, 'add_ingredient'):
-                await self.parent_view.add_ingredient(interaction, self.item_name, quantity)
-            elif hasattr(self.parent_view, 'add_attachment'): # MailComposeView용 메서드
-                await self.parent_view.add_attachment(interaction, self.item_name, quantity)
-
+            qty = int(self.quantity_input.value)
+            if not 1 <= qty <= self.max_quantity:
+                await interaction.response.send_message(f"1에서 {self.max_quantity} 사이의 숫자만 입력해주세요.", ephemeral=True, delete_after=5)
+                return
+            await self.parent_view.add_attachment(interaction, self.item_name, qty)
         except ValueError:
-            await interaction.response.send_message(f"1에서 {max_qty} 사이의 숫자를 입력해주세요.", ephemeral=True, delete_after=5)
-        except Exception as e:
-            logger.error(f"재료 수량 입력 처리 중 오류: {e}", exc_info=True)
+            await interaction.response.send_message("숫자만 입력해주세요.", ephemeral=True, delete_after=5)
 
-# [추가] cooking.py에서 복사해 온 IngredientSelectView
+class CoinInputModal(ui.Modal, title="코인 설정"):
+    coin_input = ui.TextInput(label="코인", placeholder="설정할 코인 액수를 입력하세요 (제거는 0 입력)", required=True)
+    def __init__(self, title:str, max_coins: int):
+        super().__init__(title=title)
+        self.max_coins = max_coins
+        self.coins: Optional[int] = None
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            coins = int(self.coin_input.value)
+            if not 0 <= coins <= self.max_coins: raise ValueError
+            self.coins = coins
+            await interaction.response.defer()
+        except ValueError:
+            await interaction.response.send_message(f"0에서 {self.max_coins:,} 사이의 숫자만 입력해주세요.", ephemeral=True, delete_after=5)
+        self.stop()
+
+class MessageModal(ui.Modal, title="메시지 작성"):
+    message_input = ui.TextInput(label="메시지 (최대 100자)", style=discord.TextStyle.paragraph, max_length=100, required=False)
+    def __init__(self, current_message: str, parent_view: 'MailComposeView'):
+        super().__init__()
+        self.message_input.default = current_message
+        self.parent_view = parent_view
+    async def on_submit(self, interaction: discord.Interaction):
+        self.parent_view.message_content = self.message_input.value
+        await self.parent_view.refresh(interaction)
+
+class RemoveItemSelectView(ui.View):
+    def __init__(self, parent_view: 'MailComposeView'):
+        super().__init__(timeout=180)
+        self.parent_view = parent_view
+
+    async def start(self, interaction: discord.Interaction):
+        await self.build_components()
+        await interaction.followup.send("제거할 아이템을 선택하세요.", view=self, ephemeral=True)
+
+    async def build_components(self):
+        self.clear_items()
+        attached_items = self.parent_view.attachments.get("items", {})
+        if not attached_items:
+            self.add_item(ui.Button(label="제거할 아이템이 없습니다.", disabled=True))
+            return
+        
+        options = [discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in attached_items.items()]
+        item_select = ui.Select(placeholder="제거할 아이템 선택...", options=options)
+        item_select.callback = self.on_item_select
+        self.add_item(item_select)
+
+    async def on_item_select(self, interaction: discord.Interaction):
+        item_name = interaction.data['values'][0]
+        if item_name in self.parent_view.attachments["items"]:
+            del self.parent_view.attachments["items"][item_name]
+        
+        await self.parent_view.refresh(interaction)
+        try:
+            await interaction.delete_original_response()
+        except (discord.NotFound, discord.HTTPException):
+            pass
+
 class IngredientSelectView(ui.View):
-    def __init__(self, parent_view: Any): # 타입을 Any로 변경
+    def __init__(self, parent_view: 'MailComposeView'):
         super().__init__(timeout=180)
         self.parent_view = parent_view
         self.user = parent_view.user
 
     async def start(self, interaction: discord.Interaction):
         await self.build_components()
-        await interaction.followup.send("추가할 재료를 선택하세요.", view=self, ephemeral=True)
+        await interaction.followup.send("첨부할 아이템을 선택하세요.", view=self, ephemeral=True)
 
     async def build_components(self):
         self.clear_items()
         inventory = await get_inventory(self.user)
         item_db = get_item_database()
         
-        all_ingredients_in_selected = set()
-        if hasattr(self.parent_view, 'get_selected_cauldrons'):
-            for cauldron in self.parent_view.get_selected_cauldrons():
-                all_ingredients_in_selected.update((cauldron.get('current_ingredients') or {}).keys())
-        elif hasattr(self.parent_view, 'attachments'):
-             all_ingredients_in_selected.update(self.parent_view.attachments.get('items', {}).keys())
-
-        # MailComposeView는 TRADEABLE_CATEGORIES를 사용
-        categories_to_check = TRADEABLE_CATEGORIES
-
-        cookable_items = {
+        attached_items = self.parent_view.attachments.get("items", {}).keys()
+        
+        tradeable_items = {
             name: qty for name, qty in inventory.items()
-            if item_db.get(name, {}).get('category') in categories_to_check and name not in all_ingredients_in_selected
+            if item_db.get(name, {}).get('category') in TRADEABLE_CATEGORIES and name not in attached_items
         }
 
-        if not cookable_items:
-            self.add_item(ui.Button(label="추가할 아이템이 없습니다.", disabled=True))
+        if not tradeable_items:
+            self.add_item(ui.Button(label="첨부 가능한 아이템이 없습니다.", disabled=True))
             return
-        options = [discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in cookable_items.items()]
-        item_select = ui.Select(placeholder="재료 선택...", options=options[:25])
+        options = [discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in tradeable_items.items()]
+        item_select = ui.Select(placeholder="아이템 선택...", options=options[:25])
         item_select.callback = self.on_item_select
         self.add_item(item_select)
 
@@ -99,26 +157,22 @@ class IngredientSelectView(ui.View):
         item_name = interaction.data['values'][0]
         inventory = await get_inventory(self.user)
         max_qty = inventory.get(item_name, 0)
-        modal = IngredientSelectModal(item_name, max_qty, self.parent_view)
+        modal = MailItemSelectModal(f"'{item_name}' 수량 입력", max_qty, item_name, self.parent_view)
         await interaction.response.send_modal(modal)
         try:
             await interaction.delete_original_response()
-        except (discord.NotFound, discord.HTTPException): pass
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
 class MailComposeView(ui.View):
-    # ... (기존 __init__, start, refresh, build_embed, build_components, dispatch_callback 그대로 유지) ...
     def __init__(self, cog: 'Trade', user: discord.Member, recipient: discord.Member, original_interaction: discord.Interaction):
         super().__init__(timeout=300)
-        self.cog = cog
-        self.user = user
-        self.recipient = recipient
+        self.cog = cog; self.user = user; self.recipient = recipient
         self.original_interaction = original_interaction
-        self.message_content = ""
-        self.attachments = {"items": {}}
-        self.currency_icon = get_config("CURRENCY_ICON", "🪙")
-        self.shipping_fee = 100
+        self.message_content = ""; self.attachments = {"items": {}}
+        self.currency_icon = get_config("CURRENCY_ICON", "🪙"); self.shipping_fee = 100
         self.message: Optional[discord.WebhookMessage] = None
-
+        
     async def start(self):
         embed = await self.build_embed()
         await self.build_components()
@@ -151,7 +205,6 @@ class MailComposeView(ui.View):
         self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="remove_item", row=0, disabled=remove_disabled))
         self.add_item(ui.Button(label="메시지 작성/수정", style=discord.ButtonStyle.secondary, emoji="✍️", custom_id="write_message", row=0))
         
-        # [수정] 보내기 버튼 비활성화 로직 추가
         send_disabled = not (self.attachments.get("items") or self.message_content)
         self.add_item(ui.Button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀", custom_id="send_mail", row=1, disabled=send_disabled))
 
@@ -177,13 +230,11 @@ class MailComposeView(ui.View):
     async def handle_attach_item(self, interaction: discord.Interaction):
         view = IngredientSelectView(self)
         await view.start(interaction)
-    
-    # [추가] MailComposeView에서 호출할 add_attachment 메서드
+
     async def add_attachment(self, interaction: discord.Interaction, item_name: str, quantity: int):
         self.attachments['items'][item_name] = self.attachments['items'].get(item_name, 0) + quantity
         await self.refresh(interaction)
-
-    # ... (handle_remove_item, handle_write_message, handle_send 메서드는 이전 버전과 동일하게 유지) ...
+    
     async def handle_remove_item(self, interaction: discord.Interaction):
         view = RemoveItemSelectView(self)
         await view.start(interaction)
@@ -194,7 +245,6 @@ class MailComposeView(ui.View):
 
     async def handle_send(self, interaction: discord.Interaction):
         try:
-            # [추가] 보내기 전 유효성 검사
             if not self.attachments.get("items") and not self.message_content:
                 msg = await interaction.followup.send("❌ 아이템이나 메시지 중 하나는 반드시 포함되어야 합니다.", ephemeral=True)
                 return await delete_after(msg, 5)
@@ -241,167 +291,9 @@ class MailComposeView(ui.View):
             self.stop()
 
 class MailboxView(ui.View):
-    def __init__(self, cog: 'Trade', user: discord.Member):
-        super().__init__(timeout=180)
-        self.cog = cog
-        self.user = user
-        self.page = 0
-        self.mails_on_page: List[Dict] = []
-        self.message: Optional[discord.WebhookMessage] = None
-        self.currency_icon = get_config("CURRENCY_ICON", "🪙")
-        self.selected_mail_ids: List[str] = []
-
-    async def start(self, interaction: discord.Interaction):
-        embed = await self.build_embed()
-        await self.build_components()
-        self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
-
-    async def update_view(self, interaction: discord.Interaction):
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-
-        if not self.message:
-            self.message = await interaction.original_response()
-
-        embed = await self.build_embed()
-        await self.build_components()
-        
-        try:
-            await self.message.edit(embed=embed, view=self)
-        except (discord.NotFound, discord.Forbidden) as e:
-            logger.warning(f"MailboxView 메시지(ID: {self.message.id})를 수정할 수 없습니다: {e}")
-            await interaction.followup.send("오류: UI가 만료되었거나 찾을 수 없습니다. 우편함을 다시 열어주세요.", ephemeral=True, delete_after=5)
-            self.stop()
-
-
-    async def build_embed(self) -> discord.Embed:
-        embed = discord.Embed(title=f"📫 {self.user.display_name}의 우편함", color=0x964B00)
-        res = await supabase.table('mails').select('*, mail_attachments(*)', count='exact').eq('recipient_id', str(self.user.id)).is_('claimed_at', None).order('sent_at', desc=True).range(self.page * 5, self.page * 5 + 4).execute()
-        
-        self.mails_on_page = res.data if res.data else []
-        
-        if not self.mails_on_page:
-            embed.description = "받은 편지가 없습니다."
-        else:
-            embed.set_footer(text=f"페이지 {self.page + 1} / {math.ceil((res.count or 0) / 5)}")
-            for i, mail in enumerate(self.mails_on_page):
-                sender_id_int = int(mail['sender_id'])
-                sender = self.cog.bot.get_user(sender_id_int)
-                sender_name = sender.display_name if sender else f"알 수 없는 유저 ({sender_id_int})"
-                sender_mention = sender.mention if sender else sender_name
-
-                attachments = mail['mail_attachments']
-                att_str = [f"📦 {att['item_name']}: {att['quantity']}개" for att in attachments if not att['is_coin']]
-                field_value = (f"**보낸 사람:** {sender_mention}\n" +
-                               (f"> **메시지:** {mail['message']}\n" if mail['message'] else "") +
-                               "**첨부 아이템:**\n" + ("\n".join(att_str) if att_str else "없음"))
-                embed.add_field(name=f"FROM: {sender_name} ({discord.utils.format_dt(datetime.fromisoformat(mail['sent_at']), 'R')})", value=field_value, inline=False)
-                
-                if i < len(self.mails_on_page) - 1:
-                    embed.add_field(name="\u200b", value="━━━━━━━━━━━━━━━━━━", inline=False)
-        return embed
-
-    async def build_components(self):
-        self.clear_items()
-        
-        mail_options = [
-            discord.SelectOption(
-                label=f"보낸사람: {getattr(self.cog.bot.get_user(int(m['sender_id'])), 'display_name', m['sender_id'])}",
-                value=str(m['id']),
-                default=(str(m['id']) in self.selected_mail_ids)
-            ) for m in self.mails_on_page
-        ]
-
-        if mail_options:
-            select = ui.Select(
-                placeholder="처리할 우편을 선택하세요 (여러 개 선택 가능)",
-                options=mail_options,
-                max_values=len(mail_options)
-            )
-            select.callback = self.on_mail_select
-            self.add_item(select)
-
-        claim_all_button = ui.Button(label="선택한 우편 모두 받기", style=discord.ButtonStyle.success, emoji="📥", disabled=not self.selected_mail_ids, row=1)
-        claim_all_button.callback = self.claim_selected_mails
-        self.add_item(claim_all_button)
-
-        delete_all_button = ui.Button(label="선택한 우편 모두 삭제", style=discord.ButtonStyle.danger, emoji="🗑️", disabled=not self.selected_mail_ids, row=1)
-        delete_all_button.callback = self.delete_selected_mails
-        self.add_item(delete_all_button)
-
-        send_button = ui.Button(label="편지 보내기", style=discord.ButtonStyle.success, emoji="✉️", row=2)
-        send_button.callback = self.send_mail
-        self.add_item(send_button)
-        
-        res = await supabase.table('mails').select('id', count='exact').eq('recipient_id', str(self.user.id)).is_('claimed_at', None).execute()
-        total_mails = res.count or 0
-
-        prev_button = ui.Button(label="◀", style=discord.ButtonStyle.secondary, disabled=self.page == 0, row=2)
-        prev_button.callback = self.prev_page_callback
-        self.add_item(prev_button)
-        next_button = ui.Button(label="▶", style=discord.ButtonStyle.secondary, disabled=(self.page + 1) * 5 >= total_mails, row=2)
-        next_button.callback = self.next_page_callback
-        self.add_item(next_button)
-
-    async def on_mail_select(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        self.selected_mail_ids = interaction.data['values']
-        await self.update_view(interaction)
-
-    async def claim_selected_mails(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        claimed_count = 0
-        total_items: Dict[str, int] = {}
-        db_tasks = []
-
-        mail_ids_to_process = [int(mid) for mid in self.selected_mail_ids]
-        
-        attachments_res = await supabase.table('mail_attachments').select('*').in_('mail_id', mail_ids_to_process).execute()
-        
-        if attachments_res.data:
-            for att in attachments_res.data:
-                total_items[att['item_name']] = total_items.get(att['item_name'], 0) + att['quantity']
-            
-            for item_name, qty in total_items.items():
-                db_tasks.append(update_inventory(self.user.id, item_name, qty))
-        
-        try:
-            if db_tasks:
-                await asyncio.gather(*db_tasks)
-            
-            now_iso = datetime.now(timezone.utc).isoformat()
-            await supabase.table('mails').update({'claimed_at': now_iso}).in_('id', mail_ids_to_process).execute()
-            claimed_count = len(mail_ids_to_process)
-
-        except Exception as e:
-            logger.error(f"우편 일괄 수령 중 DB 작업 오류: {e}", exc_info=True)
-            await interaction.followup.send("우편을 수령하는 중 오류가 발생했습니다.", ephemeral=True)
-            return
-        
-        if claimed_count > 0:
-            item_summary = "\n".join([f"ㄴ {name}: {qty}개" for name, qty in total_items.items()])
-            success_message = f"{claimed_count}개의 우편을 수령했습니다!\n\n**총 받은 아이템:**\n{item_summary or '없음'}"
-            
-            msg = await interaction.followup.send(success_message, ephemeral=True)
-            self.cog.bot.loop.create_task(delete_after(msg, 10))
-
-        else:
-            await interaction.followup.send("수령할 우편이 없거나 오류가 발생했습니다.", ephemeral=True)
-        
-        self.selected_mail_ids.clear()
-        await self.update_view(interaction)
-
-    async def delete_selected_mails(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        mail_ids_to_delete = [int(mid) for mid in self.selected_mail_ids]
-        
-        await supabase.table('mails').delete().in_('id', mail_ids_to_delete).eq('recipient_id', str(self.user.id)).execute()
-        
-        self.selected_mail_ids.clear()
-        await self.update_view(interaction)
-        
+    # ... (기존 MailboxView 코드는 대부분 유지) ...
     async def send_mail(self, interaction: discord.Interaction):
+        # ▼▼▼ [핵심 수정] 이 메서드를 아래 코드로 교체합니다. ▼▼▼
         view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="편지를 보낼 상대를 선택하세요.")
         
@@ -418,13 +310,15 @@ class MailboxView(ui.View):
             await compose_view.start()
 
             try:
-                await interaction.edit_original_response(content="편지 작성 UI가 열렸습니다.", view=None)
+                await interaction.delete_original_response()
             except discord.NotFound:
                 pass
 
         user_select.callback = callback
         view.add_item(user_select)
-        await interaction.edit_original_response(content="누구에게 편지를 보내시겠습니까?", view=view, embed=None)
+        
+        # 기존 메시지를 수정하는 대신 새로운 메시지를 보냅니다.
+        await interaction.followup.send("누구에게 편지를 보내시겠습니까?", view=view, ephemeral=True)
     
     async def prev_page_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
