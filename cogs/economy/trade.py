@@ -446,6 +446,136 @@ class TradeView(ui.View):
         if self.trade_id in self.cog.active_trades: self.cog.active_trades.pop(self.trade_id)
         super().stop()
 
+class MailComposeView(ui.View):
+    def __init__(self, cog: 'Trade', user: discord.Member, recipient: discord.Member, original_interaction: discord.Interaction):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.user = user
+        self.recipient = recipient
+        self.original_interaction = original_interaction
+        self.message_content = ""
+        self.attachments = {"items": {}}
+        self.currency_icon = get_config("CURRENCY_ICON", "🪙")
+        self.shipping_fee = 100
+        self.message: Optional[discord.WebhookMessage] = None
+
+    async def start(self):
+        embed = await self.build_embed()
+        await self.build_components()
+        self.message = await self.original_interaction.followup.send(embed=embed, view=self, ephemeral=True)
+
+    async def refresh(self, interaction: Optional[discord.Interaction] = None):
+        if interaction and not interaction.response.is_done():
+            await interaction.response.defer()
+
+        embed = await self.build_embed()
+        await self.build_components()
+        
+        if self.message:
+            await self.message.edit(embed=embed, view=self)
+
+    async def build_embed(self) -> discord.Embed:
+        embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
+        att_items = self.attachments.get("items", {})
+        att_str = [f"ㄴ {name}: {qty}개" for name, qty in att_items.items()]
+        embed.add_field(name="첨부 아이템", value="\n".join(att_str) if att_str else "없음", inline=False)
+        embed.add_field(name="메시지", value=f"```{self.message_content}```" if self.message_content else "메시지 없음", inline=False)
+        embed.set_footer(text=f"배송비: {self.shipping_fee:,}{self.currency_icon}")
+        return embed
+
+    async def build_components(self):
+        self.clear_items()
+        
+        self.add_item(ui.Button(label="아이템 첨부", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="attach_item", row=0))
+        remove_disabled = not self.attachments.get("items")
+        self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="remove_item", row=0, disabled=remove_disabled))
+        self.add_item(ui.Button(label="메시지 작성/수정", style=discord.ButtonStyle.secondary, emoji="✍️", custom_id="write_message", row=0))
+        
+        send_disabled = not (self.attachments.get("items") or self.message_content)
+        self.add_item(ui.Button(label="보내기", style=discord.ButtonStyle.success, emoji="🚀", custom_id="send_mail", row=1, disabled=send_disabled))
+
+        for item in self.children:
+            item.callback = self.dispatch_callback
+
+    async def dispatch_callback(self, interaction: discord.Interaction):
+        custom_id = interaction.data['custom_id']
+        
+        if custom_id == "write_message":
+            return await self.handle_write_message(interaction)
+        
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+
+        if custom_id == "attach_item":
+            await self.handle_attach_item(interaction)
+        elif custom_id == "remove_item":
+            await self.handle_remove_item(interaction)
+        elif custom_id == "send_mail":
+            await self.handle_send(interaction)
+
+    async def handle_attach_item(self, interaction: discord.Interaction):
+        view = IngredientSelectView(self)
+        await view.start(interaction)
+
+    async def add_attachment(self, interaction: discord.Interaction, item_name: str, quantity: int):
+        self.attachments['items'][item_name] = self.attachments['items'].get(item_name, 0) + quantity
+        await self.refresh(interaction)
+    
+    async def handle_remove_item(self, interaction: discord.Interaction):
+        view = RemoveItemSelectView(self)
+        await view.start(interaction)
+
+    async def handle_write_message(self, interaction: discord.Interaction):
+        modal = MessageModal(self.message_content, self)
+        await interaction.response.send_modal(modal)
+
+    async def handle_send(self, interaction: discord.Interaction):
+        try:
+            if not self.attachments.get("items") and not self.message_content:
+                msg = await interaction.followup.send("❌ 아이템이나 메시지 중 하나는 반드시 포함되어야 합니다.", ephemeral=True)
+                return await delete_after(msg, 5)
+
+            wallet, inventory = await asyncio.gather(get_wallet(self.user.id), get_inventory(self.user))
+            if wallet.get('balance', 0) < self.shipping_fee:
+                msg = await interaction.followup.send(f"코인이 부족합니다. (배송비: {self.shipping_fee:,}{self.currency_icon})", ephemeral=True)
+                return await delete_after(msg, 5)
+            
+            for item, qty in self.attachments["items"].items():
+                if inventory.get(item, 0) < qty:
+                    msg = await interaction.followup.send(f"아이템 재고가 부족합니다: '{item}'", ephemeral=True)
+                    return await delete_after(msg, 5)
+            
+            db_tasks = [update_wallet(self.user, -self.shipping_fee)]
+            for item, qty in self.attachments["items"].items(): db_tasks.append(update_inventory(self.user.id, item, -qty))
+            await asyncio.gather(*db_tasks)
+            now, expires_at = datetime.now(timezone.utc), datetime.now(timezone.utc) + timedelta(days=30)
+            
+            mail_res = await supabase.table('mails').insert({"sender_id": str(self.user.id), "recipient_id": str(self.recipient.id), "message": self.message_content, "sent_at": now.isoformat(), "expires_at": expires_at.isoformat()}).execute()
+
+            if not mail_res.data:
+                logger.error("메일 레코드 생성 실패. 환불 시도."); refund_tasks = [update_wallet(self.user, self.shipping_fee)]
+                for item, qty in self.attachments["items"].items(): refund_tasks.append(update_inventory(self.user.id, item, qty))
+                await asyncio.gather(*refund_tasks)
+                return await interaction.edit_original_response(content="우편 발송 실패. 비용이 환불되었습니다.", view=None, embed=None)
+            
+            new_mail_id = mail_res.data[0]['id']
+            if self.attachments["items"]:
+                att_to_insert = [{"mail_id": new_mail_id, "item_name": n, "quantity": q, "is_coin": False} for n, q in self.attachments["items"].items()]
+                await supabase.table('mail_attachments').insert(att_to_insert).execute()
+            
+            await interaction.edit_original_response(content="✅ 우편을 성공적으로 보냈습니다.", view=None, embed=None)
+            
+            if (panel_ch_id := get_id("trade_panel_channel_id")) and (panel_ch := self.cog.bot.get_channel(panel_ch_id)):
+                if embed_data := await get_embed_from_db("log_new_mail"):
+                    log_embed = format_embed_from_db(embed_data, sender_mention=self.user.mention, recipient_mention=self.recipient.mention)
+                    await panel_ch.send(content=self.recipient.mention, embed=log_embed, allowed_mentions=discord.AllowedMentions(users=True), delete_after=60.0)
+                await self.cog.regenerate_panel(panel_ch)
+            self.stop()
+        except Exception as e:
+            logger.error(f"우편 발송 중 최종 단계에서 예외 발생: {e}", exc_info=True)
+            await interaction.followup.send("우편 발송 중 오류가 발생했습니다. 재료 소모 여부를 확인해주세요.", ephemeral=True)
+            self.stop()
+
 class MailboxView(ui.View):
     def __init__(self, cog: 'Trade', user: discord.Member):
         super().__init__(timeout=180)
@@ -630,7 +760,7 @@ class MailboxView(ui.View):
         user_select.callback = callback
         view.add_item(user_select)
         
-        await interaction.followup.send("누구에게 편지를 보내시겠습니까?", view=view, ephemeral=True)
+        await interaction.edit_original_response(content="누구에게 편지를 보내시겠습니까?", view=view, embed=None)
     
     async def prev_page_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
