@@ -330,7 +330,7 @@ class Blacksmith(commands.Cog):
 
         gear_key_map = {"낚싯대": "rod", "괭이": "hoe", "물뿌리개": "watering_can", "곡괭이": "pickaxe"}
         
-        # ▼▼▼ [핵심 수정] 도구 타입 매칭 로직 변경 ▼▼▼
+        # ▼▼▼ [수정] 도구 타입 매칭 로직 변경 ▼▼▼
         # 가장 긴 이름부터 확인하여 '곡괭이'가 '괭이'로 잘못 인식되는 문제를 해결합니다.
         sorted_tool_types = sorted(gear_key_map.keys(), key=len, reverse=True)
         gear_key = None
@@ -338,6 +338,7 @@ class Blacksmith(commands.Cog):
             if tool_type in target_tool:
                 gear_key = gear_key_map[tool_type]
                 break
+        # ▲▲▲ [수정] 완료 ▲▲▲
         
         if not gear_key or gear.get(gear_key) != recipe['requires_tool']:
             return await interaction.response.send_message(f"❌ 이 업그레이드를 하려면 먼저 **{recipe['requires_tool']}**(을)를 장착해야 합니다.", ephemeral=True, delete_after=10)
