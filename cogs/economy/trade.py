@@ -58,7 +58,7 @@ class MailItemSelectModal(ui.Modal):
 
             self.parent_view.attachments["items"][self.item_name] = self.parent_view.attachments["items"].get(self.item_name, 0) + qty
             self.parent_view.current_state = "composing"
-            await self.parent_view.build_and_send(interaction)
+            await self.parent_view.update_message(interaction)
 
         except ValueError:
             await interaction.response.send_message("숫자만 입력해주세요.", ephemeral=True, delete_after=5)
@@ -88,7 +88,7 @@ class MessageModal(ui.Modal, title="메시지 작성"):
         self.parent_view = parent_view
     async def on_submit(self, interaction: discord.Interaction):
         self.parent_view.message_content = self.message_input.value
-        await self.parent_view.build_and_send(interaction)
+        await self.parent_view.update_message(interaction)
 
 class TradeView(ui.View):
     def __init__(self, cog: 'Trade', initiator: discord.Member, partner: discord.Member, trade_id: str):
@@ -197,7 +197,7 @@ class TradeView(ui.View):
 
     async def handle_cancel(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        await interaction.followup.send("거래 취소를 요청했습니다.", ephemeral=True)
+        await interaction.followup.send("거래 취소를 요청했습니다.", ephemeral=True, delete_after=5)
         await self.on_timeout(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
@@ -310,21 +310,19 @@ class MailComposeView(ui.View):
         self.current_state = "composing" 
         
     async def start(self, interaction: discord.Interaction):
-        await self.build_and_send(interaction)
+        await self.update_message(interaction)
 
-    async def build_and_send(self, interaction: discord.Interaction):
+    async def update_message(self, interaction: discord.Interaction):
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
         embed = await self.build_embed()
         await self.build_components()
         
-        target = interaction.followup
-        
         if self.message:
             await self.message.edit(embed=embed, view=self)
         else:
-            self.message = await target.send(embed=embed, view=self, ephemeral=True)
+            self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
@@ -364,19 +362,24 @@ class MailComposeView(ui.View):
         custom_id = interaction.data['custom_id']
         
         if custom_id in ["write_message_button", "item_select_dropdown"]:
-             pass
+            pass # These will open modals, which is an interaction response.
         elif not interaction.response.is_done():
-             await interaction.response.defer()
+            await interaction.response.defer()
 
-        if custom_id == "attach_item_button": await self.handle_attach_item(interaction)
-        elif custom_id == "write_message_button": await self.handle_write_message(interaction)
-        elif custom_id == "send_button": await self.handle_send(interaction)
-        elif custom_id == "item_select_dropdown": await self.on_item_select(interaction)
-        elif custom_id == "back_to_composing": await self.on_back_to_composing(interaction)
+        if custom_id == "attach_item_button":
+            await self.handle_attach_item(interaction)
+        elif custom_id == "write_message_button":
+            await self.handle_write_message(interaction)
+        elif custom_id == "send_button":
+            await self.handle_send(interaction)
+        elif custom_id == "item_select_dropdown":
+            await self.on_item_select(interaction)
+        elif custom_id == "back_to_composing":
+            await self.on_back_to_composing(interaction)
 
     async def handle_attach_item(self, interaction: discord.Interaction):
         self.current_state = "selecting_item"
-        await self.build_and_send(interaction)
+        await self.update_message(interaction)
         
     async def on_item_select(self, interaction: discord.Interaction):
         inventory = await get_inventory(self.user)
@@ -388,7 +391,7 @@ class MailComposeView(ui.View):
         
     async def on_back_to_composing(self, interaction: discord.Interaction):
         self.current_state = "composing"
-        await self.build_and_send(interaction)
+        await self.update_message(interaction)
 
     async def handle_write_message(self, interaction: discord.Interaction):
         modal = MessageModal(self.message_content, self)
@@ -618,7 +621,7 @@ class MailboxView(ui.View):
             await compose_view.start(select_interaction)
         user_select.callback = callback
         select_view.add_item(user_select)
-        await interaction.followup.send("누구에게 편지를 보내시겠습니까?", view=select_view, ephemeral=True)
+        await interaction.followup.send("누구에게 편지를 보내시겠습니까?", view=view, ephemeral=True)
     
     async def prev_page_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
