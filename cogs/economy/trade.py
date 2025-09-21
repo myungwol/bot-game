@@ -362,7 +362,7 @@ class MailComposeView(ui.View):
         custom_id = interaction.data['custom_id']
         
         if custom_id in ["write_message_button", "item_select_dropdown"]:
-            pass # These will open modals, which is an interaction response.
+            pass
         elif not interaction.response.is_done():
             await interaction.response.defer()
 
@@ -621,7 +621,7 @@ class MailboxView(ui.View):
             await compose_view.start(select_interaction)
         user_select.callback = callback
         select_view.add_item(user_select)
-        await interaction.followup.send("누구에게 편지를 보내시겠습니까?", view=view, ephemeral=True)
+        await interaction.followup.send("누구에게 편지를 보내시겠습니까?", view=select_view, ephemeral=True)
     
     async def prev_page_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
