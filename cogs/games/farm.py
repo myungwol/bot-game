@@ -36,6 +36,7 @@ KST = timezone(timedelta(hours=9))
 KST_MIDNIGHT_UPDATE = dt_time(hour=0, minute=5, tzinfo=KST)
 
 async def delete_after(message: discord.WebhookMessage, delay: int):
+    """메시지를 보낸 후 지정된 시간 뒤에 삭제하는 헬퍼 함수"""
     await asyncio.sleep(delay)
     try:
         await message.delete()
@@ -249,22 +250,6 @@ class FarmActionView(ui.View):
         await interaction.edit_original_response(embed=self.build_embed(), view=self)
 
 class FarmUIView(ui.View):
-    async def _disable_all(self, interaction: discord.Interaction):
-        tmp = FarmUIView(self.cog)
-        for child in tmp.children:
-            if isinstance(child, ui.Button):
-                child.disabled = True
-        try:
-            await self.cog.safe_edit(interaction.message, view=tmp)
-        except Exception:
-            pass
-
-    async def _enable_all(self, interaction: discord.Interaction):
-        try:
-            await self.cog.safe_edit(interaction.message, view=self)
-        except Exception:
-            pass
-
     def __init__(self, cog_instance: 'Farm'):
         super().__init__(timeout=None)
         self.cog = cog_instance
@@ -293,13 +278,14 @@ class FarmUIView(ui.View):
 
         method_name = f"on_{cid}_click" if cid else None
         if not cid or not hasattr(self, method_name):
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.defer()
+                except discord.NotFound:
+                    pass
             return
 
-        await self._disable_all(interaction)
-        try:
-            await getattr(self, method_name)(interaction)
-        finally:
-            await self._enable_all(interaction)
+        await getattr(self, method_name)(interaction)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         self.farm_owner_id = await get_farm_owner_by_thread(interaction.channel.id)
