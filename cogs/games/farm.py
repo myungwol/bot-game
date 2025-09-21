@@ -289,11 +289,14 @@ class FarmUIView(ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         self.farm_owner_id = await get_farm_owner_by_thread(interaction.channel.id)
+    
+        # ▼▼▼ [수정] 아래 None 체크 로직 추가 ▼▼▼
         if not self.farm_owner_id: 
             if not interaction.response.is_done():
                 await interaction.response.send_message("❌ 이 농장의 정보를 찾을 수 없습니다.", ephemeral=True, delete_after=5)
             return False
-        
+        # ▲▲▲ [수정] 완료 ▲▲▲
+    
         if interaction.user.id == self.farm_owner_id: 
             return True
         
