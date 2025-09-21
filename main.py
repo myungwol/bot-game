@@ -34,6 +34,7 @@ TEST_GUILD_ID: Optional[int] = None
 if RAW_TEST_GUILD_ID:
     try:
         TEST_GUILD_ID = int(RAW_TEST_GUILD_ID)
+        logger.info(f"테스트 서버 ID가 '{TEST_GUILD_ID}'(으)로 설정되었습니다.")
     except ValueError:
         logger.error(f"❌ TEST_GUILD_ID 환경 변수가 유효한 숫자가 아닙니다: '{RAW_TEST_GUILD_ID}'")
 
@@ -41,30 +42,18 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 intents.voice_states = True
-BOT_VERSION = "v2.3-game-stable-ko"
+BOT_VERSION = "v2.3-game-stable-ko" # 게임 봇 안정화 버전 (한국어)
 
+# ▼▼▼ [복구] MyBot 클래스를 원래대로 되돌립니다. ▼▼▼
 class MyBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.interaction_handler_cog = None
-
-    # ▼▼▼ [최종 수정] on_interaction을 유일한 상호작용 처리 관문으로 사용합니다. ▼▼▼
-    async def on_interaction(self, interaction: discord.Interaction):
-        if self.interaction_handler_cog:
-            # InteractionHandler에게 쿨다운 검사를 위임합니다.
-            # can_proceed가 False이면, InteractionHandler가 이미 사용자에게 응답하고
-            # 처리를 중단해야 함을 의미합니다.
-            can_proceed = await self.interaction_handler_cog.check_cooldown(interaction)
-            if not can_proceed:
-                return  # 여기서 즉시 종료하여 더 이상 상호작용이 전파되지 않도록 합니다.
-
-        # 쿨다운을 통과한 상호작용만 discord.py의 기본 처리 로직으로 전달합니다.
-        self.dispatch('interaction', interaction)
-    # ▲▲▲ 최종 수정 끝 ▲▲▲
-                
+        # 쿨다운 관련 속성을 제거합니다.
+        
     async def setup_hook(self):
         await self.load_all_extensions()
         
+        # PanelUpdater가 목록에 없는 원래 상태로 되돌립니다.
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
             "DiceGame", "SlotMachine", "RPSGame",
@@ -80,6 +69,7 @@ class MyBot(commands.Bot):
                 try:
                     await cog.register_persistent_views()
                     registered_views_count += 1
+                    logger.info(f"✅ '{cog_name}' Cog의 영구 View가 등록되었습니다.")
                 except Exception as e:
                     logger.error(f"❌ '{cog_name}' Cog의 영구 View 등록 중 오류 발생: {e}", exc_info=True)
         logger.info(f"✅ 총 {registered_views_count}개의 Cog에서 영구 View를 성공적으로 등록했습니다.")
@@ -90,10 +80,13 @@ class MyBot(commands.Bot):
         if not os.path.isdir(cogs_dir):
             logger.critical(f"❌ Cogs 디렉토리를 찾을 수 없습니다: {cogs_dir}")
             return
-        loaded_count, failed_count = 0, 0
+
+        loaded_count = 0
+        failed_count = 0
         from glob import glob
         for path in glob(f'{cogs_dir}/**/*.py', recursive=True):
-            if '__init__' in path: continue
+            if '__init__' in path:
+                continue
             extension_path = path.replace('.py', '').replace(os.path.sep, '.')
             try:
                 await self.load_extension(extension_path)
@@ -103,6 +96,7 @@ class MyBot(commands.Bot):
                 logger.error(f'❌ Cog 로드 실패: {extension_path} | {e}', exc_info=True)
                 failed_count += 1
         logger.info(f"------ [ Cog 로드 완료 | 성공: {loaded_count} / 실패: {failed_count} ] ------")
+# ▲▲▲ 복구 끝 ▲▲▲
 
 bot = MyBot(command_prefix="/", intents=intents)
 
@@ -113,7 +107,9 @@ async def on_ready():
     logger.info(f"✅ 봇 버전: {BOT_VERSION}")
     logger.info(f"✅ 현재 UTC 시간: {datetime.now(timezone.utc)}")
     logger.info("==================================================")
+    
     await load_all_data_from_db()
+    
     logger.info("------ [ 모든 Cog 설정 새로고침 시작 ] ------")
     refreshed_cogs_count = 0
     for cog_name, cog in bot.cogs.items():
@@ -125,6 +121,7 @@ async def on_ready():
                 logger.error(f"❌ '{cog_name}' Cog 설정 새로고침 중 오류: {e}", exc_info=True)
     logger.info(f"✅ 총 {refreshed_cogs_count}개의 Cog 설정이 새로고침되었습니다.")
     logger.info("------ [ 모든 Cog 설정 새로고침 완료 ] ------")
+    
     try:
         if TEST_GUILD_ID:
             guild = discord.Object(id=TEST_GUILD_ID)
