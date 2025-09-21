@@ -97,13 +97,15 @@ class RPSGameView(ui.View):
         await self.cog.handle_choice(interaction, self.channel_id, "paper")
 
 class RPSGame(commands.Cog):
+    # ▼▼▼ [수정] __init__ 메서드 수정 ▼▼▼
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_games: Dict[int, Dict] = {}
         self.currency_icon = "🪙"
-        self.user_locks: Dict[int, asyncio.Lock] = {}
+        self.user_locks: Dict[int, asyncio.Lock] = {} # defaultdict 대신 일반 dict 사용
         self.max_players = 5
         self.cleanup_stale_games.start()
+    # ▲▲▲ [수정] 완료 ▲▲▲
 
     def cog_unload(self):
         self.cleanup_stale_games.cancel()
@@ -237,6 +239,7 @@ class RPSGame(commands.Cog):
         await asyncio.sleep(5)
         await self.start_new_round(channel_id)
 
+    # ▼▼▼ [수정] end_game 메서드 수정 ▼▼▼
     async def end_game(self, channel_id: int, winner: Optional[discord.Member]):
         game = self.active_games.pop(channel_id, None)
         if not game: return
@@ -249,11 +252,11 @@ class RPSGame(commands.Cog):
                 try: await msg.delete()
                 except discord.NotFound: pass
 
+        initial_players = game.get("initial_players", [])
         log_embed = None
-        if winner:
-            initial_players = game.get("initial_players", [winner])
-            total_pot = game["bet_amount"] * len(initial_players)
 
+        if winner:
+            total_pot = game["bet_amount"] * len(initial_players)
             await update_wallet(winner, total_pot)
 
             if embed_data := await get_embed_from_db("log_rps_game_end"):
@@ -263,10 +266,7 @@ class RPSGame(commands.Cog):
                     total_pot=total_pot, bet_amount=game["bet_amount"],
                     participants_list=participants_list, currency_icon=self.currency_icon
                 )
-        else:
-            initial_players = game.get("initial_players", [])
-            if not initial_players: return
-
+        elif initial_players:
             refund_tasks = [update_wallet(player, game["bet_amount"]) for player in initial_players]
             await asyncio.gather(*refund_tasks)
 
@@ -274,9 +274,14 @@ class RPSGame(commands.Cog):
             refund_message = f"**✊✌️✋ 가위바위보 중지**\n> 게임이 중지되어 참가자 {player_mentions}에게 베팅 금액 `{game['bet_amount']}`{self.currency_icon}이(가) 환불되었습니다."
             log_embed = discord.Embed(description=refund_message, color=0x99AAB5)
 
+        # 게임에 참여했던 모든 유저의 lock 객체를 메모리에서 제거합니다.
+        for player in initial_players:
+            self.user_locks.pop(player.id, None)
+
         channel = self.bot.get_channel(channel_id)
         if channel:
             await self.regenerate_panel(channel, last_game_log=log_embed)
+    # ▲▲▲ [수정] 완료 ▲▲▲
 
     async def handle_join(self, interaction: discord.Interaction, channel_id: int):
         user_lock = self.user_locks.setdefault(interaction.user.id, asyncio.Lock())
