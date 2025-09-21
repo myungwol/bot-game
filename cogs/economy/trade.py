@@ -197,7 +197,7 @@ class TradeView(ui.View):
 
     async def handle_cancel(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        await interaction.followup.send("거래 취소를 요청했습니다.", ephemeral=True, delete_after=5)
+        await interaction.followup.send("거래 취소를 요청했습니다.", ephemeral=True)
         await self.on_timeout(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
@@ -320,6 +320,7 @@ class MailComposeView(ui.View):
         await self.build_components()
         
         await interaction.edit_original_response(embed=embed, view=self)
+
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
@@ -610,6 +611,7 @@ class MailboxView(ui.View):
                 await select_interaction.response.send_message("잘못된 상대입니다.", ephemeral=True, delete_after=5)
                 return
             
+            # UserSelect에서 받은 새 상호작용을 MailComposeView로 넘겨줍니다.
             compose_view = MailComposeView(self.cog, self.user, recipient, select_interaction)
             await compose_view.start()
 
