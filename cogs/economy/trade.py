@@ -319,12 +319,10 @@ class MailComposeView(ui.View):
         embed = await self.build_embed()
         await self.build_components()
         
-        # ephemeral 메시지는 followup으로 새로 보낼 수 없고, 반드시 원래 메시지를 수정해야 합니다.
-        if self.message:
-            await self.message.edit(embed=embed, view=self)
-        else:
-            # 이 View가 처음 생성될 때, 이전 상호작용(UserSelect)에 대한 후속 조치로 메시지를 보냅니다.
-            self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
+        target_message = await interaction.original_response()
+        await target_message.edit(embed=embed, view=self)
+        self.message = target_message
+
 
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"✉️ 편지 쓰기 (TO: {self.recipient.display_name})", color=0x3498DB)
@@ -363,7 +361,6 @@ class MailComposeView(ui.View):
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
         
-        # 모달을 띄우는 상호작용은 응답을 직접 처리하므로 defer하지 않습니다.
         if custom_id in ["write_message_button", "item_select_dropdown"]:
             pass
         elif not interaction.response.is_done():
@@ -612,15 +609,12 @@ class MailboxView(ui.View):
         select_view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="편지를 보낼 상대를 선택하세요.")
         async def callback(select_interaction: discord.Interaction):
-            # UserSelect에서 응답하는 것이므로, 이 상호작용은 새롭습니다.
-            # defer() 또는 다른 응답을 해야 합니다.
-            # MailComposeView.start()가 defer를 포함한 응답을 처리할 것입니다.
             recipient_id = int(select_interaction.data['values'][0])
             recipient = interaction.guild.get_member(recipient_id)
             if not recipient or recipient.bot or recipient.id == self.user.id:
-                return await select_interaction.response.send_message("잘못된 상대입니다.", ephemeral=True, delete_after=5)
+                await select_interaction.response.send_message("잘못된 상대입니다.", ephemeral=True, delete_after=5)
+                return
             
-            # 현재 떠 있는 UserSelect 메시지를 수정하여 MailComposeView로 전환합니다.
             compose_view = MailComposeView(self.cog, self.user, recipient)
             await compose_view.start(select_interaction)
 
