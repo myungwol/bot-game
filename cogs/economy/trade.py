@@ -823,12 +823,7 @@ class Trade(commands.Cog):
         self.bot = bot
         self.active_trades: Dict[str, TradeView] = {}
         self.currency_icon = "🪙" 
-        # ▼▼▼ [핵심 수정] 아래 3줄을 추가합니다. ▼▼▼
-        self.actor_locks: dict[tuple[int, int], asyncio.Lock] = {}
-        self.last_action_ts: dict[tuple[int, int], float] = {}
-        self.cooldown_sec: float = 1.0 # 버튼 연타 방지 쿨다운 (1초)
-        # ▲▲▲ 추가 끝 ▲▲▲
-
+        
     async def cog_load(self):
         self.bot.loop.create_task(self.cleanup_stale_trades())
     
