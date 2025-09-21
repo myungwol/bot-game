@@ -100,6 +100,8 @@ class TradeView(ui.View):
         self.message: Optional[discord.Message] = None
         
         self.add_item(ui.Button(label="아이템 추가", style=discord.ButtonStyle.secondary, emoji="📦", custom_id="add_item_button"))
+        # ▼▼▼ [핵심 추가] '아이템 제거' 버튼을 추가합니다. ▼▼▼
+        self.add_item(ui.Button(label="아이템 제거", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="remove_item_button"))
         self.add_item(ui.Button(label="코인 추가", style=discord.ButtonStyle.secondary, emoji="🪙", custom_id="add_coin_button"))
         self.add_item(ui.Button(label="준비/확정", style=discord.ButtonStyle.success, emoji="✅", custom_id="ready_button"))
         self.add_item(ui.Button(label="취소", style=discord.ButtonStyle.danger, emoji="✖️", custom_id="cancel_button"))
@@ -153,6 +155,7 @@ class TradeView(ui.View):
         async with lock:
             custom_id = interaction.data['custom_id']
             if custom_id == "add_item_button": await self.handle_add_item(interaction)
+            elif custom_id == "remove_item_button": await self.handle_remove_item(interaction)
             elif custom_id == "add_coin_button": await self.handle_add_coin(interaction)
             elif custom_id == "ready_button": await self.handle_ready(interaction)
             elif custom_id == "cancel_button": await self.handle_cancel(interaction)
@@ -176,6 +179,36 @@ class TradeView(ui.View):
             except discord.NotFound: pass
         item_select.callback = select_callback; select_view.add_item(item_select)
         await interaction.response.send_message(view=select_view, ephemeral=True)
+
+    # ▼▼▼ [핵심 추가] 아이템 제거를 처리하는 함수입니다. ▼▼▼
+    async def handle_remove_item(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        if self.offers[user_id]["ready"]:
+            return await interaction.response.send_message("준비 완료 상태에서는 제안을 변경할 수 없습니다.", ephemeral=True, delete_after=5)
+        
+        offered_items = self.offers[user_id]["items"]
+        if not offered_items:
+            return await interaction.response.send_message("제거할 아이템이 없습니다.", ephemeral=True, delete_after=5)
+
+        options = [discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in offered_items.items()]
+        
+        select_view = ui.View(timeout=180)
+        item_select = ui.Select(placeholder="제거할 아이템을 선택하세요", options=options)
+
+        async def select_callback(si: discord.Interaction):
+            await si.response.defer()
+            item_name_to_remove = si.data['values'][0]
+            if item_name_to_remove in self.offers[user_id]["items"]:
+                del self.offers[user_id]["items"][item_name_to_remove]
+                await self.update_ui()
+            try:
+                await si.delete_original_response()
+            except discord.NotFound:
+                pass
+        
+        item_select.callback = select_callback
+        select_view.add_item(item_select)
+        await interaction.response.send_message("제거할 아이템을 선택하세요.", view=select_view, ephemeral=True)
 
     async def handle_add_coin(self, interaction: discord.Interaction):
         user_id = interaction.user.id
@@ -611,7 +644,6 @@ class MailboxView(ui.View):
                 await select_interaction.response.send_message("잘못된 상대입니다.", ephemeral=True, delete_after=5)
                 return
             
-            # UserSelect에서 받은 새 상호작용을 MailComposeView로 넘겨줍니다.
             compose_view = MailComposeView(self.cog, self.user, recipient, select_interaction)
             await compose_view.start()
 
