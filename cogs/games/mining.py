@@ -99,11 +99,11 @@ class MiningGameView(ui.View):
         logger.error(f"MiningGameView에서 오류 발생 (Item: {item.custom_id}): {error}", exc_info=True)
 
     async def dispatch_callback(self, interaction: discord.Interaction):
-        if not interaction.response.is_done(): await interaction.response.defer()
-        
         if self.on_cooldown:
-            return await interaction.followup.send("⏳ 아직 주변을 살피고 있습니다.", ephemeral=True, delete_after=5)
-        
+            # ▼▼▼ [수정] is_done 체크 추가 ▼▼▼
+            if not interaction.response.is_done():
+                await interaction.response.send_message("⏳ 아직 주변을 살피고 있습니다.", ephemeral=True, delete_after=5)
+            return
         await self.handle_action_button(interaction, self.children[0])
 
     def build_embed(self) -> discord.Embed:
@@ -137,6 +137,9 @@ class MiningGameView(ui.View):
         return embed
 
     async def handle_action_button(self, interaction: discord.Interaction, button: ui.Button):
+        # ▼▼▼ [수정] is_done 체크 추가 ▼▼▼
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         async with self.ui_lock:
             if self.state == "idle":
                 self.last_result_text = None
@@ -207,9 +210,6 @@ class MiningPanelView(ui.View):
         self.add_item(enter_button)
 
     async def dispatch_callback(self, interaction: discord.Interaction):
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-        
         await self.cog.handle_enter_mine(interaction)
 
 class Mining(commands.Cog):
@@ -239,6 +239,9 @@ class Mining(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def handle_enter_mine(self, interaction: discord.Interaction):
+        # ▼▼▼ [수정] is_done 체크 추가 ▼▼▼
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
         user = interaction.user
 
         if user.id in self.active_sessions:
