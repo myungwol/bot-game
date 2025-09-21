@@ -1,7 +1,7 @@
 # cogs/economy/trade.py
 
 import discord
-from discord.ext import commands
+from discord.ext import commandsㄹ
 from discord import ui
 import logging
 import asyncio
@@ -757,20 +757,6 @@ class TradePanelView(ui.View):
     # ▼▼▼ [핵심 수정] dispatch_callback 메서드를 추가합니다. ▼▼▼
     async def dispatch_callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        
-        # --- 연타 방지 로직 시작 ---
-        key = (interaction.channel.id, interaction.user.id)
-        now = time.monotonic()
-        last = self.cog.last_action_ts.get(key, 0.0)
-        if now - last < self.cog.cooldown_sec:
-            return
-        
-        lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
-        if lock.locked():
-            return
-        
-        async with lock:
-            self.cog.last_action_ts[key] = now
             
             # --- 기존 로직 시작 ---
             custom_id = interaction.data['custom_id']
