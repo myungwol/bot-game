@@ -4,7 +4,7 @@ import discord
 from discord.ext import commands, tasks
 from discord import ui
 import logging
-from typing import Optional, Dict, List, Any, Set # <--- 여기에 Set 추가
+from typing import Optional, Dict, List, Any, Set
 import asyncio
 import time
 import math
@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 
 CROP_EMOJI_MAP = {
     'seed':    {0: '🫘', 1: '🌱', 2: '🌿'},
-    # [핵심 수정] 5단계 성장을 위한 나무 전용 맵 추가
     'sapling_default': {0: '🫘', 1: '🌱', 2: '🪴', 3: '🌿', 4: '🌳'},
     'sapling_palm': {0: '🫘', 1: '🌱', 2: '🪴', 3: '🌿', 4: '🌴'}
 }
@@ -37,7 +36,6 @@ KST = timezone(timedelta(hours=9))
 KST_MIDNIGHT_UPDATE = dt_time(hour=0, minute=5, tzinfo=KST)
 
 async def delete_after(message: discord.WebhookMessage, delay: int):
-    """메시지를 보낸 후 지정된 시간 뒤에 삭제하는 헬퍼 함수"""
     await asyncio.sleep(delay)
     try:
         await message.delete()
@@ -250,17 +248,13 @@ class FarmActionView(ui.View):
         await self.build_components()
         await interaction.edit_original_response(embed=self.build_embed(), view=self)
 
-# (cogs/games/farm.py 파일에서 이 클래스를 찾아 아래 내용으로 전체 교체)
-
 class FarmUIView(ui.View):
-
     async def _disable_all(self, interaction: discord.Interaction):
         tmp = FarmUIView(self.cog)
         for child in tmp.children:
             if isinstance(child, ui.Button):
                 child.disabled = True
         try:
-            # defer()는 이제 dispatch_callback에서 조건부로 처리되므로 여기서 응답하지 않음
             await self.cog.safe_edit(interaction.message, view=tmp)
         except Exception:
             pass
@@ -289,41 +283,23 @@ class FarmUIView(ui.View):
             item.callback = self.dispatch_callback
             self.add_item(item)
     
-    
     async def dispatch_callback(self, interaction: discord.Interaction):
         cid = (interaction.data or {}).get('custom_id')
         
-        # ▼▼▼ [핵심 수정] 새 응답(메시지/모달)을 보내는 버튼들은 defer()를 하지 않도록 예외 처리 ▼▼▼
         buttons_that_send_new_response = ["farm_invite", "farm_share", "farm_rename", "farm_plant", "farm_uproot"]
         
-        # 이 버튼들이 아니면서, 아직 응답되지 않은 경우에만 defer()를 호출
         if cid not in buttons_that_send_new_response and not interaction.response.is_done():
             await interaction.response.defer()
-        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
         method_name = f"on_{cid}_click" if cid else None
         if not cid or not hasattr(self, method_name):
             return
 
-        key = (interaction.channel.id, interaction.user.id)
-        now = time.monotonic()
-        last = self.cog.last_action_ts.get(key, 0.0)
-        if now - last < self.cog.cooldown_sec:
-            return
-        self.cog.last_action_ts[key] = now
-
-        lock = self.cog.actor_locks.setdefault(key, asyncio.Lock())
-        if lock.locked():
-            return
-
-        async with lock:
-            await self._disable_all(interaction)
-            try:
-                await getattr(self, method_name)(interaction)
-            finally:
-                # 작업이 끝나면 무조건 버튼을 다시 활성화
-                await self._enable_all(interaction)
-
+        await self._disable_all(interaction)
+        try:
+            await getattr(self, method_name)(interaction)
+        finally:
+            await self._enable_all(interaction)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         self.farm_owner_id = await get_farm_owner_by_thread(interaction.channel.id)
@@ -575,7 +551,6 @@ class FarmUIView(ui.View):
             await si.edit_original_response(content="초대가 완료되었습니다.", view=None)
         select.callback = cb
         view.add_item(select)
-        # ▼▼▼ [핵심 수정] defer()가 이미 호출되었으므로 followup.send 사용 ▼▼▼
         await i.followup.send("누구를 농장에 초대하시겠습니까?", view=view, ephemeral=True)
 
     async def on_farm_share_click(self, i: discord.Interaction):
@@ -591,13 +566,11 @@ class FarmUIView(ui.View):
             await si.edit_original_response(content=f"{', '.join(u.display_name for u in users_to_grant if u)}님에게 권한을 부여했습니다.", view=None)
         select.callback = cb
         view.add_item(select)
-        # ▼▼▼ [핵심 수정] defer()가 이미 호출되었으므로 followup.send 사용 ▼▼▼
         await i.followup.send("누구에게 농장 권한을 주시겠습니까?", view=view, ephemeral=True)
 
     async def on_farm_rename_click(self, i: discord.Interaction): 
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
-        # ▼▼▼ [핵심 수정] defer() 없이 바로 모달을 보냅니다. ▼▼▼
         await i.response.send_modal(FarmNameModal(self.cog, farm_data))
 
 class FarmCreationPanelView(ui.View):
@@ -626,14 +599,7 @@ class Farm(commands.Cog):
         self.bot = bot
         self.thread_locks: Dict[int, asyncio.Lock] = {}
         self.daily_crop_update.start()
-        
-        # ▼▼▼ [핵심 수정] 락과 디바운싱을 위한 변수 추가 ▼▼▼
-        self.actor_locks: dict[tuple[int, int], asyncio.Lock] = {}
-        self.last_action_ts: dict[tuple[int, int], float] = {}
-        self.cooldown_sec: float = 0.8  # 0.8초의 버튼 클릭 쿨타임 설정
-        # ▲▲▲ [핵심 수정] 여기까지 ▲▲▲
 
-    # [핵심 수정] safe_edit 헬퍼 메소드를 클래스 내부로 이동
     async def safe_edit(self, message: discord.Message, **kwargs):
         backoff = [0.4, 0.8, 1.6, 2.0]
         for i, sleep_s in enumerate([0.0] + backoff):
@@ -731,7 +697,6 @@ class Farm(commands.Cog):
                         ability_activations_by_user[owner_id]["thread_id"] = plot['farms']['thread_id']
 
                 if grows_today:
-                    # [핵심 수정] 성장 가속 로직을 완전히 제거하고, 항상 1씩만 성장하도록 변경
                     growth_amount = 1
                     update_payload['growth_stage'] = min(
                         plot['growth_stage'] + growth_amount,
@@ -890,17 +855,14 @@ class Farm(commands.Cog):
         all_farm_abilities_map = {}
         job_advancement_data = get_config("JOB_ADVANCEMENT_DATA", {})
         
-        # [핵심 수정] 농업 관련 능력을 찾는 로직 개선
         if isinstance(job_advancement_data, dict):
             for level_data in job_advancement_data.values():
                 for job in level_data:
                     for ability in job.get('abilities', []):
-                        # 직업 이름 대신, 능력 키가 'farm_'으로 시작하는 모든 능력을 가져옵니다.
                         if ability['ability_key'].startswith('farm_'):
                             all_farm_abilities_map[ability['ability_key']] = {'name': ability['ability_name'], 'description': ability['description']}
         
         active_effects = []
-        # [핵심 수정] EMOJI_MAP을 더 명확하게 수정하고 새로운 능력을 추가합니다.
         EMOJI_MAP = {
             'farm_seed_saver': '🌱', 
             'farm_water_retention': '💧', 
@@ -911,7 +873,6 @@ class Farm(commands.Cog):
         for ability_key in owner_abilities:
             if ability_key in all_farm_abilities_map:
                 ability_info = all_farm_abilities_map[ability_key]
-                # ability_key의 일부와 일치하는 이모지를 찾습니다.
                 emoji = next((e for key, e in EMOJI_MAP.items() if key in ability_key), '🌾')
                 active_effects.append(f"> {emoji} **{ability_info['name']}**: {ability_info['description']}")
         
@@ -979,10 +940,8 @@ class Farm(commands.Cog):
                 
     async def create_new_farm_thread(self, interaction: discord.Interaction, user: discord.Member):
         try:
-            # ▼▼▼ [핵심 수정] 농장을 생성하기 전에 DB에 정보가 있는지 먼저 확인합니다. ▼▼▼
             farm_data = await get_farm_data(user.id)
 
-            # DB에 농장 정보가 없으면, 새로 생성합니다.
             if not farm_data:
                 logger.info(f"{user.name}님의 농장 데이터가 없어 새로 생성합니다.")
                 farm_data = await create_farm(user.id)
@@ -990,7 +949,6 @@ class Farm(commands.Cog):
                     await interaction.followup.send("❌ 농장을 초기화하는 데 실패했습니다. 잠시 후 다시 시도해주세요.", ephemeral=True)
                     return
             
-            # 이제 farm_data가 무조건 존재함을 보장할 수 있습니다.
             farm_name = f"{user.display_name}의 농장"
             thread = await interaction.channel.create_thread(
                 name=f"🌱｜{farm_name}", 
@@ -1002,10 +960,8 @@ class Farm(commands.Cog):
 
             await delete_config_from_db(f"farm_state_{user.id}")
 
-            # 기존 또는 새로 생성된 농장 데이터에 새 스레드 ID와 이름을 업데이트합니다.
             await supabase.table('farms').update({'thread_id': thread.id, 'name': farm_name}).eq('user_id', str(user.id)).execute()
             
-            # UI 생성을 위해 최신 정보로 다시 불러옵니다.
             updated_farm_data = await get_farm_data(user.id)
             if updated_farm_data:
                 await self.update_farm_ui(thread, user, updated_farm_data, force_new=True)
@@ -1013,10 +969,8 @@ class Farm(commands.Cog):
             await interaction.followup.send(f"✅ 당신만의 농장을 만들었습니다! {thread.mention} 채널을 확인해주세요.", ephemeral=True)
 
         except APIError as e:
-            # 만약의 경우를 대비한 추가 예외 처리
-            if '23505' in str(e.code): # Duplicate key
+            if '23505' in str(e.code): 
                  logger.warning(f"농장 생성 시도 중 중복 키 오류가 재발생했습니다 (User: {user.id}). 스레드를 연결하는 로직으로 넘어갑니다.")
-                 # 이 경우, 이미 다른 요청으로 농장이 생성되었을 수 있으므로 UI 업데이트만 시도합니다.
                  updated_farm_data = await get_farm_data(user.id)
                  if updated_farm_data and (thread_id := updated_farm_data.get('thread_id')):
                      if thread := self.bot.get_channel(thread_id):
