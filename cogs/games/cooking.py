@@ -47,9 +47,13 @@ class IngredientSelectModal(ui.Modal):
             quantity = int(self.quantity_input.value)
             max_qty = int(self.quantity_input.placeholder.split(' ')[1].replace('개', ''))
             if not 1 <= quantity <= max_qty: raise ValueError
+            
+            # ▼▼▼ [수정] interaction을 먼저 넘겨주고, add_ingredient 안에서 응답하도록 변경 ▼▼▼
             await self.parent_view.add_ingredient(interaction, self.item_name, quantity)
         except ValueError:
-            await interaction.response.send_message(f"1에서 {max_qty} 사이의 숫자를 입력해주세요.", ephemeral=True, delete_after=5)
+            # ▼▼▼ [수정] is_done() 체크 추가 ▼▼▼
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"1에서 {max_qty} 사이의 숫자를 입력해주세요.", ephemeral=True, delete_after=5)
         except Exception as e:
             logger.error(f"재료 수량 입력 처리 중 오류: {e}", exc_info=True)
 
@@ -336,21 +340,23 @@ class CookingPanelView(ui.View):
         await view.start(interaction)
 
     async def add_ingredient(self, interaction: discord.Interaction, item_name: str, quantity: int):
-        await interaction.response.defer()
+        # ▼▼▼ [수정] 이 함수 시작 부분에서 응답을 책임집니다. ▼▼▼
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+            
         selected_cauldrons = self.get_selected_cauldrons()
         
         total_needed = quantity * len(selected_cauldrons)
         inventory = await get_inventory(self.user)
         if inventory.get(item_name, 0) < total_needed:
             msg = await interaction.followup.send(f"❌ 재료가 부족합니다! '{item_name}'이(가) 총 {total_needed}개 필요하지만 {inventory.get(item_name, 0)}개만 가지고 있습니다.", ephemeral=True)
-            await delete_after(msg, 10)
+            self.cog.bot.loop.create_task(delete_after(msg, 10))
             return
 
         updates_to_perform = []
         for cauldron in selected_cauldrons:
             current_ingredients = cauldron.get('current_ingredients') or {}
             current_ingredients[item_name] = current_ingredients.get(item_name, 0) + quantity
-            # [핵심 수정] DB 오류를 해결하기 위해 user_id와 slot_number를 명시적으로 추가
             updates_to_perform.append({
                 'id': cauldron['id'],
                 'user_id': str(self.user.id),
@@ -361,7 +367,8 @@ class CookingPanelView(ui.View):
 
         if updates_to_perform:
             await supabase.table('cauldrons').upsert(updates_to_perform).execute()
-
+        
+        # 마지막에 한 번만 refresh를 호출합니다.
         await self.refresh(interaction)
     
     async def clear_ingredients(self, interaction: discord.Interaction):
