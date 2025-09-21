@@ -12,7 +12,7 @@ from typing import Optional
 from utils.database import load_all_data_from_db
 
 # --- 중앙 로깅 설정 ---
-# (이하 로깅 설정은 기존과 동일)
+# (생략, 기존과 동일)
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(name)s:%(lineno)d] %(message)s')
 log_handler = logging.StreamHandler()
 log_handler.setFormatter(log_formatter)
@@ -29,7 +29,7 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # --- 환경 변수 및 인텐트 설정 ---
-# (이하 환경 변수 설정은 기존과 동일)
+# (생략, 기존과 동일)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 RAW_TEST_GUILD_ID = os.environ.get('TEST_GUILD_ID')
 TEST_GUILD_ID: Optional[int] = None
@@ -49,26 +49,38 @@ BOT_VERSION = "v2.3-game-stable-ko"
 class MyBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # InteractionHandler Cog를 저장할 변수
         self.interaction_handler_cog = None
 
-    # ▼▼▼ [핵심] 이 메서드가 모든 버튼 클릭을 가로채 쿨다운 검사를 수행합니다. ▼▼▼
     async def process_application_commands(self, interaction: discord.Interaction):
-        # InteractionHandler Cog가 로드되었고, 쿨다운 검사를 통과해야만 원래 로직 실행
+        # ▼▼▼ [진단용 로깅 추가] ▼▼▼
+        # 상호작용이 발생할 때마다 핸들러의 상태를 확인합니다.
         if self.interaction_handler_cog:
-            # 쿨다운 검사를 통과하면 True, 아니면 False 반환
-            can_proceed = await self.interaction_handler_cog.check_cooldown(interaction)
-            if not can_proceed:
-                return # 쿨다운에 걸리면 여기서 처리 중단
+            logger.info("[진단] process_application_commands: 'interaction_handler_cog'를 찾았습니다. 쿨다운 검사를 시작합니다.")
+        else:
+            # 이 에러 로그가 보인다면, 쿨다운 시스템이 작동하지 않는 원인입니다.
+            logger.error("[진단] process_application_commands: 'interaction_handler_cog'가 'None'입니다! 쿨다운을 검사할 수 없습니다.")
+            # 핸들러가 없으면 원래 로직을 그냥 실행합니다.
+            await super().process_application_commands(interaction)
+            return
+        # ▲▲▲ 진단용 로깅 끝 ▲▲▲
 
-        # 쿨다운을 통과한 상호작용은 원래의 명령 처리기로 전달
+        can_proceed = await self.interaction_handler_cog.check_cooldown(interaction)
+        if not can_proceed:
+            return
+
         await super().process_application_commands(interaction)
-    # ▲▲▲ 핵심 로직 끝 ▲▲▲
                 
     async def setup_hook(self):
-        # (이하 setup_hook 및 다른 부분은 기존과 동일)
         await self.load_all_extensions()
         
+        # ▼▼▼ [진단용 로깅 추가] ▼▼▼
+        # 모든 Cog를 로드한 후, 핸들러가 제대로 설정되었는지 확인합니다.
+        if self.interaction_handler_cog:
+            logger.info("✅ [진단] setup_hook 완료 후: 'bot.interaction_handler_cog'가 성공적으로 설정되었습니다.")
+        else:
+            logger.error("❌ [진단] setup_hook 완료 후: 'bot.interaction_handler_cog'가 설정되지 않았습니다!")
+        # ▲▲▲ 진단용 로깅 끝 ▲▲▲
+         
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
             "DiceGame", "SlotMachine", "RPSGame",
@@ -76,7 +88,7 @@ class MyBot(commands.Bot):
             "WorldSystem", "EconomyCore", "LevelSystem",
             "Mining", "Blacksmith", "Trade", "Cooking"
         ]
-         
+        
         registered_views_count = 0
         for cog_name in cogs_with_persistent_views:
             cog = self.get_cog(cog_name)
@@ -84,12 +96,12 @@ class MyBot(commands.Bot):
                 try:
                     await cog.register_persistent_views()
                     registered_views_count += 1
-                    logger.info(f"✅ '{cog_name}' Cog의 영구 View가 등록되었습니다.")
                 except Exception as e:
                     logger.error(f"❌ '{cog_name}' Cog의 영구 View 등록 중 오류 발생: {e}", exc_info=True)
         logger.info(f"✅ 총 {registered_views_count}개의 Cog에서 영구 View를 성공적으로 등록했습니다.")
 
     async def load_all_extensions(self):
+        # (이하 load_all_extensions 함수는 기존과 동일)
         logger.info("------ [ Cog 로드 시작 ] ------")
         cogs_dir = 'cogs'
         if not os.path.isdir(cogs_dir):
