@@ -304,11 +304,6 @@ class Fishing(commands.Cog):
         self.fishing_log_channel_id: Optional[int] = None
         self.last_result_messages: Dict[int, discord.Message] = {}
         
-        # ▼▼▼ [핵심 수정] 락과 디바운싱을 위한 변수 추가 ▼▼▼
-        self.actor_locks: dict[tuple[int, int], asyncio.Lock] = {}
-        self.last_action_ts: dict[tuple[int, int], float] = {}
-        self.cooldown_sec: float = 2.0  # 게임 시작 버튼은 쿨타임을 넉넉하게 설정
-        
         logger.info("Fishing Cog가 성공적으로 초기화되었습니다.")
     
     # ... (이하 Fishing Cog의 나머지 메소드는 변경 없습니다) ...
