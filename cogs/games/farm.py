@@ -270,15 +270,9 @@ class FarmUIView(ui.View):
     
     async def dispatch_callback(self, interaction: discord.Interaction):
         cid = (interaction.data or {}).get('custom_id')
-        
         method_name = f"on_{cid}_click" if cid else None
         if not cid or not hasattr(self, method_name):
-            if not interaction.response.is_done():
-                try:
-                    await interaction.response.defer()
-                except discord.HTTPException: pass
             return
-
         await getattr(self, method_name)(interaction)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -323,10 +317,8 @@ class FarmUIView(ui.View):
             pass
         
     async def on_farm_regenerate_click(self, interaction: discord.Interaction):
-        # ▼▼▼ [핵심 수정] is_done() 체크 추가 ▼▼▼
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-            
+        # ▼▼▼ [핵심 수정] is_done() 체크를 제거하고 defer()를 직접 호출합니다. ▼▼▼
+        await interaction.response.defer()
         try:
             if interaction.message: await interaction.message.delete()
         except (discord.NotFound, discord.Forbidden) as e:
@@ -338,10 +330,8 @@ class FarmUIView(ui.View):
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
     async def on_farm_till_click(self, interaction: discord.Interaction):
-        # ▼▼▼ [핵심 수정] is_done() 체크 추가 ▼▼▼
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-            
+        # ▼▼▼ [핵심 수정] is_done() 체크를 제거하고 defer()를 직접 호출합니다. ▼▼▼
+        await interaction.response.defer()
         gear = await get_user_gear(interaction.user)
         hoe = gear.get('hoe', BARE_HANDS)
         if hoe == BARE_HANDS:
@@ -378,10 +368,8 @@ class FarmUIView(ui.View):
         await view.send_initial_message(i)
 
     async def on_farm_water_click(self, interaction: discord.Interaction):
-        # ▼▼▼ [핵심 수정] is_done() 체크 추가 ▼▼▼
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-
+        # ▼▼▼ [핵심 수정] is_done() 체크를 제거하고 defer()를 직접 호출합니다. ▼▼▼
+        await interaction.response.defer()
         gear = await get_user_gear(interaction.user)
         can = gear.get('watering_can', BARE_HANDS)
         if can == BARE_HANDS:
@@ -438,10 +426,8 @@ class FarmUIView(ui.View):
         await view.send_initial_message(i)
         
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
-        # ▼▼▼ [핵심 수정] is_done() 체크 추가 ▼▼▼
-        if not interaction.response.is_done():
-            await interaction.response.defer()
-            
+        # ▼▼▼ [핵심 수정] is_done() 체크를 제거하고 defer()를 직접 호출합니다. ▼▼▼
+        await interaction.response.defer()
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
         
