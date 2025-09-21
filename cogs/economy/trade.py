@@ -39,7 +39,6 @@ class ItemSelectModal(ui.Modal, title="수량 입력"):
             await interaction.response.send_message(f"1에서 {self.max_quantity} 사이의 숫자만 입력해주세요.", ephemeral=True, delete_after=5)
         self.stop()
 
-# ▼▼▼ [핵심 수정] 우편용 아이템 선택 모달을 새로 추가합니다. ▼▼▼
 class MailItemSelectModal(ui.Modal):
     quantity_input = ui.TextInput(label="수량", placeholder="수량을 입력하세요.", required=True)
 
@@ -48,6 +47,7 @@ class MailItemSelectModal(ui.Modal):
         self.max_quantity = max_quantity
         self.item_name = item_name
         self.parent_view = parent_view
+        self.quantity_input.placeholder = f"최대 {max_quantity}개"
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
@@ -62,6 +62,7 @@ class MailItemSelectModal(ui.Modal):
 
         except ValueError:
             await interaction.response.send_message("숫자만 입력해주세요.", ephemeral=True, delete_after=5)
+
 
 class CoinInputModal(ui.Modal, title="코인 입력"):
     coin_input = ui.TextInput(label="코인", placeholder="코인을 입력하세요.", required=True)
@@ -81,13 +82,10 @@ class CoinInputModal(ui.Modal, title="코인 입력"):
 
 class MessageModal(ui.Modal, title="메시지 작성"):
     message_input = ui.TextInput(label="메시지 (최대 100자)", style=discord.TextStyle.paragraph, max_length=100, required=False)
-    
-    # ▼▼▼ [핵심 수정] 부모 View를 받도록 __init__을 수정합니다. ▼▼▼
     def __init__(self, current_message: str, parent_view: 'MailComposeView'):
         super().__init__()
         self.message_input.default = current_message
         self.parent_view = parent_view
-
     async def on_submit(self, interaction: discord.Interaction):
         self.parent_view.message_content = self.message_input.value
         await self.parent_view.build_and_send(interaction)
@@ -197,10 +195,9 @@ class TradeView(ui.View):
             await self.process_trade(interaction)
         else: await self.update_ui()
 
-    # ▼▼▼ [핵심 수정] delete_after 인자를 제거하고, 사용자에게 명확한 피드백을 주도록 수정합니다. ▼▼▼
     async def handle_cancel(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        await interaction.followup.send("거래 취소 절차를 시작합니다...", ephemeral=True)
+        await interaction.followup.send("거래 취소를 요청했습니다.", ephemeral=True)
         await self.on_timeout(cancelled_by=interaction.user)
 
     async def process_trade(self, interaction: discord.Interaction):
@@ -271,20 +268,33 @@ class TradeView(ui.View):
     async def on_timeout(self, cancelled_by: Optional[discord.User] = None):
         if self.is_finished(): return
         self.stop()
-        if self.message:
-            try:
-                if self.initiator:
-                    refund_result = await update_wallet(self.initiator, 250)
-                    if refund_result:
-                        logger.info(f"거래 취소/타임아웃으로 {self.initiator.id}에게 수수료 250코인 환불 완료.")
-                        try: await self.initiator.send(f"거래가 취소되어 신청 수수료 250{self.currency_icon}을(를) 환불해드렸습니다.")
-                        except discord.Forbidden: pass
-                    else:
-                        logger.error(f"거래 취소/타임아웃 후 {self.initiator.id}에게 수수료 환불 실패!")
-                
-                await self.message.channel.send("거래가 종료되었습니다. 이 채널은 10초 후에 삭제됩니다.")
-                await asyncio.sleep(10); await self.message.channel.delete()
-            except (discord.NotFound, discord.Forbidden): pass
+        if not self.message: return
+
+        channel = self.message.channel
+        try:
+            final_messages = []
+            if cancelled_by:
+                final_messages.append(f"{cancelled_by.mention}님이 거래를 취소했습니다.")
+            else:
+                final_messages.append("시간이 초과되어 거래가 자동으로 종료되었습니다.")
+
+            if self.initiator:
+                refund_result = await update_wallet(self.initiator, 250)
+                if refund_result:
+                    logger.info(f"거래 취소/타임아웃으로 {self.initiator.id}에게 수수료 250코인 환불 완료.")
+                    final_messages.append(f"{self.initiator.mention}님에게 거래 신청 수수료 250{self.currency_icon}을(를) 환불해드렸습니다.")
+                else:
+                    logger.error(f"거래 취소/타임아웃 후 {self.initiator.id}에게 수수료 환불 실패!")
+            
+            final_messages.append("\n이 채널은 10초 후에 삭제됩니다.")
+            
+            await channel.send("\n".join(final_messages))
+            await asyncio.sleep(10)
+            await channel.delete()
+        except (discord.NotFound, discord.Forbidden) as e:
+            logger.warning(f"거래 종료/삭제 중 오류: {e}")
+        except Exception as e:
+            logger.error(f"거래 종료 중 예외 발생: {e}", exc_info=True)
     
     def stop(self):
         if self.trade_id in self.cog.active_trades: self.cog.active_trades.pop(self.trade_id)
@@ -303,15 +313,14 @@ class MailComposeView(ui.View):
         await self.build_and_send(interaction)
 
     async def build_and_send(self, interaction: discord.Interaction):
-        # ▼▼▼ [핵심 수정] 상호작용이 이미 응답되었는지 확인하고, 그렇지 않으면 defer 합니다. ▼▼▼
         if not interaction.response.is_done():
-            await interaction.response.defer()
+            await interaction.response.defer(ephemeral=True)
 
         embed = await self.build_embed()
         await self.build_components()
         
         target = interaction.followup
-            
+        
         if self.message:
             await self.message.edit(embed=embed, view=self)
         else:
@@ -354,7 +363,6 @@ class MailComposeView(ui.View):
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
         
-        # ▼▼▼ [핵심 수정] 모달을 띄우는 버튼은 defer하지 않도록 처리합니다. ▼▼▼
         if custom_id in ["write_message_button", "item_select_dropdown"]:
              pass
         elif not interaction.response.is_done():
@@ -370,7 +378,6 @@ class MailComposeView(ui.View):
         self.current_state = "selecting_item"
         await self.build_and_send(interaction)
         
-    # ▼▼▼ [핵심 수정] 아이템 선택 로직을 새 모달 클래스를 사용하도록 변경합니다. ▼▼▼
     async def on_item_select(self, interaction: discord.Interaction):
         inventory = await get_inventory(self.user)
         item_name = interaction.data['values'][0]
@@ -383,7 +390,6 @@ class MailComposeView(ui.View):
         self.current_state = "composing"
         await self.build_and_send(interaction)
 
-    # ▼▼▼ [핵심 수정] 메시지 작성 로직을 수정된 모달 클래스를 사용하도록 변경합니다. ▼▼▼
     async def handle_write_message(self, interaction: discord.Interaction):
         modal = MessageModal(self.message_content, self)
         await interaction.response.send_modal(modal)
