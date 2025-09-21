@@ -50,7 +50,6 @@ class MailItemSelectModal(ui.Modal):
         self.quantity_input.placeholder = f"최대 {max_quantity}개"
 
     async def on_submit(self, interaction: discord.Interaction):
-        logger.info(f"[TRADE DEBUG] MailItemSelectModal on_submit triggered by {interaction.user.id}. Interaction ID: {interaction.id}")
         try:
             qty = int(self.quantity_input.value)
             if not 1 <= qty <= self.max_quantity:
@@ -60,12 +59,9 @@ class MailItemSelectModal(ui.Modal):
             self.parent_view.attachments["items"][self.item_name] = self.parent_view.attachments["items"].get(self.item_name, 0) + qty
             self.parent_view.current_state = "composing"
             await self.parent_view.update_message(interaction)
-            logger.info(f"[TRADE DEBUG] MailItemSelectModal on_submit successful for {interaction.user.id}")
 
         except ValueError:
             await interaction.response.send_message("숫자만 입력해주세요.", ephemeral=True, delete_after=5)
-        except Exception as e:
-            logger.error(f"[TRADE DEBUG] Error in MailItemSelectModal on_submit: {e}", exc_info=True)
 
 
 class CoinInputModal(ui.Modal, title="코인 입력"):
@@ -91,10 +87,8 @@ class MessageModal(ui.Modal, title="메시지 작성"):
         self.message_input.default = current_message
         self.parent_view = parent_view
     async def on_submit(self, interaction: discord.Interaction):
-        logger.info(f"[TRADE DEBUG] MessageModal on_submit triggered by {interaction.user.id}. Interaction ID: {interaction.id}")
         self.parent_view.message_content = self.message_input.value
         await self.parent_view.update_message(interaction)
-        logger.info(f"[TRADE DEBUG] MessageModal on_submit successful for {interaction.user.id}")
 
 class TradeView(ui.View):
     def __init__(self, cog: 'Trade', initiator: discord.Member, partner: discord.Member, trade_id: str):
@@ -316,23 +310,20 @@ class MailComposeView(ui.View):
         self.current_state = "composing" 
         
     async def start(self, interaction: discord.Interaction):
-        logger.info(f"[TRADE DEBUG] MailComposeView starting for {interaction.user.id}. Interaction ID: {interaction.id}")
         await self.update_message(interaction)
 
     async def update_message(self, interaction: discord.Interaction):
-        logger.info(f"[TRADE DEBUG] update_message called by {interaction.user.id}. Interaction ID: {interaction.id}, is_done: {interaction.response.is_done()}")
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
-            logger.info(f"[TRADE DEBUG] Interaction deferred.")
 
         embed = await self.build_embed()
         await self.build_components()
         
+        # ephemeral 메시지는 followup으로 새로 보낼 수 없고, 반드시 원래 메시지를 수정해야 합니다.
         if self.message:
-            logger.info(f"[TRADE DEBUG] Editing existing message {self.message.id}")
             await self.message.edit(embed=embed, view=self)
         else:
-            logger.info(f"[TRADE DEBUG] Sending new followup message")
+            # 이 View가 처음 생성될 때, 이전 상호작용(UserSelect)에 대한 후속 조치로 메시지를 보냅니다.
             self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     async def build_embed(self) -> discord.Embed:
@@ -371,8 +362,8 @@ class MailComposeView(ui.View):
 
     async def dispatch_callback(self, interaction: discord.Interaction):
         custom_id = interaction.data['custom_id']
-        logger.info(f"[TRADE DEBUG] MailComposeView dispatch_callback triggered by {interaction.user.id} with custom_id: {custom_id}. Interaction ID: {interaction.id}")
         
+        # 모달을 띄우는 상호작용은 응답을 직접 처리하므로 defer하지 않습니다.
         if custom_id in ["write_message_button", "item_select_dropdown"]:
             pass
         elif not interaction.response.is_done():
@@ -621,16 +612,18 @@ class MailboxView(ui.View):
         select_view = ui.View(timeout=180)
         user_select = ui.UserSelect(placeholder="편지를 보낼 상대를 선택하세요.")
         async def callback(select_interaction: discord.Interaction):
-            await select_interaction.response.defer(ephemeral=True)
+            # UserSelect에서 응답하는 것이므로, 이 상호작용은 새롭습니다.
+            # defer() 또는 다른 응답을 해야 합니다.
+            # MailComposeView.start()가 defer를 포함한 응답을 처리할 것입니다.
             recipient_id = int(select_interaction.data['values'][0])
             recipient = interaction.guild.get_member(recipient_id)
             if not recipient or recipient.bot or recipient.id == self.user.id:
-                return await select_interaction.followup.send("잘못된 상대입니다.", ephemeral=True, delete_after=5)
+                return await select_interaction.response.send_message("잘못된 상대입니다.", ephemeral=True, delete_after=5)
             
-            await self.message.delete()
-                    
+            # 현재 떠 있는 UserSelect 메시지를 수정하여 MailComposeView로 전환합니다.
             compose_view = MailComposeView(self.cog, self.user, recipient)
             await compose_view.start(select_interaction)
+
         user_select.callback = callback
         select_view.add_item(user_select)
         await interaction.followup.send("누구에게 편지를 보내시겠습니까?", view=select_view, ephemeral=True)
