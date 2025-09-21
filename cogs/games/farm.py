@@ -270,14 +270,9 @@ class FarmUIView(ui.View):
     
     async def dispatch_callback(self, interaction: discord.Interaction):
         cid = (interaction.data or {}).get('custom_id')
-        
-        buttons_that_send_new_response = ["farm_invite", "farm_share", "farm_rename", "farm_plant", "farm_uproot"]
-        
-        if cid not in buttons_that_send_new_response and not interaction.response.is_done():
-            await interaction.response.defer()
-
         method_name = f"on_{cid}_click" if cid else None
         if not cid or not hasattr(self, method_name):
+            # defer가 필요한 경우를 대비해 is_done 체크 후 defer
             if not interaction.response.is_done():
                 try:
                     await interaction.response.defer()
@@ -340,6 +335,8 @@ class FarmUIView(ui.View):
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
 
     async def on_farm_till_click(self, interaction: discord.Interaction):
+        # ▼▼▼ [핵심 추가] 각 메서드 시작 부분에서 defer를 호출합니다. ▼▼▼
+        await interaction.response.defer()
         gear = await get_user_gear(interaction.user)
         hoe = gear.get('hoe', BARE_HANDS)
         if hoe == BARE_HANDS:
@@ -369,13 +366,16 @@ class FarmUIView(ui.View):
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
     
-    async def on_farm_plant_click(self, i: discord.Interaction): 
+    async def on_farm_plant_click(self, i: discord.Interaction):
+        # 이 메서드는 새 View를 띄우므로 자체적으로 defer/send_message를 관리합니다. 수정 필요 없음.
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
         view = FarmActionView(self.cog, farm_data, i.user, "plant_seed", self.farm_owner_id)
         await view.send_initial_message(i)
 
     async def on_farm_water_click(self, interaction: discord.Interaction):
+        # ▼▼▼ [핵심 추가] 각 메서드 시작 부분에서 defer를 호출합니다. ▼▼▼
+        await interaction.response.defer()
         gear = await get_user_gear(interaction.user)
         can = gear.get('watering_can', BARE_HANDS)
         if can == BARE_HANDS:
@@ -426,12 +426,15 @@ class FarmUIView(ui.View):
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data, message=interaction.message)
 
     async def on_farm_uproot_click(self, i: discord.Interaction): 
+        # 이 메서드는 새 View를 띄우므로 자체적으로 defer/send_message를 관리합니다. 수정 필요 없음.
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
         view = FarmActionView(self.cog, farm_data, i.user, "uproot", self.farm_owner_id)
         await view.send_initial_message(i)
         
     async def on_farm_harvest_click(self, interaction: discord.Interaction):
+        # ▼▼▼ [핵심 추가] 각 메서드 시작 부분에서 defer를 호출합니다. ▼▼▼
+        await interaction.response.defer()
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
         
