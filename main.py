@@ -12,6 +12,7 @@ from typing import Optional
 from utils.database import load_all_data_from_db
 
 # --- 중앙 로깅 설정 ---
+# (이하 로깅 설정은 기존과 동일)
 log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(name)s:%(lineno)d] %(message)s')
 log_handler = logging.StreamHandler()
 log_handler.setFormatter(log_formatter)
@@ -23,12 +24,12 @@ root_logger.addHandler(log_handler)
 logging.getLogger('discord').setLevel(logging.WARNING)
 logging.getLogger('discord.http').setLevel(logging.WARNING)
 logging.getLogger('websockets').setLevel(logging.WARNING)
-# Supabase 및 httpx 라이브러리의 정보성 로그는 출력하지 않습니다.
 logging.getLogger('supabase').setLevel(logging.WARNING)
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # --- 환경 변수 및 인텐트 설정 ---
+# (이하 환경 변수 설정은 기존과 동일)
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 RAW_TEST_GUILD_ID = os.environ.get('TEST_GUILD_ID')
 TEST_GUILD_ID: Optional[int] = None
@@ -43,7 +44,7 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 intents.voice_states = True
-BOT_VERSION = "v2.3-game-stable-ko" # 게임 봇 안정화 버전 (한국어)
+BOT_VERSION = "v2.3-game-stable-ko"
 
 class MyBot(commands.Bot):
     def __init__(self, *args, **kwargs):
@@ -51,7 +52,7 @@ class MyBot(commands.Bot):
         # InteractionHandler Cog를 저장할 변수
         self.interaction_handler_cog = None
 
-    # ▼▼▼ [핵심 수정] 아래 메서드를 MyBot 클래스 안에 추가합니다. ▼▼▼
+    # ▼▼▼ [핵심] 이 메서드가 모든 버튼 클릭을 가로채 쿨다운 검사를 수행합니다. ▼▼▼
     async def process_application_commands(self, interaction: discord.Interaction):
         # InteractionHandler Cog가 로드되었고, 쿨다운 검사를 통과해야만 원래 로직 실행
         if self.interaction_handler_cog:
@@ -62,12 +63,12 @@ class MyBot(commands.Bot):
 
         # 쿨다운을 통과한 상호작용은 원래의 명령 처리기로 전달
         await super().process_application_commands(interaction)
-    # ▲▲▲ 추가 끝 ▲▲▲
+    # ▲▲▲ 핵심 로직 끝 ▲▲▲
                 
     async def setup_hook(self):
+        # (이하 setup_hook 및 다른 부분은 기존과 동일)
         await self.load_all_extensions()
         
-        # ▼▼▼ [핵심 수정] 아래 리스트에서 "PanelUpdater"를 삭제합니다. ▼▼▼
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
             "DiceGame", "SlotMachine", "RPSGame",
@@ -115,6 +116,7 @@ bot = MyBot(command_prefix="/", intents=intents)
 
 @bot.event
 async def on_ready():
+    # (이하 on_ready 및 main 함수는 기존과 동일)
     logger.info("==================================================")
     logger.info(f"✅ {bot.user.name}(이)가 성공적으로 로그인했습니다.")
     logger.info(f"✅ 봇 버전: {BOT_VERSION}")
