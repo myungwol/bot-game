@@ -97,8 +97,18 @@ class BuyItemView(ShopViewBase):
         all_ui_strings = get_config("strings", {})
         commerce_strings = all_ui_strings.get("commerce", {})
         
-        category_display_names = { "아이템": "잡화점", "장비": "장비점", "미끼": "미끼가게", "농장_씨앗": "씨앗가게", "pet_item": "펫 상점", "egg": "알 상점", "조미료": "조미료 가게" }
+        # ▼▼▼ [수정] 한글 카테고리 이름에 대한 상점 이름을 추가합니다. ▼▼▼
+        category_display_names = { 
+            "아이템": "잡화점", 
+            "장비": "장비점", 
+            "미끼": "미끼가게", 
+            "농장_씨앗": "씨앗가게", 
+            "펫 아이템": "펫 상점", # 'pet_item' -> '펫 아이템'
+            "알": "알 상점",     # 'egg' -> '알'
+            "조미료": "조미료 가게"
+        }
         display_name = category_display_names.get(self.category, self.category.replace("_", " "))
+        # ▲▲▲ [수정] 완료 ▲▲▲
         
         description_template = commerce_strings.get("item_view_desc", "현재 소지금: `{balance}`{currency_icon}\n구매하고 싶은 상품을 선택해주세요.")
 
@@ -348,7 +358,6 @@ class BuyCategoryView(ShopViewBase):
         embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         return embed
     
-    # ▼▼▼ [수정] build_components 메서드 수정 ▼▼▼
     async def build_components(self):
         self.clear_items()
         item_db = get_item_database()
@@ -357,33 +366,25 @@ class BuyCategoryView(ShopViewBase):
             d.get('category', '').strip() for d in item_db.values() if d.get('buyable') and d.get('category')
         )
         
-        # 선호/후순위 정렬 및 한글 이름 매핑 추가
-        preferred_order = ["아이템", "장비", "미끼", "농장_씨앗", "농장_도구"]
-        last_order = ["pet_item", "egg"] # 펫 아이템과 알을 맨 뒤로
+        preferred_order = ["아이템", "장비", "미끼", "농장_씨앗", "농장_도구", "조미료"]
+        last_order = ["펫 아이템", "알"] # DB에 저장된 한글 이름 기준
         category_display_map = {
-            "pet_item": "펫 아이템",
-            "egg": "알",
-            "농장_씨앗": "농장 씨앗" # 언더스코어를 띄어쓰기로 변경
+            "농장_씨앗": "농장 씨앗" # DB의 _를 공백으로 표시
         }
         
-        # 1. 선호 순서대로 정렬
         sorted_categories = []
         for category in preferred_order:
             if category in available_categories:
                 sorted_categories.append(category)
                 available_categories.remove(category)
 
-        # 2. 후순위 아이템을 available_categories에서 임시 제거
         last_items = []
         for category in last_order:
             if category in available_categories:
                 last_items.append(category)
                 available_categories.remove(category)
                 
-        # 3. 나머지 아이템을 가나다순으로 정렬
         sorted_categories.extend(sorted(list(available_categories)))
-
-        # 4. 후순위 아이템을 맨 뒤에 추가
         sorted_categories.extend(last_items)
 
         if not sorted_categories:
@@ -391,12 +392,10 @@ class BuyCategoryView(ShopViewBase):
             return
 
         for category_name in sorted_categories:
-            # 매핑된 이름이 있으면 사용하고, 없으면 원래 이름에서 _를 공백으로 변경
-            display_name = category_display_map.get(category_name, category_name.replace("_", " "))
+            display_name = category_display_map.get(category_name, category_name)
             button = ui.Button(label=display_name, custom_id=f"buy_category_{category_name}")
             button.callback = self.category_callback
             self.add_item(button)
-    # ▲▲▲ [수정] 완료 ▲▲▲
     
     async def category_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -701,7 +700,6 @@ class SellCookingView(ShopViewBase):
         self.cooking_data_map.clear()
         
         options = []
-        # '요리' 카테고리의 아이템만 필터링합니다.
         cooking_items = {name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category', '').strip() == '요리'}
 
         if cooking_items:
