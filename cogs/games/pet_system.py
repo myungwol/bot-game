@@ -33,6 +33,20 @@ ELEMENT_TO_FILENAME = {
     "빛": "light", "어둠": "dark"
 }
 
+# ▼▼▼ [추가] 경험치 바, 친밀도 바 생성 헬퍼 함수 ▼▼▼
+def create_bar(current: int, required: int, length: int = 10, full_char: str = '▓', empty_char: str = '░') -> str:
+    """경험치나 친밀도 같은 막대 그래프 문자열을 생성합니다."""
+    if required <= 0: return full_char * length
+    progress = min(current / required, 1.0)
+    filled_length = int(length * progress)
+    return f"[{full_char * filled_length}{empty_char * (length - filled_length)}]"
+
+# ▼▼▼ [추가] 펫 레벨업에 필요한 경험치를 계산하는 함수 ▼▼▼
+def calculate_xp_for_pet_level(level: int) -> int:
+    """펫의 다음 레벨업에 필요한 누적 경험치를 계산합니다."""
+    if level <= 1: return 100 # 레벨 1 -> 2
+    return int(100 * (level ** 1.5))
+
 class EggSelectView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'PetSystem'):
         super().__init__(timeout=180)
@@ -152,6 +166,7 @@ class PetSystem(commands.Cog):
             logger.error(f"인큐베이션 시작 중 오류 (유저: {user.id}, 알: {egg_name}): {e}", exc_info=True)
             await interaction.edit_original_response(content="❌ 부화 절차를 시작하는 중 오류가 발생했습니다.", view=None)
     
+    # ▼▼▼ [수정] build_pet_ui_embed 함수 전체를 교체합니다. ▼▼▼
     def build_pet_ui_embed(self, user: discord.Member, pet_data: Dict) -> discord.Embed:
         species_info = pet_data.get('pet_species')
         if not species_info:
@@ -178,20 +193,42 @@ class PetSystem(commands.Cog):
         else:
             stage_info_json = species_info.get('stage_info', {})
             stage_name = stage_info_json.get(str(current_stage), {}).get('name', '알 수 없는 단계')
-
+            
             embed = discord.Embed(title=f"🐾 {stage_name}: {species_info['species_name']}", color=0xFFD700)
             embed.set_author(name=f"{user.display_name}님의 펫", icon_url=user.display_avatar.url if user.display_avatar else None)
             embed.set_thumbnail(url=image_url)
 
             nickname = pet_data.get('nickname') or species_info['species_name']
-            embed.description = f"**이름:** {nickname}\n**레벨:** {pet_data['level']}\n**속성:** {species_info['element']}"
+            current_level = pet_data['level']
+            current_xp = pet_data['xp']
+            xp_for_next_level = calculate_xp_for_pet_level(current_level)
+            
+            xp_bar = create_bar(current_xp, xp_for_next_level)
+            
+            # 친밀도는 아직 데이터가 없으므로 0으로 표시
+            friendship = pet_data.get('friendship', 0)
+            friendship_bar = create_bar(friendship, 100, full_char='❤️', empty_char='🖤')
+            
+            description_parts = [
+                f"**이름:** {nickname}",
+                f"**속성:** {species_info['element']}",
+                f"**레벨:** {current_level}",
+                f"**경험치:** `{current_xp} / {xp_for_next_level}`",
+                f"{xp_bar}",
+                f"**친밀도:**",
+                f"{friendship_bar}"
+            ]
+            embed.description = "\n".join(description_parts)
             
             embed.add_field(name="❤️ 체력", value=str(pet_data['current_hp']), inline=True)
             embed.add_field(name="⚔️ 공격력", value=str(pet_data['current_attack']), inline=True)
             embed.add_field(name="🛡️ 방어력", value=str(pet_data['current_defense']), inline=True)
             embed.add_field(name="💨 스피드", value=str(pet_data['current_speed']), inline=True)
-
+            # 빈 필드를 추가하여 줄바꿈 효과
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
         return embed
+    # ▲▲▲ [수정] 완료 ▲▲▲
 
     async def process_hatching(self, pet_data: Dict):
         user_id = int(pet_data['user_id'])
@@ -240,15 +277,11 @@ class PetSystem(commands.Cog):
             except (discord.NotFound, discord.Forbidden) as e:
                 logger.error(f"부화 UI 업데이트 실패 (스레드: {thread.id}): {e}")
 
-    # ▼▼▼ [추가] 영구 View 등록 함수 ▼▼▼
     async def register_persistent_views(self):
-        """봇이 재시작될 때 인큐베이터 패널의 View를 다시 등록합니다."""
         self.bot.add_view(IncubatorPanelView(self))
         logger.info("✅ 펫 시스템(인큐베이터)의 영구 View가 성공적으로 등록되었습니다.")
-    # ▲▲▲ [추가] 완료 ▲▲▲
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_incubator"):
-        """지정된 채널에 펫 인큐베이터 패널을 (재)생성합니다."""
         panel_name = panel_key.replace("panel_", "")
         
         if panel_info := get_panel_id(panel_name):
