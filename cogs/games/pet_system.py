@@ -363,22 +363,31 @@ class PetSystem(commands.Cog):
                 f"**이름:** {nickname}",
                 f"**속성:** {species_info['element']}",
                 f"**레벨:** {current_level}",
-                "",
+                "###",
                 f"**경험치:** `{current_xp} / {xp_for_next_level}`",
                 f"{xp_bar}",
-                "",
+                "###",
                 f"**배고픔:** `{hunger} / 100`",
                 f"{hunger_bar}",
-                "",
+                "###",
                 f"**친밀도:** `{friendship} / 100`",
                 f"{friendship_bar}"
             ]
             embed.description = "\n".join(description_parts)
 
-            # ▼▼▼ [수정] 스탯 표시를 한 줄로 통합 ▼▼▼
+            # ▼▼▼ [수정] 스탯 표시를 한 줄로 통합하고 정렬을 개선합니다. ▼▼▼
+            hp = str(pet_data['current_hp'])
+            attack = str(pet_data['current_attack'])
+            defense = str(pet_data['current_defense'])
+            speed = str(pet_data['current_speed'])
+            
+            # 각 스탯 값을 지정된 너비에 맞게 중앙 정렬하여 한 줄의 문자열로 만듭니다.
+            # 모든 값을 하나의 코드 블록(` ``` `) 안에 넣어 수직 정렬을 보장합니다.
+            stats_line = f"{hp:^6} | {attack:^8} | {defense:^9} | {speed:^8}"
+
             embed.add_field(
-                name="❤️ 체력⠀|⠀⚔️ 공격력⠀|⠀🛡️ 방어력⠀|⠀💨 스피드",
-                value=f"{str(pet_data['current_hp']).center(5)}`|`{str(pet_data['current_attack']).center(8)}`|`{str(pet_data['current_defense']).center(9)}`|`{str(pet_data['current_speed']).center(7)}",
+                name="❤️ 체력   |   ⚔️ 공격력   |   🛡️ 방어력   |   💨 스피드",
+                value=f"```{stats_line}```",
                 inline=False
             )
         return embed
