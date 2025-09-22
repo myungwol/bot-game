@@ -631,13 +631,28 @@ class PetSystem(commands.Cog):
             except (discord.NotFound, discord.Forbidden) as e:
                 logger.error(f"부화 UI 업데이트 실패 (스레드: {thread.id}): {e}")
     
+    # ▼▼▼ [수정] 관리자 요청과 일반 레벨업 요청을 모두 처리하도록 함수 수정 ▼▼▼
     async def process_levelup_requests(self, requests: List[Dict]):
         user_ids_to_notify = {int(req['config_key'].split('_')[-1]): req['config_value'] for req in requests}
         
         for user_id, payload in user_ids_to_notify.items():
-            new_level = payload.get('new_level')
-            points_awarded = payload.get('points_awarded')
-            await self.notify_pet_level_up(user_id, new_level, points_awarded)
+            new_level, points_awarded = None, None
+            
+            # payload가 비어있으면 관리자 테스트 명령어로 간주하고 DB 함수를 호출
+            if not payload: 
+                res = await supabase.rpc('admin_level_up_pet', {'p_user_id': user_id}).single().execute()
+                if res.data and res.data.get('leveled_up'):
+                    new_level = res.data.get('new_level')
+                    points_awarded = res.data.get('points_awarded')
+            # payload에 정보가 있으면 일반 레벨업으로 간주
+            else:
+                new_level = payload.get('new_level')
+                points_awarded = payload.get('points_awarded')
+
+            if new_level is not None and points_awarded is not None:
+                await self.notify_pet_level_up(user_id, new_level, points_awarded)
+            else:
+                logger.warning(f"펫 레벨업 알림 실패: 유저 {user_id}의 new_level 또는 points_awarded를 결정할 수 없습니다.")
 
     async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded: int):
         pet_data = await self.get_user_pet(user_id)
