@@ -126,7 +126,6 @@ class PetSystem(commands.Cog):
             )
             await thread.add_user(user)
 
-            # ▼▼▼ [수정] .select().single() 제거 ▼▼▼
             pet_insert_res = await supabase.table('pets').insert({
                 'user_id': user.id,
                 'pet_species_id': pet_species_id,
@@ -136,14 +135,11 @@ class PetSystem(commands.Cog):
                 'created_at': now.isoformat(),
                 'thread_id': thread.id
             }).execute()
-            # ▲▲▲ [수정] 완료 ▲▲▲
 
             await update_inventory(user.id, egg_name, -1)
             
-            # ▼▼▼ [수정] 결과가 리스트이므로 첫 번째 요소를 가져옵니다. ▼▼▼
             pet_data = pet_insert_res.data[0]
             pet_data['pet_species'] = pet_species_data
-            # ▲▲▲ [수정] 완료 ▲▲▲
 
             embed = self.build_pet_ui_embed(user, pet_data)
             message = await thread.send(embed=embed)
@@ -222,7 +218,6 @@ class PetSystem(commands.Cog):
             stat_to_buff = random.choice(stats_keys)
             final_stats[stat_to_buff] += 1
             
-        # ▼▼▼ [수정] .select().single() 제거 ▼▼▼
         updated_pet_data_res = await supabase.table('pets').update({
             'current_stage': 2, 'level': 1, 'xp': 0,
             'current_hp': final_stats['hp'], 'current_attack': final_stats['attack'],
@@ -230,10 +225,8 @@ class PetSystem(commands.Cog):
             'nickname': species_info['species_name']
         }).eq('id', pet_data['id']).execute()
         
-        # ▼▼▼ [수정] 결과가 리스트이므로 첫 번째 요소를 가져옵니다. ▼▼▼
         updated_pet_data = updated_pet_data_res.data[0]
         updated_pet_data['pet_species'] = species_info
-        # ▲▲▲ [수정] 완료 ▲▲▲
 
         thread = self.bot.get_channel(pet_data['thread_id'])
         if thread:
@@ -247,7 +240,15 @@ class PetSystem(commands.Cog):
             except (discord.NotFound, discord.Forbidden) as e:
                 logger.error(f"부화 UI 업데이트 실패 (스레드: {thread.id}): {e}")
 
+    # ▼▼▼ [추가] 영구 View 등록 함수 ▼▼▼
+    async def register_persistent_views(self):
+        """봇이 재시작될 때 인큐베이터 패널의 View를 다시 등록합니다."""
+        self.bot.add_view(IncubatorPanelView(self))
+        logger.info("✅ 펫 시스템(인큐베이터)의 영구 View가 성공적으로 등록되었습니다.")
+    # ▲▲▲ [추가] 완료 ▲▲▲
+
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_incubator"):
+        """지정된 채널에 펫 인큐베이터 패널을 (재)생성합니다."""
         panel_name = panel_key.replace("panel_", "")
         
         if panel_info := get_panel_id(panel_name):
