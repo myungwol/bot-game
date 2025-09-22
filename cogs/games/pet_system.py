@@ -593,19 +593,19 @@ class PetSystem(commands.Cog):
             # 1. '단계' 필드에서 종족 이름을 제거합니다.
             embed.add_field(name="단계", value=f"**{stage_name}**", inline=True)
             embed.add_field(name="타입", value=f"{ELEMENT_TO_TYPE.get(species_info['element'], '알 수 없음')}", inline=True)
-            embed.add_field(name="\u200b", value="\n\u200b", inline=False)
+            embed.add_field(name="\u200b", value="\u200b", inline=True) 
             
             embed.add_field(name="레벨", value=f"**Lv. {current_level}**", inline=True)
             embed.add_field(name="속성", value=f"{species_info['element']}", inline=True)
-            embed.add_field(name="\u200b", value="\n\u200b", inline=False)
+            embed.add_field(name="\u200b", value="\u200b", inline=True) 
 
             embed.add_field(name="경험치", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=True)
-            embed.add_field(name="\u200b", value="\n\u200b", inline=False)
-            embed.add_field(name="\u200b", value="\n\u200b", inline=False)
+            embed.add_field(name="\u200b", value="\u200b", inline=True) 
+            embed.add_field(name="\u200b", value="\u200b", inline=True) 
             
             embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=True)
             embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=True)
-            embed.add_field(name="\u200b", value="\n\u200b", inline=False)
+            embed.add_field(name="\u200b", value="\u200b", inline=True) 
 
             stat_points = pet_data.get('stat_points', 0)
             if stat_points > 0:
