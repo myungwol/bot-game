@@ -51,8 +51,12 @@ def create_bar(current: int, required: int, length: int = 10, full_char: str = '
     return f"[{full_char * filled_length}{empty_char * (length - filled_length)}]"
 
 def calculate_xp_for_pet_level(level: int) -> int:
-    if level < 1: return 80
-    return int(80 * (level ** 1.2))
+    # 새로운 선형 증가 경험치 공식 적용
+    if level < 1: return 0
+    # 레벨 L에서 L+1로 가는 데 필요한 경험치: 400 + (100 * L)
+    base_xp = 400
+    increment = 100
+    return base_xp + (increment * level)
 
 async def delete_message_after(message: discord.InteractionMessage, delay: int):
     await asyncio.sleep(delay)
@@ -722,7 +726,8 @@ class PetSystem(commands.Cog):
                 # 레벨에 해당하는 총 경험치를 계산합니다.
                 total_xp_for_level = 0
                 for l in range(1, exact_level):
-                    total_xp_for_level += calculate_xp_for_pet_level(l)
+                    # ▼▼▼ 핵심 수정: 새로운 공식으로 변경 ▼▼▼
+                    total_xp_for_level += (400 + (100 * l))
                 
                 # DB 함수를 호출하여 레벨과 경험치를 직접 설정합니다.
                 res = await supabase.rpc('set_pet_level_and_xp', {
