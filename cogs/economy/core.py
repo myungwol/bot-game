@@ -173,7 +173,13 @@ class EconomyCore(commands.Cog):
                  if pet_cog := self.bot.get_cog("PetSystem"):
                     user_ids = {int(req['config_key'].split('_')[-1]) for req in requests_by_prefix['pet_evolution_check']}
                     await pet_cog.check_and_process_auto_evolution(user_ids)
-
+            
+            # ▼▼▼▼▼ 여기에 아래 코드를 추가하세요 ▼▼▼▼▼
+            if 'pet_level_set' in requests_by_prefix:
+                if pet_cog := self.bot.get_cog("PetSystem"):
+                    await pet_cog.process_level_set_requests(requests_by_prefix['pet_level_set'])
+            # ▲▲▲▲▲ 여기까지 추가 ▲▲▲▲▲
+            
             server_id_str = get_config("SERVER_ID")
             guild = self.bot.get_guild(int(server_id_str)) if server_id_str else None
 
