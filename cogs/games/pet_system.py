@@ -273,6 +273,7 @@ class PetSystem(commands.Cog):
         if not (species_res and species_res.data):
             await interaction.followup.send("❌ 펫 기본 정보가 없습니다. 관리자에게 문의해주세요.", ephemeral=True)
             return
+            
         pet_species_data = species_res.data
         pet_species_id = pet_species_data['id']
         base_hatch_seconds = HATCH_TIMES.get(egg_name, 172800)
@@ -280,28 +281,33 @@ class PetSystem(commands.Cog):
         final_hatch_seconds = base_hatch_seconds + random_offset_seconds
         now = datetime.now(timezone.utc)
         hatches_at = now + timedelta(seconds=final_hatch_seconds)
+        
         try:
-            thread = await interaction.channel.create_thread(name=f"🥚｜{user.display_name}의 알", type=discord.ChannelType.public_thread, auto_archive_duration=10080)
-            
-            # ▼▼▼ [수정] 봇 자신을 스레드에 추가하고, 시스템 메시지를 삭제하는 로직 추가 ▼▼▼
-            try:
-                # 봇이 스레드 멤버 목록을 보거나 관리할 수 있도록 추가합니다.
-                await thread.add_user(self.bot.user)
-                # 스레드를 생성한 유저는 자동으로 추가되므로 별도로 추가할 필요가 없습니다.
-            except Exception as e:
-                logger.warning(f"스레드에 봇을 추가하는 중 오류 발생: {e}")
+            # 1. 공개 스레드를 생성합니다.
+            thread = await interaction.channel.create_thread(
+                name=f"🥚｜{user.display_name}의 알",
+                type=discord.ChannelType.public_thread,
+                auto_archive_duration=10080
+            )
 
+            # 2. 펫 주인(user)을 스레드에 명시적으로 추가(초대)합니다.
+            await thread.add_user(user)
+
+            # 3. 데이터베이스에 펫 정보를 기록합니다.
             pet_insert_res = await supabase.table('pets').insert({
                 'user_id': user.id, 'pet_species_id': pet_species_id, 'current_stage': 1, 'level': 0,
                 'hatches_at': hatches_at.isoformat(), 'created_at': now.isoformat(), 'thread_id': thread.id
             }).execute()
             await update_inventory(user.id, egg_name, -1)
+            
             pet_data = pet_insert_res.data[0]
             pet_data['pet_species'] = pet_species_data
+
+            # 4. 스레드에 UI 메시지를 보냅니다.
             embed = self.build_pet_ui_embed(user, pet_data)
             message = await thread.send(embed=embed)
-            
-            # "이 스레드를 시작했습니다" 시스템 메시지를 찾아서 삭제합니다.
+
+            # 5. "스레드를 시작했습니다" 라는 시스템 메시지를 찾아서 삭제합니다.
             try:
                 system_start_message = await thread.fetch_message(thread.id)
                 if system_start_message and system_start_message.type == discord.MessageType.thread_starter_message:
@@ -309,10 +315,10 @@ class PetSystem(commands.Cog):
             except (discord.NotFound, discord.Forbidden):
                 pass # 메시지가 없거나 삭제 권한이 없으면 무시
 
-            # ▲▲▲ [수정] 완료 ▲▲▲
-            
+            # 6. DB에 UI 메시지 ID를 업데이트하고 사용자에게 알립니다.
             await supabase.table('pets').update({'message_id': message.id}).eq('id', pet_data['id']).execute()
             await interaction.edit_original_response(content=f"✅ 부화가 시작되었습니다! {thread.mention} 채널에서 확인해주세요.", view=None)
+
         except Exception as e:
             logger.error(f"인큐베이션 시작 중 오류 (유저: {user.id}, 알: {egg_name}): {e}", exc_info=True)
             await interaction.edit_original_response(content="❌ 부화 절차를 시작하는 중 오류가 발생했습니다.", view=None)
