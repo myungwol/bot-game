@@ -60,7 +60,7 @@ class MyBot(commands.Bot):
             "DailyCheck", "Quests", "Farm",
             "WorldSystem", "EconomyCore", "LevelSystem",
             "Mining", "Blacksmith", "Trade", "Cooking",
-            "FriendInvite" # <--- 여기에 추가
+            "FriendInvite", "PetSystem" # <--- 여기에 PetSystem 추가
         ]
         # ▲▲▲ [수정] 완료 ▲▲▲
          
