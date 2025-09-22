@@ -378,7 +378,7 @@ class PetSystem(commands.Cog):
             # ▼▼▼ [수정] 스탯 표시를 한 줄로 통합 ▼▼▼
             embed.add_field(
                 name="❤️ 체력⠀|⠀⚔️ 공격력⠀|⠀🛡️ 방어력⠀|⠀💨 스피드",
-                value=f"`{str(pet_data['current_hp']).center(5)}`|`{str(pet_data['current_attack']).center(8)}`|`{str(pet_data['current_defense']).center(9)}`|`{str(pet_data['current_speed']).center(7)}`",
+                value=f"{str(pet_data['current_hp']).center(5)}`|`{str(pet_data['current_attack']).center(8)}`|`{str(pet_data['current_defense']).center(9)}`|`{str(pet_data['current_speed']).center(7)}",
                 inline=False
             )
         return embed
