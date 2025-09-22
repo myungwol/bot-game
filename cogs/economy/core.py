@@ -141,11 +141,16 @@ class EconomyCore(commands.Cog):
                 if panel_cog := self.bot.get_cog("PanelUpdater"):
                     await panel_cog.process_panel_regenerate_requests(requests_by_prefix['panel_regenerate'])
 
-            # ▼▼▼ [수정] 펫 레벨업 요청을 PetSystem으로 넘기도록 변경 ▼▼▼
             if 'pet_levelup' in requests_by_prefix:
                 if pet_cog := self.bot.get_cog("PetSystem"):
-                    # core.py가 직접 처리하는 대신, PetSystem에 요청 목록을 그대로 전달합니다.
                     await pet_cog.process_levelup_requests(requests_by_prefix['pet_levelup'])
+
+            # ▼▼▼ [추가] 관리자용 펫 레벨업 요청을 별도로 처리합니다. ▼▼▼
+            if 'pet_admin_levelup' in requests_by_prefix:
+                if pet_cog := self.bot.get_cog("PetSystem"):
+                    admin_requests = requests_by_prefix['pet_admin_levelup']
+                    # 관리자 요청은 payload가 없으므로 빈 딕셔너리를 전달합니다.
+                    await pet_cog.process_levelup_requests(admin_requests)
 
             if 'pet_evolution_check' in requests_by_prefix:
                  if pet_cog := self.bot.get_cog("PetSystem"):
