@@ -41,14 +41,12 @@ def calculate_xp_for_pet_level(level: int) -> int:
     if level <= 1: return 100
     return int(100 * (level ** 1.5))
 
-# ▼▼▼ [추가] 메시지 자동 삭제를 위한 헬퍼 함수 ▼▼▼
 async def delete_message_after(message: discord.InteractionMessage, delay: int):
     await asyncio.sleep(delay)
     try:
         await message.delete()
     except (discord.NotFound, discord.Forbidden):
         pass
-# ▲▲▲ [추가] 완료 ▲▲▲
 
 
 class PetUIView(ui.View):
@@ -91,12 +89,8 @@ class PetUIView(ui.View):
             await update_inventory(self.user_id, item_name, -1)
             await supabase.rpc('increase_pet_hunger', {'p_user_id': self.user_id, 'p_amount': hunger_to_add}).execute()
             await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
-            
-            # ▼▼▼ [수정] delete_after 제거 및 수동 삭제 로직으로 변경 ▼▼▼
             msg = await select_interaction.followup.send(f"🍖 {item_name}을(를) 주었습니다. 펫의 배가 든든해졌습니다!", ephemeral=True)
             self.cog.bot.loop.create_task(delete_message_after(msg, 5))
-            # ▲▲▲ [수정] 완료 ▲▲▲
-            
             await select_interaction.delete_original_response()
 
         feed_select.callback = feed_callback
@@ -121,11 +115,8 @@ class PetUIView(ui.View):
         await supabase.rpc('increase_pet_friendship', {'p_user_id': self.user_id, 'p_amount': 1}).execute()
         await set_cooldown(interaction.user.id, cooldown_key)
         await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
-        
-        # ▼▼▼ [수정] delete_after 제거 및 수동 삭제 로직으로 변경 ▼▼▼
         msg = await interaction.followup.send("❤️ 펫과 즐거운 시간을 보냈습니다! 친밀도가 1 올랐습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_message_after(msg, 5))
-        # ▲▲▲ [수정] 완료 ▲▲▲
 
     @ui.button(label="새로고침", style=discord.ButtonStyle.secondary, emoji="🔄")
     async def refresh_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -238,8 +229,15 @@ class PetSystem(commands.Cog):
         now = datetime.now(timezone.utc)
         hatches_at = now + timedelta(seconds=final_hatch_seconds)
         try:
-            thread = await interaction.channel.create_thread(name=f"🥚｜{user.display_name}의 알", type=discord.ChannelType.private_thread, auto_archive_duration=10080)
-            await thread.add_user(user)
+            # ▼▼▼ [수정] 스레드 타입을 public_thread로 변경합니다. ▼▼▼
+            thread = await interaction.channel.create_thread(
+                name=f"🥚｜{user.display_name}의 알",
+                type=discord.ChannelType.public_thread, 
+                auto_archive_duration=10080
+            )
+            # ▲▲▲ [수정] 완료 ▲▲▲
+            
+            # 공개 스레드이므로 주인을 초대할 필요가 없습니다. (add_user 제거)
             pet_insert_res = await supabase.table('pets').insert({
                 'user_id': user.id, 'pet_species_id': pet_species_id, 'current_stage': 1, 'level': 0,
                 'hatches_at': hatches_at.isoformat(), 'created_at': now.isoformat(), 'thread_id': thread.id
