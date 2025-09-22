@@ -357,6 +357,17 @@ class EggSelectView(ui.View):
         await self.message.edit(content=f"'{egg_name}'을 선택했습니다. 부화 절차를 시작합니다...", view=self)
         await self.cog.start_incubation_process(interaction, egg_name)
 
+class PetSystem(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.active_views_loaded = False
+        self.hatch_checker.start()
+        self.hunger_and_stat_decay.start()
+
+    def cog_unload(self):
+        self.hatch_checker.cancel()
+        self.hunger_and_stat_decay.cancel()
+
     @commands.Cog.listener()
     async def on_ready(self):
         if self.active_views_loaded:
@@ -653,7 +664,7 @@ class EggSelectView(ui.View):
         for user_id, payload in user_ids_to_notify.items():
             new_level, points_awarded = None, None
             
-            if is_admin:
+            if is_admin: 
                 res = await supabase.rpc('admin_level_up_pet', {'p_user_id': user_id}).execute()
                 if res.data and res.data[0].get('leveled_up'):
                     new_level = res.data[0].get('new_level')
@@ -741,9 +752,11 @@ class EggSelectView(ui.View):
             await supabase.table('pets').update({'message_id': new_message.id}).eq('user_id', user_id).execute()
         else:
             await message.edit(embed=embed, view=view)
+            
     async def register_persistent_views(self):
         self.bot.add_view(IncubatorPanelView(self))
         logger.info("✅ 펫 시스템(인큐베이터)의 영구 View가 성공적으로 등록되었습니다.")
+        
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_incubator"):
         panel_name = panel_key.replace("panel_", "")
         if panel_info := get_panel_id(panel_name):
@@ -762,6 +775,7 @@ class EggSelectView(ui.View):
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_name, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} 패널을 #{channel.name} 채널에 성공적으로 생성했습니다.")
+
 class IncubatorPanelView(ui.View):
     def __init__(self, cog_instance: 'PetSystem'):
         super().__init__(timeout=None)
@@ -775,5 +789,6 @@ class IncubatorPanelView(ui.View):
         # ▼▼▼ [수정] self 대신 self.cog를 전달합니다. ▼▼▼
         view = EggSelectView(interaction.user, self.cog)
         await view.start(interaction)
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(PetSystem(bot))
