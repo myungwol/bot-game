@@ -10,7 +10,6 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List, Any
 import asyncio 
 import re 
-# ▼▼▼ [수정] collections 라이브러리에서 defaultdict를 import 합니다. ▼▼▼
 from collections import defaultdict
 
 from utils.database import (
@@ -21,6 +20,10 @@ from utils.database import (
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
+
+# ▼▼▼▼▼ 여기에 KST 상수를 추가하세요 ▼▼▼▼▼
+KST = timezone(timedelta(hours=9))
+# ▲▲▲▲▲ 여기까지 추가 ▲▲▲▲▲
 
 HATCH_TIMES = {
     "랜덤 펫 알": 172800, "불의알": 172800, "물의알": 172800,
