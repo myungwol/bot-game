@@ -332,7 +332,7 @@ class EconomyCore(commands.Cog):
                 if new_total_voice_minutes_today > 0 and new_total_voice_minutes_today % self.voice_time_requirement_minutes == 0:
                     today_str = datetime.now(KST).strftime('%Y-%m-%d')
                     cooldown_key = f"voice_reward_{today_str}_{new_total_voice_minutes_today}m"
-                    if await get_cooldown(user_id, cooldown_key) == 0:
+                    if await get_cooldown(user_id, cooldown_key) == 0: # OK
                         reward = random.randint(*self.voice_reward_range)
                         await update_wallet(user, reward)
                         await log_activity(user_id, 'reward_voice', coin_earned=reward)
