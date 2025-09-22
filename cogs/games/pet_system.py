@@ -670,16 +670,20 @@ class PetSystem(commands.Cog):
                 
                 if pet_res and pet_res.data:
                     current_level = pet_res.data.get('level', 1)
-                    current_xp = pet_res.data.get('xp', 0)
-                    logger.info(f"[펫 레벨업 디버깅] 현재 펫 상태: 레벨={current_level}, XP={current_xp}")
+                    current_xp_in_level = pet_res.data.get('xp', 0) # 현재 레벨에서 쌓인 경험치
+                    logger.info(f"[펫 레벨업 디버깅] 현재 펫 상태: 레벨={current_level}, XP={current_xp_in_level}")
 
-                    xp_for_next_level = calculate_xp_for_pet_level(current_level + 1)
-                    xp_to_add = (xp_for_next_level - current_xp) + 1
-                    logger.info(f"[펫 레벨업 디버깅] XP 계산: 다음 레벨 필요 XP={xp_for_next_level}, 추가할 XP={xp_to_add}")
+                    # ▼▼▼ 핵심 수정 ▼▼▼
+                    # 현재 레벨을 기준으로 레벨업에 필요한 총량을 계산합니다.
+                    xp_for_this_level = calculate_xp_for_pet_level(current_level)
+                    # 필요한 총량에서 현재 쌓인 경험치를 빼서, 레벨업까지 남은 경험치를 계산합니다.
+                    xp_to_add = (xp_for_this_level - current_xp_in_level) + 1
+                    # ▲▲▲ 핵심 수정 ▲▲▲
+
+                    logger.info(f"[펫 레벨업 디버깅] XP 계산: 이번 레벨 필요 XP={xp_for_this_level}, 추가할 XP={xp_to_add}")
 
                     if xp_to_add > 0:
                         res = await supabase.rpc('add_xp_to_pet', {'p_user_id': user_id, 'p_xp_to_add': xp_to_add}).execute()
-                        # 가장 중요한 로그: DB 함수의 실제 반환 값을 확인합니다.
                         logger.info(f"[펫 레벨업 디버깅] 'add_xp_to_pet' RPC 응답: {res.data}")
                         
                         if res.data and res.data[0].get('leveled_up'):
