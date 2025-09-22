@@ -10,6 +10,7 @@ from datetime import datetime, timezone, timedelta, time as dt_time
 from typing import Dict, Optional, List, Deque, Set
 from collections import deque, defaultdict
 
+# ▼▼▼ [수정] add_xp_to_user_and_pet 함수는 사용하지 않으므로, 원래의 add_xp를 그대로 사용합니다. ▼▼▼
 from utils.database import (
     get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
     save_config_to_db, get_all_user_stats, log_activity, get_cooldown, set_cooldown,
@@ -137,17 +138,13 @@ class EconomyCore(commands.Cog):
 
             requests_by_prefix = defaultdict(list)
             for req in requests:
-                # 'request'를 기준으로 분리하여 접두사를 얻습니다.
-                # 예: 'level_tier_update_request_...' -> 'level_tier_update'
                 prefix_parts = req['config_key'].split('_request')
                 if len(prefix_parts) > 1:
                     prefix = prefix_parts[0]
                     requests_by_prefix[prefix].append(req)
 
-            # --- 각 Cog에 작업 전달 ---
             if 'level_tier_update' in requests_by_prefix or 'job_advancement' in requests_by_prefix:
                 if level_cog := self.bot.get_cog("LevelSystem"):
-                    # LevelSystem은 두 종류의 요청을 모두 처리해야 하므로 전체 딕셔너리를 전달
                     await level_cog.process_level_requests(requests_by_prefix)
             
             if 'farm_ui_update' in requests_by_prefix:
@@ -179,7 +176,6 @@ class EconomyCore(commands.Cog):
                 await self.update_market_prices()
                 logger.info("[수동 업데이트] 모든 수동 업데이트 완료.")
             
-            # 처리된 요청 키 DB에서 삭제
             if keys_to_delete:
                 await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
 
@@ -228,8 +224,15 @@ class EconomyCore(commands.Cog):
 
                 xp_to_add = self.xp_from_chat * count
                 if xp_to_add > 0:
+                    # ▼▼▼ [수정] 펫 경험치 추가 로직 ▼▼▼
+                    # 1. 먼저 유저의 경험치를 올립니다.
                     xp_res = await supabase.rpc('add_xp', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
                     if xp_res.data: await self.handle_level_up_event(user, xp_res.data)
+
+                    # 2. 펫이 존재하고 알이 아니라면, 펫에게도 경험치를 줍니다.
+                    await supabase.rpc('add_xp_to_pet', {'p_user_id': user_id, 'p_xp_to_add': xp_to_add}).execute()
+                    # ▲▲▲ [수정] 완료 ▲▲▲
+
 
                 stats = await get_all_user_stats(user_id)
                 daily_stats = stats.get('daily', {})
@@ -317,12 +320,22 @@ class EconomyCore(commands.Cog):
 
             if logs_to_insert:
                 await supabase.table('user_activities').insert(logs_to_insert).execute()
-
+                
+                # ▼▼▼ [수정] 펫 경험치 추가 로직 ▼▼▼
+                # 1. 유저 경험치를 먼저 올립니다.
                 xp_update_tasks = [
                     supabase.rpc('add_xp', {'p_user_id': str(user_id), 'p_xp_to_add': xp_per_minute, 'p_source': 'voice'}).execute()
                     for user_id in users_to_reward
                 ]
                 xp_results = await asyncio.gather(*xp_update_tasks, return_exceptions=True)
+
+                # 2. 펫에게도 경험치를 줍니다.
+                pet_xp_tasks = [
+                    supabase.rpc('add_xp_to_pet', {'p_user_id': user_id, 'p_xp_to_add': xp_per_minute}).execute()
+                    for user_id in users_to_reward
+                ]
+                await asyncio.gather(*pet_xp_tasks, return_exceptions=True) # 결과는 무시
+                # ▲▲▲ [수정] 완료 ▲▲▲
 
                 for i, result in enumerate(xp_results):
                     if not isinstance(result, Exception) and hasattr(result, 'data') and result.data:
@@ -346,7 +359,6 @@ class EconomyCore(commands.Cog):
         game_config = get_config("GAME_CONFIG", {})
         job_advancement_levels = game_config.get("JOB_ADVANCEMENT_LEVELS", [50, 100])
         
-        # 'job_advancement_request'와 'level_tier_update_request' 키를 사용합니다.
         if new_level in job_advancement_levels:
             await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": time.time()})
         await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
@@ -463,4 +475,4 @@ class EconomyCore(commands.Cog):
         await self.bot.wait_until_ready()
 
 async def setup(bot: commands.Cog):
-    await bot.add_cog(EconomyCore(bot))
+    await bot.add_cog(EconomyCore(bot))```
