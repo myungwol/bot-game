@@ -11,7 +11,7 @@ from typing import Optional, Dict, List, Any
 
 from utils.database import (
     supabase, get_inventory, update_inventory, get_item_database,
-    save_panel_id, get_panel_id, get_embed_from_db
+    save_panel_id, get_panel_id, get_embed_from_db, set_cooldown, get_cooldown
 )
 from utils.helpers import format_embed_from_db
 
@@ -42,6 +42,78 @@ def create_bar(current: int, required: int, length: int = 10, full_char: str = '
 def calculate_xp_for_pet_level(level: int) -> int:
     if level <= 1: return 100
     return int(100 * (level ** 1.5))
+
+class PetUIView(ui.View):
+    def __init__(self, cog_instance: 'PetSystem', user_id: int):
+        super().__init__(timeout=None)
+        self.cog = cog_instance
+        self.user_id = user_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 자신의 펫만 돌볼 수 있습니다.", ephemeral=True, delete_after=5)
+            return False
+        return True
+
+    @ui.button(label="먹이주기", style=discord.ButtonStyle.success, emoji="🍖", custom_id="pet_feed")
+    async def feed_pet_button(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        inventory = await get_inventory(interaction.user)
+        feed_items = {name: qty for name, qty in inventory.items() if get_item_database().get(name, {}).get('effect_type') == 'pet_feed'}
+        
+        if not feed_items:
+            return await interaction.followup.send("❌ 펫에게 줄 수 있는 먹이가 없습니다.", ephemeral=True)
+
+        options = [discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in feed_items.items()]
+        
+        feed_select = ui.Select(placeholder="줄 먹이를 선택하세요...", options=options)
+
+        async def feed_callback(select_interaction: discord.Interaction):
+            await select_interaction.response.defer()
+            item_name = select_interaction.data['values'][0]
+            item_data = get_item_database().get(item_name, {})
+            hunger_to_add = item_data.get('power', 10)
+
+            await update_inventory(self.user_id, item_name, -1)
+            await supabase.rpc('increase_pet_hunger', {'p_user_id': self.user_id, 'p_amount': hunger_to_add}).execute()
+            
+            await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
+            await select_interaction.followup.send(f"🍖 {item_name}을(를) 주었습니다. 펫의 배가 든든해졌습니다!", ephemeral=True, delete_after=5)
+            await select_interaction.delete_original_response()
+
+        feed_select.callback = feed_callback
+        view = ui.View(timeout=60).add_item(feed_select)
+        await interaction.followup.send("어떤 먹이를 주시겠습니까?", view=view, ephemeral=True)
+
+    @ui.button(label="놀아주기", style=discord.ButtonStyle.primary, emoji="🎾", custom_id="pet_play")
+    async def play_with_pet_button(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        cooldown_key = f"daily_pet_play"
+        last_played = await get_cooldown(interaction.user.id, cooldown_key)
+        
+        today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        last_played_date = datetime.fromtimestamp(last_played, tz=timezone.utc).strftime('%Y-%m-%d')
+
+        if last_played > 0 and today_str == last_played_date:
+             return await interaction.followup.send("❌ 오늘은 이미 놀아주었습니다. 내일 다시 시도해주세요.", ephemeral=True)
+            
+        inventory = await get_inventory(interaction.user)
+        if inventory.get("공놀이 세트", 0) < 1:
+            return await interaction.followup.send("❌ '공놀이 세트' 아이템이 부족합니다.", ephemeral=True)
+
+        await update_inventory(self.user_id, "공놀이 세트", -1)
+        await supabase.rpc('increase_pet_friendship', {'p_user_id': self.user_id, 'p_amount': 1}).execute()
+        await set_cooldown(interaction.user.id, cooldown_key)
+
+        await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
+        await interaction.followup.send("❤️ 펫과 즐거운 시간을 보냈습니다! 친밀도가 1 올랐습니다.", ephemeral=True, delete_after=5)
+
+    @ui.button(label="새로고침", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="pet_refresh")
+    async def refresh_button(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer()
+        await self.cog.update_pet_ui(interaction.user.id, interaction.channel, interaction.message)
 
 class EggSelectView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'PetSystem'):
@@ -75,14 +147,23 @@ class EggSelectView(ui.View):
 
         await self.cog.start_incubation_process(interaction, egg_name)
 
-
 class PetSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.hatch_checker.start()
+        self.hunger_and_stat_decay.start()
 
     def cog_unload(self):
         self.hatch_checker.cancel()
+        self.hunger_and_stat_decay.cancel()
+
+    @tasks.loop(hours=1)
+    async def hunger_and_stat_decay(self):
+        try:
+            await supabase.rpc('decrease_all_pets_hunger', {'p_amount': 1}).execute()
+            await supabase.rpc('update_pet_stats_on_hunger').execute()
+        except Exception as e:
+            logger.error(f"펫 배고픔 감소 처리 중 오류: {e}", exc_info=True)
 
     @tasks.loop(seconds=30)
     async def hatch_checker(self):
@@ -162,7 +243,6 @@ class PetSystem(commands.Cog):
             logger.error(f"인큐베이션 시작 중 오류 (유저: {user.id}, 알: {egg_name}): {e}", exc_info=True)
             await interaction.edit_original_response(content="❌ 부화 절차를 시작하는 중 오류가 발생했습니다.", view=None)
     
-    # ▼▼▼ [수정] build_pet_ui_embed 함수 전체를 다시 교체합니다. ▼▼▼
     def build_pet_ui_embed(self, user: discord.Member, pet_data: Dict) -> discord.Embed:
         species_info = pet_data.get('pet_species')
         if not species_info:
@@ -201,6 +281,9 @@ class PetSystem(commands.Cog):
             
             xp_bar = create_bar(current_xp, xp_for_next_level)
             
+            hunger = pet_data.get('hunger', 0)
+            hunger_bar = create_bar(hunger, 100, full_char='🟧', empty_char='⬛')
+            
             friendship = pet_data.get('friendship', 0)
             friendship_bar = create_bar(friendship, 100, full_char='❤️', empty_char='🖤')
             
@@ -210,19 +293,19 @@ class PetSystem(commands.Cog):
                 f"**레벨:** {current_level}",
                 f"**경험치:** `{current_xp} / {xp_for_next_level}`",
                 f"{xp_bar}",
-                f"**친밀도:**",
+                f"**배고픔:** `{hunger} / 100`",
+                f"{hunger_bar}",
+                f"**친밀도:** `{friendship} / 100`",
                 f"{friendship_bar}"
             ]
             embed.description = "\n".join(description_parts)
             
-            # 스탯 필드를 한 줄에 모두 표시하도록 수정
             embed.add_field(name="❤️ 체력", value=str(pet_data['current_hp']), inline=True)
             embed.add_field(name="⚔️ 공격력", value=str(pet_data['current_attack']), inline=True)
             embed.add_field(name="🛡️ 방어력", value=str(pet_data['current_defense']), inline=True)
             embed.add_field(name="💨 스피드", value=str(pet_data['current_speed']), inline=True)
-            
+
         return embed
-    # ▲▲▲ [수정] 완료 ▲▲▲
 
     async def process_hatching(self, pet_data: Dict):
         user_id = int(pet_data['user_id'])
@@ -250,7 +333,7 @@ class PetSystem(commands.Cog):
             final_stats[stat_to_buff] += 1
             
         updated_pet_data_res = await supabase.table('pets').update({
-            'current_stage': 2, 'level': 1, 'xp': 0,
+            'current_stage': 2, 'level': 1, 'xp': 0, 'hunger': 100, 'friendship': 0,
             'current_hp': final_stats['hp'], 'current_attack': final_stats['attack'],
             'current_defense': final_stats['defense'], 'current_speed': final_stats['speed'],
             'nickname': species_info['species_name']
@@ -265,11 +348,24 @@ class PetSystem(commands.Cog):
                 message = await thread.fetch_message(pet_data['message_id'])
                 hatched_embed = self.build_pet_ui_embed(user, updated_pet_data)
                 
-                await message.edit(embed=hatched_embed, view=None) 
+                view = PetUIView(self, user_id)
+                await message.edit(embed=hatched_embed, view=view) 
+                
                 await thread.send(f"{user.mention} 님의 알이 부화했습니다!")
                 await thread.edit(name=f"🐾｜{species_info['species_name']}")
             except (discord.NotFound, discord.Forbidden) as e:
                 logger.error(f"부화 UI 업데이트 실패 (스레드: {thread.id}): {e}")
+
+    async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: discord.Message):
+        pet_data = await self.get_user_pet(user_id)
+        if not pet_data:
+            await message.edit(content="펫 정보를 찾을 수 없습니다.", embed=None, view=None)
+            return
+
+        user = self.bot.get_user(user_id)
+        embed = self.build_pet_ui_embed(user, pet_data)
+        view = PetUIView(self, user_id)
+        await message.edit(embed=embed, view=view)
 
     async def register_persistent_views(self):
         self.bot.add_view(IncubatorPanelView(self))
