@@ -254,7 +254,13 @@ class EconomyCore(commands.Cog):
                     xp_res = await supabase.rpc('add_xp', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
                     if xp_res.data: await self.handle_level_up_event(user, xp_res.data)
                     
-                    await supabase.rpc('add_xp_to_pet', {'p_user_id': user_id, 'p_xp_to_add': xp_to_add}).single().execute()
+                    pet_xp_res = await supabase.rpc('add_xp_to_pet', {'p_user_id': user_id, 'p_xp_to_add': xp_to_add}).execute()
+                    if pet_xp_res.data and pet_xp_res.data[0].get('leveled_up'):
+                        await save_config_to_db(f"pet_levelup_request_{user_id}", {
+                            "new_level": pet_xp_res.data[0].get('new_level'),
+                            "points_awarded": pet_xp_res.data[0].get('points_awarded')
+                        })
+                        await save_config_to_db(f"pet_evolution_check_request_{user_id}", time.time())
 
                 stats = await get_all_user_stats(user_id)
                 daily_stats = stats.get('daily', {})
@@ -325,9 +331,9 @@ class EconomyCore(commands.Cog):
             if logs_to_insert:
                 await supabase.table('user_activities').insert(logs_to_insert).execute()
                 xp_update_tasks = [supabase.rpc('add_xp', {'p_user_id': str(uid), 'p_xp_to_add': xp_per_minute, 'p_source': 'voice'}).execute() for uid in users_to_reward]
-                pet_xp_tasks = [supabase.rpc('add_xp_to_pet', {'p_user_id': uid, 'p_xp_to_add': xp_per_minute}).single().execute() for uid in users_to_reward]
+                pet_xp_tasks = [supabase.rpc('add_xp_to_pet', {'p_user_id': uid, 'p_xp_to_add': xp_per_minute}).execute() for uid in users_to_reward]
                 
-                xp_results, _ = await asyncio.gather(
+                xp_results, pet_xp_results = await asyncio.gather(
                     asyncio.gather(*xp_update_tasks, return_exceptions=True),
                     asyncio.gather(*pet_xp_tasks, return_exceptions=True)
                 )
@@ -337,6 +343,14 @@ class EconomyCore(commands.Cog):
                         user = self.bot.get_user(list(users_to_reward)[i])
                         if user: await self.handle_level_up_event(user, result.data)
                 
+                for i, result in enumerate(pet_xp_results):
+                    user_id_from_list = list(users_to_reward)[i]
+                    if not isinstance(result, Exception) and hasattr(result, 'data') and result.data and result.data[0].get('leveled_up'):
+                        await save_config_to_db(f"pet_levelup_request_{user_id_from_list}", {
+                            "new_level": result.data[0].get('new_level'),
+                            "points_awarded": result.data[0].get('points_awarded')
+                        })
+                        await save_config_to_db(f"pet_evolution_check_request_{user_id_from_list}", time.time())
         except Exception as e:
             logger.error(f"[음성 활동 추적] 순찰 중 오류 발생: {e}", exc_info=True)
         finally:
