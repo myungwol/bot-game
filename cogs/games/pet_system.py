@@ -16,7 +16,7 @@ from collections import defaultdict
 from utils.database import (
     supabase, get_inventory, update_inventory, get_item_database,
     save_panel_id, get_panel_id, get_embed_from_db, set_cooldown, get_cooldown,
-    save_config_to_db, delete_config_from_db
+    save_config_to_db, delete_config_from_db, get_id
 )
 from utils.helpers import format_embed_from_db
 
