@@ -269,7 +269,10 @@ class PetUIView(ui.View):
     async def play_with_pet_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         cooldown_key = f"daily_pet_play"
-        if await self.cog._is_play_on_cooldown(interaction.user.id):
+        
+        # ▼▼▼ 핵심 수정 ▼▼▼
+        pet_id = self.pet_data['id']
+        if await self.cog._is_play_on_cooldown(pet_id):
              return await interaction.followup.send("❌ 오늘은 이미 놀아주었습니다. 내일 다시 시도해주세요.", ephemeral=True)
         inventory = await get_inventory(interaction.user)
         if inventory.get("공놀이 세트", 0) < 1:
@@ -280,7 +283,8 @@ class PetUIView(ui.View):
         friendship_amount = 1; stat_increase_amount = 1
         await supabase.rpc('increase_pet_friendship_and_stats', {'p_user_id': self.user_id, 'p_friendship_amount': friendship_amount, 'p_stat_amount': stat_increase_amount}).execute()
 
-        await set_cooldown(interaction.user.id, cooldown_key)
+        # ▼▼▼ 핵심 수정 ▼▼▼
+        await set_cooldown(pet_id, cooldown_key)
         await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
         
         msg = await interaction.followup.send(f"❤️ 펫과 즐거운 시간을 보냈습니다! 친밀도가 {friendship_amount} 오르고 모든 스탯이 {stat_increase_amount} 상승했습니다.", ephemeral=True)
@@ -317,10 +321,6 @@ class PetUIView(ui.View):
         )
         await confirm_view.wait()
         if confirm_view.value is True:
-            cooldown_key = f"daily_pet_play"
-            await supabase.table('cooldowns').delete().eq('user_id', self.user_id).eq('cooldown_key', cooldown_key).execute()
-            logger.info(f"펫을 놓아주면서 {self.user_id}의 '{cooldown_key}' 쿨다운을 초기화했습니다.")
-            
             await supabase.table('pets').delete().eq('user_id', self.user_id).execute()
             await interaction.edit_original_response(content="펫을 자연으로 돌려보냈습니다...", view=None)
             await interaction.channel.send(f"{interaction.user.mention}님이 펫을 자연의 품으로 돌려보냈습니다.")
@@ -379,14 +379,16 @@ class PetSystem(commands.Cog):
         await self.reload_active_pet_views()
         self.active_views_loaded = True
 
-    async def _is_play_on_cooldown(self, user_id: int) -> bool:
+    async def _is_play_on_cooldown(self, pet_id: int) -> bool: # user_id -> pet_id
         cooldown_key = "daily_pet_play"
-        last_played = await get_cooldown(user_id, cooldown_key)
-        if last_played == 0:
+        last_played_timestamp = await get_cooldown(pet_id, cooldown_key) # user_id -> pet_id
+        if last_played_timestamp == 0:
             return False
-        today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-        last_played_date = datetime.fromtimestamp(last_played, tz=timezone.utc).strftime('%Y-%m-%d')
-        return today_str == last_played_date
+        
+        now_kst = datetime.now(KST)
+        last_played_kst = datetime.fromtimestamp(last_played_timestamp, tz=timezone.utc).astimezone(KST)
+        
+        return now_kst.date() == last_played_kst.date()
 
     async def _is_evolution_ready(self, pet_data: Dict, inventory: Dict) -> bool:
         if not pet_data: return False
@@ -443,7 +445,8 @@ class PetSystem(commands.Cog):
                 message_id = int(pet_data['message_id'])
                 user_inventory = inventories.get(user_id, {})
                 
-                cooldown_active = await self._is_play_on_cooldown(user_id)
+                # ▼▼▼ 핵심 수정 ▼▼▼
+                cooldown_active = await self._is_play_on_cooldown(pet_data['id'])
                 evo_ready = await self._is_evolution_ready(pet_data, user_inventory)
                 
                 view = PetUIView(self, user_id, pet_data, play_cooldown_active=cooldown_active, evolution_ready=evo_ready)
@@ -834,7 +837,8 @@ class PetSystem(commands.Cog):
             return
         user = self.bot.get_user(user_id)
         embed = self.build_pet_ui_embed(user, pet_data)
-        cooldown_active = await self._is_play_on_cooldown(user_id)
+        # ▼▼▼ 핵심 수정 ▼▼▼
+        cooldown_active = await self._is_play_on_cooldown(pet_data['id'])
         evo_ready = await self._is_evolution_ready(pet_data, inventory)
         view = PetUIView(self, user_id, pet_data, play_cooldown_active=cooldown_active, evolution_ready=evo_ready)
         if is_refresh:
