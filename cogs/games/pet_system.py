@@ -90,12 +90,15 @@ class StatAllocationView(ui.View):
 
         for key in ['hp', 'attack', 'defense', 'speed']:
             base = base_stats[key]
-            bonus = self.pet_data.get(f"bonus_{key}", 0)
+            # ▼▼▼ [수정] bonus_ -> natural_bonus_ 로 변경 ▼▼▼
+            natural_bonus = self.pet_data.get(f"natural_bonus_{key}", 0)
+            allocated = self.pet_data.get(f"allocated_{key}", 0)
             spent = self.spent_points[key]
-            total = base + bonus + spent
+            total = base + natural_bonus + allocated + spent
+            # ▼▼▼ [수정] 기본 스탯 표기를 (자연 성장 + 유저 분배) 형식으로 변경 ▼▼▼
             embed.add_field(
                 name=f"{stat_emojis[key]} {stat_names[key]}",
-                value=f"`{total}` (`{base+bonus}` + `{spent}`)",
+                value=f"`{total}` (`{base + natural_bonus}` + `{allocated + spent}`)",
                 inline=False
             )
         return embed
@@ -582,10 +585,34 @@ class PetSystem(commands.Cog):
             
             base_stats = self.get_base_stats(pet_data)
             
-            embed.add_field(name="❤️ 체력", value=f"{pet_data['current_hp']} (`{base_stats['hp']}`)", inline=True)
-            embed.add_field(name="⚔️ 공격력", value=f"{pet_data['current_attack']} (`{base_stats['attack']}`)", inline=True)
-            embed.add_field(name="🛡️ 방어력", value=f"{pet_data['current_defense']} (`{base_stats['defense']}`)", inline=True)
-            embed.add_field(name="💨 스피드", value=f"{pet_data['current_speed']} (`{base_stats['speed']}`)", inline=True)
+            # (레벨 성장 + 자연 보너스)를 기본 스탯으로 합산
+            base_with_natural_bonus = {
+                'hp': base_stats['hp'] + pet_data.get('natural_bonus_hp', 0),
+                'attack': base_stats['attack'] + pet_data.get('natural_bonus_attack', 0),
+                'defense': base_stats['defense'] + pet_data.get('natural_bonus_defense', 0),
+                'speed': base_stats['speed'] + pet_data.get('natural_bonus_speed', 0),
+            }
+            
+            # 유저가 분배한 스탯
+            allocated_stats = {
+                'hp': pet_data.get('allocated_hp', 0),
+                'attack': pet_data.get('allocated_attack', 0),
+                'defense': pet_data.get('allocated_defense', 0),
+                'speed': pet_data.get('allocated_speed', 0),
+            }
+
+            # 현재 스탯 (배고픔 페널티 등이 적용될 수 있음)
+            current_stats = {
+                'hp': pet_data['current_hp'],
+                'attack': pet_data['current_attack'],
+                'defense': pet_data['current_defense'],
+                'speed': pet_data['current_speed']
+            }
+
+            embed.add_field(name="❤️ 체력", value=f"{current_stats['hp']} (`{base_with_natural_bonus['hp']}` + `{allocated_stats['hp']}`)", inline=True)
+            embed.add_field(name="⚔️ 공격력", value=f"{current_stats['attack']} (`{base_with_natural_bonus['attack']}` + `{allocated_stats['attack']}`)", inline=True)
+            embed.add_field(name="🛡️ 방어력", value=f"{current_stats['defense']} (`{base_with_natural_bonus['defense']}` + `{allocated_stats['defense']}`)", inline=True)
+            embed.add_field(name="💨 스피드", value=f"{current_stats['speed']} (`{base_with_natural_bonus['speed']}` + `{allocated_stats['speed']}`)", inline=True)
         return embed
     async def process_hatching(self, pet_data: Dict):
         user_id = int(pet_data['user_id'])
@@ -598,20 +625,23 @@ class PetSystem(commands.Cog):
         species_info = pet_data['pet_species']
         
         final_stats = {"hp": species_info['base_hp'], "attack": species_info['base_attack'], "defense": species_info['base_defense'], "speed": species_info['base_speed']}
-        bonus_stats = {"hp": 0, "attack": 0, "defense": 0, "speed": 0}
+        # ▼▼▼ [수정] 부화 보너스를 natural_bonus_ 컬럼에 저장하도록 변경 ▼▼▼
+        natural_bonus_stats = {"hp": 0, "attack": 0, "defense": 0, "speed": 0}
         stats_keys = list(final_stats.keys())
         for _ in range(bonus_points):
             stat_to_increase = random.choice(stats_keys)
             final_stats[stat_to_increase] += 1
-            bonus_stats[stat_to_increase] += 1
+            natural_bonus_stats[stat_to_increase] += 1
             
         updated_pet_data_res = await supabase.table('pets').update({
             'current_stage': 2, 'level': 1, 'xp': 0, 'hunger': 100, 'friendship': 0,
             'current_hp': final_stats['hp'], 'current_attack': final_stats['attack'],
             'current_defense': final_stats['defense'], 'current_speed': final_stats['speed'],
             'nickname': species_info['species_name'],
-            'bonus_hp': bonus_stats['hp'], 'bonus_attack': bonus_stats['attack'],
-            'bonus_defense': bonus_stats['defense'], 'bonus_speed': bonus_stats['speed']
+            'natural_bonus_hp': natural_bonus_stats['hp'], 
+            'natural_bonus_attack': natural_bonus_stats['attack'],
+            'natural_bonus_defense': natural_bonus_stats['defense'], 
+            'natural_bonus_speed': natural_bonus_stats['speed']
         }).eq('id', pet_data['id']).execute()
         
         updated_pet_data = updated_pet_data_res.data[0]
@@ -622,7 +652,6 @@ class PetSystem(commands.Cog):
                 message = await thread.fetch_message(pet_data['message_id'])
                 hatched_embed = self.build_pet_ui_embed(user, updated_pet_data)
                 cooldown_active = await self._is_play_on_cooldown(user_id)
-                # 부화 시에는 인벤토리 정보가 불필요하므로 빈 딕셔너리 전달
                 evo_ready = await self._is_evolution_ready(updated_pet_data, {})
                 view = PetUIView(self, user_id, updated_pet_data, play_cooldown_active=cooldown_active, evolution_ready=evo_ready)
                 await message.edit(embed=hatched_embed, view=view) 
