@@ -294,18 +294,17 @@ class PetSystem(commands.Cog):
             embed = self.build_pet_ui_embed(user, pet_data)
             message = await thread.send(embed=embed)
             
-            # ▼▼▼ [수정] 재시도 루프(Retry Loop)로 시스템 메시지 삭제 ▼▼▼
-            for _ in range(5): # 최대 5번 시도
-                try:
-                    system_start_message = await thread.fetch_message(thread.id)
-                    if system_start_message and system_start_message.type == discord.MessageType.thread_starter_message:
+            # ▼▼▼ [수정] 스레드의 가장 오래된 메시지(첫 메시지)를 삭제하는 방식으로 변경 ▼▼▼
+            try:
+                # 스레드 기록에서 가장 오래된 메시지 1개를 가져옵니다.
+                history = [msg async for msg in thread.history(limit=1, oldest_first=True)]
+                if history:
+                    system_start_message = history[0]
+                    # 해당 메시지가 시스템 메시지 유형인지 확인하고 삭제합니다.
+                    if system_start_message.type == discord.MessageType.thread_starter_message:
                         await system_start_message.delete()
-                        break # 성공 시 루프 탈출
-                except discord.NotFound:
-                    await asyncio.sleep(0.5) # 메시지를 못 찾으면 0.5초 대기 후 재시도
-                except discord.Forbidden:
-                    logger.warning(f"스레드({thread.id})의 시스템 메시지를 삭제할 권한이 없습니다.")
-                    break
+            except (discord.NotFound, discord.Forbidden):
+                pass # 메시지를 찾을 수 없거나 권한이 없으면 무시
             # ▲▲▲ [수정] 완료 ▲▲▲
 
             await supabase.table('pets').update({'message_id': message.id}).eq('id', pet_data['id']).execute()
