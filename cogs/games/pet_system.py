@@ -665,23 +665,33 @@ class PetSystem(commands.Cog):
             new_level, points_awarded = None, None
             
             if is_admin:
-                # 1. 현재 펫의 레벨과 경험치를 직접 조회합니다.
+                logger.info(f"[펫 레벨업 디버깅] 유저 {user_id}의 관리자 레벨업 요청 처리 시작.")
                 pet_res = await supabase.table('pets').select('level, xp').eq('user_id', user_id).maybe_single().execute()
+                
                 if pet_res and pet_res.data:
                     current_level = pet_res.data.get('level', 1)
                     current_xp = pet_res.data.get('xp', 0)
-                    
-                    # 2. 다음 레벨업에 필요한 총 경험치를 계산합니다.
+                    logger.info(f"[펫 레벨업 디버깅] 현재 펫 상태: 레벨={current_level}, XP={current_xp}")
+
                     xp_for_next_level = calculate_xp_for_pet_level(current_level + 1)
-                    # 3. 레벨업에 필요한 경험치 양을 계산합니다 (+1은 확실한 레벨업을 보장).
                     xp_to_add = (xp_for_next_level - current_xp) + 1
-                    
+                    logger.info(f"[펫 레벨업 디버깅] XP 계산: 다음 레벨 필요 XP={xp_for_next_level}, 추가할 XP={xp_to_add}")
+
                     if xp_to_add > 0:
-                        # 4. 일반 경험치 추가 함수(add_xp_to_pet)를 호출하여 레벨업을 처리합니다.
                         res = await supabase.rpc('add_xp_to_pet', {'p_user_id': user_id, 'p_xp_to_add': xp_to_add}).execute()
+                        # 가장 중요한 로그: DB 함수의 실제 반환 값을 확인합니다.
+                        logger.info(f"[펫 레벨업 디버깅] 'add_xp_to_pet' RPC 응답: {res.data}")
+                        
                         if res.data and res.data[0].get('leveled_up'):
                             new_level = res.data[0].get('new_level')
                             points_awarded = res.data[0].get('points_awarded')
+                            logger.info(f"[펫 레벨업 디버깅] 레벨업 성공 감지: new_level={new_level}, points_awarded={points_awarded}")
+                        else:
+                            logger.warning(f"[펫 레벨업 디버깅] RPC 응답에서 'leveled_up'이 true가 아니거나 데이터가 없습니다.")
+                    else:
+                        logger.warning(f"[펫 레벨업 디버깅] 추가할 XP가 0 이하({xp_to_add})이므로 RPC 호출을 건너뜁니다.")
+                else:
+                    logger.warning(f"[펫 레벨업 디버깅] 유저 {user_id}의 펫 정보를 DB에서 찾을 수 없습니다.")
             else: 
                 if isinstance(payload, dict):
                     new_level = payload.get('new_level')
