@@ -60,17 +60,19 @@ async def delete_message_after(message: discord.InteractionMessage, delay: int):
         pass
         
 class StatAllocationView(ui.View):
-    # ▼▼▼ [수정] __init__에 message 파라미터를 추가하여 메시지 객체를 직접 받습니다. ▼▼▼
     def __init__(self, parent_view: 'PetUIView', message: discord.Message):
         super().__init__(timeout=180)
         self.parent_view = parent_view
         self.cog = parent_view.cog
         self.user = parent_view.cog.bot.get_user(parent_view.user_id)
         self.pet_data = parent_view.pet_data
-        self.message = message  # 부모 View의 메시지 객체를 저장
+        self.message = message
         
         self.points_to_spend = self.pet_data.get('stat_points', 0)
         self.spent_points = {'hp': 0, 'attack': 0, 'defense': 0, 'speed': 0}
+        
+        # ▼▼▼ [추가] 동시성 문제를 막기 위한 Lock 추가 ▼▼▼
+        self.lock = asyncio.Lock()
 
     async def start(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -104,13 +106,11 @@ class StatAllocationView(ui.View):
         self.clear_items()
         remaining_points = self.points_to_spend - sum(self.spent_points.values())
         
-        # 플러스 버튼
         self.add_item(self.create_stat_button('hp', 1, '➕❤️', 0, remaining_points <= 0))
         self.add_item(self.create_stat_button('attack', 1, '➕⚔️', 0, remaining_points <= 0))
         self.add_item(self.create_stat_button('defense', 1, '➕🛡️', 0, remaining_points <= 0))
         self.add_item(self.create_stat_button('speed', 1, '➕💨', 0, remaining_points <= 0))
         
-        # 마이너스 버튼
         self.add_item(self.create_stat_button('hp', -1, '➖❤️', 1, self.spent_points['hp'] <= 0))
         self.add_item(self.create_stat_button('attack', -1, '➖⚔️', 1, self.spent_points['attack'] <= 0))
         self.add_item(self.create_stat_button('defense', -1, '➖🛡️', 1, self.spent_points['defense'] <= 0))
@@ -129,39 +129,42 @@ class StatAllocationView(ui.View):
         btn.callback = self.on_stat_button_click
         return btn
 
+    # ▼▼▼ [수정] Lock을 사용하여 동시 클릭 방지 ▼▼▼
     async def on_stat_button_click(self, interaction: discord.Interaction):
-        _, stat, amount_str = interaction.data['custom_id'].split('_')
-        amount = int(amount_str)
-        
-        if amount > 0:
-            remaining_points = self.points_to_spend - sum(self.spent_points.values())
-            if remaining_points > 0:
-                self.spent_points[stat] += amount
-        else:
-            if self.spent_points[stat] > 0:
-                self.spent_points[stat] += amount
-        
-        self.build_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        async with self.lock:
+            _, stat, amount_str = interaction.data['custom_id'].split('_')
+            amount = int(amount_str)
+            
+            if amount > 0:
+                remaining_points = self.points_to_spend - sum(self.spent_points.values())
+                if remaining_points > 0:
+                    self.spent_points[stat] += amount
+            else:
+                if self.spent_points[stat] > 0:
+                    self.spent_points[stat] += amount
+            
+            self.build_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
+    # ▼▼▼ [수정] Lock을 사용하여 동시 클릭 방지 ▼▼▼
     async def on_confirm(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        try:
-            await supabase.rpc('allocate_pet_stat_points', {
-                'p_user_id': self.user.id,
-                'p_hp_points': self.spent_points['hp'],
-                'p_atk_points': self.spent_points['attack'],
-                'p_def_points': self.spent_points['defense'],
-                'p_spd_points': self.spent_points['speed']
-            }).execute()
-            
-            # ▼▼▼ [수정] self.parent_view.message 대신 저장해둔 self.message를 사용합니다. ▼▼▼
-            await self.cog.update_pet_ui(self.user.id, interaction.channel, self.message)
-            await interaction.delete_original_response()
-            
-        except Exception as e:
-            logger.error(f"스탯 포인트 분배 DB 업데이트 중 오류: {e}", exc_info=True)
-            await interaction.followup.send("❌ 스탯 분배 중 오류가 발생했습니다.", ephemeral=True)
+        async with self.lock:
+            await interaction.response.defer()
+            try:
+                await supabase.rpc('allocate_pet_stat_points', {
+                    'p_user_id': self.user.id,
+                    'p_hp_points': self.spent_points['hp'],
+                    'p_atk_points': self.spent_points['attack'],
+                    'p_def_points': self.spent_points['defense'],
+                    'p_spd_points': self.spent_points['speed']
+                }).execute()
+                
+                await self.cog.update_pet_ui(self.user.id, interaction.channel, self.message)
+                await interaction.delete_original_response()
+                
+            except Exception as e:
+                logger.error(f"스탯 포인트 분배 DB 업데이트 중 오류: {e}", exc_info=True)
+                await interaction.followup.send("❌ 스탯 분배 중 오류가 발생했습니다.", ephemeral=True)
 
     async def on_cancel(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -229,7 +232,6 @@ class PetUIView(ui.View):
 
     @ui.button(label="스탯 분배", style=discord.ButtonStyle.success, emoji="✨", row=0)
     async def allocate_stats_button(self, interaction: discord.Interaction, button: ui.Button):
-        # ▼▼▼ [수정] StatAllocationView 생성 시 interaction.message를 전달합니다. ▼▼▼
         allocation_view = StatAllocationView(self, interaction.message)
         await allocation_view.start(interaction)
 
