@@ -103,7 +103,6 @@ class EconomyCore(commands.Cog):
         if self.log_sender_task: self.log_sender_task.cancel()
         self.unified_request_dispatcher.cancel()
 
-    # ▼▼▼ [수정] 통합 요청 처리기에 관리자 요청 핸들링 로직 추가 ▼▼▼
     @tasks.loop(seconds=10.0)
     async def unified_request_dispatcher(self):
         try:
@@ -122,7 +121,6 @@ class EconomyCore(commands.Cog):
                     prefix = prefix_parts[0]
                     requests_by_prefix[prefix].append(req)
 
-            # --- 각 Cog에 작업 전달 ---
             if 'level_tier_update' in requests_by_prefix or 'job_advancement' in requests_by_prefix:
                 if level_cog := self.bot.get_cog("LevelSystem"):
                     await level_cog.process_level_requests(requests_by_prefix)
@@ -141,22 +139,6 @@ class EconomyCore(commands.Cog):
                 if panel_cog := self.bot.get_cog("PanelUpdater"):
                     await panel_cog.process_panel_regenerate_requests(requests_by_prefix['panel_regenerate'])
 
-            if 'pet_levelup' in requests_by_prefix:
-                if pet_cog := self.bot.get_cog("PetSystem"):
-                    await pet_cog.process_levelup_requests(requests_by_prefix['pet_levelup'])
-
-            # ▼▼▼ [추가] 관리자용 펫 레벨업 요청을 별도로 처리합니다. ▼▼▼
-            if 'pet_admin_levelup' in requests_by_prefix:
-                if pet_cog := self.bot.get_cog("PetSystem"):
-                    admin_requests = requests_by_prefix['pet_admin_levelup']
-                    # 관리자 요청은 payload가 없으므로 빈 딕셔너리를 전달합니다.
-                    await pet_cog.process_levelup_requests(admin_requests)
-
-            if 'pet_evolution_check' in requests_by_prefix:
-                 if pet_cog := self.bot.get_cog("PetSystem"):
-                    user_ids = {int(req['config_key'].split('_')[-1]) for req in requests_by_prefix['pet_evolution_check']}
-                    await pet_cog.check_and_process_auto_evolution(user_ids)
-            
             if 'config_reload' in requests_by_prefix:
                 logger.info("[CONFIG] 설정 새로고침 요청 감지...")
                 await load_bot_configs_from_db()
@@ -172,7 +154,6 @@ class EconomyCore(commands.Cog):
                 await self.update_market_prices()
                 logger.info("[수동 업데이트] 모든 수동 업데이트 완료.")
             
-            # --- 관리자 요청 처리 로직 추가 ---
             server_id_str = get_config("SERVER_ID")
             guild = self.bot.get_guild(int(server_id_str)) if server_id_str else None
 
@@ -208,30 +189,11 @@ class EconomyCore(commands.Cog):
                             except Exception as e:
                                 logger.error(f"[AdminBridge] XP/레벨 요청 처리 중 오류: {e}", exc_info=True)
             
-            if 'pet_levelup' in requests_by_prefix:
-                if pet_cog := self.bot.get_cog("PetSystem"):
-                    for req in requests_by_prefix['pet_levelup']:
-                        try:
-                            user_id = int(req['config_key'].split('_')[-1])
-                            res = await supabase.rpc('admin_level_up_pet', {'p_user_id': user_id}).single().execute()
-                            if res.data and res.data.get('leveled_up'):
-                                logger.info(f"[AdminBridge] {user_id}님의 펫 레벨업 처리 완료.")
-                                await pet_cog.notify_pet_level_up(
-                                    user_id, 
-                                    res.data.get('new_level'), 
-                                    res.data.get('points_awarded')
-                                )
-                            else:
-                                logger.warning(f"[AdminBridge] {user_id}님의 펫 레벨업 처리 실패 (RPC 결과 없음). 펫이 없거나 DB 오류일 수 있습니다.")
-                        except Exception as e:
-                            logger.error(f"[AdminBridge] 펫 레벨업 요청 처리 중 오류: {e}", exc_info=True)
-
             if keys_to_delete:
                 await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
 
         except Exception as e:
             logger.error(f"통합 요청 처리기에서 오류 발생: {e}", exc_info=True)
-    # ▲▲▲ [수정] 완료 ▲▲▲
 
     @unified_request_dispatcher.before_loop
     async def before_unified_dispatcher(self):
@@ -250,7 +212,6 @@ class EconomyCore(commands.Cog):
             except Exception as e:
                 logger.error(f"코인 지급 로그 발송 중 오류: {e}", exc_info=True)
             await asyncio.sleep(2)
-
 
     @tasks.loop(minutes=1)
     async def activity_log_loop(self):
@@ -279,15 +240,7 @@ class EconomyCore(commands.Cog):
                     xp_res = await supabase.rpc('add_xp', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
                     if xp_res.data: await self.handle_level_up_event(user, xp_res.data)
                     
-                    pet_xp_res = await supabase.rpc('add_xp_to_pet', {'p_user_id': user_id, 'p_xp_to_add': xp_to_add}).single().execute()
-                    if pet_xp_res.data and pet_xp_res.data.get('leveled_up'):
-                        # ▼▼▼ [수정] DB에 저장하는 값을 딕셔너리 형태로 변경 ▼▼▼
-                        await save_config_to_db(f"pet_levelup_request_{user_id}", {
-                            "new_level": pet_xp_res.data.get('new_level'),
-                            "points_awarded": pet_xp_res.data.get('points_awarded')
-                        })
-                        # ▲▲▲ [수정] 완료 ▲▲▲
-                        await save_config_to_db(f"pet_evolution_check_request_{user_id}", time.time())
+                    await supabase.rpc('add_xp_to_pet', {'p_user_id': user_id, 'p_xp_to_add': xp_to_add}).single().execute()
 
                 stats = await get_all_user_stats(user_id)
                 daily_stats = stats.get('daily', {})
@@ -358,11 +311,9 @@ class EconomyCore(commands.Cog):
             if logs_to_insert:
                 await supabase.table('user_activities').insert(logs_to_insert).execute()
                 xp_update_tasks = [supabase.rpc('add_xp', {'p_user_id': str(uid), 'p_xp_to_add': xp_per_minute, 'p_source': 'voice'}).execute() for uid in users_to_reward]
-                
-                # ▼▼▼ [수정] 펫 경험치 추가 후 진화 체크 로직 추가 ▼▼▼
                 pet_xp_tasks = [supabase.rpc('add_xp_to_pet', {'p_user_id': uid, 'p_xp_to_add': xp_per_minute}).single().execute() for uid in users_to_reward]
                 
-                xp_results, pet_xp_results = await asyncio.gather(
+                xp_results, _ = await asyncio.gather(
                     asyncio.gather(*xp_update_tasks, return_exceptions=True),
                     asyncio.gather(*pet_xp_tasks, return_exceptions=True)
                 )
@@ -372,16 +323,6 @@ class EconomyCore(commands.Cog):
                         user = self.bot.get_user(list(users_to_reward)[i])
                         if user: await self.handle_level_up_event(user, result.data)
                 
-                for i, result in enumerate(pet_xp_results):
-                    user_id_from_list = list(users_to_reward)[i]
-                    if not isinstance(result, Exception) and hasattr(result, 'data') and result.data and result.data.get('leveled_up'):
-                        # ▼▼▼ [수정] DB에 저장하는 값을 딕셔너리 형태로 변경 ▼▼▼
-                        await save_config_to_db(f"pet_levelup_request_{user_id_from_list}", {
-                            "new_level": result.data.get('new_level'),
-                            "points_awarded": result.data.get('points_awarded')
-                        })
-                        # ▲▲▲ [수정] 완료 ▲▲▲
-                        await save_config_to_db(f"pet_evolution_check_request_{user_id_from_list}", time.time())
         except Exception as e:
             logger.error(f"[음성 활동 추적] 순찰 중 오류 발생: {e}", exc_info=True)
         finally:
@@ -482,6 +423,3 @@ class EconomyCore(commands.Cog):
     @update_market_prices.before_loop
     async def before_update_market_prices(self):
         await self.bot.wait_until_ready()
-
-async def setup(bot: commands.Cog):
-    await bot.add_cog(EconomyCore(bot))
