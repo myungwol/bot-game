@@ -475,4 +475,4 @@ class EconomyCore(commands.Cog):
         await self.bot.wait_until_ready()
 
 async def setup(bot: commands.Cog):
-    await bot.add_cog(EconomyCore(bot))```
+    await bot.add_cog(EconomyCore(bot))
