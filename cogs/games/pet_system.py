@@ -710,20 +710,37 @@ class PetSystem(commands.Cog):
 
     async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded: int):
         pet_data = await self.get_user_pet(user_id)
-        if not pet_data or not (thread_id := pet_data.get('thread_id')):
+        if not pet_data:
             return
-        
-        if thread := self.bot.get_channel(thread_id):
-            user = self.bot.get_user(user_id)
-            if user:
-                await thread.send(f"🎉 {user.mention} 님의 펫이 **레벨 {new_level}** (으)로 성장했습니다! 스탯 포인트 **{points_awarded}**개를 획득했습니다. ✨")
-            
-            if message_id := pet_data.get('message_id'):
-                try:
-                    message = await thread.fetch_message(message_id)
-                    await self.update_pet_ui(user_id, thread, message)
-                except (discord.NotFound, discord.Forbidden):
-                    logger.warning(f"펫 레벨업 후 UI 업데이트 실패: 메시지(ID: {message_id})를 찾을 수 없습니다.")
+
+        user = self.bot.get_user(user_id)
+        if not user:
+            return
+
+        # 펫의 닉네임을 가져옵니다.
+        nickname = pet_data.get('nickname', '이름 없는 펫')
+
+        # 새로 설정한 로그 채널로 알림을 보냅니다.
+        log_channel_id = get_id("log_pet_levelup_channel_id")
+        if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
+            message_text = (
+                f"🎉 {user.mention}님의 '**{nickname}**'이(가) **레벨 {new_level}**(으)로 성장했습니다! "
+                f"스탯 포인트 **{points_awarded}**개를 획득했습니다. ✨"
+            )
+            try:
+                await log_channel.send(message_text)
+            except Exception as e:
+                logger.error(f"펫 레벨업 로그 전송 실패: {e}")
+
+        # 기존 펫 스레드의 UI는 계속 업데이트합니다.
+        if thread_id := pet_data.get('thread_id'):
+            if thread := self.bot.get_channel(thread_id):
+                if message_id := pet_data.get('message_id'):
+                    try:
+                        message = await thread.fetch_message(message_id)
+                        await self.update_pet_ui(user_id, thread, message)
+                    except (discord.NotFound, discord.Forbidden):
+                        logger.warning(f"펫 레벨업 후 UI 업데이트 실패: 메시지(ID: {message_id})를 찾을 수 없습니다.")
 
     async def check_and_process_auto_evolution(self, user_ids: set):
         for user_id in user_ids:
