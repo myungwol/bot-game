@@ -8,6 +8,8 @@ import random
 import os
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List, Any
+import asyncio # <-- [핵심 수정] asyncio import 추가
+import re # <-- [핵심 수정] re import 추가
 
 from utils.database import (
     supabase, get_inventory, update_inventory, get_item_database,
@@ -39,7 +41,6 @@ def create_bar(current: int, required: int, length: int = 10, full_char: str = '
 
 def calculate_xp_for_pet_level(level: int) -> int:
     if level <= 1: return 100
-    # 경험치 상승폭을 1.3으로 완만하게 조정
     return int(100 * (level ** 1.3))
 
 async def delete_message_after(message: discord.InteractionMessage, delay: int):
@@ -106,10 +107,8 @@ class PetUIView(ui.View):
         feed_items = {name: qty for name, qty in inventory.items() if get_item_database().get(name, {}).get('effect_type') == 'pet_feed'}
         if not feed_items:
             return await interaction.followup.send("❌ 펫에게 줄 수 있는 먹이가 없습니다.", ephemeral=True)
-
         options = [discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in feed_items.items()]
         feed_select = ui.Select(placeholder="줄 먹이를 선택하세요...", options=options)
-
         async def feed_callback(select_interaction: discord.Interaction):
             await select_interaction.response.defer()
             item_name = select_interaction.data['values'][0]
@@ -121,7 +120,6 @@ class PetUIView(ui.View):
             msg = await select_interaction.followup.send(f"🍖 {item_name}을(를) 주었습니다. 펫의 배가 든든해졌습니다!", ephemeral=True)
             self.cog.bot.loop.create_task(delete_message_after(msg, 5))
             await select_interaction.delete_original_response()
-
         feed_select.callback = feed_callback
         view = ui.View(timeout=60).add_item(feed_select)
         await interaction.followup.send("어떤 먹이를 주시겠습니까?", view=view, ephemeral=True)
@@ -135,11 +133,9 @@ class PetUIView(ui.View):
         last_played_date = datetime.fromtimestamp(last_played, tz=timezone.utc).strftime('%Y-%m-%d')
         if last_played > 0 and today_str == last_played_date:
              return await interaction.followup.send("❌ 오늘은 이미 놀아주었습니다. 내일 다시 시도해주세요.", ephemeral=True)
-            
         inventory = await get_inventory(interaction.user)
         if inventory.get("공놀이 세트", 0) < 1:
             return await interaction.followup.send("❌ '공놀이 세트' 아이템이 부족합니다.", ephemeral=True)
-
         await update_inventory(self.user_id, "공놀이 세트", -1)
         await supabase.rpc('increase_pet_friendship', {'p_user_id': self.user_id, 'p_amount': 1}).execute()
         await set_cooldown(interaction.user.id, cooldown_key)
@@ -152,7 +148,6 @@ class PetUIView(ui.View):
         modal = PetNicknameModal()
         await interaction.response.send_modal(modal)
         await modal.wait()
-        
         if modal.nickname_input.value:
             new_name = modal.nickname_input.value
             await supabase.table('pets').update({'nickname': new_name}).eq('user_id', self.user_id).execute()
@@ -273,7 +268,6 @@ class PetSystem(commands.Cog):
         if not (species_res and species_res.data):
             await interaction.followup.send("❌ 펫 기본 정보가 없습니다. 관리자에게 문의해주세요.", ephemeral=True)
             return
-            
         pet_species_data = species_res.data
         pet_species_id = pet_species_data['id']
         base_hatch_seconds = HATCH_TIMES.get(egg_name, 172800)
@@ -281,56 +275,37 @@ class PetSystem(commands.Cog):
         final_hatch_seconds = base_hatch_seconds + random_offset_seconds
         now = datetime.now(timezone.utc)
         hatches_at = now + timedelta(seconds=final_hatch_seconds)
-        
         try:
-            # ▼▼▼ [수정] 닉네임에서 스레드 이름에 사용할 수 없는 문자를 제거합니다. ▼▼▼
-            import re
-            # 알파벳, 숫자, 한글, 일부 기본 특수문자(_-)를 제외한 모든 문자를 제거
             safe_name = re.sub(r'[^\w\s\-_가-힣]', '', user.display_name).strip()
-            if not safe_name:  # 모든 문자가 제거된 경우
+            if not safe_name:
                 safe_name = f"유저-{user.id}"
-            
             thread_name = f"🥚｜{safe_name}의 알"
-            # ▲▲▲ [수정] 완료 ▲▲▲
-
-            thread = await interaction.channel.create_thread(
-                name=thread_name, # 정규화된 이름 사용
-                type=discord.ChannelType.public_thread,
-                auto_archive_duration=10080
-            )
+            thread = await interaction.channel.create_thread(name=thread_name, type=discord.ChannelType.public_thread, auto_archive_duration=10080)
             await thread.add_user(user)
-
             pet_insert_res = await supabase.table('pets').insert({
                 'user_id': user.id, 'pet_species_id': pet_species_id, 'current_stage': 1, 'level': 0,
                 'hatches_at': hatches_at.isoformat(), 'created_at': now.isoformat(), 'thread_id': thread.id
             }).execute()
             await update_inventory(user.id, egg_name, -1)
-            
             pet_data = pet_insert_res.data[0]
             pet_data['pet_species'] = pet_species_data
-
             embed = self.build_pet_ui_embed(user, pet_data)
             message = await thread.send(embed=embed)
-
             await asyncio.sleep(1) 
             try:
                 system_start_message = await thread.fetch_message(thread.id)
                 if system_start_message and system_start_message.type == discord.MessageType.thread_starter_message:
                     await system_start_message.delete()
             except (discord.NotFound, discord.Forbidden):
-                pass 
-
+                pass
             await supabase.table('pets').update({'message_id': message.id}).eq('id', pet_data['id']).execute()
             await interaction.edit_original_response(content=f"✅ 부화가 시작되었습니다! {thread.mention} 채널에서 확인해주세요.", view=None)
-
         except Exception as e:
             logger.error(f"인큐베이션 시작 중 오류 (유저: {user.id}, 알: {egg_name}): {e}", exc_info=True)
-            # 오류가 발생하면, 생성되었을 수 있는 스레드를 삭제하려고 시도합니다.
             if 'thread' in locals() and thread:
                 try:
                     await thread.delete()
-                except (discord.NotFound, discord.Forbidden):
-                    pass
+                except (discord.NotFound, discord.Forbidden): pass
             await interaction.edit_original_response(content="❌ 부화 절차를 시작하는 중 오류가 발생했습니다.", view=None)
     def build_pet_ui_embed(self, user: discord.Member, pet_data: Dict) -> discord.Embed:
         species_info = pet_data.get('pet_species')
