@@ -32,6 +32,14 @@ ELEMENT_TO_FILENAME = {
     "불": "fire", "물": "water", "전기": "electric", "풀": "grass",
     "빛": "light", "어둠": "dark"
 }
+ELEMENT_TO_TYPE = {
+    "불": "공격형",
+    "물": "방어형",
+    "전기": "스피드형",
+    "풀": "체력형",
+    "빛": "체력/방어형",
+    "어둠": "공격/스피드형"
+}
 
 def create_bar(current: int, required: int, length: int = 10, full_char: str = '▓', empty_char: str = '░') -> str:
     if required <= 0: return full_char * length
@@ -78,7 +86,8 @@ class ConfirmReleaseView(ui.View):
         await interaction.response.defer()
 
 class PetUIView(ui.View):
-    def __init__(self, cog_instance: 'PetSystem', user_id: int, pet_data: Dict):
+    # ▼▼▼ [수정] __init__에 play_cooldown_active 파라미터 추가 ▼▼▼
+    def __init__(self, cog_instance: 'PetSystem', user_id: int, pet_data: Dict, play_cooldown_active: bool):
         super().__init__(timeout=None)
         self.cog = cog_instance
         self.user_id = user_id
@@ -92,6 +101,9 @@ class PetUIView(ui.View):
 
         if self.pet_data.get('hunger', 0) >= 100:
             self.feed_pet_button.disabled = True
+        
+        # ▼▼▼ [추가] 쿨다운 상태에 따라 '놀아주기' 버튼 비활성화 ▼▼▼
+        self.play_with_pet_button.disabled = play_cooldown_active
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         try:
@@ -133,19 +145,29 @@ class PetUIView(ui.View):
     async def play_with_pet_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         cooldown_key = f"daily_pet_play"
-        last_played = await get_cooldown(interaction.user.id, cooldown_key)
-        today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-        last_played_date = datetime.fromtimestamp(last_played, tz=timezone.utc).strftime('%Y-%m-%d')
-        if last_played > 0 and today_str == last_played_date:
+        # 버튼이 활성화 되어있더라도, 이중 확인을 위해 서버사이드 쿨다운 체크는 유지합니다.
+        if await self.cog._is_play_on_cooldown(interaction.user.id):
              return await interaction.followup.send("❌ 오늘은 이미 놀아주었습니다. 내일 다시 시도해주세요.", ephemeral=True)
         inventory = await get_inventory(interaction.user)
         if inventory.get("공놀이 세트", 0) < 1:
             return await interaction.followup.send("❌ '공놀이 세트' 아이템이 부족합니다.", ephemeral=True)
+            
         await update_inventory(self.user_id, "공놀이 세트", -1)
-        await supabase.rpc('increase_pet_friendship', {'p_user_id': self.user_id, 'p_amount': 1}).execute()
+        
+        # ▼▼▼ [수정] 친밀도와 모든 스탯을 함께 1씩 올립니다. ▼▼▼
+        friendship_amount = 1
+        stat_increase_amount = 1
+        await supabase.rpc('increase_pet_friendship_and_stats', {
+            'p_user_id': self.user_id, 
+            'p_friendship_amount': friendship_amount, 
+            'p_stat_amount': stat_increase_amount
+        }).execute()
+
         await set_cooldown(interaction.user.id, cooldown_key)
         await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
-        msg = await interaction.followup.send("❤️ 펫과 즐거운 시간을 보냈습니다! 친밀도가 1 올랐습니다.", ephemeral=True)
+        
+        # ▼▼▼ [수정] 스탯 상승에 대한 안내 메시지 추가 ▼▼▼
+        msg = await interaction.followup.send(f"❤️ 펫과 즐거운 시간을 보냈습니다! 친밀도가 {friendship_amount} 오르고 모든 스탯이 {stat_increase_amount} 상승했습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_message_after(msg, 5))
 
     @ui.button(label="이름 변경", style=discord.ButtonStyle.secondary, emoji="✏️", row=1)
@@ -233,6 +255,17 @@ class PetSystem(commands.Cog):
             return
         await self.reload_active_pet_views()
         self.active_views_loaded = True
+
+    # ▼▼▼ [추가] 쿨다운 상태를 확인하는 헬퍼 함수 ▼▼▼
+    async def _is_play_on_cooldown(self, user_id: int) -> bool:
+        cooldown_key = "daily_pet_play"
+        last_played = await get_cooldown(user_id, cooldown_key)
+        if last_played == 0:
+            return False
+        today_str = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        last_played_date = datetime.fromtimestamp(last_played, tz=timezone.utc).strftime('%Y-%m-%d')
+        return today_str == last_played_date
+
     async def reload_active_pet_views(self):
         logger.info("[PetSystem] 활성화된 펫 관리 UI를 다시 로드합니다...")
         try:
@@ -246,7 +279,8 @@ class PetSystem(commands.Cog):
                 message_id = int(pet['message_id'])
                 pet_data = await self.get_user_pet(user_id)
                 if pet_data:
-                    view = PetUIView(self, user_id, pet_data)
+                    cooldown_active = await self._is_play_on_cooldown(user_id)
+                    view = PetUIView(self, user_id, pet_data, play_cooldown_active=cooldown_active)
                     self.bot.add_view(view, message_id=message_id)
                     reloaded_count += 1
             logger.info(f"[PetSystem] 총 {reloaded_count}개의 펫 관리 UI를 성공적으로 다시 로드했습니다.")
@@ -354,9 +388,13 @@ class PetSystem(commands.Cog):
             friendship = pet_data.get('friendship', 0)
             friendship_bar = create_bar(friendship, 100, full_char='❤️', empty_char='🖤')
             
+            element = species_info['element']
+            pet_type = ELEMENT_TO_TYPE.get(element, "알 수 없음")
+            
             description_parts = [
                 f"**이름:** {nickname}",
-                f"**속성:** {species_info['element']}",
+                f"**속성:** {element}",
+                f"**타입:** {pet_type}",
                 f"**레벨:** {current_level}",
                 "",
                 f"**경험치:** `{current_xp} / {xp_for_next_level}`",
@@ -370,7 +408,6 @@ class PetSystem(commands.Cog):
             ]
             embed.description = "\n".join(description_parts)
 
-            # ▼▼▼ [수정] 스탯 표시를 원래의 개별 필드 방식으로 복원합니다. ▼▼▼
             embed.add_field(name="❤️ 체력", value=str(pet_data['current_hp']), inline=True)
             embed.add_field(name="⚔️ 공격력", value=str(pet_data['current_attack']), inline=True)
             embed.add_field(name="🛡️ 방어력", value=str(pet_data['current_defense']), inline=True)
@@ -401,7 +438,8 @@ class PetSystem(commands.Cog):
             try:
                 message = await thread.fetch_message(pet_data['message_id'])
                 hatched_embed = self.build_pet_ui_embed(user, updated_pet_data)
-                view = PetUIView(self, user_id, updated_pet_data)
+                cooldown_active = await self._is_play_on_cooldown(user_id)
+                view = PetUIView(self, user_id, updated_pet_data, play_cooldown_active=cooldown_active)
                 await message.edit(embed=hatched_embed, view=view) 
                 await thread.send(f"{user.mention} 님의 알이 부화했습니다!")
                 await thread.edit(name=f"🐾｜{species_info['species_name']}")
@@ -414,7 +452,8 @@ class PetSystem(commands.Cog):
             return
         user = self.bot.get_user(user_id)
         embed = self.build_pet_ui_embed(user, pet_data)
-        view = PetUIView(self, user_id, pet_data)
+        cooldown_active = await self._is_play_on_cooldown(user_id)
+        view = PetUIView(self, user_id, pet_data, play_cooldown_active=cooldown_active)
         if is_refresh:
             try: await message.delete()
             except (discord.NotFound, discord.Forbidden): pass
