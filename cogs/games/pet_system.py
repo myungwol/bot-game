@@ -379,9 +379,9 @@ class PetSystem(commands.Cog):
         await self.reload_active_pet_views()
         self.active_views_loaded = True
 
-    async def _is_play_on_cooldown(self, pet_id: int) -> bool: # user_id -> pet_id
+    async def _is_play_on_cooldown(self, pet_id: int) -> bool:
         cooldown_key = "daily_pet_play"
-        last_played_timestamp = await get_cooldown(pet_id, cooldown_key) # user_id -> pet_id
+        last_played_timestamp = await get_cooldown(pet_id, cooldown_key) # OK
         if last_played_timestamp == 0:
             return False
         
