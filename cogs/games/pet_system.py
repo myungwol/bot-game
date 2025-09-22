@@ -28,7 +28,6 @@ EGG_TO_ELEMENT = {
 }
 ELEMENTS = ["불", "물", "전기", "풀", "빛", "어둠"]
 
-# ▼▼▼ [추가] DB 속성 이름과 이미지 파일명 앞부분을 매핑합니다. ▼▼▼
 ELEMENT_TO_FILENAME = {
     "불": "fire", "물": "water", "전기": "electric", "풀": "grass",
     "빛": "light", "어둠": "dark"
@@ -140,7 +139,7 @@ class PetSystem(commands.Cog):
             await update_inventory(user.id, egg_name, -1)
 
             pet_data = pet_insert_res.data
-            pet_data['pet_species'] = pet_species_data # 수동으로 species 정보 추가
+            pet_data['pet_species'] = pet_species_data
 
             embed = self.build_pet_ui_embed(user, pet_data)
             message = await thread.send(embed=embed)
@@ -153,7 +152,6 @@ class PetSystem(commands.Cog):
             logger.error(f"인큐베이션 시작 중 오류 (유저: {user.id}, 알: {egg_name}): {e}", exc_info=True)
             await interaction.edit_original_response(content="❌ 부화 절차를 시작하는 중 오류가 발생했습니다.", view=None)
     
-    # ▼▼▼ [수정] build_incubation_embed 와 build_hatched_pet_embed 를 하나로 통합 ▼▼▼
     def build_pet_ui_embed(self, user: discord.Member, pet_data: Dict) -> discord.Embed:
         species_info = pet_data.get('pet_species')
         if not species_info:
@@ -161,18 +159,15 @@ class PetSystem(commands.Cog):
 
         current_stage = pet_data['current_stage']
         
-        # --- 이미지 URL 동적 생성 ---
         storage_base_url = f"{os.environ.get('SUPABASE_URL')}/storage/v1/object/public/pet_images"
         element_filename = ELEMENT_TO_FILENAME.get(species_info['element'], 'unknown')
         image_url = f"{storage_base_url}/{element_filename}_{current_stage}.png"
 
-        # --- UI 분기 처리 ---
-        if current_stage == 1: # 알 상태
+        if current_stage == 1:
             embed = discord.Embed(title="🥚 알 부화 진행 중...", color=0xFAFAFA)
             embed.set_author(name=f"{user.display_name}님의 알", icon_url=user.display_avatar.url if user.display_avatar else None)
             embed.set_thumbnail(url=image_url)
             
-            # DB에 egg_name 컬럼이 없으므로, species_info로 유추
             egg_name = f"{species_info['element']}의알"
             embed.add_field(name="부화 중인 알", value=f"`{egg_name}`", inline=False)
             
@@ -180,7 +175,7 @@ class PetSystem(commands.Cog):
             embed.add_field(name="예상 부화 시간", value=f"{discord.utils.format_dt(hatches_at, style='R')}", inline=False)
             embed.set_footer(text="시간이 되면 자동으로 부화합니다.")
 
-        else: # 부화 후 상태
+        else:
             stage_info_json = species_info.get('stage_info', {})
             stage_name = stage_info_json.get(str(current_stage), {}).get('name', '알 수 없는 단계')
 
@@ -197,7 +192,6 @@ class PetSystem(commands.Cog):
             embed.add_field(name="💨 스피드", value=str(pet_data['current_speed']), inline=True)
 
         return embed
-    # ▲▲▲ [수정] 완료 ▲▲▲
 
     async def process_hatching(self, pet_data: Dict):
         user_id = int(pet_data['user_id'])
@@ -208,7 +202,7 @@ class PetSystem(commands.Cog):
 
         created_at = datetime.fromisoformat(pet_data['created_at'])
         hatches_at = datetime.fromisoformat(pet_data['hatches_at'])
-        base_duration = timedelta(seconds=172800) # 2일 기본
+        base_duration = timedelta(seconds=172800)
         
         bonus_duration = (hatches_at - created_at) - base_duration
         bonus_points = max(0, int(bonus_duration.total_seconds() / 3600))
@@ -224,20 +218,21 @@ class PetSystem(commands.Cog):
             stat_to_buff = random.choice(stats_keys)
             final_stats[stat_to_buff] += 1
             
-        updated_pet_data = await supabase.table('pets').update({
+        updated_pet_data_res = await supabase.table('pets').update({
             'current_stage': 2, 'level': 1, 'xp': 0,
             'current_hp': final_stats['hp'], 'current_attack': final_stats['attack'],
             'current_defense': final_stats['defense'], 'current_speed': final_stats['speed'],
             'nickname': species_info['species_name']
         }).eq('id', pet_data['id']).select().single().execute()
         
-        updated_pet_data.data['pet_species'] = species_info # species 정보 다시 합치기
+        updated_pet_data = updated_pet_data_res.data
+        updated_pet_data['pet_species'] = species_info
 
         thread = self.bot.get_channel(pet_data['thread_id'])
         if thread:
             try:
                 message = await thread.fetch_message(pet_data['message_id'])
-                hatched_embed = self.build_pet_ui_embed(user, updated_pet_data.data)
+                hatched_embed = self.build_pet_ui_embed(user, updated_pet_data)
                 
                 await message.edit(embed=hatched_embed, view=None) 
                 await thread.send(f"{user.mention} 님의 알이 부화했습니다!")
@@ -245,14 +240,40 @@ class PetSystem(commands.Cog):
             except (discord.NotFound, discord.Forbidden) as e:
                 logger.error(f"부화 UI 업데이트 실패 (스레드: {thread.id}): {e}")
 
+    # ▼▼▼ [추가] regenerate_panel 함수 ▼▼▼
+    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_incubator"):
+        """지정된 채널에 펫 인큐베이터 패널을 (재)생성합니다."""
+        panel_name = panel_key.replace("panel_", "")
+        
+        if panel_info := get_panel_id(panel_name):
+            if old_channel_id := panel_info.get("channel_id"):
+                if old_channel := self.bot.get_channel(old_channel_id):
+                    try:
+                        old_message = await old_channel.fetch_message(panel_info["message_id"])
+                        await old_message.delete()
+                    except (discord.NotFound, discord.Forbidden):
+                        pass
+        
+        embed_data = await get_embed_from_db(panel_key)
+        if not embed_data:
+            logger.error(f"DB에서 '{panel_key}'에 대한 임베드 데이터를 찾을 수 없어 패널 생성을 중단합니다.")
+            return
+
+        embed = discord.Embed.from_dict(embed_data)
+        view = IncubatorPanelView(self)
+        
+        new_message = await channel.send(embed=embed, view=view)
+        await save_panel_id(panel_name, new_message.id, channel.id)
+        logger.info(f"✅ {panel_key} 패널을 #{channel.name} 채널에 성공적으로 생성했습니다.")
+    # ▲▲▲ [추가] 완료 ▲▲▲
+
 class IncubatorPanelView(ui.View):
     def __init__(self, cog_instance: 'PetSystem'):
         super().__init__(timeout=None)
         self.cog = cog_instance
 
     @ui.button(label="알 부화시키기", style=discord.ButtonStyle.secondary, emoji="🥚", custom_id="incubator_start")
-    async def start_incubation_button(self, interaction: discord.Interaction):
-        # 1인 1펫 규칙 확인
+    async def start_incubation_button(self, interaction: discord.Interaction, button: ui.Button):
         if await self.cog.get_user_pet(interaction.user.id):
             await interaction.response.send_message("❌ 이미 펫을 소유하고 있습니다. 펫은 한 마리만 키울 수 있습니다.", ephemeral=True, delete_after=5)
             return
