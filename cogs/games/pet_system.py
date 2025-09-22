@@ -59,7 +59,6 @@ async def delete_message_after(message: discord.InteractionMessage, delay: int):
     except (discord.NotFound, discord.Forbidden):
         pass
         
-# ▼▼▼ [추가] 스탯 분배를 위한 새로운 View ▼▼▼
 class StatAllocationView(ui.View):
     def __init__(self, parent_view: 'PetUIView'):
         super().__init__(timeout=180)
@@ -128,12 +127,23 @@ class StatAllocationView(ui.View):
         btn.callback = self.on_stat_button_click
         return btn
 
+    # ▼▼▼ [수정] 스탯 포인트 증감 시 유효성 검사 로직 추가 ▼▼▼
     async def on_stat_button_click(self, interaction: discord.Interaction):
         _, stat, amount_str = interaction.data['custom_id'].split('_')
         amount = int(amount_str)
         
-        self.spent_points[stat] += amount
+        # 플러스 버튼 클릭 시
+        if amount > 0:
+            remaining_points = self.points_to_spend - sum(self.spent_points.values())
+            if remaining_points > 0:
+                self.spent_points[stat] += amount
+        # 마이너스 버튼 클릭 시
+        else:
+            if self.spent_points[stat] > 0:
+                self.spent_points[stat] += amount
         
+        # UI 재생성 및 업데이트
+        self.build_components()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
     async def on_confirm(self, interaction: discord.Interaction):
@@ -197,14 +207,12 @@ class PetUIView(ui.View):
         self.rename_pet_button.custom_id = f"pet_rename:{user_id}"
         self.release_pet_button.custom_id = f"pet_release:{user_id}"
         self.refresh_button.custom_id = f"pet_refresh:{user_id}"
-        # ▼▼▼ [추가] 스탯 분배 버튼 ▼▼▼
         self.allocate_stats_button.custom_id = f"pet_allocate_stats:{user_id}"
 
         if self.pet_data.get('hunger', 0) >= 100:
             self.feed_pet_button.disabled = True
         
         self.play_with_pet_button.disabled = play_cooldown_active
-        # ▼▼▼ [추가] 스탯 포인트가 없으면 스탯 분배 버튼 비활성화 ▼▼▼
         self.allocate_stats_button.disabled = self.pet_data.get('stat_points', 0) <= 0
 
 
@@ -220,7 +228,6 @@ class PetUIView(ui.View):
             await interaction.response.send_message("❌ 잘못된 상호작용입니다.", ephemeral=True, delete_after=5)
             return False
 
-    # ▼▼▼ [추가] 스탯 분배 버튼 콜백 ▼▼▼
     @ui.button(label="스탯 분배", style=discord.ButtonStyle.success, emoji="✨", row=0)
     async def allocate_stats_button(self, interaction: discord.Interaction, button: ui.Button):
         allocation_view = StatAllocationView(self)
@@ -457,7 +464,6 @@ class PetSystem(commands.Cog):
                 except (discord.NotFound, discord.Forbidden): pass
             await interaction.edit_original_response(content="❌ 부화 절차를 시작하는 중 오류가 발생했습니다.", view=None)
             
-    # ▼▼▼ [추가] 기본 스탯 계산 함수 ▼▼▼
     def get_base_stats(self, pet_data: Dict) -> Dict[str, int]:
         species_info = pet_data.get('pet_species', {})
         level = pet_data.get('level', 1)
@@ -508,7 +514,6 @@ class PetSystem(commands.Cog):
             element = species_info['element']
             pet_type = ELEMENT_TO_TYPE.get(element, "알 수 없음")
             
-            # ▼▼▼ [수정] 스탯 포인트 표시 추가 ▼▼▼
             stat_points = pet_data.get('stat_points', 0)
             
             description_parts = [
@@ -532,7 +537,6 @@ class PetSystem(commands.Cog):
 
             embed.description = "\n".join(description_parts)
             
-            # ▼▼▼ [수정] 스탯 표시를 '총 (기본)' 형식으로 변경 ▼▼▼
             base_stats = self.get_base_stats(pet_data)
             
             embed.add_field(name="❤️ 체력", value=f"{pet_data['current_hp']} (`{base_stats['hp']}`)", inline=True)
@@ -550,7 +554,6 @@ class PetSystem(commands.Cog):
         bonus_points = max(0, int(bonus_duration.total_seconds() / 3600))
         species_info = pet_data['pet_species']
         
-        # ▼▼▼ [수정] 부화 시 보너스 스탯을 bonus_ 컬럼에 저장하도록 변경 ▼▼▼
         final_stats = {"hp": species_info['base_hp'], "attack": species_info['base_attack'], "defense": species_info['base_defense'], "speed": species_info['base_speed']}
         bonus_stats = {"hp": 0, "attack": 0, "defense": 0, "speed": 0}
         stats_keys = list(final_stats.keys())
@@ -583,7 +586,6 @@ class PetSystem(commands.Cog):
             except (discord.NotFound, discord.Forbidden) as e:
                 logger.error(f"부화 UI 업데이트 실패 (스레드: {thread.id}): {e}")
     
-    # ▼▼▼ [추가] 레벨업 요청 처리 및 알림 함수 ▼▼▼
     async def process_levelup_requests(self, requests: List[Dict]):
         user_ids_to_notify = {int(req['config_key'].split('_')[-1]): req['config_value'] for req in requests}
         
