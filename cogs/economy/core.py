@@ -116,10 +116,14 @@ class EconomyCore(commands.Cog):
 
             requests_by_prefix = defaultdict(list)
             for req in requests:
+                # --- [로깅 추가 1] ---
+                logger.info(f"[Dispatcher-Debug] 감지된 요청 키: {req['config_key']}")
                 prefix_parts = req['config_key'].split('_request')
                 if len(prefix_parts) > 1:
                     prefix = prefix_parts[0]
                     requests_by_prefix[prefix].append(req)
+                    # --- [로깅 추가 2] ---
+                    logger.info(f"[Dispatcher-Debug] '{req['config_key']}' -> 접두사 '{prefix}'로 분류됨.")
 
             if 'level_tier_update' in requests_by_prefix or 'job_advancement' in requests_by_prefix:
                 if level_cog := self.bot.get_cog("LevelSystem"):
@@ -159,6 +163,8 @@ class EconomyCore(commands.Cog):
                     await pet_cog.process_levelup_requests(requests_by_prefix['pet_levelup'])
 
             if 'pet_admin_levelup' in requests_by_prefix:
+                # --- [로깅 추가 3] ---
+                logger.info(f"[Dispatcher-Debug] 'pet_admin_levelup' 접두사 감지! PetSystem으로 전달합니다.")
                 if pet_cog := self.bot.get_cog("PetSystem"):
                     admin_requests = requests_by_prefix['pet_admin_levelup']
                     await pet_cog.process_levelup_requests(admin_requests, is_admin=True)
