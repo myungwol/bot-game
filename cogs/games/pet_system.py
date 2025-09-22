@@ -292,8 +292,15 @@ class PetUIView(ui.View):
 
     @ui.button(label="진화", style=discord.ButtonStyle.success, emoji="🌟", row=0)
     async def evolve_button(self, interaction: discord.Interaction, button: ui.Button):
+        # 1. 먼저 defer()를 호출하여 상호작용 시간을 확보합니다.
         await interaction.response.defer()
-        await self.cog.handle_evolution(interaction, interaction.message)
+        
+        # 2. 실제 진화 로직을 호출하고, 결과를 받습니다.
+        success = await self.cog.handle_evolution(interaction.user.id, interaction.channel)
+        
+        # 3. 결과에 따라 followup으로 최종 응답을 보냅니다.
+        if not success:
+            await interaction.followup.send("❌ 진화 조건을 만족하지 못했습니다. 레벨과 필요 아이템을 확인해주세요.", ephemeral=True, delete_after=10)
 
     @ui.button(label="이름 변경", style=discord.ButtonStyle.secondary, emoji="✏️", row=1)
     async def rename_pet_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -821,14 +828,15 @@ class PetSystem(commands.Cog):
                 except (discord.NotFound, discord.Forbidden):
                     pass
 
-    async def handle_evolution(self, interaction: discord.Interaction, message: discord.Message):
-        user_id = interaction.user.id
+    async def handle_evolution(self, user_id: int, channel: discord.TextChannel) -> bool:
         res = await supabase.rpc('attempt_pet_evolution', {'p_user_id': user_id}).single().execute()
         
         if res.data and res.data.get('success'):
+            # 진화 알림 함수는 interaction 대신 user_id와 결과 데이터를 받도록 합니다.
             await self.notify_pet_evolution(user_id, res.data.get('new_stage'), res.data.get('points_granted'))
+            return True
         else:
-            await interaction.followup.send("❌ 진화 조건을 만족하지 못했습니다. 레벨과 필요 아이템을 확인해주세요.", ephemeral=True, delete_after=10)
+            return False
 
     async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: discord.Message, is_refresh: bool = False):
         pet_data, inventory = await asyncio.gather(self.get_user_pet(user_id), get_inventory(self.bot.get_user(user_id)))
