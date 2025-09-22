@@ -633,7 +633,6 @@ class PetSystem(commands.Cog):
             }
 
             # 능력치 3x1 그리드 + 마지막 한 칸
-            embed.add_field(name="\u200b", value="**능력치**", inline=False) # 능력치 섹션 제목 역할
             embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)", inline=True)
             embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)", inline=True)
             embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)", inline=True)
