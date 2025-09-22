@@ -154,6 +154,20 @@ class EconomyCore(commands.Cog):
                 await self.update_market_prices()
                 logger.info("[수동 업데이트] 모든 수동 업데이트 완료.")
             
+            if 'pet_levelup' in requests_by_prefix:
+                if pet_cog := self.bot.get_cog("PetSystem"):
+                    await pet_cog.process_levelup_requests(requests_by_prefix['pet_levelup'])
+
+            if 'pet_admin_levelup' in requests_by_prefix:
+                if pet_cog := self.bot.get_cog("PetSystem"):
+                    admin_requests = requests_by_prefix['pet_admin_levelup']
+                    await pet_cog.process_levelup_requests(admin_requests, is_admin=True)
+
+            if 'pet_evolution_check' in requests_by_prefix:
+                 if pet_cog := self.bot.get_cog("PetSystem"):
+                    user_ids = {int(req['config_key'].split('_')[-1]) for req in requests_by_prefix['pet_evolution_check']}
+                    await pet_cog.check_and_process_auto_evolution(user_ids)
+
             server_id_str = get_config("SERVER_ID")
             guild = self.bot.get_guild(int(server_id_str)) if server_id_str else None
 
@@ -423,3 +437,6 @@ class EconomyCore(commands.Cog):
     @update_market_prices.before_loop
     async def before_update_market_prices(self):
         await self.bot.wait_until_ready()
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(EconomyCore(bot))
