@@ -701,11 +701,11 @@ class PetSystem(commands.Cog):
         for user_id, payload in user_ids_to_notify.items():
             new_level, points_awarded = None, None
             
-            if is_admin: 
-                res = await supabase.rpc('admin_level_up_pet', {'p_user_id': user_id}).single().execute()
-                if res.data and res.data.get('leveled_up'):
-                    new_level = res.data.get('new_level')
-                    points_awarded = res.data.get('points_awarded')
+            if is_admin:
+                res = await supabase.rpc('admin_level_up_pet', {'p_user_id': user_id}).execute()
+                if res.data and res.data[0].get('leveled_up'):
+                    new_level = res.data[0].get('new_level')
+                    points_awarded = res.data[0].get('points_awarded')
             else: 
                 if isinstance(payload, dict):
                     new_level = payload.get('new_level')
