@@ -126,6 +126,7 @@ class PetSystem(commands.Cog):
             )
             await thread.add_user(user)
 
+            # ▼▼▼ [수정] .select().single() 제거 ▼▼▼
             pet_insert_res = await supabase.table('pets').insert({
                 'user_id': user.id,
                 'pet_species_id': pet_species_id,
@@ -134,12 +135,15 @@ class PetSystem(commands.Cog):
                 'hatches_at': hatches_at.isoformat(),
                 'created_at': now.isoformat(),
                 'thread_id': thread.id
-            }).select().single().execute()
+            }).execute()
+            # ▲▲▲ [수정] 완료 ▲▲▲
 
             await update_inventory(user.id, egg_name, -1)
-
-            pet_data = pet_insert_res.data
+            
+            # ▼▼▼ [수정] 결과가 리스트이므로 첫 번째 요소를 가져옵니다. ▼▼▼
+            pet_data = pet_insert_res.data[0]
             pet_data['pet_species'] = pet_species_data
+            # ▲▲▲ [수정] 완료 ▲▲▲
 
             embed = self.build_pet_ui_embed(user, pet_data)
             message = await thread.send(embed=embed)
@@ -218,15 +222,18 @@ class PetSystem(commands.Cog):
             stat_to_buff = random.choice(stats_keys)
             final_stats[stat_to_buff] += 1
             
+        # ▼▼▼ [수정] .select().single() 제거 ▼▼▼
         updated_pet_data_res = await supabase.table('pets').update({
             'current_stage': 2, 'level': 1, 'xp': 0,
             'current_hp': final_stats['hp'], 'current_attack': final_stats['attack'],
             'current_defense': final_stats['defense'], 'current_speed': final_stats['speed'],
             'nickname': species_info['species_name']
-        }).eq('id', pet_data['id']).select().single().execute()
+        }).eq('id', pet_data['id']).execute()
         
-        updated_pet_data = updated_pet_data_res.data
+        # ▼▼▼ [수정] 결과가 리스트이므로 첫 번째 요소를 가져옵니다. ▼▼▼
+        updated_pet_data = updated_pet_data_res.data[0]
         updated_pet_data['pet_species'] = species_info
+        # ▲▲▲ [수정] 완료 ▲▲▲
 
         thread = self.bot.get_channel(pet_data['thread_id'])
         if thread:
@@ -240,9 +247,7 @@ class PetSystem(commands.Cog):
             except (discord.NotFound, discord.Forbidden) as e:
                 logger.error(f"부화 UI 업데이트 실패 (스레드: {thread.id}): {e}")
 
-    # ▼▼▼ [추가] regenerate_panel 함수 ▼▼▼
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_incubator"):
-        """지정된 채널에 펫 인큐베이터 패널을 (재)생성합니다."""
         panel_name = panel_key.replace("panel_", "")
         
         if panel_info := get_panel_id(panel_name):
@@ -265,7 +270,6 @@ class PetSystem(commands.Cog):
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_name, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} 패널을 #{channel.name} 채널에 성공적으로 생성했습니다.")
-    # ▲▲▲ [추가] 완료 ▲▲▲
 
 class IncubatorPanelView(ui.View):
     def __init__(self, cog_instance: 'PetSystem'):
