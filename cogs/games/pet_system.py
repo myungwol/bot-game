@@ -591,7 +591,7 @@ class PetSystem(commands.Cog):
 
             # ▼▼▼ 최종 그리드 레이아웃 적용 ▼▼▼
             # 1행
-            embed.add_field(name="단계", value=f"**{stage_name}**: {species_info['species_name']}", inline=True)
+            embed.add_field(name="단계", value=f"**{stage_name}**", inline=True)
             embed.add_field(name="타입", value=f"{ELEMENT_TO_TYPE.get(species_info['element'], '알 수 없음')}", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) # 줄 맞춤
 
