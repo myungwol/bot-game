@@ -284,16 +284,13 @@ class PetSystem(commands.Cog):
                 safe_name = f"유저-{user.id}"
             thread_name = f"🥚｜{safe_name}의 알"
             
-            # --- 로깅 1: 스레드 생성 시도 ---
-            logger.info(f"스레드 생성 시도: 이름='{thread_name}', 타입=public")
             thread = await interaction.channel.create_thread(
                 name=thread_name,
                 type=discord.ChannelType.public_thread,
                 auto_archive_duration=10080
             )
-            logger.info(f"스레드 생성 성공: ID={thread.id}, OwnerID={thread.owner_id}")
-            
             await thread.add_user(user)
+
             pet_insert_res = await supabase.table('pets').insert({
                 'user_id': user.id, 'pet_species_id': pet_species_id, 'current_stage': 1, 'level': 0,
                 'hatches_at': hatches_at.isoformat(), 'created_at': now.isoformat(), 'thread_id': thread.id
@@ -306,37 +303,20 @@ class PetSystem(commands.Cog):
             embed = self.build_pet_ui_embed(user, pet_data)
             message = await thread.send(embed=embed)
 
-            # --- 로깅 2: 시스템 메시지 삭제 로직 시작 ---
-            logger.info(f"스레드(ID: {thread.id})의 시스템 메시지 삭제를 시작합니다.")
-            
-            # 재시도 루프(Retry Loop)로 시스템 메시지 삭제
-            deleted = False
-            for i in range(5): # 최대 5번 (약 2.5초) 시도
+            # ▼▼▼ [핵심 수정] 스레드 내부가 아닌, 원래 채널(interaction.channel)에서 메시지를 찾습니다. ▼▼▼
+            for i in range(5):
                 try:
-                    logger.info(f"삭제 시도 #{i+1}: thread.fetch_message({thread.id}) 실행")
-                    system_start_message = await thread.fetch_message(thread.id)
-                    
-                    # --- 로깅 3: 메시지 fetch 성공 시 정보 로깅 ---
-                    logger.info(f"메시지 fetch 성공: ID={system_start_message.id}, Type={system_start_message.type}")
-
-                    if system_start_message.type == discord.MessageType.thread_starter_message:
-                        await system_start_message.delete()
-                        logger.info("시스템 메시지를 성공적으로 삭제했습니다.")
-                        deleted = True
-                        break 
+                    # thread.fetch_message -> interaction.channel.fetch_message
+                    system_start_message = await interaction.channel.fetch_message(thread.id)
+                    await system_start_message.delete()
+                    logger.info(f"스레드 생성 시스템 메시지(ID: {thread.id})를 성공적으로 삭제했습니다.")
+                    break 
                 except discord.NotFound:
-                    logger.warning(f"삭제 시도 #{i+1}: 메시지를 찾지 못했습니다 (NotFound). 0.5초 후 재시도합니다.")
                     await asyncio.sleep(0.5)
                 except discord.Forbidden:
-                    logger.error(f"삭제 시도 #{i+1}: 메시지를 삭제할 권한이 없습니다 (Forbidden). 루프를 중단합니다.")
+                    logger.warning(f"시스템 메시지(ID: {thread.id})를 삭제할 권한이 없습니다.")
                     break
-                except Exception as e:
-                    logger.error(f"삭제 시도 #{i+1}: 예상치 못한 오류 발생 - {type(e).__name__}: {e}")
-                    break
-            
-            if not deleted:
-                logger.error("최종적으로 시스템 메시지 삭제에 실패했습니다.")
-            # --- 로깅 종료 ---
+            # ▲▲▲ [수정] 완료 ▲▲▲
 
             await supabase.table('pets').update({'message_id': message.id}).eq('id', pet_data['id']).execute()
             await interaction.edit_original_response(content=f"✅ 부화가 시작되었습니다! {thread.mention} 채널에서 확인해주세요.", view=None)
