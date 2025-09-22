@@ -377,6 +377,30 @@ class PetSystem(commands.Cog):
         last_played_date = datetime.fromtimestamp(last_played, tz=timezone.utc).strftime('%Y-%m-%d')
         return today_str == last_played_date
 
+    # ▼▼▼ [추가] _is_evolution_ready 함수 추가 ▼▼▼
+    async def _is_evolution_ready(self, pet_data: Dict, inventory: Dict) -> bool:
+        if not pet_data: return False
+        
+        species_info = pet_data.get('pet_species')
+        if not species_info: return False
+
+        next_stage_num = pet_data['current_stage'] + 1
+        stage_info_json = species_info.get('stage_info', {})
+        next_stage_info = stage_info_json.get(str(next_stage_num))
+
+        if not next_stage_info: return False
+
+        if 'item' not in next_stage_info: return False
+
+        if pet_data['level'] < next_stage_info['level_req']: return False
+        
+        required_item = next_stage_info['item']
+        required_qty = next_stage_info['qty']
+        
+        if inventory.get(required_item, 0) < required_qty: return False
+
+        return True
+
     # ▼▼▼ [수정] reload_active_pet_views 함수 수정 ▼▼▼
     async def reload_active_pet_views(self):
         logger.info("[PetSystem] 활성화된 펫 관리 UI를 다시 로드합니다...")
@@ -598,33 +622,14 @@ class PetSystem(commands.Cog):
                 message = await thread.fetch_message(pet_data['message_id'])
                 hatched_embed = self.build_pet_ui_embed(user, updated_pet_data)
                 cooldown_active = await self._is_play_on_cooldown(user_id)
-                view = PetUIView(self, user_id, updated_pet_data, play_cooldown_active=cooldown_active)
+                # 부화 시에는 인벤토리 정보가 불필요하므로 빈 딕셔너리 전달
+                evo_ready = await self._is_evolution_ready(updated_pet_data, {})
+                view = PetUIView(self, user_id, updated_pet_data, play_cooldown_active=cooldown_active, evolution_ready=evo_ready)
                 await message.edit(embed=hatched_embed, view=view) 
                 await thread.send(f"{user.mention} 님의 알이 부화했습니다!")
                 await thread.edit(name=f"🐾｜{species_info['species_name']}")
             except (discord.NotFound, discord.Forbidden) as e:
                 logger.error(f"부화 UI 업데이트 실패 (스레드: {thread.id}): {e}")
-
-    # ▼▼▼ [추가] 진화 처리 핸들러 ▼▼▼
-    async def handle_evolution(self, interaction: discord.Interaction, message: discord.Message):
-        user_id = interaction.user.id
-        res = await supabase.rpc('attempt_pet_evolution', {'p_user_id': user_id}).single().execute()
-        
-        if res.data and res.data.get('success'):
-            new_stage_num = res.data.get('new_stage')
-            points_granted = res.data.get('points_granted')
-            
-            pet_data = await self.get_user_pet(user_id)
-            species_info = pet_data.get('pet_species', {})
-            stage_info_json = species_info.get('stage_info', {})
-            new_stage_name = stage_info_json.get(str(new_stage_num), {}).get('name', '새로운 모습')
-            
-            await interaction.channel.send(f"🌟 {interaction.user.mention}님의 펫이 **{new_stage_name}**(으)로 진화했습니다! 스탯 포인트 **{points_granted}**개를 획득했습니다!")
-            
-            # 진화 후 UI 즉시 업데이트
-            await self.update_pet_ui(user_id, interaction.channel, message)
-        else:
-            await interaction.followup.send("❌ 진화 조건을 만족하지 못했습니다. 레벨과 필요 아이템을 확인해주세요.", ephemeral=True, delete_after=10)
     
     async def process_levelup_requests(self, requests: List[Dict]):
         user_ids_to_notify = {int(req['config_key'].split('_')[-1]): req['config_value'] for req in requests}
@@ -652,14 +657,15 @@ class PetSystem(commands.Cog):
                     logger.warning(f"펫 레벨업 후 UI 업데이트 실패: 메시지(ID: {message_id})를 찾을 수 없습니다.")
 
     async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: discord.Message, is_refresh: bool = False):
-        pet_data = await self.get_user_pet(user_id)
+        pet_data, inventory = await asyncio.gather(self.get_user_pet(user_id), get_inventory(self.bot.get_user(user_id)))
         if not pet_data:
             await message.edit(content="펫 정보를 찾을 수 없습니다.", embed=None, view=None)
             return
         user = self.bot.get_user(user_id)
         embed = self.build_pet_ui_embed(user, pet_data)
         cooldown_active = await self._is_play_on_cooldown(user_id)
-        view = PetUIView(self, user_id, pet_data, play_cooldown_active=cooldown_active)
+        evo_ready = await self._is_evolution_ready(pet_data, inventory)
+        view = PetUIView(self, user_id, pet_data, play_cooldown_active=cooldown_active, evolution_ready=evo_ready)
         if is_refresh:
             try: await message.delete()
             except (discord.NotFound, discord.Forbidden): pass
