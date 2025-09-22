@@ -88,7 +88,14 @@ class MyBot(commands.Bot):
         for path in glob(f'{cogs_dir}/**/*.py', recursive=True):
             if '__init__' in path:
                 continue
+            
+            # ▼▼▼ [수정] AdminBridge.py 파일은 로드하지 않도록 예외 처리 ▼▼▼
             extension_path = path.replace('.py', '').replace(os.path.sep, '.')
+            if 'AdminBridge' in extension_path:
+                logger.info(f"ℹ️ AdminBridge Cog 로드를 건너뜁니다 (EconomyCore로 통합됨).")
+                continue
+            # ▲▲▲ [수정] 완료 ▲▲▲
+
             try:
                 await self.load_extension(extension_path)
                 logger.info(f'✅ Cog 로드 성공: {extension_path}')
@@ -97,7 +104,6 @@ class MyBot(commands.Bot):
                 logger.error(f'❌ Cog 로드 실패: {extension_path} | {e}', exc_info=True)
                 failed_count += 1
         logger.info(f"------ [ Cog 로드 완료 | 성공: {loaded_count} / 실패: {failed_count} ] ------")
-# ▲▲▲ 복구 끝 ▲▲▲
 
 bot = MyBot(command_prefix="/", intents=intents)
 
