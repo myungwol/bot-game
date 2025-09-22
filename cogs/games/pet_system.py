@@ -194,7 +194,6 @@ class ConfirmReleaseView(ui.View):
         await interaction.response.defer()
 
 class PetUIView(ui.View):
-    # ▼▼▼ [수정] __init__에 evolution_ready 파라미터 추가 ▼▼▼
     def __init__(self, cog_instance: 'PetSystem', user_id: int, pet_data: Dict, play_cooldown_active: bool, evolution_ready: bool):
         super().__init__(timeout=None)
         self.cog = cog_instance
@@ -207,7 +206,6 @@ class PetUIView(ui.View):
         self.release_pet_button.custom_id = f"pet_release:{user_id}"
         self.refresh_button.custom_id = f"pet_refresh:{user_id}"
         self.allocate_stats_button.custom_id = f"pet_allocate_stats:{user_id}"
-        # ▼▼▼ [추가] 진화 버튼 ▼▼▼
         self.evolve_button.custom_id = f"pet_evolve:{user_id}"
 
         if self.pet_data.get('hunger', 0) >= 100:
@@ -215,8 +213,6 @@ class PetUIView(ui.View):
         
         self.play_with_pet_button.disabled = play_cooldown_active
         self.allocate_stats_button.disabled = self.pet_data.get('stat_points', 0) <= 0
-        
-        # ▼▼▼ [추가] 진화 준비 상태에 따라 버튼 비활성화 ▼▼▼
         self.evolve_button.disabled = not evolution_ready
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -281,7 +277,6 @@ class PetUIView(ui.View):
         msg = await interaction.followup.send(f"❤️ 펫과 즐거운 시간을 보냈습니다! 친밀도가 {friendship_amount} 오르고 모든 스탯이 {stat_increase_amount} 상승했습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_message_after(msg, 5))
 
-    # ▼▼▼ [추가] 진화 버튼 콜백 ▼▼▼
     @ui.button(label="진화", style=discord.ButtonStyle.success, emoji="🌟", row=0)
     async def evolve_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer()
@@ -382,47 +377,38 @@ class PetSystem(commands.Cog):
         last_played_date = datetime.fromtimestamp(last_played, tz=timezone.utc).strftime('%Y-%m-%d')
         return today_str == last_played_date
 
-    async def _is_evolution_ready(self, pet_data: Dict, inventory: Dict) -> bool:
-        if not pet_data: return False
-        
-        species_info = pet_data.get('pet_species')
-        if not species_info: return False
-
-        next_stage_num = pet_data['current_stage'] + 1
-        stage_info_json = species_info.get('stage_info', {})
-        next_stage_info = stage_info_json.get(str(next_stage_num))
-
-        if not next_stage_info: return False # 마지막 단계
-
-        # 아이템이 필요한 진화 단계만 버튼으로 활성화
-        if 'item' not in next_stage_info: return False
-
-        if pet_data['level'] < next_stage_info['level_req']: return False
-        
-        required_item = next_stage_info['item']
-        required_qty = next_stage_info['qty']
-        
-        if inventory.get(required_item, 0) < required_qty: return False
-
-        return True
-        
+    # ▼▼▼ [수정] reload_active_pet_views 함수 수정 ▼▼▼
     async def reload_active_pet_views(self):
         logger.info("[PetSystem] 활성화된 펫 관리 UI를 다시 로드합니다...")
         try:
-            res = await supabase.table('pets').select('user_id, message_id').gt('current_stage', 1).not_.is_('message_id', 'null').execute()
+            res = await supabase.table('pets').select('*, pet_species(*)').gt('current_stage', 1).not_.is_('message_id', 'null').execute()
             if not res.data:
                 logger.info("[PetSystem] 다시 로드할 활성 펫 UI가 없습니다.")
                 return
+
+            all_user_ids = [int(pet['user_id']) for pet in res.data]
+            inventories = {}
+            if all_user_ids:
+                inv_res = await supabase.table('inventories').select('user_id, item_name, quantity').in_('user_id', all_user_ids).execute()
+                if inv_res.data:
+                    for item in inv_res.data:
+                        uid = int(item['user_id'])
+                        if uid not in inventories:
+                            inventories[uid] = {}
+                        inventories[uid][item['item_name']] = item['quantity']
+            
             reloaded_count = 0
-            for pet in res.data:
-                user_id = int(pet['user_id'])
-                message_id = int(pet['message_id'])
-                pet_data = await self.get_user_pet(user_id)
-                if pet_data:
-                    cooldown_active = await self._is_play_on_cooldown(user_id)
-                    view = PetUIView(self, user_id, pet_data, play_cooldown_active=cooldown_active)
-                    self.bot.add_view(view, message_id=message_id)
-                    reloaded_count += 1
+            for pet_data in res.data:
+                user_id = int(pet_data['user_id'])
+                message_id = int(pet_data['message_id'])
+                user_inventory = inventories.get(user_id, {})
+                
+                cooldown_active = await self._is_play_on_cooldown(user_id)
+                evo_ready = await self._is_evolution_ready(pet_data, user_inventory)
+                
+                view = PetUIView(self, user_id, pet_data, play_cooldown_active=cooldown_active, evolution_ready=evo_ready)
+                self.bot.add_view(view, message_id=message_id)
+                reloaded_count += 1
             logger.info(f"[PetSystem] 총 {reloaded_count}개의 펫 관리 UI를 성공적으로 다시 로드했습니다.")
         except Exception as e:
             logger.error(f"활성 펫 UI 로드 중 오류 발생: {e}", exc_info=True)
@@ -618,6 +604,27 @@ class PetSystem(commands.Cog):
                 await thread.edit(name=f"🐾｜{species_info['species_name']}")
             except (discord.NotFound, discord.Forbidden) as e:
                 logger.error(f"부화 UI 업데이트 실패 (스레드: {thread.id}): {e}")
+
+    # ▼▼▼ [추가] 진화 처리 핸들러 ▼▼▼
+    async def handle_evolution(self, interaction: discord.Interaction, message: discord.Message):
+        user_id = interaction.user.id
+        res = await supabase.rpc('attempt_pet_evolution', {'p_user_id': user_id}).single().execute()
+        
+        if res.data and res.data.get('success'):
+            new_stage_num = res.data.get('new_stage')
+            points_granted = res.data.get('points_granted')
+            
+            pet_data = await self.get_user_pet(user_id)
+            species_info = pet_data.get('pet_species', {})
+            stage_info_json = species_info.get('stage_info', {})
+            new_stage_name = stage_info_json.get(str(new_stage_num), {}).get('name', '새로운 모습')
+            
+            await interaction.channel.send(f"🌟 {interaction.user.mention}님의 펫이 **{new_stage_name}**(으)로 진화했습니다! 스탯 포인트 **{points_granted}**개를 획득했습니다!")
+            
+            # 진화 후 UI 즉시 업데이트
+            await self.update_pet_ui(user_id, interaction.channel, message)
+        else:
+            await interaction.followup.send("❌ 진화 조건을 만족하지 못했습니다. 레벨과 필요 아이템을 확인해주세요.", ephemeral=True, delete_after=10)
     
     async def process_levelup_requests(self, requests: List[Dict]):
         user_ids_to_notify = {int(req['config_key'].split('_')[-1]): req['config_value'] for req in requests}
