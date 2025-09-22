@@ -664,11 +664,24 @@ class PetSystem(commands.Cog):
         for user_id, payload in user_ids_to_notify.items():
             new_level, points_awarded = None, None
             
-            if is_admin: 
-                res = await supabase.rpc('admin_level_up_pet', {'p_user_id': user_id}).execute()
-                if res.data and res.data[0].get('leveled_up'):
-                    new_level = res.data[0].get('new_level')
-                    points_awarded = res.data[0].get('points_awarded')
+            if is_admin:
+                # 1. 현재 펫의 레벨과 경험치를 직접 조회합니다.
+                pet_res = await supabase.table('pets').select('level, xp').eq('user_id', user_id).maybe_single().execute()
+                if pet_res and pet_res.data:
+                    current_level = pet_res.data.get('level', 1)
+                    current_xp = pet_res.data.get('xp', 0)
+                    
+                    # 2. 다음 레벨업에 필요한 총 경험치를 계산합니다.
+                    xp_for_next_level = calculate_xp_for_pet_level(current_level + 1)
+                    # 3. 레벨업에 필요한 경험치 양을 계산합니다 (+1은 확실한 레벨업을 보장).
+                    xp_to_add = (xp_for_next_level - current_xp) + 1
+                    
+                    if xp_to_add > 0:
+                        # 4. 일반 경험치 추가 함수(add_xp_to_pet)를 호출하여 레벨업을 처리합니다.
+                        res = await supabase.rpc('add_xp_to_pet', {'p_user_id': user_id, 'p_xp_to_add': xp_to_add}).execute()
+                        if res.data and res.data[0].get('leveled_up'):
+                            new_level = res.data[0].get('new_level')
+                            points_awarded = res.data[0].get('points_awarded')
             else: 
                 if isinstance(payload, dict):
                     new_level = payload.get('new_level')
