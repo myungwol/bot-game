@@ -623,7 +623,6 @@ class PetSystem(commands.Cog):
                 'speed': current_stats['speed'] - hatch_base_stats['speed']
             }
 
-            embed.add_field(name="\u200b\n능력치", value="\u200b", inline=False)
             embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)", inline=True)
             embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)", inline=True)
             embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)", inline=True)
