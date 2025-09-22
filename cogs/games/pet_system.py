@@ -708,6 +708,40 @@ class PetSystem(commands.Cog):
             else:
                 logger.warning(f"펫 레벨업 알림 실패: 유저 {user_id}의 new_level 또는 points_awarded를 결정할 수 없습니다.")
 
+    # ▼▼▼▼▼ 여기에 아래 코드를 추가하세요 ▼▼▼▼▼
+    async def process_level_set_requests(self, requests: List[Dict]):
+        for req in requests:
+            try:
+                user_id = int(req['config_key'].split('_')[-1])
+                payload = req.get('config_value', {})
+                exact_level = payload.get('exact_level')
+
+                if exact_level is None:
+                    continue
+                
+                # 레벨에 해당하는 총 경험치를 계산합니다.
+                total_xp_for_level = 0
+                for l in range(1, exact_level):
+                    total_xp_for_level += calculate_xp_for_pet_level(l)
+                
+                # DB 함수를 호출하여 레벨과 경험치를 직접 설정합니다.
+                res = await supabase.rpc('set_pet_level_and_xp', {
+                    'p_user_id': user_id,
+                    'p_new_level': exact_level,
+                    'p_new_xp': 0, # 해당 레벨의 시작 경험치로 설정
+                    'p_total_xp': total_xp_for_level
+                }).execute()
+
+                if res.data and res.data[0].get('success'):
+                    points_awarded = res.data[0].get('points_awarded', 0)
+                    await self.notify_pet_level_up(user_id, exact_level, points_awarded)
+                    logger.info(f"관리자 요청으로 {user_id}의 펫 레벨을 {exact_level}로 설정했습니다.")
+                else:
+                    logger.error(f"관리자 펫 레벨 설정 DB 함수 호출 실패: {res.data}")
+            except Exception as e:
+                logger.error(f"펫 레벨 설정 요청 처리 중 오류: {e}", exc_info=True)
+    # ▲▲▲▲▲ 여기까지 추가 ▲▲▲▲▲
+
     async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded: int):
         pet_data = await self.get_user_pet(user_id)
         if not pet_data:
