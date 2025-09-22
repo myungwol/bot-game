@@ -398,17 +398,24 @@ class PetSystem(commands.Cog):
         stage_info_json = species_info.get('stage_info', {})
         next_stage_info = stage_info_json.get(str(next_stage_num))
 
-        if not next_stage_info: return False
+        # 1. 다음 진화 단계 정보가 없으면 진화 불가
+        if not next_stage_info:
+            return False
 
-        if 'item' not in next_stage_info: return False
-
-        if pet_data['level'] < next_stage_info['level_req']: return False
+        # 2. 레벨이 부족하면 진화 불가
+        if pet_data['level'] < next_stage_info.get('level_req', 999):
+            return False
         
-        required_item = next_stage_info['item']
-        required_qty = next_stage_info['qty']
+        # 3. 아이템이 필요한 진화인지 확인
+        if 'item' in next_stage_info and 'qty' in next_stage_info:
+            required_item = next_stage_info['item']
+            required_qty = next_stage_info['qty']
+            
+            # 3-1. 아이템이 부족하면 진화 불가
+            if inventory.get(required_item, 0) < required_qty:
+                return False
         
-        if inventory.get(required_item, 0) < required_qty: return False
-
+        # 4. 모든 조건을 통과했으므로 진화 가능
         return True
 
     async def reload_active_pet_views(self):
