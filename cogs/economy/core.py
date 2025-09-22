@@ -141,16 +141,16 @@ class EconomyCore(commands.Cog):
                 if panel_cog := self.bot.get_cog("PanelUpdater"):
                     await panel_cog.process_panel_regenerate_requests(requests_by_prefix['panel_regenerate'])
 
-            # ▼▼▼ [추가] 펫 레벨업 및 진화 체크 요청 처리 ▼▼▼
+            # ▼▼▼ [수정] 펫 레벨업 요청을 PetSystem으로 넘기도록 변경 ▼▼▼
             if 'pet_levelup' in requests_by_prefix:
                 if pet_cog := self.bot.get_cog("PetSystem"):
+                    # core.py가 직접 처리하는 대신, PetSystem에 요청 목록을 그대로 전달합니다.
                     await pet_cog.process_levelup_requests(requests_by_prefix['pet_levelup'])
 
             if 'pet_evolution_check' in requests_by_prefix:
                  if pet_cog := self.bot.get_cog("PetSystem"):
                     user_ids = {int(req['config_key'].split('_')[-1]) for req in requests_by_prefix['pet_evolution_check']}
                     await pet_cog.check_and_process_auto_evolution(user_ids)
-            # ▲▲▲ [추가] 완료 ▲▲▲
             
             if 'config_reload' in requests_by_prefix:
                 logger.info("[CONFIG] 설정 새로고침 요청 감지...")
