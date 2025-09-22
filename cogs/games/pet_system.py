@@ -283,8 +283,18 @@ class PetSystem(commands.Cog):
         hatches_at = now + timedelta(seconds=final_hatch_seconds)
         
         try:
+            # ▼▼▼ [수정] 닉네임에서 스레드 이름에 사용할 수 없는 문자를 제거합니다. ▼▼▼
+            import re
+            # 알파벳, 숫자, 한글, 일부 기본 특수문자(_-)를 제외한 모든 문자를 제거
+            safe_name = re.sub(r'[^\w\s\-_가-힣]', '', user.display_name).strip()
+            if not safe_name:  # 모든 문자가 제거된 경우
+                safe_name = f"유저-{user.id}"
+            
+            thread_name = f"🥚｜{safe_name}의 알"
+            # ▲▲▲ [수정] 완료 ▲▲▲
+
             thread = await interaction.channel.create_thread(
-                name=f"🥚｜{user.display_name}의 알",
+                name=thread_name, # 정규화된 이름 사용
                 type=discord.ChannelType.public_thread,
                 auto_archive_duration=10080
             )
@@ -302,7 +312,6 @@ class PetSystem(commands.Cog):
             embed = self.build_pet_ui_embed(user, pet_data)
             message = await thread.send(embed=embed)
 
-            # ▼▼▼ [수정] 시스템 메시지를 삭제하기 전에 1초 대기합니다. ▼▼▼
             await asyncio.sleep(1) 
             try:
                 system_start_message = await thread.fetch_message(thread.id)
@@ -310,13 +319,18 @@ class PetSystem(commands.Cog):
                     await system_start_message.delete()
             except (discord.NotFound, discord.Forbidden):
                 pass 
-            # ▲▲▲ [수정] 완료 ▲▲▲
 
             await supabase.table('pets').update({'message_id': message.id}).eq('id', pet_data['id']).execute()
             await interaction.edit_original_response(content=f"✅ 부화가 시작되었습니다! {thread.mention} 채널에서 확인해주세요.", view=None)
 
         except Exception as e:
             logger.error(f"인큐베이션 시작 중 오류 (유저: {user.id}, 알: {egg_name}): {e}", exc_info=True)
+            # 오류가 발생하면, 생성되었을 수 있는 스레드를 삭제하려고 시도합니다.
+            if 'thread' in locals() and thread:
+                try:
+                    await thread.delete()
+                except (discord.NotFound, discord.Forbidden):
+                    pass
             await interaction.edit_original_response(content="❌ 부화 절차를 시작하는 중 오류가 발생했습니다.", view=None)
     def build_pet_ui_embed(self, user: discord.Member, pet_data: Dict) -> discord.Embed:
         species_info = pet_data.get('pet_species')
