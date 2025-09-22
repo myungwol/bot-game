@@ -238,17 +238,17 @@ async def get_user_abilities(user_id: int) -> List[str]:
     return abilities
 
 @supabase_retry_handler()
-async def get_cooldown(user_id: int, cooldown_key: str) -> float:
-    response = await supabase.table('cooldowns').select('last_cooldown_timestamp').eq('user_id', str(user_id)).eq('cooldown_key', cooldown_key).maybe_single().execute()
+async def get_cooldown(pet_id: int, cooldown_key: str) -> float: # user_id -> pet_id
+    response = await supabase.table('cooldowns').select('last_cooldown_timestamp').eq('pet_id', pet_id).eq('cooldown_key', cooldown_key).maybe_single().execute() # user_id -> pet_id
     if response and response.data and (ts_str := response.data.get('last_cooldown_timestamp')):
         try: return datetime.fromisoformat(ts_str.replace('Z', '+00:00')).timestamp()
         except (ValueError, TypeError): return 0.0
     return 0.0
 
 @supabase_retry_handler()
-async def set_cooldown(user_id: int, cooldown_key: str):
+async def set_cooldown(pet_id: int, cooldown_key: str): # user_id -> pet_id
     iso_timestamp = datetime.now(timezone.utc).isoformat()
-    await supabase.table('cooldowns').upsert({"user_id": str(user_id), "cooldown_key": cooldown_key, "last_cooldown_timestamp": iso_timestamp}).execute()
+    await supabase.table('cooldowns').upsert({"pet_id": pet_id, "cooldown_key": cooldown_key, "last_cooldown_timestamp": iso_timestamp}).execute() # user_id -> pet_id
 
 @supabase_retry_handler()
 async def log_activity(
