@@ -48,6 +48,36 @@ async def delete_message_after(message: discord.InteractionMessage, delay: int):
     except (discord.NotFound, discord.Forbidden):
         pass
 
+class PetNicknameModal(ui.Modal, title="펫 이름 변경"):
+    nickname_input = ui.TextInput(label="새로운 이름", placeholder="펫의 새 이름을 입력하세요.", max_length=20)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        self.stop()
+
+class ConfirmReleaseView(ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.value = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ 본인만 결정할 수 있습니다.", ephemeral=True, delete_after=5)
+            return False
+        return True
+
+    @ui.button(label="예, 놓아줍니다", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: ui.Button):
+        self.value = True
+        self.stop()
+        await interaction.response.defer()
+
+    @ui.button(label="아니요", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: ui.Button):
+        self.value = False
+        self.stop()
+        await interaction.response.defer()
 
 class PetUIView(ui.View):
     def __init__(self, cog_instance: 'PetSystem', user_id: int):
@@ -56,6 +86,8 @@ class PetUIView(ui.View):
         self.user_id = user_id
         self.feed_pet_button.custom_id = f"pet_feed:{user_id}"
         self.play_with_pet_button.custom_id = f"pet_play:{user_id}"
+        self.rename_pet_button.custom_id = f"pet_rename:{user_id}"
+        self.release_pet_button.custom_id = f"pet_release:{user_id}"
         self.refresh_button.custom_id = f"pet_refresh:{user_id}"
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -70,7 +102,7 @@ class PetUIView(ui.View):
             await interaction.response.send_message("❌ 잘못된 상호작용입니다.", ephemeral=True, delete_after=5)
             return False
 
-    @ui.button(label="먹이주기", style=discord.ButtonStyle.success, emoji="🍖")
+    @ui.button(label="먹이주기", style=discord.ButtonStyle.success, emoji="🍖", row=0)
     async def feed_pet_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         inventory = await get_inventory(interaction.user)
@@ -88,7 +120,7 @@ class PetUIView(ui.View):
             hunger_to_add = item_data.get('power', 10)
             await update_inventory(self.user_id, item_name, -1)
             await supabase.rpc('increase_pet_hunger', {'p_user_id': self.user_id, 'p_amount': hunger_to_add}).execute()
-            await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
+            await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message, is_refresh=True)
             msg = await select_interaction.followup.send(f"🍖 {item_name}을(를) 주었습니다. 펫의 배가 든든해졌습니다!", ephemeral=True)
             self.cog.bot.loop.create_task(delete_message_after(msg, 5))
             await select_interaction.delete_original_response()
@@ -97,7 +129,7 @@ class PetUIView(ui.View):
         view = ui.View(timeout=60).add_item(feed_select)
         await interaction.followup.send("어떤 먹이를 주시겠습니까?", view=view, ephemeral=True)
 
-    @ui.button(label="놀아주기", style=discord.ButtonStyle.primary, emoji="🎾")
+    @ui.button(label="놀아주기", style=discord.ButtonStyle.primary, emoji="🎾", row=0)
     async def play_with_pet_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         cooldown_key = f"daily_pet_play"
@@ -114,14 +146,48 @@ class PetUIView(ui.View):
         await update_inventory(self.user_id, "공놀이 세트", -1)
         await supabase.rpc('increase_pet_friendship', {'p_user_id': self.user_id, 'p_amount': 1}).execute()
         await set_cooldown(interaction.user.id, cooldown_key)
-        await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
+        await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message, is_refresh=True)
         msg = await interaction.followup.send("❤️ 펫과 즐거운 시간을 보냈습니다! 친밀도가 1 올랐습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_message_after(msg, 5))
 
-    @ui.button(label="새로고침", style=discord.ButtonStyle.secondary, emoji="🔄")
+    @ui.button(label="이름 변경", style=discord.ButtonStyle.secondary, emoji="✏️", row=1)
+    async def rename_pet_button(self, interaction: discord.Interaction, button: ui.Button):
+        modal = PetNicknameModal()
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+        
+        if modal.nickname_input.value:
+            new_name = modal.nickname_input.value
+            await supabase.table('pets').update({'nickname': new_name}).eq('user_id', self.user_id).execute()
+            await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message, is_refresh=True)
+            await interaction.followup.send(f"펫의 이름이 '{new_name}'(으)로 변경되었습니다.", ephemeral=True, delete_after=5)
+
+    @ui.button(label="놓아주기", style=discord.ButtonStyle.danger, emoji="👋", row=1)
+    async def release_pet_button(self, interaction: discord.Interaction, button: ui.Button):
+        confirm_view = ConfirmReleaseView(self.user_id)
+        msg = await interaction.response.send_message(
+            "**⚠️ 경고: 펫을 놓아주면 다시는 되돌릴 수 없습니다. 정말로 놓아주시겠습니까?**", 
+            view=confirm_view, 
+            ephemeral=True
+        )
+        await confirm_view.wait()
+
+        if confirm_view.value is True:
+            await supabase.table('pets').delete().eq('user_id', self.user_id).execute()
+            await interaction.edit_original_response(content="펫을 자연으로 돌려보냈습니다...", view=None)
+            await interaction.channel.send(f"{interaction.user.mention}님이 펫을 자연의 품으로 돌려보냈습니다.")
+            await asyncio.sleep(10)
+            try:
+                await interaction.channel.delete()
+            except (discord.NotFound, discord.Forbidden):
+                pass
+        else:
+            await interaction.edit_original_response(content="펫 놓아주기를 취소했습니다.", view=None)
+
+    @ui.button(label="UI 재생성", style=discord.ButtonStyle.secondary, emoji="🔄", row=1)
     async def refresh_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer()
-        await self.cog.update_pet_ui(interaction.user.id, interaction.channel, interaction.message)
+        await self.cog.update_pet_ui(interaction.user.id, interaction.channel, interaction.message, is_refresh=True)
 
 class EggSelectView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'PetSystem'):
@@ -229,15 +295,7 @@ class PetSystem(commands.Cog):
         now = datetime.now(timezone.utc)
         hatches_at = now + timedelta(seconds=final_hatch_seconds)
         try:
-            # ▼▼▼ [수정] 스레드 타입을 public_thread로 변경합니다. ▼▼▼
-            thread = await interaction.channel.create_thread(
-                name=f"🥚｜{user.display_name}의 알",
-                type=discord.ChannelType.public_thread, 
-                auto_archive_duration=10080
-            )
-            # ▲▲▲ [수정] 완료 ▲▲▲
-            
-            # 공개 스레드이므로 주인을 초대할 필요가 없습니다. (add_user 제거)
+            thread = await interaction.channel.create_thread(name=f"🥚｜{user.display_name}의 알", type=discord.ChannelType.public_thread, auto_archive_duration=10080)
             pet_insert_res = await supabase.table('pets').insert({
                 'user_id': user.id, 'pet_species_id': pet_species_id, 'current_stage': 1, 'level': 0,
                 'hatches_at': hatches_at.isoformat(), 'created_at': now.isoformat(), 'thread_id': thread.id
@@ -332,7 +390,7 @@ class PetSystem(commands.Cog):
             except (discord.NotFound, discord.Forbidden) as e:
                 logger.error(f"부화 UI 업데이트 실패 (스레드: {thread.id}): {e}")
 
-    async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: discord.Message):
+    async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: discord.Message, is_refresh: bool = False):
         pet_data = await self.get_user_pet(user_id)
         if not pet_data:
             await message.edit(content="펫 정보를 찾을 수 없습니다.", embed=None, view=None)
@@ -340,7 +398,14 @@ class PetSystem(commands.Cog):
         user = self.bot.get_user(user_id)
         embed = self.build_pet_ui_embed(user, pet_data)
         view = PetUIView(self, user_id)
-        await message.edit(embed=embed, view=view)
+        if is_refresh:
+            try:
+                await message.delete()
+            except (discord.NotFound, discord.Forbidden): pass
+            new_message = await channel.send(embed=embed, view=view)
+            await supabase.table('pets').update({'message_id': new_message.id}).eq('user_id', user_id).execute()
+        else:
+            await message.edit(embed=embed, view=view)
 
     async def register_persistent_views(self):
         self.bot.add_view(IncubatorPanelView(self))
