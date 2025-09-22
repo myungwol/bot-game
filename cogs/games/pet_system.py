@@ -573,11 +573,8 @@ class PetSystem(commands.Cog):
             stage_name = stage_info_json.get(str(current_stage), {}).get('name', '알 수 없는 단계')
             nickname = pet_data.get('nickname') or species_info['species_name']
             
-            embed = discord.Embed(
-                title=f"🐾 {nickname}",
-                description=f"**{stage_name}**: {species_info['species_name']}",
-                color=0xFFD700
-            )
+            # 1. 제목은 펫 닉네임만 사용, 설명은 비워둡니다.
+            embed = discord.Embed(title=f"🐾 {nickname}", color=0xFFD700)
             embed.set_author(name=f"{user.display_name}님의 펫", icon_url=user.display_avatar.url if user.display_avatar else None)
             embed.set_thumbnail(url=image_url)
 
@@ -591,12 +588,14 @@ class PetSystem(commands.Cog):
             friendship = pet_data.get('friendship', 0)
             friendship_bar = create_bar(friendship, 100, full_char='❤️', empty_char='🖤')
 
-            embed.add_field(name="레벨", value=f"**Lv. {current_level}**", inline=True)
+            # 2. 요청하신 새로운 필드 레이아웃 적용
+            embed.add_field(name="단계", value=f"**{stage_name}**: {species_info['species_name']}", inline=True)
             embed.add_field(name="속성/타입", value=f"{species_info['element']} / {ELEMENT_TO_TYPE.get(species_info['element'], '알 수 없음')}", inline=True)
+            embed.add_field(name="레벨", value=f"**Lv. {current_level}**", inline=True)
+            embed.add_field(name="경험치", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=True)
             
-            # ▼▼▼ 핵심 수정 1: 레벨과 경험치 사이의 불필요한 줄바꿈 필드를 제거합니다. ▼▼▼
-            embed.add_field(name="경험치", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=False)
-            
+            embed.add_field(name="\u200b", value="\u200b", inline=False) # 구분선
+
             embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=True)
             embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=True)
 
@@ -622,13 +621,13 @@ class PetSystem(commands.Cog):
                 'defense': current_stats['defense'] - hatch_base_stats['defense'],
                 'speed': current_stats['speed'] - hatch_base_stats['speed']
             }
-            stats_description = (
-                f"**❤️ 체력**: **{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)\n"
-                f"**⚔️ 공격력**: **{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)\n"
-                f"**🛡️ 방어력**: **{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)\n"
-                f"**💨 스피드**: **{current_stats['speed']}** (`{hatch_base_stats['speed']}` + `{total_bonus_stats['speed']}`)"
-            )
-            embed.add_field(name="능력치", value=stats_description, inline=False)
+
+            # 3. 능력치 섹션 제목 추가 및 아이콘 변경
+            embed.add_field(name="\u200b\n능력치", value="\u200b", inline=False)
+            embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)", inline=True)
+            embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)", inline=True)
+            embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)", inline=True)
+            embed.add_field(name="👟 스피드", value=f"**{current_stats['speed']}** (`{hatch_base_stats['speed']}` + `{total_bonus_stats['speed']}`)", inline=True)
             
         return embed
     async def process_hatching(self, pet_data: Dict):
