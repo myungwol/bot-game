@@ -10,6 +10,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List, Any
 import asyncio 
 import re 
+# ▼▼▼ [수정] collections 라이브러리에서 defaultdict를 import 합니다. ▼▼▼
+from collections import defaultdict
 
 from utils.database import (
     supabase, get_inventory, update_inventory, get_item_database,
