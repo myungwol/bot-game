@@ -622,16 +622,13 @@ class PetSystem(commands.Cog):
                 'defense': current_stats['defense'] - hatch_base_stats['defense'],
                 'speed': current_stats['speed'] - hatch_base_stats['speed']
             }
-
-            # ▼▼▼ 핵심 수정 2: 능력치 필드들의 순서와 간격을 조정합니다. ▼▼▼
-            embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)", inline=True)
-            embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)", inline=True)
-            
-            # 능력치 항목들 사이에 세로 간격을 주기 위한 보이지 않는 필드를 추가합니다.
-            embed.add_field(name="\u200b", value="\u200b", inline=False)
-
-            embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)", inline=True)
-            embed.add_field(name="💨 스피드", value=f"**{current_stats['speed']}** (`{hatch_base_stats['speed']}` + `{total_bonus_stats['speed']}`)", inline=True)
+            stats_description = (
+                f"**❤️ 체력**: **{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)\n"
+                f"**⚔️ 공격력**: **{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)\n"
+                f"**🛡️ 방어력**: **{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)\n"
+                f"**💨 스피드**: **{current_stats['speed']}** (`{hatch_base_stats['speed']}` + `{total_bonus_stats['speed']}`)"
+            )
+            embed.add_field(name="능력치", value=stats_description, inline=False)
             
         return embed
     async def process_hatching(self, pet_data: Dict):
