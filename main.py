@@ -53,16 +53,15 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         await self.load_all_extensions()
         
-        # ▼▼▼ [수정] cogs_with_persistent_views 리스트에 'FriendInvite'를 추가합니다. ▼▼▼
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
             "DiceGame", "SlotMachine", "RPSGame",
             "DailyCheck", "Quests", "Farm",
             "WorldSystem", "EconomyCore", "LevelSystem",
             "Mining", "Blacksmith", "Trade", "Cooking",
-            "FriendInvite", "PetSystem" # <--- 여기에 PetSystem 추가
+            "FriendInvite",
+            "PetSystem" # <--- 이 부분이 있는지 확인
         ]
-        # ▲▲▲ [수정] 완료 ▲▲▲
          
         registered_views_count = 0
         for cog_name in cogs_with_persistent_views:
