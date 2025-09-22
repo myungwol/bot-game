@@ -93,88 +93,56 @@ class BuyItemView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
         wallet = await get_wallet(self.user.id)
         balance = wallet.get('balance', 0)
-        
         all_ui_strings = get_config("strings", {})
         commerce_strings = all_ui_strings.get("commerce", {})
-        
-        # ▼▼▼ [수정] 한글 카테고리 이름에 대한 상점 이름을 추가합니다. ▼▼▼
         category_display_names = { 
-            "아이템": "잡화점", 
-            "장비": "장비점", 
-            "미끼": "미끼가게", 
-            "농장_씨앗": "씨앗가게", 
-            "펫 아이템": "펫 상점", # 'pet_item' -> '펫 아이템'
-            "알": "알 상점",     # 'egg' -> '알'
-            "조미료": "조미료 가게"
+            "아이템": "잡화점", "장비": "장비점", "미끼": "미끼가게", "농장_씨앗": "씨앗가게", 
+            "펫 아이템": "펫 상점", "알": "알 상점", "조미료": "조미료 가게"
         }
         display_name = category_display_names.get(self.category, self.category.replace("_", " "))
-        # ▲▲▲ [수정] 완료 ▲▲▲
-        
         description_template = commerce_strings.get("item_view_desc", "현재 소지금: `{balance}`{currency_icon}\n구매하고 싶은 상품을 선택해주세요.")
-
         embed = discord.Embed(
             title=f"🏪 구매함 - {display_name}",
             description=description_template.format(balance=f"{balance:,}", currency_icon=self.currency_icon),
             color=discord.Color.blue()
         )
-        
         await self._filter_items_for_user()
-
         if not self.items_in_category:
             wip_message = commerce_strings.get("wip_category", "이 카테고리의 상품은 현재 준비 중입니다.")
             embed.add_field(name="준비 중", value=wip_message)
         else:
-            start_index = self.page_index * self.items_per_page
-            end_index = start_index + self.items_per_page
+            start_index, end_index = self.page_index * self.items_per_page, (self.page_index + 1) * self.items_per_page
             items_on_page = self.items_in_category[start_index:end_index]
-
             for name, data in items_on_page:
                 field_name = f"{data.get('emoji', '📦')} {name}"
-                field_value = (
-                    f"**가격:** `{data.get('current_price', data.get('price', 0)):,}`{self.currency_icon}\n"
-                    f"> {data.get('description', '설명이 없습니다.')}"
-                )
+                field_value = (f"**가격:** `{data.get('current_price', data.get('price', 0)):,}`{self.currency_icon}\n"
+                               f"> {data.get('description', '설명이 없습니다.')}")
                 embed.add_field(name=field_name, value=field_value, inline=False)
-            
             total_pages = math.ceil(len(self.items_in_category) / self.items_per_page)
             footer_text = "매일 00:05(KST)에 시세 변동"
             if total_pages > 1:
-                page_text = f"페이지 {self.page_index + 1} / {total_pages}"
-                embed.set_footer(text=f"{page_text} | {footer_text}")
+                embed.set_footer(text=f"페이지 {self.page_index + 1} / {total_pages} | {footer_text}")
             else:
                 embed.set_footer(text=footer_text)
-
         return embed
 
     async def build_components(self):
         self.clear_items()
-        
-        start_index = self.page_index * self.items_per_page
-        end_index = start_index + self.items_per_page
+        start_index, end_index = self.page_index * self.items_per_page, (self.page_index + 1) * self.items_per_page
         items_on_page = self.items_in_category[start_index:end_index]
-
         if items_on_page:
-            options = [
-                discord.SelectOption(
-                    label=name, value=name,
-                    description=f"가격: {data.get('current_price', data.get('price', 0)):,}{self.currency_icon}",
-                    emoji=coerce_item_emoji(data.get('emoji'))
-                ) for name, data in items_on_page
-            ]
+            options = [discord.SelectOption(label=name, value=name, description=f"가격: {data.get('current_price', data.get('price', 0)):,}{self.currency_icon}", emoji=coerce_item_emoji(data.get('emoji'))) for name, data in items_on_page]
             select = ui.Select(placeholder=f"구매할 '{self.category}' 상품을 선택하세요...", options=options)
             select.callback = self.select_callback
             self.add_item(select)
-        
         total_pages = math.ceil(len(self.items_in_category) / self.items_per_page)
         if total_pages > 1:
             prev_button = ui.Button(label="◀ 이전", custom_id="prev_page", disabled=(self.page_index == 0), row=2)
             prev_button.callback = self.pagination_callback
             self.add_item(prev_button)
-            
             next_button = ui.Button(label="다음 ▶", custom_id="next_page", disabled=(self.page_index >= total_pages - 1), row=2)
             next_button.callback = self.pagination_callback
             self.add_item(next_button)
-
         back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=3)
         back_button.callback = self.back_callback
         self.add_item(back_button)
@@ -197,97 +165,17 @@ class BuyItemView(ShopViewBase):
             wallet = await get_wallet(self.user.id)
             price = item_data.get('current_price', item_data.get('price', 0))
 
-            if item_data.get('instant_use', False) and item_name == '밭 확장 허가증':
-                farm_data = await get_farm_data(self.user.id)
-                if not farm_data:
-                    msg = await interaction.response.send_message("❌ 농장을 먼저 만들어주세요.", ephemeral=True, delete_after=5); return
+            # ▼▼▼ [수정] 모든 구매 로직 전에 공통적으로 잔액 확인 ▼▼▼
+            if wallet.get('balance', 0) < price:
+                return await interaction.response.send_message("❌ 코인이 부족하여 아이템을 구매할 수 없습니다.", ephemeral=True, delete_after=5)
 
-                current_plots = len(farm_data.get('farm_plots', []))
-                plots_can_add = 25 - current_plots
-                if plots_can_add <= 0:
-                    await interaction.response.send_message("❌ 농장이 이미 최대 크기(25칸)입니다.", ephemeral=True, delete_after=5); return
-                
-                max_from_balance = wallet.get('balance', 0) // price if price > 0 else plots_can_add
-                max_buyable = min(plots_can_add, max_from_balance, 24)
-
-                if max_buyable <= 0:
-                    await interaction.response.send_message("❌ 잔액이 부족하여 밭 확장 허가증을 구매할 수 없습니다.", ephemeral=True, delete_after=5); return
-                
-                modal = QuantityModal(f"'{item_name}' 구매", max_buyable)
-                await interaction.response.send_modal(modal)
-                await modal.wait()
-
-                if modal.value is None: return
-
-                quantity = modal.value
-                total_price = price * quantity
-                
-                await interaction.followup.send(f"⏳ {quantity}칸의 농장 확장을 진행합니다...", ephemeral=True)
-                
-                await update_wallet(self.user, -total_price)
-                
-                success_count = 0
-                for i in range(quantity):
-                    success = await expand_farm_db(farm_data['id'], current_plots + i)
-                    if success:
-                        success_count += 1
-                    else:
-                        logger.error(f"{self.user.id}의 농장 확장 중 {i+1}번째에서 실패. 구매한 {quantity}개 중 {success_count}개만 적용됨.")
-                        failed_cost = price * (quantity - success_count)
-                        await update_wallet(self.user, failed_cost)
-                        break
-                
-                if farm_cog := interaction.client.get_cog("Farm"):
-                    await farm_cog.request_farm_ui_update(self.user.id)
-                
-                final_message = f"✅ 농장이 {success_count}칸 확장되었습니다! (총 비용: {price * success_count:,}{self.currency_icon})"
-                if success_count < quantity:
-                    final_message += f"\n⚠️ 일부 확장에 실패하여 차액이 환불되었습니다."
-
-                msg = await interaction.followup.send(final_message, ephemeral=True)
-                asyncio.create_task(delete_after(msg, 10))
-                
-                await self.update_view(interaction)
-                return
-
-            elif item_data.get('instant_use', False):
-                await self.handle_instant_use_item(interaction, item_name, item_data, price, wallet)
-
-            elif item_data.get('max_ownable', 1) > 1:
+            if item_data.get('max_ownable', 1) > 1:
                 await self.handle_quantity_purchase(interaction, item_name, item_data, inventory, wallet)
-            
             else:
-                await self.handle_single_purchase(interaction, item_name, item_data, price)
-
+                await self.handle_single_purchase(interaction, item_name, item_data, price, wallet)
         except Exception as e:
             await self.handle_error(interaction, e, str(e))
-
-    async def handle_instant_use_item(self, interaction: discord.Interaction, item_name: str, item_data: Dict, price: int, wallet: Dict):
-        await interaction.response.defer(ephemeral=True)
-
-        if item_data.get('effect_type') == 'expand_farm':
-            farm_data = await get_farm_data(self.user.id)
-            if not farm_data:
-                msg = await interaction.followup.send("❌ 농장을 먼저 만들어주세요.", ephemeral=True); asyncio.create_task(delete_after(msg, 5)); return
-
-            current_plots = len(farm_data.get('farm_plots', []))
-            if current_plots >= 25:
-                msg = await interaction.followup.send("❌ 농장이 이미 최대 크기(25칸)입니다.", ephemeral=True); asyncio.create_task(delete_after(msg, 5)); return
-
-            await update_wallet(self.user, -price)
-            success = await expand_farm_db(farm_data['id'], current_plots)
-
-            if success:
-                msg = await interaction.followup.send(f"✅ 농장이 1칸 확장되었습니다! (현재 크기: {current_plots + 1}/25)", ephemeral=True)
-                asyncio.create_task(delete_after(msg, 10))
-            else:
-                await update_wallet(self.user, price)
-                msg = await interaction.followup.send("❌ 농장을 확장하는 중 오류가 발생했습니다.", ephemeral=True); asyncio.create_task(delete_after(msg, 5))
-        else:
-            msg = await interaction.followup.send("❓ 알 수 없는 즉시 사용 아이템입니다.", ephemeral=True); asyncio.create_task(delete_after(msg, 5))
-        
-        await self.update_view(interaction)
-
+    
     async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict, inventory: Dict, wallet: Dict):
         price = item_data.get('current_price', item_data.get('price', 0))
         max_ownable = item_data.get('max_ownable', 999)
@@ -306,6 +194,12 @@ class BuyItemView(ShopViewBase):
         if modal.value is None: return
 
         quantity, total_price = modal.value, price * modal.value
+        
+        # ▼▼▼ [수정] 수량을 입력받은 후, 최종 금액으로 다시 한번 잔액 확인 ▼▼▼
+        current_wallet = await get_wallet(self.user.id)
+        if current_wallet.get('balance', 0) < total_price:
+            return await interaction.followup.send("❌ 코인이 부족하여 아이템을 구매할 수 없습니다.", ephemeral=True)
+
         await update_inventory(str(self.user.id), item_name, quantity)
         await update_wallet(self.user, -total_price)
 
@@ -319,7 +213,8 @@ class BuyItemView(ShopViewBase):
         asyncio.create_task(delete_after(msg, 10))
         await self.update_view(interaction)
 
-    async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict, price: int):
+    async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict, price: int, wallet: Dict):
+        # 단일 구매의 경우, 이미 select_callback에서 잔액 확인을 했으므로 바로 진행
         await interaction.response.defer(ephemeral=True)
         
         await update_inventory(str(self.user.id), item_name, 1)
@@ -339,7 +234,7 @@ class BuyItemView(ShopViewBase):
         msg = await interaction.followup.send(success_message, ephemeral=True)
         asyncio.create_task(delete_after(msg, 10))
         await self.update_view(interaction)
-
+        
     async def back_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         category_view = BuyCategoryView(self.user)
