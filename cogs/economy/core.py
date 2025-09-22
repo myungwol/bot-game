@@ -274,15 +274,15 @@ class EconomyCore(commands.Cog):
                     xp_res = await supabase.rpc('add_xp', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
                     if xp_res.data: await self.handle_level_up_event(user, xp_res.data)
                     
-                    # ▼▼▼ [수정] 펫 경험치 추가 후 진화 체크 로직 추가 ▼▼▼
                     pet_xp_res = await supabase.rpc('add_xp_to_pet', {'p_user_id': user_id, 'p_xp_to_add': xp_to_add}).single().execute()
                     if pet_xp_res.data and pet_xp_res.data.get('leveled_up'):
+                        # ▼▼▼ [수정] DB에 저장하는 값을 딕셔너리 형태로 변경 ▼▼▼
                         await save_config_to_db(f"pet_levelup_request_{user_id}", {
                             "new_level": pet_xp_res.data.get('new_level'),
                             "points_awarded": pet_xp_res.data.get('points_awarded')
                         })
+                        # ▲▲▲ [수정] 완료 ▲▲▲
                         await save_config_to_db(f"pet_evolution_check_request_{user_id}", time.time())
-                    # ▲▲▲ [수정] 완료 ▲▲▲
 
                 stats = await get_all_user_stats(user_id)
                 daily_stats = stats.get('daily', {})
@@ -370,12 +370,13 @@ class EconomyCore(commands.Cog):
                 for i, result in enumerate(pet_xp_results):
                     user_id_from_list = list(users_to_reward)[i]
                     if not isinstance(result, Exception) and hasattr(result, 'data') and result.data and result.data.get('leveled_up'):
+                        # ▼▼▼ [수정] DB에 저장하는 값을 딕셔너리 형태로 변경 ▼▼▼
                         await save_config_to_db(f"pet_levelup_request_{user_id_from_list}", {
                             "new_level": result.data.get('new_level'),
                             "points_awarded": result.data.get('points_awarded')
                         })
+                        # ▲▲▲ [수정] 완료 ▲▲▲
                         await save_config_to_db(f"pet_evolution_check_request_{user_id_from_list}", time.time())
-                # ▲▲▲ [수정] 완료 ▲▲▲
         except Exception as e:
             logger.error(f"[음성 활동 추적] 순찰 중 오류 발생: {e}", exc_info=True)
         finally:
