@@ -361,9 +361,48 @@ class PetSystem(commands.Cog):
         self.active_views_loaded = False
         self.hatch_checker.start()
         self.hunger_and_stat_decay.start()
+        self.pet_request_dispatcher.start()
+
     def cog_unload(self):
         self.hatch_checker.cancel()
         self.hunger_and_stat_decay.cancel()
+        self.pet_request_dispatcher.cancel()
+
+    @tasks.loop(seconds=10.0)
+    async def pet_request_dispatcher(self):
+        try:
+            response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', 'pet_%_request%').execute()
+            
+            if not (response and response.data):
+                return
+
+            requests = response.data
+            keys_to_delete = [req['config_key'] for req in requests]
+            
+            requests_by_prefix = defaultdict(list)
+            for req in requests:
+                prefix = req['config_key'].split('_request')[0]
+                requests_by_prefix[prefix].append(req)
+
+            if 'pet_levelup' in requests_by_prefix:
+                await self.process_levelup_requests(requests_by_prefix['pet_levelup'])
+            if 'pet_admin_levelup' in requests_by_prefix:
+                await self.process_levelup_requests(requests_by_prefix['pet_admin_levelup'], is_admin=True)
+            
+            if 'pet_evolution_check' in requests_by_prefix:
+                user_ids = {int(req['config_key'].split('_')[-1]) for req in requests_by_prefix['pet_evolution_check']}
+                await self.check_and_process_auto_evolution(user_ids)
+            
+            if keys_to_delete:
+                await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
+                
+        except Exception as e:
+            logger.error(f"펫 요청 디스패처에서 오류 발생: {e}", exc_info=True)
+
+    @pet_request_dispatcher.before_loop
+    async def before_pet_request_dispatcher(self):
+        await self.bot.wait_until_ready()
+
     @commands.Cog.listener()
     async def on_ready(self):
         if self.active_views_loaded:
@@ -380,7 +419,6 @@ class PetSystem(commands.Cog):
         last_played_date = datetime.fromtimestamp(last_played, tz=timezone.utc).strftime('%Y-%m-%d')
         return today_str == last_played_date
 
-    # ▼▼▼ [추가] _is_evolution_ready 함수 추가 ▼▼▼
     async def _is_evolution_ready(self, pet_data: Dict, inventory: Dict) -> bool:
         if not pet_data: return False
         
@@ -404,7 +442,6 @@ class PetSystem(commands.Cog):
 
         return True
 
-    # ▼▼▼ [수정] reload_active_pet_views 함수 수정 ▼▼▼
     async def reload_active_pet_views(self):
         logger.info("[PetSystem] 활성화된 펫 관리 UI를 다시 로드합니다...")
         try:
@@ -585,7 +622,6 @@ class PetSystem(commands.Cog):
             
             base_stats = self.get_base_stats(pet_data)
             
-            # (레벨 성장 + 자연 보너스)를 기본 스탯으로 합산
             base_with_natural_bonus = {
                 'hp': base_stats['hp'] + pet_data.get('natural_bonus_hp', 0),
                 'attack': base_stats['attack'] + pet_data.get('natural_bonus_attack', 0),
@@ -593,7 +629,6 @@ class PetSystem(commands.Cog):
                 'speed': base_stats['speed'] + pet_data.get('natural_bonus_speed', 0),
             }
             
-            # 유저가 분배한 스탯
             allocated_stats = {
                 'hp': pet_data.get('allocated_hp', 0),
                 'attack': pet_data.get('allocated_attack', 0),
@@ -601,7 +636,6 @@ class PetSystem(commands.Cog):
                 'speed': pet_data.get('allocated_speed', 0),
             }
 
-            # 현재 스탯 (배고픔 페널티 등이 적용될 수 있음)
             current_stats = {
                 'hp': pet_data['current_hp'],
                 'attack': pet_data['current_attack'],
@@ -625,7 +659,6 @@ class PetSystem(commands.Cog):
         species_info = pet_data['pet_species']
         
         final_stats = {"hp": species_info['base_hp'], "attack": species_info['base_attack'], "defense": species_info['base_defense'], "speed": species_info['base_speed']}
-        # ▼▼▼ [수정] 부화 보너스를 natural_bonus_ 컬럼에 저장하도록 변경 ▼▼▼
         natural_bonus_stats = {"hp": 0, "attack": 0, "defense": 0, "speed": 0}
         stats_keys = list(final_stats.keys())
         for _ in range(bonus_points):
@@ -660,23 +693,21 @@ class PetSystem(commands.Cog):
             except (discord.NotFound, discord.Forbidden) as e:
                 logger.error(f"부화 UI 업데이트 실패 (스레드: {thread.id}): {e}")
     
-    # ▼▼▼ [수정] 관리자 요청과 일반 레벨업 요청을 모두 처리하도록 함수 수정 ▼▼▼
-    async def process_levelup_requests(self, requests: List[Dict]):
-        user_ids_to_notify = {int(req['config_key'].split('_')[-1]): req['config_value'] for req in requests}
+    async def process_levelup_requests(self, requests: List[Dict], is_admin: bool = False):
+        user_ids_to_notify = {int(req['config_key'].split('_')[-1]): req.get('config_value') for req in requests}
         
         for user_id, payload in user_ids_to_notify.items():
             new_level, points_awarded = None, None
             
-            # payload가 비어있으면 관리자 테스트 명령어로 간주하고 DB 함수를 호출
-            if not payload: 
+            if is_admin: 
                 res = await supabase.rpc('admin_level_up_pet', {'p_user_id': user_id}).single().execute()
                 if res.data and res.data.get('leveled_up'):
                     new_level = res.data.get('new_level')
                     points_awarded = res.data.get('points_awarded')
-            # payload에 정보가 있으면 일반 레벨업으로 간주
-            else:
-                new_level = payload.get('new_level')
-                points_awarded = payload.get('points_awarded')
+            else: 
+                if isinstance(payload, dict):
+                    new_level = payload.get('new_level')
+                    points_awarded = payload.get('points_awarded')
 
             if new_level is not None and points_awarded is not None:
                 await self.notify_pet_level_up(user_id, new_level, points_awarded)
@@ -699,6 +730,45 @@ class PetSystem(commands.Cog):
                     await self.update_pet_ui(user_id, thread, message)
                 except (discord.NotFound, discord.Forbidden):
                     logger.warning(f"펫 레벨업 후 UI 업데이트 실패: 메시지(ID: {message_id})를 찾을 수 없습니다.")
+
+    async def check_and_process_auto_evolution(self, user_ids: set):
+        for user_id in user_ids:
+            try:
+                res = await supabase.rpc('trigger_pet_auto_evolution', {'p_user_id': user_id}).single().execute()
+                if res.data and res.data.get('evolved'):
+                    await self.notify_pet_evolution(user_id, res.data.get('new_stage'), res.data.get('points_granted'))
+            except Exception as e:
+                logger.error(f"자동 진화 처리 중 오류 (유저: {user_id}): {e}", exc_info=True)
+
+    async def notify_pet_evolution(self, user_id: int, new_stage_num: int, points_granted: int):
+        pet_data = await self.get_user_pet(user_id)
+        if not pet_data or not (thread_id := pet_data.get('thread_id')):
+            return
+
+        species_info = pet_data.get('pet_species', {})
+        stage_info_json = species_info.get('stage_info', {})
+        new_stage_name = stage_info_json.get(str(new_stage_num), {}).get('name', '새로운 모습')
+        
+        if thread := self.bot.get_channel(thread_id):
+            user = self.bot.get_user(user_id)
+            if user:
+                await thread.send(f"🌟 {user.mention}님의 펫이 **{new_stage_name}**(으)로 진화했습니다! 스탯 포인트 **{points_granted}**개를 획득했습니다!")
+            
+            if message_id := pet_data.get('message_id'):
+                try:
+                    message = await thread.fetch_message(message_id)
+                    await self.update_pet_ui(user_id, thread, message)
+                except (discord.NotFound, discord.Forbidden):
+                    pass
+
+    async def handle_evolution(self, interaction: discord.Interaction, message: discord.Message):
+        user_id = interaction.user.id
+        res = await supabase.rpc('attempt_pet_evolution', {'p_user_id': user_id}).single().execute()
+        
+        if res.data and res.data.get('success'):
+            await self.notify_pet_evolution(user_id, res.data.get('new_stage'), res.data.get('points_granted'))
+        else:
+            await interaction.followup.send("❌ 진화 조건을 만족하지 못했습니다. 레벨과 필요 아이템을 확인해주세요.", ephemeral=True, delete_after=10)
 
     async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: discord.Message, is_refresh: bool = False):
         pet_data, inventory = await asyncio.gather(self.get_user_pet(user_id), get_inventory(self.bot.get_user(user_id)))
@@ -748,7 +818,7 @@ class IncubatorPanelView(ui.View):
             await interaction.response.send_message("❌ 이미 펫을 소유하고 있습니다. 펫은 한 마리만 키울 수 있습니다.", ephemeral=True, delete_after=5)
             return
         await interaction.response.defer(ephemeral=True, thinking=False)
-        view = EggSelectView(interaction.user, self.cog)
+        view = EggSelectView(interaction.user, self)
         await view.start(interaction)
 async def setup(bot: commands.Bot):
     await bot.add_cog(PetSystem(bot))
