@@ -568,6 +568,8 @@ class PetSystem(commands.Cog):
             hatches_at = datetime.fromisoformat(pet_data['hatches_at'])
             embed.add_field(name="예상 부화 시간", value=f"{discord.utils.format_dt(hatches_at, style='R')}", inline=False)
             embed.set_footer(text="시간이 되면 자동으로 부화합니다.")
+# cogs/games/pet_system.py - build_pet_ui_embed 함수 내부
+
         else:
             stage_info_json = species_info.get('stage_info', {})
             stage_name = stage_info_json.get(str(current_stage), {}).get('name', '알 수 없는 단계')
@@ -587,18 +589,18 @@ class PetSystem(commands.Cog):
             friendship = pet_data.get('friendship', 0)
             friendship_bar = create_bar(friendship, 100, full_char='❤️', empty_char='🖤')
 
-            # ▼▼▼ 핵심 수정: 최종 그리드 레이아웃 적용 ▼▼▼
+            # ▼▼▼ 최종 레이아웃 수정 ▼▼▼
             embed.add_field(name="단계", value=f"**{stage_name}**: {species_info['species_name']}", inline=True)
             embed.add_field(name="속성/타입", value=f"{species_info['element']} / {ELEMENT_TO_TYPE.get(species_info['element'], '알 수 없음')}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True) # 1행 줄 맞춤
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
 
             embed.add_field(name="레벨", value=f"**Lv. {current_level}**", inline=True)
             embed.add_field(name="경험치", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True) # 2행 줄 맞춤
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
             
+            # 배고픔과 친밀도가 한 줄을 꽉 채우지 않도록 inline=True로 설정합니다.
             embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=True)
             embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True) # 3행 줄 맞춤
             
             stat_points = pet_data.get('stat_points', 0)
             if stat_points > 0:
@@ -623,8 +625,13 @@ class PetSystem(commands.Cog):
                 'speed': current_stats['speed'] - hatch_base_stats['speed']
             }
 
+            embed.add_field(name="\u200b\n능력치", value="\u200b", inline=False)
+            
+            # 능력치 2x2 그리드 강제 정렬
             embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)", inline=True)
             embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)", inline=True)
+            # 세 번째 빈 필드를 추가하여 한 줄을 채우고, 다음 필드가 무조건 아래로 내려가게 만듭니다.
+            embed.add_field(name="\u200b", value="\u200b", inline=True) 
             embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)", inline=True)
             embed.add_field(name="👟 스피드", value=f"**{current_stats['speed']}** (`{hatch_base_stats['speed']}` + `{total_bonus_stats['speed']}`)", inline=True)
             
