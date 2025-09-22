@@ -628,11 +628,14 @@ class PetSystem(commands.Cog):
                 'speed': current_stats['speed'] - hatch_base_stats['speed']
             }
 
-            # 능력치 3x1 그리드 + 마지막 한 칸
+            # 3. 능력치 2x2 그리드를 강제 정렬합니다.
             embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)", inline=True)
             embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)", inline=True)
+            embed.add_field(name="\u200b", value="\u200b", inline=True) 
+
             embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)", inline=True)
             embed.add_field(name="👟 스피드", value=f"**{current_stats['speed']}** (`{hatch_base_stats['speed']}` + `{total_bonus_stats['speed']}`)", inline=True)
+            embed.add_field(name="\u200b", value="\u200b", inline=True) 
             
         return embed
     async def process_hatching(self, pet_data: Dict):
