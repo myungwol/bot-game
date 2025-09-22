@@ -625,13 +625,9 @@ class PetSystem(commands.Cog):
                 'speed': current_stats['speed'] - hatch_base_stats['speed']
             }
 
-            embed.add_field(name="\u200b\n능력치", value="\u200b", inline=False)
-            
-            # 능력치 2x2 그리드 강제 정렬
             embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)", inline=True)
             embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)", inline=True)
-            # 세 번째 빈 필드를 추가하여 한 줄을 채우고, 다음 필드가 무조건 아래로 내려가게 만듭니다.
-            embed.add_field(name="\u200b", value="\u200b", inline=True) 
+            
             embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)", inline=True)
             embed.add_field(name="👟 스피드", value=f"**{current_stats['speed']}** (`{hatch_base_stats['speed']}` + `{total_bonus_stats['speed']}`)", inline=True)
             
