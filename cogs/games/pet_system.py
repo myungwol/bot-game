@@ -176,6 +176,11 @@ class PetUIView(ui.View):
         )
         await confirm_view.wait()
         if confirm_view.value is True:
+            # ▼▼▼ [수정] '놀아주기' 쿨다운을 함께 삭제하는 로직 추가 ▼▼▼
+            cooldown_key = f"daily_pet_play"
+            await supabase.table('cooldowns').delete().eq('user_id', self.user_id).eq('cooldown_key', cooldown_key).execute()
+            logger.info(f"펫을 놓아주면서 {self.user_id}의 '{cooldown_key}' 쿨다운을 초기화했습니다.")
+            
             await supabase.table('pets').delete().eq('user_id', self.user_id).execute()
             await interaction.edit_original_response(content="펫을 자연으로 돌려보냈습니다...", view=None)
             await interaction.channel.send(f"{interaction.user.mention}님이 펫을 자연의 품으로 돌려보냈습니다.")
@@ -352,17 +357,30 @@ class PetSystem(commands.Cog):
             hunger_bar = create_bar(hunger, 100, full_char='🟧', empty_char='⬛')
             friendship = pet_data.get('friendship', 0)
             friendship_bar = create_bar(friendship, 100, full_char='❤️', empty_char='🖤')
+            
+            # ▼▼▼ [수정] description 항목에 여백을 추가하여 가독성 개선 ▼▼▼
             description_parts = [
-                f"**이름:** {nickname}", f"**속성:** {species_info['element']}", f"**레벨:** {current_level}",
-                f"**경험치:** `{current_xp} / {xp_for_next_level}`", f"{xp_bar}",
-                f"**배고픔:** `{hunger} / 100`", f"{hunger_bar}",
-                f"**친밀도:** `{friendship} / 100`", f"{friendship_bar}"
+                f"**이름:** {nickname}",
+                f"**속성:** {species_info['element']}",
+                f"**레벨:** {current_level}",
+                "",
+                f"**경험치:** `{current_xp} / {xp_for_next_level}`",
+                f"{xp_bar}",
+                "",
+                f"**배고픔:** `{hunger} / 100`",
+                f"{hunger_bar}",
+                "",
+                f"**친밀도:** `{friendship} / 100`",
+                f"{friendship_bar}"
             ]
             embed.description = "\n".join(description_parts)
-            embed.add_field(name="❤️ 체력", value=str(pet_data['current_hp']), inline=True)
-            embed.add_field(name="⚔️ 공격력", value=str(pet_data['current_attack']), inline=True)
-            embed.add_field(name="🛡️ 방어력", value=str(pet_data['current_defense']), inline=True)
-            embed.add_field(name="💨 스피드", value=str(pet_data['current_speed']), inline=True)
+
+            # ▼▼▼ [수정] 스탯 표시를 한 줄로 통합 ▼▼▼
+            embed.add_field(
+                name="❤️ 체력⠀|⠀⚔️ 공격력⠀|⠀🛡️ 방어력⠀|⠀💨 스피드",
+                value=f"`{str(pet_data['current_hp']).center(5)}`|`{str(pet_data['current_attack']).center(8)}`|`{str(pet_data['current_defense']).center(9)}`|`{str(pet_data['current_speed']).center(7)}`",
+                inline=False
+            )
         return embed
     async def process_hatching(self, pet_data: Dict):
         user_id = int(pet_data['user_id'])
