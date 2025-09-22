@@ -585,22 +585,7 @@ class PetSystem(commands.Cog):
 
             embed.description = "\n".join(description_parts)
             
-            base_stats = self.get_base_stats(pet_data)
-            
-            base_with_natural_bonus = {
-                'hp': base_stats['hp'] + pet_data.get('natural_bonus_hp', 0),
-                'attack': base_stats['attack'] + pet_data.get('natural_bonus_attack', 0),
-                'defense': base_stats['defense'] + pet_data.get('natural_bonus_defense', 0),
-                'speed': base_stats['speed'] + pet_data.get('natural_bonus_speed', 0),
-            }
-            
-            allocated_stats = {
-                'hp': pet_data.get('allocated_hp', 0),
-                'attack': pet_data.get('allocated_attack', 0),
-                'defense': pet_data.get('allocated_defense', 0),
-                'speed': pet_data.get('allocated_speed', 0),
-            }
-
+            # 현재 능력치는 DB에서 직접 가져옵니다.
             current_stats = {
                 'hp': pet_data['current_hp'],
                 'attack': pet_data['current_attack'],
@@ -608,10 +593,27 @@ class PetSystem(commands.Cog):
                 'speed': pet_data['current_speed']
             }
 
-            embed.add_field(name="❤️ 체력", value=f"{current_stats['hp']} (`{base_with_natural_bonus['hp']}` + `{allocated_stats['hp']}`)", inline=True)
-            embed.add_field(name="⚔️ 공격력", value=f"{current_stats['attack']} (`{base_with_natural_bonus['attack']}` + `{allocated_stats['attack']}`)", inline=True)
-            embed.add_field(name="🛡️ 방어력", value=f"{current_stats['defense']} (`{base_with_natural_bonus['defense']}` + `{allocated_stats['defense']}`)", inline=True)
-            embed.add_field(name="💨 스피드", value=f"{current_stats['speed']} (`{base_with_natural_bonus['speed']}` + `{allocated_stats['speed']}`)", inline=True)
+            # 부화 시점(Lv.1)의 순수 기본 능력치를 가져옵니다.
+            hatch_base_stats = {
+                'hp': species_info.get('base_hp', 0),
+                'attack': species_info.get('base_attack', 0),
+                'defense': species_info.get('base_defense', 0),
+                'speed': species_info.get('base_speed', 0)
+            }
+
+            # 모든 보너스(레벨업 성장 + 부화 보너스 + 분배 스탯)를 계산합니다.
+            total_bonus_stats = {
+                'hp': current_stats['hp'] - hatch_base_stats['hp'],
+                'attack': current_stats['attack'] - hatch_base_stats['attack'],
+                'defense': current_stats['defense'] - hatch_base_stats['defense'],
+                'speed': current_stats['speed'] - hatch_base_stats['speed']
+            }
+
+            # 요청하신 새로운 형식으로 필드를 추가합니다.
+            embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)", inline=True)
+            embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)", inline=True)
+            embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)", inline=True)
+            embed.add_field(name="💨 스피드", value=f"**{current_stats['speed']}** (`{hatch_base_stats['speed']}` + `{total_bonus_stats['speed']}`)", inline=True)
         return embed
     async def process_hatching(self, pet_data: Dict):
         user_id = int(pet_data['user_id'])
