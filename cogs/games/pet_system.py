@@ -78,7 +78,6 @@ class ConfirmReleaseView(ui.View):
         await interaction.response.defer()
 
 class PetUIView(ui.View):
-    # ▼▼▼ [수정] __init__에 pet_data를 받아와서 버튼 상태를 미리 결정 ▼▼▼
     def __init__(self, cog_instance: 'PetSystem', user_id: int, pet_data: Dict):
         super().__init__(timeout=None)
         self.cog = cog_instance
@@ -91,7 +90,6 @@ class PetUIView(ui.View):
         self.release_pet_button.custom_id = f"pet_release:{user_id}"
         self.refresh_button.custom_id = f"pet_refresh:{user_id}"
 
-        # 배고픔이 100 이상이면 먹이주기 버튼 비활성화
         if self.pet_data.get('hunger', 0) >= 100:
             self.feed_pet_button.disabled = True
 
@@ -176,7 +174,6 @@ class PetUIView(ui.View):
         )
         await confirm_view.wait()
         if confirm_view.value is True:
-            # ▼▼▼ [수정] '놀아주기' 쿨다운을 함께 삭제하는 로직 추가 ▼▼▼
             cooldown_key = f"daily_pet_play"
             await supabase.table('cooldowns').delete().eq('user_id', self.user_id).eq('cooldown_key', cooldown_key).execute()
             logger.info(f"펫을 놓아주면서 {self.user_id}의 '{cooldown_key}' 쿨다운을 초기화했습니다.")
@@ -196,7 +193,6 @@ class PetUIView(ui.View):
         await interaction.response.defer()
         await self.cog.update_pet_ui(interaction.user.id, interaction.channel, interaction.message, is_refresh=True)
 
-# ... 이하 EggSelectView, PetSystem 클래스는 이전 답변의 전체 코드와 동일하게 유지 ...
 class EggSelectView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'PetSystem'):
         super().__init__(timeout=180)
@@ -248,7 +244,7 @@ class PetSystem(commands.Cog):
             for pet in res.data:
                 user_id = int(pet['user_id'])
                 message_id = int(pet['message_id'])
-                pet_data = await self.get_user_pet(user_id) # pet_data를 불러와서 View에 전달
+                pet_data = await self.get_user_pet(user_id)
                 if pet_data:
                     view = PetUIView(self, user_id, pet_data)
                     self.bot.add_view(view, message_id=message_id)
@@ -358,38 +354,32 @@ class PetSystem(commands.Cog):
             friendship = pet_data.get('friendship', 0)
             friendship_bar = create_bar(friendship, 100, full_char='❤️', empty_char='🖤')
             
-            # ▼▼▼ [수정] description 항목에 여백을 추가하여 가독성 개선 ▼▼▼
             description_parts = [
                 f"**이름:** {nickname}",
                 f"**속성:** {species_info['element']}",
                 f"**레벨:** {current_level}",
-                "###",
+                "",
                 f"**경험치:** `{current_xp} / {xp_for_next_level}`",
                 f"{xp_bar}",
-                "###",
+                "",
                 f"**배고픔:** `{hunger} / 100`",
                 f"{hunger_bar}",
-                "###",
+                "",
                 f"**친밀도:** `{friendship} / 100`",
                 f"{friendship_bar}"
             ]
             embed.description = "\n".join(description_parts)
 
-            # ▼▼▼ [수정] 스탯 표시를 한 줄로 통합하고 정렬을 개선합니다. ▼▼▼
+            # ▼▼▼ [수정] 스탯 표시를 블록이나 특별한 정렬 없이 한 줄로 단순화합니다. ▼▼▼
             hp = str(pet_data['current_hp'])
             attack = str(pet_data['current_attack'])
             defense = str(pet_data['current_defense'])
             speed = str(pet_data['current_speed'])
             
-            # 각 스탯 값을 지정된 너비에 맞게 중앙 정렬하여 한 줄의 문자열로 만듭니다.
-            # 모든 값을 하나의 코드 블록(` ``` `) 안에 넣어 수직 정렬을 보장합니다.
-            stats_line = f"{hp:^6} | {attack:^8} | {defense:^9} | {speed:^8}"
+            stats_name = "❤️ 체력  |  ⚔️ 공격력  |  🛡️ 방어력  |  💨 스피드"
+            stats_value = f"{hp} | {attack} | {defense} | {speed}"
 
-            embed.add_field(
-                name="❤️ 체력   |   ⚔️ 공격력   |   🛡️ 방어력   |   💨 스피드",
-                value=f"```{stats_line}```",
-                inline=False
-            )
+            embed.add_field(name=stats_name, value=stats_value, inline=False)
         return embed
     async def process_hatching(self, pet_data: Dict):
         user_id = int(pet_data['user_id'])
