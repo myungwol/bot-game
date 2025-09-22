@@ -282,6 +282,15 @@ class PetSystem(commands.Cog):
         hatches_at = now + timedelta(seconds=final_hatch_seconds)
         try:
             thread = await interaction.channel.create_thread(name=f"🥚｜{user.display_name}의 알", type=discord.ChannelType.public_thread, auto_archive_duration=10080)
+            
+            # ▼▼▼ [수정] 봇 자신을 스레드에 추가하고, 시스템 메시지를 삭제하는 로직 추가 ▼▼▼
+            try:
+                # 봇이 스레드 멤버 목록을 보거나 관리할 수 있도록 추가합니다.
+                await thread.add_user(self.bot.user)
+                # 스레드를 생성한 유저는 자동으로 추가되므로 별도로 추가할 필요가 없습니다.
+            except Exception as e:
+                logger.warning(f"스레드에 봇을 추가하는 중 오류 발생: {e}")
+
             pet_insert_res = await supabase.table('pets').insert({
                 'user_id': user.id, 'pet_species_id': pet_species_id, 'current_stage': 1, 'level': 0,
                 'hatches_at': hatches_at.isoformat(), 'created_at': now.isoformat(), 'thread_id': thread.id
@@ -291,6 +300,17 @@ class PetSystem(commands.Cog):
             pet_data['pet_species'] = pet_species_data
             embed = self.build_pet_ui_embed(user, pet_data)
             message = await thread.send(embed=embed)
+            
+            # "이 스레드를 시작했습니다" 시스템 메시지를 찾아서 삭제합니다.
+            try:
+                system_start_message = await thread.fetch_message(thread.id)
+                if system_start_message and system_start_message.type == discord.MessageType.thread_starter_message:
+                    await system_start_message.delete()
+            except (discord.NotFound, discord.Forbidden):
+                pass # 메시지가 없거나 삭제 권한이 없으면 무시
+
+            # ▲▲▲ [수정] 완료 ▲▲▲
+            
             await supabase.table('pets').update({'message_id': message.id}).eq('id', pet_data['id']).execute()
             await interaction.edit_original_response(content=f"✅ 부화가 시작되었습니다! {thread.mention} 채널에서 확인해주세요.", view=None)
         except Exception as e:
