@@ -357,54 +357,6 @@ class EggSelectView(ui.View):
         await self.message.edit(content=f"'{egg_name}'을 선택했습니다. 부화 절차를 시작합니다...", view=self)
         await self.cog.start_incubation_process(interaction, egg_name)
 
-class PetSystem(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self.active_views_loaded = False
-        self.hatch_checker.start()
-        self.hunger_and_stat_decay.start()
-        self.pet_request_dispatcher.start()
-
-    def cog_unload(self):
-        self.hatch_checker.cancel()
-        self.hunger_and_stat_decay.cancel()
-        self.pet_request_dispatcher.cancel()
-
-    @tasks.loop(seconds=10.0)
-    async def pet_request_dispatcher(self):
-        try:
-            response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', 'pet_%_request%').execute()
-            
-            if not (response and response.data):
-                return
-
-            requests = response.data
-            keys_to_delete = [req['config_key'] for req in requests]
-            
-            requests_by_prefix = defaultdict(list)
-            for req in requests:
-                prefix = req['config_key'].split('_request')[0]
-                requests_by_prefix[prefix].append(req)
-
-            if 'pet_levelup' in requests_by_prefix:
-                await self.process_levelup_requests(requests_by_prefix['pet_levelup'])
-            if 'pet_admin_levelup' in requests_by_prefix:
-                await self.process_levelup_requests(requests_by_prefix['pet_admin_levelup'], is_admin=True)
-            
-            if 'pet_evolution_check' in requests_by_prefix:
-                user_ids = {int(req['config_key'].split('_')[-1]) for req in requests_by_prefix['pet_evolution_check']}
-                await self.check_and_process_auto_evolution(user_ids)
-            
-            if keys_to_delete:
-                await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
-                
-        except Exception as e:
-            logger.error(f"펫 요청 디스패처에서 오류 발생: {e}", exc_info=True)
-
-    @pet_request_dispatcher.before_loop
-    async def before_pet_request_dispatcher(self):
-        await self.bot.wait_until_ready()
-
     @commands.Cog.listener()
     async def on_ready(self):
         if self.active_views_loaded:
