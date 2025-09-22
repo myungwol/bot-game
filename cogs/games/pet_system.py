@@ -370,19 +370,11 @@ class PetSystem(commands.Cog):
             ]
             embed.description = "\n".join(description_parts)
 
-            # ▼▼▼ [수정] 스탯 표시를 코드 블록 없이, 특수 공백(U+2002)을 사용하여 간격을 조정합니다. ▼▼▼
-            hp = str(pet_data['current_hp'])
-            attack = str(pet_data['current_attack'])
-            defense = str(pet_data['current_defense'])
-            speed = str(pet_data['current_speed'])
-            
-            # 특수 공백(en space)을 사용하여 간격을 미세 조정
-            en_space = "\u2002"
-            
-            stats_name = f"❤️ 체력{en_space}⚔️ 공격력{en_space}🛡️ 방어력{en_space}💨 스피드"
-            stats_value = f"{hp}{en_space*4}|{en_space*3}{attack}{en_space*4}|{en_space*4}{defense}{en_space*4}|{en_space*4}{speed}"
-            
-            embed.add_field(name=stats_name, value=stats_value, inline=False)
+            # ▼▼▼ [수정] 스탯 표시를 원래의 개별 필드 방식으로 복원합니다. ▼▼▼
+            embed.add_field(name="❤️ 체력", value=str(pet_data['current_hp']), inline=True)
+            embed.add_field(name="⚔️ 공격력", value=str(pet_data['current_attack']), inline=True)
+            embed.add_field(name="🛡️ 방어력", value=str(pet_data['current_defense']), inline=True)
+            embed.add_field(name="💨 스피드", value=str(pet_data['current_speed']), inline=True)
         return embed
     async def process_hatching(self, pet_data: Dict):
         user_id = int(pet_data['user_id'])
@@ -456,7 +448,7 @@ class IncubatorPanelView(ui.View):
         super().__init__(timeout=None)
         self.cog = cog_instance
     @ui.button(label="알 부화시키기", style=discord.ButtonStyle.secondary, emoji="🥚", custom_id="incubator_start")
-    async def start_incubation_button(self, interaction: discord.Interaction):
+    async def start_incubation_button(self, interaction: discord.Interaction, button: ui.Button):
         if await self.cog.get_user_pet(interaction.user.id):
             await interaction.response.send_message("❌ 이미 펫을 소유하고 있습니다. 펫은 한 마리만 키울 수 있습니다.", ephemeral=True, delete_after=5)
             return
