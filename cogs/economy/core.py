@@ -192,6 +192,24 @@ class EconomyCore(commands.Cog):
                             except Exception as e:
                                 logger.error(f"[AdminBridge] XP/레벨 요청 처리 중 오류: {e}", exc_info=True)
             
+            if 'pet_levelup' in requests_by_prefix:
+                if pet_cog := self.bot.get_cog("PetSystem"):
+                    for req in requests_by_prefix['pet_levelup']:
+                        try:
+                            user_id = int(req['config_key'].split('_')[-1])
+                            res = await supabase.rpc('admin_level_up_pet', {'p_user_id': user_id}).single().execute()
+                            if res.data and res.data.get('leveled_up'):
+                                logger.info(f"[AdminBridge] {user_id}님의 펫 레벨업 처리 완료.")
+                                await pet_cog.notify_pet_level_up(
+                                    user_id, 
+                                    res.data.get('new_level'), 
+                                    res.data.get('points_awarded')
+                                )
+                            else:
+                                logger.warning(f"[AdminBridge] {user_id}님의 펫 레벨업 처리 실패 (RPC 결과 없음). 펫이 없거나 DB 오류일 수 있습니다.")
+                        except Exception as e:
+                            logger.error(f"[AdminBridge] 펫 레벨업 요청 처리 중 오류: {e}", exc_info=True)
+
             if keys_to_delete:
                 await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
 
