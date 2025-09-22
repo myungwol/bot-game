@@ -8,8 +8,8 @@ import random
 import os
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List, Any
-import asyncio # <-- [핵심 수정] asyncio import 추가
-import re # <-- [핵심 수정] re import 추가
+import asyncio 
+import re 
 
 from utils.database import (
     supabase, get_inventory, update_inventory, get_item_database,
@@ -107,6 +107,7 @@ class PetUIView(ui.View):
         feed_items = {name: qty for name, qty in inventory.items() if get_item_database().get(name, {}).get('effect_type') == 'pet_feed'}
         if not feed_items:
             return await interaction.followup.send("❌ 펫에게 줄 수 있는 먹이가 없습니다.", ephemeral=True)
+
         options = [discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in feed_items.items()]
         feed_select = ui.Select(placeholder="줄 먹이를 선택하세요...", options=options)
         async def feed_callback(select_interaction: discord.Interaction):
@@ -170,8 +171,7 @@ class PetUIView(ui.View):
             await asyncio.sleep(10)
             try:
                 await interaction.channel.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
+            except (discord.NotFound, discord.Forbidden): pass
         else:
             await interaction.edit_original_response(content="펫 놓아주기를 취소했습니다.", view=None)
 
@@ -261,6 +261,7 @@ class PetSystem(commands.Cog):
     async def get_user_pet(self, user_id: int) -> Optional[Dict]:
         res = await supabase.table('pets').select('*, pet_species(*)').eq('user_id', user_id).maybe_single().execute()
         return res.data if res and res.data else None
+    
     async def start_incubation_process(self, interaction: discord.Interaction, egg_name: str):
         user = interaction.user
         element = EGG_TO_ELEMENT.get(egg_name) if egg_name != "랜덤 펫 알" else random.choice(ELEMENTS)
@@ -275,6 +276,7 @@ class PetSystem(commands.Cog):
         final_hatch_seconds = base_hatch_seconds + random_offset_seconds
         now = datetime.now(timezone.utc)
         hatches_at = now + timedelta(seconds=final_hatch_seconds)
+        thread = None
         try:
             safe_name = re.sub(r'[^\w\s\-_가-힣]', '', user.display_name).strip()
             if not safe_name:
@@ -291,22 +293,31 @@ class PetSystem(commands.Cog):
             pet_data['pet_species'] = pet_species_data
             embed = self.build_pet_ui_embed(user, pet_data)
             message = await thread.send(embed=embed)
-            await asyncio.sleep(1) 
-            try:
-                system_start_message = await thread.fetch_message(thread.id)
-                if system_start_message and system_start_message.type == discord.MessageType.thread_starter_message:
-                    await system_start_message.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
+            
+            # ▼▼▼ [수정] 재시도 루프(Retry Loop)로 시스템 메시지 삭제 ▼▼▼
+            for _ in range(5): # 최대 5번 시도
+                try:
+                    system_start_message = await thread.fetch_message(thread.id)
+                    if system_start_message and system_start_message.type == discord.MessageType.thread_starter_message:
+                        await system_start_message.delete()
+                        break # 성공 시 루프 탈출
+                except discord.NotFound:
+                    await asyncio.sleep(0.5) # 메시지를 못 찾으면 0.5초 대기 후 재시도
+                except discord.Forbidden:
+                    logger.warning(f"스레드({thread.id})의 시스템 메시지를 삭제할 권한이 없습니다.")
+                    break
+            # ▲▲▲ [수정] 완료 ▲▲▲
+
             await supabase.table('pets').update({'message_id': message.id}).eq('id', pet_data['id']).execute()
             await interaction.edit_original_response(content=f"✅ 부화가 시작되었습니다! {thread.mention} 채널에서 확인해주세요.", view=None)
         except Exception as e:
             logger.error(f"인큐베이션 시작 중 오류 (유저: {user.id}, 알: {egg_name}): {e}", exc_info=True)
-            if 'thread' in locals() and thread:
+            if thread:
                 try:
                     await thread.delete()
                 except (discord.NotFound, discord.Forbidden): pass
             await interaction.edit_original_response(content="❌ 부화 절차를 시작하는 중 오류가 발생했습니다.", view=None)
+
     def build_pet_ui_embed(self, user: discord.Member, pet_data: Dict) -> discord.Embed:
         species_info = pet_data.get('pet_species')
         if not species_info:
