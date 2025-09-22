@@ -589,14 +589,23 @@ class PetSystem(commands.Cog):
             friendship = pet_data.get('friendship', 0)
             friendship_bar = create_bar(friendship, 100, full_char='❤️', empty_char='🖤')
 
-            # ▼▼▼ 최종 레이아웃 수정 ▼▼▼
+            # ▼▼▼ 최종 그리드 레이아웃 적용 ▼▼▼
+            # 1행
             embed.add_field(name="단계", value=f"**{stage_name}**: {species_info['species_name']}", inline=True)
-            embed.add_field(name="속성/타입", value=f"{species_info['element']} / {ELEMENT_TO_TYPE.get(species_info['element'], '알 수 없음')}", inline=True)
+            embed.add_field(name="타입", value=f"{ELEMENT_TO_TYPE.get(species_info['element'], '알 수 없음')}", inline=True)
+            embed.add_field(name="\u200b", value="\u200b", inline=True) # 줄 맞춤
+
+            # 2행
             embed.add_field(name="레벨", value=f"**Lv. {current_level}**", inline=True)
-            
+            embed.add_field(name="속성", value=f"{species_info['element']}", inline=True)
+            embed.add_field(name="\u200b", value="\u200b", inline=True) # 줄 맞춤
+
+            # 3행
             embed.add_field(name="경험치", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True)
-            # 배고픔과 친밀도가 한 줄을 꽉 채우지 않도록 inline=True로 설정합니다.
+            embed.add_field(name="\u200b", value="\u200b", inline=True) # 빈 공간
+            embed.add_field(name="\u200b", value="\u200b", inline=True) # 줄 맞춤
+            
+            # 4행
             embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=True)
             embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=True)
             
@@ -623,6 +632,8 @@ class PetSystem(commands.Cog):
                 'speed': current_stats['speed'] - hatch_base_stats['speed']
             }
 
+            # 능력치 3x1 그리드 + 마지막 한 칸
+            embed.add_field(name="\u200b", value="**능력치**", inline=False) # 능력치 섹션 제목 역할
             embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)", inline=True)
             embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)", inline=True)
             embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)", inline=True)
