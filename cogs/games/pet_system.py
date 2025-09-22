@@ -269,6 +269,7 @@ class PetSystem(commands.Cog):
         if not (species_res and species_res.data):
             await interaction.followup.send("❌ 펫 기본 정보가 없습니다. 관리자에게 문의해주세요.", ephemeral=True)
             return
+            
         pet_species_data = species_res.data
         pet_species_id = pet_species_data['id']
         base_hatch_seconds = HATCH_TIMES.get(egg_name, 172800)
@@ -282,33 +283,64 @@ class PetSystem(commands.Cog):
             if not safe_name:
                 safe_name = f"유저-{user.id}"
             thread_name = f"🥚｜{safe_name}의 알"
-            thread = await interaction.channel.create_thread(name=thread_name, type=discord.ChannelType.public_thread, auto_archive_duration=10080)
+            
+            # --- 로깅 1: 스레드 생성 시도 ---
+            logger.info(f"스레드 생성 시도: 이름='{thread_name}', 타입=public")
+            thread = await interaction.channel.create_thread(
+                name=thread_name,
+                type=discord.ChannelType.public_thread,
+                auto_archive_duration=10080
+            )
+            logger.info(f"스레드 생성 성공: ID={thread.id}, OwnerID={thread.owner_id}")
+            
             await thread.add_user(user)
             pet_insert_res = await supabase.table('pets').insert({
                 'user_id': user.id, 'pet_species_id': pet_species_id, 'current_stage': 1, 'level': 0,
                 'hatches_at': hatches_at.isoformat(), 'created_at': now.isoformat(), 'thread_id': thread.id
             }).execute()
             await update_inventory(user.id, egg_name, -1)
+            
             pet_data = pet_insert_res.data[0]
             pet_data['pet_species'] = pet_species_data
+
             embed = self.build_pet_ui_embed(user, pet_data)
             message = await thread.send(embed=embed)
+
+            # --- 로깅 2: 시스템 메시지 삭제 로직 시작 ---
+            logger.info(f"스레드(ID: {thread.id})의 시스템 메시지 삭제를 시작합니다.")
             
-            # ▼▼▼ [수정] 스레드의 가장 오래된 메시지(첫 메시지)를 삭제하는 방식으로 변경 ▼▼▼
-            try:
-                # 스레드 기록에서 가장 오래된 메시지 1개를 가져옵니다.
-                history = [msg async for msg in thread.history(limit=1, oldest_first=True)]
-                if history:
-                    system_start_message = history[0]
-                    # 해당 메시지가 시스템 메시지 유형인지 확인하고 삭제합니다.
+            # 재시도 루프(Retry Loop)로 시스템 메시지 삭제
+            deleted = False
+            for i in range(5): # 최대 5번 (약 2.5초) 시도
+                try:
+                    logger.info(f"삭제 시도 #{i+1}: thread.fetch_message({thread.id}) 실행")
+                    system_start_message = await thread.fetch_message(thread.id)
+                    
+                    # --- 로깅 3: 메시지 fetch 성공 시 정보 로깅 ---
+                    logger.info(f"메시지 fetch 성공: ID={system_start_message.id}, Type={system_start_message.type}")
+
                     if system_start_message.type == discord.MessageType.thread_starter_message:
                         await system_start_message.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass # 메시지를 찾을 수 없거나 권한이 없으면 무시
-            # ▲▲▲ [수정] 완료 ▲▲▲
+                        logger.info("시스템 메시지를 성공적으로 삭제했습니다.")
+                        deleted = True
+                        break 
+                except discord.NotFound:
+                    logger.warning(f"삭제 시도 #{i+1}: 메시지를 찾지 못했습니다 (NotFound). 0.5초 후 재시도합니다.")
+                    await asyncio.sleep(0.5)
+                except discord.Forbidden:
+                    logger.error(f"삭제 시도 #{i+1}: 메시지를 삭제할 권한이 없습니다 (Forbidden). 루프를 중단합니다.")
+                    break
+                except Exception as e:
+                    logger.error(f"삭제 시도 #{i+1}: 예상치 못한 오류 발생 - {type(e).__name__}: {e}")
+                    break
+            
+            if not deleted:
+                logger.error("최종적으로 시스템 메시지 삭제에 실패했습니다.")
+            # --- 로깅 종료 ---
 
             await supabase.table('pets').update({'message_id': message.id}).eq('id', pet_data['id']).execute()
             await interaction.edit_original_response(content=f"✅ 부화가 시작되었습니다! {thread.mention} 채널에서 확인해주세요.", view=None)
+
         except Exception as e:
             logger.error(f"인큐베이션 시작 중 오류 (유저: {user.id}, 알: {egg_name}): {e}", exc_info=True)
             if thread:
@@ -316,7 +348,6 @@ class PetSystem(commands.Cog):
                     await thread.delete()
                 except (discord.NotFound, discord.Forbidden): pass
             await interaction.edit_original_response(content="❌ 부화 절차를 시작하는 중 오류가 발생했습니다.", view=None)
-
     def build_pet_ui_embed(self, user: discord.Member, pet_data: Dict) -> discord.Embed:
         species_info = pet_data.get('pet_species')
         if not species_info:
