@@ -49,8 +49,8 @@ def create_bar(current: int, required: int, length: int = 10, full_char: str = '
     return f"[{full_char * filled_length}{empty_char * (length - filled_length)}]"
 
 def calculate_xp_for_pet_level(level: int) -> int:
-    if level <= 1: return 100
-    return int(100 * (level ** 1.3))
+    if level < 1: return 80
+    return int(80 * (level ** 1.2))
 
 async def delete_message_after(message: discord.InteractionMessage, delay: int):
     await asyncio.sleep(delay)
@@ -70,8 +70,6 @@ class StatAllocationView(ui.View):
         
         self.points_to_spend = self.pet_data.get('stat_points', 0)
         self.spent_points = {'hp': 0, 'attack': 0, 'defense': 0, 'speed': 0}
-        
-        # ▼▼▼ [추가] 동시성 문제를 막기 위한 Lock 추가 ▼▼▼
         self.lock = asyncio.Lock()
 
     async def start(self, interaction: discord.Interaction):
@@ -129,7 +127,6 @@ class StatAllocationView(ui.View):
         btn.callback = self.on_stat_button_click
         return btn
 
-    # ▼▼▼ [수정] Lock을 사용하여 동시 클릭 방지 ▼▼▼
     async def on_stat_button_click(self, interaction: discord.Interaction):
         async with self.lock:
             _, stat, amount_str = interaction.data['custom_id'].split('_')
@@ -146,7 +143,6 @@ class StatAllocationView(ui.View):
             self.build_components()
             await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
-    # ▼▼▼ [수정] Lock을 사용하여 동시 클릭 방지 ▼▼▼
     async def on_confirm(self, interaction: discord.Interaction):
         async with self.lock:
             await interaction.response.defer()
@@ -198,7 +194,8 @@ class ConfirmReleaseView(ui.View):
         await interaction.response.defer()
 
 class PetUIView(ui.View):
-    def __init__(self, cog_instance: 'PetSystem', user_id: int, pet_data: Dict, play_cooldown_active: bool):
+    # ▼▼▼ [수정] __init__에 evolution_ready 파라미터 추가 ▼▼▼
+    def __init__(self, cog_instance: 'PetSystem', user_id: int, pet_data: Dict, play_cooldown_active: bool, evolution_ready: bool):
         super().__init__(timeout=None)
         self.cog = cog_instance
         self.user_id = user_id
@@ -210,13 +207,17 @@ class PetUIView(ui.View):
         self.release_pet_button.custom_id = f"pet_release:{user_id}"
         self.refresh_button.custom_id = f"pet_refresh:{user_id}"
         self.allocate_stats_button.custom_id = f"pet_allocate_stats:{user_id}"
+        # ▼▼▼ [추가] 진화 버튼 ▼▼▼
+        self.evolve_button.custom_id = f"pet_evolve:{user_id}"
 
         if self.pet_data.get('hunger', 0) >= 100:
             self.feed_pet_button.disabled = True
         
         self.play_with_pet_button.disabled = play_cooldown_active
         self.allocate_stats_button.disabled = self.pet_data.get('stat_points', 0) <= 0
-
+        
+        # ▼▼▼ [추가] 진화 준비 상태에 따라 버튼 비활성화 ▼▼▼
+        self.evolve_button.disabled = not evolution_ready
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         try:
@@ -279,6 +280,12 @@ class PetUIView(ui.View):
         
         msg = await interaction.followup.send(f"❤️ 펫과 즐거운 시간을 보냈습니다! 친밀도가 {friendship_amount} 오르고 모든 스탯이 {stat_increase_amount} 상승했습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_message_after(msg, 5))
+
+    # ▼▼▼ [추가] 진화 버튼 콜백 ▼▼▼
+    @ui.button(label="진화", style=discord.ButtonStyle.success, emoji="🌟", row=0)
+    async def evolve_button(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer()
+        await self.cog.handle_evolution(interaction, interaction.message)
 
     @ui.button(label="이름 변경", style=discord.ButtonStyle.secondary, emoji="✏️", row=1)
     async def rename_pet_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -375,6 +382,30 @@ class PetSystem(commands.Cog):
         last_played_date = datetime.fromtimestamp(last_played, tz=timezone.utc).strftime('%Y-%m-%d')
         return today_str == last_played_date
 
+    async def _is_evolution_ready(self, pet_data: Dict, inventory: Dict) -> bool:
+        if not pet_data: return False
+        
+        species_info = pet_data.get('pet_species')
+        if not species_info: return False
+
+        next_stage_num = pet_data['current_stage'] + 1
+        stage_info_json = species_info.get('stage_info', {})
+        next_stage_info = stage_info_json.get(str(next_stage_num))
+
+        if not next_stage_info: return False # 마지막 단계
+
+        # 아이템이 필요한 진화 단계만 버튼으로 활성화
+        if 'item' not in next_stage_info: return False
+
+        if pet_data['level'] < next_stage_info['level_req']: return False
+        
+        required_item = next_stage_info['item']
+        required_qty = next_stage_info['qty']
+        
+        if inventory.get(required_item, 0) < required_qty: return False
+
+        return True
+        
     async def reload_active_pet_views(self):
         logger.info("[PetSystem] 활성화된 펫 관리 UI를 다시 로드합니다...")
         try:
