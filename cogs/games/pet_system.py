@@ -573,14 +573,12 @@ class PetSystem(commands.Cog):
             stage_name = stage_info_json.get(str(current_stage), {}).get('name', '알 수 없는 단계')
             nickname = pet_data.get('nickname') or species_info['species_name']
             
-            # 1. 제목 구조 변경: 펫 닉네임과 종족명을 제목으로 사용
             embed = discord.Embed(
                 title=f"🐾 {nickname}",
                 description=f"**{stage_name}**: {species_info['species_name']}",
                 color=0xFFD700
             )
             embed.set_author(name=f"{user.display_name}님의 펫", icon_url=user.display_avatar.url if user.display_avatar else None)
-            # 2. 이미지는 다시 Thumbnail로 설정하여 오른쪽에 배치
             embed.set_thumbnail(url=image_url)
 
             current_level, current_xp = pet_data['level'], pet_data['xp']
@@ -593,13 +591,12 @@ class PetSystem(commands.Cog):
             friendship = pet_data.get('friendship', 0)
             friendship_bar = create_bar(friendship, 100, full_char='❤️', empty_char='🖤')
 
-            # 3. 주요 정보들을 2열 필드로 배치하여 세로 길이 압축
             embed.add_field(name="레벨", value=f"**Lv. {current_level}**", inline=True)
             embed.add_field(name="속성/타입", value=f"{species_info['element']} / {ELEMENT_TO_TYPE.get(species_info['element'], '알 수 없음')}", inline=True)
             
-            embed.add_field(name="\u200b", value="\u200b", inline=False) # 줄바꿈 역할
-            
+            # ▼▼▼ 핵심 수정 1: 레벨과 경험치 사이의 불필요한 줄바꿈 필드를 제거합니다. ▼▼▼
             embed.add_field(name="경험치", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=False)
+            
             embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=True)
             embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=True)
 
@@ -607,7 +604,6 @@ class PetSystem(commands.Cog):
             if stat_points > 0:
                 embed.add_field(name="✨ 남은 스탯 포인트", value=f"**{stat_points}**", inline=False)
 
-            # 능력치 부분은 이전과 동일
             current_stats = {
                 'hp': pet_data['current_hp'],
                 'attack': pet_data['current_attack'],
@@ -626,12 +622,17 @@ class PetSystem(commands.Cog):
                 'defense': current_stats['defense'] - hatch_base_stats['defense'],
                 'speed': current_stats['speed'] - hatch_base_stats['speed']
             }
+
+            # ▼▼▼ 핵심 수정 2: 능력치 필드들의 순서와 간격을 조정합니다. ▼▼▼
             embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)", inline=True)
             embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True) # 줄 맞춤용
+            
+            # 능력치 항목들 사이에 세로 간격을 주기 위한 보이지 않는 필드를 추가합니다.
+            embed.add_field(name="\u200b", value="\u200b", inline=False)
+
             embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)", inline=True)
             embed.add_field(name="💨 스피드", value=f"**{current_stats['speed']}** (`{hatch_base_stats['speed']}` + `{total_bonus_stats['speed']}`)", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True) # 줄 맞춤용
+            
         return embed
     async def process_hatching(self, pet_data: Dict):
         user_id = int(pet_data['user_id'])
