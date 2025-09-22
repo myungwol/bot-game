@@ -253,7 +253,8 @@ class PetSystem(commands.Cog):
         except Exception as e:
             logger.error(f"활성 펫 UI 로드 중 오류 발생: {e}", exc_info=True)
 
-    @tasks.loop(hours=1)
+    # ▼▼▼ [수정] hours=1 에서 minutes=30 으로 변경 ▼▼▼
+    @tasks.loop(minutes=30)
     async def hunger_and_stat_decay(self):
         try:
             await supabase.rpc('decrease_all_pets_hunger', {'p_amount': 1}).execute()
@@ -370,7 +371,6 @@ class PetSystem(commands.Cog):
             ]
             embed.description = "\n".join(description_parts)
 
-            # ▼▼▼ [수정] 스탯 표시를 블록이나 특별한 정렬 없이 한 줄로 단순화합니다. ▼▼▼
             hp = str(pet_data['current_hp'])
             attack = str(pet_data['current_attack'])
             defense = str(pet_data['current_defense'])
