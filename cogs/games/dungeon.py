@@ -20,29 +20,21 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# --- 데이터베이스에서 로드될 데이터 구조 ---
-# 이 Cog는 이제 DB에서 직접 데이터를 로드하므로, 하드코딩된 데이터는 제거됩니다.
-
 async def load_dungeon_data_from_db() -> Dict[str, Any]:
-    """Supabase에서 던전 관련 모든 데이터를 로드하고 파이썬 객체로 재구성합니다."""
     try:
         dungeons_res, monsters_res, loot_res = await asyncio.gather(
             supabase.table('dungeons').select('*').execute(),
             supabase.table('monster_species').select('*').execute(),
             supabase.table('dungeon_loot').select('*').execute()
         )
-        
         dungeon_data = {d['tier_key']: d for d in dungeons_res.data} if dungeons_res.data else {}
         monster_base_data = {m['element_key']: m for m in monsters_res.data} if monsters_res.data else {}
-        
         loot_table = defaultdict(dict)
         if loot_res.data:
             for item in loot_res.data:
                 loot_table[item['dungeon_tier']][item['item_name']] = (item['drop_chance'], item['min_qty'], item['max_qty'])
-        
         logger.info(f"✅ 던전 데이터 로드 완료: 던전({len(dungeon_data)}), 몬스터({len(monster_base_data)}), 보상({len(loot_table)})")
         return {"dungeons": dungeon_data, "monsters": monster_base_data, "loot": dict(loot_table)}
-
     except Exception as e:
         logger.error(f"❌ 던전 데이터 DB 로드 실패: {e}", exc_info=True)
         return {"dungeons": {}, "monsters": {}, "loot": {}}
@@ -51,18 +43,13 @@ class DungeonGameView(ui.View):
     def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime):
         super().__init__(timeout=(end_time - datetime.now(timezone.utc)).total_seconds() + 30)
         self.cog = cog; self.user = user; self.pet_data_raw = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
-        
         self.final_pet_stats = self._calculate_final_pet_stats()
-        
         self.state = "exploring"; self.message: Optional[discord.Message] = None
         self.battle_log: List[str] = []; self.rewards: Dict[str, int] = defaultdict(int)
-
         self.pet_current_hp: int = self.final_pet_stats['hp']
         self.current_monster: Optional[Dict] = None; self.monster_current_hp: int = 0
         self.is_pet_turn: bool = True
-        
         self.storage_base_url = f"{os.environ.get('SUPABASE_URL')}/storage/v1/object/public/monster_images"
-
         self.build_components()
 
     def _calculate_final_pet_stats(self) -> Dict[str, int]:
@@ -82,19 +69,14 @@ class DungeonGameView(ui.View):
 
     def generate_monster(self) -> Dict:
         dungeon_info = self.cog.dungeon_data[self.dungeon_tier]
-        tier_modifier = dungeon_info
         element = random.choice(dungeon_info['elements'])
         base_monster = self.cog.monster_base_data[element]
-        hp = int(base_monster['base_hp'] * tier_modifier['hp_mult'])
-        attack = int(base_monster['base_attack'] * tier_modifier['atk_mult'])
-        defense = int(base_monster['base_defense'] * tier_modifier['def_mult'])
-        speed = int(base_monster['base_speed'] * tier_modifier['spd_mult'])
-        
-        # [수정] 펫 경험치 밸런스 패치 (20배 감소)
-        xp = max(1, int(hp * tier_modifier['xp_mult']) // 20)
-        
-        image_url = f"{self.storage_base_url}/{element}_{tier_modifier['image_suffix']}.png"
-        logger.info(f"[Dungeon] Generating monster image URL: {image_url}")
+        hp = int(base_monster['base_hp'] * dungeon_info['hp_mult'])
+        attack = int(base_monster['base_attack'] * dungeon_info['atk_mult'])
+        defense = int(base_monster['base_defense'] * dungeon_info['def_mult'])
+        speed = int(base_monster['base_speed'] * dungeon_info['spd_mult'])
+        xp = max(1, int(hp * dungeon_info['xp_mult']) // 20)
+        image_url = f"{self.storage_base_url}/{element}_{dungeon_info['image_suffix']}.png"
         return {"name": f"{dungeon_info['name'].replace('던전', '')} {base_monster['name']}", "hp": hp, "attack": attack, "defense": defense, "speed": speed, "xp": xp, "element": element, "image_url": image_url}
 
     def build_embed(self) -> discord.Embed:
@@ -156,8 +138,7 @@ class DungeonGameView(ui.View):
     async def handle_explore(self, interaction: discord.Interaction):
         self.current_monster = self.generate_monster(); self.monster_current_hp = self.current_monster['hp']
         self.battle_log = [f"{self.current_monster['name']} 이(가) 나타났다!"]
-        pet_speed = self.final_pet_stats['speed']; monster_speed = self.current_monster.get('speed', 0)
-        if pet_speed >= monster_speed:
+        if self.final_pet_stats['speed'] >= self.current_monster.get('speed', 0):
             self.is_pet_turn = True; self.battle_log.append(f"{self.pet_data_raw['nickname']}이(가) 민첩하게 먼저 움직인다!")
         else:
             self.is_pet_turn = False; self.battle_log.append(f"{self.current_monster['name']}의 기습 공격!"); await self._execute_monster_turn()
@@ -202,7 +183,9 @@ class DungeonGameView(ui.View):
         self.state = "exploring"; self.current_monster = None; self.battle_log = ["무사히 도망쳤다..."]
         await self.refresh_ui(interaction)
 
+    # [수정] 던전 나가기 버튼 오류 해결
     async def handle_leave(self, interaction: discord.Interaction):
+        await interaction.response.send_message("던전에서 나가는 중입니다...", ephemeral=True, delete_after=5)
         await self.cog.close_dungeon_session(self.user.id, self.rewards, interaction.channel)
 
     async def on_timeout(self): await self.cog.close_dungeon_session(self.user.id, self.rewards)
