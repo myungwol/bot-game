@@ -45,14 +45,13 @@ DUNGEON_DATA = {
     "master":       {"name": "최상급 던전", "elements": ["light", "dark"]},
 }
 
-# [수정] 몬스터 능력치 재조정 및 특화
 MONSTER_BASE_DATA = {
-    "fire":     {"name": "불의 슬라임",   "base_hp": 30, "base_attack": 12, "base_defense": 2, "base_speed": 4}, # 공격 타입
-    "water":    {"name": "물의 슬라임",   "base_hp": 40, "base_attack": 6,  "base_defense": 8, "base_speed": 2}, # 방어 타입
-    "grass":    {"name": "풀의 슬라임",   "base_hp": 50, "base_attack": 7,  "base_defense": 4, "base_speed": 3}, # 체력 타입
-    "electric": {"name": "전기 슬라임", "base_hp": 25, "base_attack": 8,  "base_defense": 2, "base_speed": 12},# 스피드 타입
-    "light":    {"name": "빛의 슬라임",   "base_hp": 45, "base_attack": 5,  "base_defense": 7, "base_speed": 3}, # 체력/방어 타입
-    "dark":     {"name": "어둠의 슬라임", "base_hp": 28, "base_attack": 11, "base_defense": 2, "base_speed": 9}, # 공격/스피드 타입
+    "fire":     {"name": "불의 슬라임",   "base_hp": 30, "base_attack": 12, "base_defense": 2, "base_speed": 4},
+    "water":    {"name": "물의 슬라임",   "base_hp": 40, "base_attack": 6,  "base_defense": 8, "base_speed": 2},
+    "grass":    {"name": "풀의 슬라임",   "base_hp": 50, "base_attack": 7,  "base_defense": 4, "base_speed": 3},
+    "electric": {"name": "전기 슬라임", "base_hp": 25, "base_attack": 8,  "base_defense": 2, "base_speed": 12},
+    "light":    {"name": "빛의 슬라임",   "base_hp": 45, "base_attack": 5,  "base_defense": 7, "base_speed": 3},
+    "dark":     {"name": "어둠의 슬라임", "base_hp": 28, "base_attack": 11, "base_defense": 2, "base_speed": 9},
 }
 
 LOOT_TABLE = {
@@ -109,7 +108,7 @@ class DungeonGameView(ui.View):
         embed = discord.Embed(title=f"탐험 중... - {dungeon_info['name']}", color=0x71368A)
         description_content = ""
 
-        # [수정] 펫 능력치 표시를 여러 줄로 변경
+        # [수정] 펫 능력치 표시를 여러 줄로 변경 (전체 능력치 반영)
         pet_stats = (
             f"❤️ **체력**: {self.pet_current_hp} / {self.pet_data['current_hp']}\n"
             f"⚔️ **공격력**: {self.pet_data['current_attack']}\n"
@@ -124,7 +123,6 @@ class DungeonGameView(ui.View):
             embed.title = f"전투 중! - {self.current_monster['name']}"
             embed.set_image(url=self.current_monster['image_url'])
             
-            # [수정] 몬스터 능력치 표시를 여러 줄로 변경
             monster_stats = (
                 f"❤️ **체력**: {self.monster_current_hp} / {self.current_monster['hp']}\n"
                 f"⚔️ **공격력**: {self.current_monster['attack']}\n"
@@ -273,9 +271,10 @@ class Dungeon(commands.Cog):
     
     @check_expired_dungeons.before_loop
     async def before_check_expired_dungeons(self): await self.bot.wait_until_ready()
-
+    
+    # [수정] 펫 정보를 가져올 때 species 정보도 함께 join합니다.
     async def get_user_pet(self, user_id: int) -> Optional[Dict]:
-        res = await supabase.table('pets').select('*').eq('user_id', user_id).gt('current_stage', 1).maybe_single().execute()
+        res = await supabase.table('pets').select('*, pet_species(*)').eq('user_id', user_id).gt('current_stage', 1).maybe_single().execute()
         return res.data if res and res.data else None
 
     async def handle_enter_dungeon(self, interaction: discord.Interaction, tier: str):
@@ -342,8 +341,9 @@ class Dungeon(commands.Cog):
         
         try:
             if not thread: thread = self.bot.get_channel(int(session_data['thread_id'])) or await self.bot.fetch_channel(int(session_data['thread_id']))
-            await thread.send("**던전이 닫혔습니다.**", delete_after=10)
-            await asyncio.sleep(1); await thread.edit(archived=True, locked=True)
+            await thread.send("**던전이 닫혔습니다. 이 채널은 5초 후에 삭제됩니다.**", delete_after=5)
+            await asyncio.sleep(5)
+            await thread.delete() # [수정] 스레드 잠금 대신 삭제
         except (discord.NotFound, discord.Forbidden): pass
         
         if panel_channel:
