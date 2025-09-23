@@ -46,6 +46,10 @@ class DungeonGameView(ui.View):
         self.final_pet_stats = self._calculate_final_pet_stats()
         self.state = "exploring"; self.message: Optional[discord.Message] = None
         self.battle_log: List[str] = []; self.rewards: Dict[str, int] = defaultdict(int)
+        
+        # [추가] 총 획득 경험치 추적
+        self.total_pet_xp_gained: int = 0
+
         self.pet_current_hp: int = self.final_pet_stats['hp']
         self.current_monster: Optional[Dict] = None; self.monster_current_hp: int = 0
         self.is_pet_turn: bool = True
@@ -165,7 +169,10 @@ class DungeonGameView(ui.View):
 
     async def handle_battle_win(self, interaction: discord.Interaction):
         self.state = "battle_over"; self.battle_log.append(f"\n🎉 {self.current_monster['name']}을(를) 물리쳤다!")
+        
         pet_exp_gain = self.current_monster['xp']
+        self.total_pet_xp_gained += pet_exp_gain # [수정] 총 경험치 누적
+        
         await supabase.rpc('add_xp_to_pet', {'p_user_id': self.user.id, 'p_xp_to_add': pet_exp_gain}).execute()
         self.battle_log.append(f"✨ 펫이 경험치 {pet_exp_gain}을 획득했다!")
         for item, (chance, min_qty, max_qty) in self.cog.loot_table.get(self.dungeon_tier, {}).items():
@@ -183,12 +190,15 @@ class DungeonGameView(ui.View):
         self.state = "exploring"; self.current_monster = None; self.battle_log = ["무사히 도망쳤다..."]
         await self.refresh_ui(interaction)
 
-    # [수정] 던전 나가기 버튼 오류 해결
     async def handle_leave(self, interaction: discord.Interaction):
         await interaction.response.send_message("던전에서 나가는 중입니다...", ephemeral=True, delete_after=5)
-        await self.cog.close_dungeon_session(self.user.id, self.rewards, interaction.channel)
+        # [수정] 누적된 경험치를 함께 전달
+        await self.cog.close_dungeon_session(self.user.id, self.rewards, self.total_pet_xp_gained, interaction.channel)
 
-    async def on_timeout(self): await self.cog.close_dungeon_session(self.user.id, self.rewards)
+    async def on_timeout(self): 
+        # [수정] 누적된 경험치를 함께 전달
+        await self.cog.close_dungeon_session(self.user.id, self.rewards, self.total_pet_xp_gained)
+    
     def stop(self):
         if self.cog and self.user: self.cog.active_sessions.pop(self.user.id, None)
         super().stop()
@@ -243,29 +253,46 @@ class Dungeon(commands.Cog):
         await interaction.followup.send(f"던전에 입장했습니다! {thread.mention}", ephemeral=True)
         await view.start(thread)
 
-    async def close_dungeon_session(self, user_id: int, rewards: Dict, thread: Optional[discord.TextChannel] = None):
+    # [수정] 함수 시그니처와 로직 변경
+    async def close_dungeon_session(self, user_id: int, rewards: Dict, total_xp: int = 0, thread: Optional[discord.TextChannel] = None):
         if user_id in self.active_sessions:
             view = self.active_sessions.pop(user_id, None)
             if view and not view.is_finished(): view.stop()
+            if total_xp == 0: total_xp = view.total_pet_xp_gained # View가 살아있었다면 최신 XP로 갱신
+
         session_res = await supabase.table('dungeon_sessions').select('*').eq('user_id', str(user_id)).maybe_single().execute()
         if not (session_res and session_res.data): return
         session_data = session_res.data
         await supabase.table('dungeon_sessions').delete().eq('user_id', str(user_id)).execute()
+        
         user = self.bot.get_user(user_id)
         panel_channel = self.bot.get_channel(get_id("dungeon_panel_channel_id")) if get_id("dungeon_panel_channel_id") else None
-        if user and rewards:
-            await asyncio.gather(*[update_inventory(user.id, item, qty) for item, qty in rewards.items()])
+
+        # [수정] 보상이 없더라도 경험치를 얻었으면 로그를 남김
+        if user and (rewards or total_xp > 0):
+            if rewards:
+                await asyncio.gather(*[update_inventory(user.id, item, qty) for item, qty in rewards.items()])
+            
             rewards_text = "\n".join([f"> {item}: {qty}개" for item, qty in rewards.items()]) or "> 획득한 아이템이 없습니다."
+            
             embed_data = await get_embed_from_db("log_dungeon_result")
-            log_embed = format_embed_from_db(embed_data, user_mention=user.mention, dungeon_name=self.dungeon_data[session_data['dungeon_tier']]['name'], rewards_list=rewards_text)
+            log_embed = format_embed_from_db(embed_data, user_mention=user.mention, 
+                                             dungeon_name=self.dungeon_data[session_data['dungeon_tier']]['name'], 
+                                             rewards_list=rewards_text, 
+                                             pet_xp_gained=total_xp)
             if user.display_avatar: log_embed.set_thumbnail(url=user.display_avatar.url)
-            if panel_channel: await panel_channel.send(embed=log_embed)
+            
+            if panel_channel:
+                await panel_channel.send(embed=log_embed)
+        
         try:
             if not thread: thread = self.bot.get_channel(int(session_data['thread_id'])) or await self.bot.fetch_channel(int(session_data['thread_id']))
             await thread.send("**던전이 닫혔습니다. 이 채널은 5초 후에 삭제됩니다.**", delete_after=5)
             await asyncio.sleep(5); await thread.delete()
         except (discord.NotFound, discord.Forbidden): pass
-        if panel_channel: await self.regenerate_panel(panel_channel)
+        
+        if panel_channel:
+            await self.regenerate_panel(panel_channel)
 
     async def register_persistent_views(self): self.bot.add_view(DungeonPanelView(self))
     
