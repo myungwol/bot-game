@@ -587,23 +587,18 @@ class PetSystem(commands.Cog):
             friendship = pet_data.get('friendship', 0)
             friendship_bar = create_bar(friendship, 100, full_char='❤️', empty_char='🖤')
 
-            # ▼▼▼ 최종 그리드 레이아웃 적용 ▼▼▼
-            # 1행
             embed.add_field(name="단계", value=f"**{stage_name}**", inline=True)
             embed.add_field(name="타입", value=f"{ELEMENT_TO_TYPE.get(species_info['element'], '알 수 없음')}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True) # 줄 맞춤
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
 
-            # 2행
             embed.add_field(name="레벨", value=f"**Lv. {current_level}**", inline=True)
             embed.add_field(name="속성", value=f"{species_info['element']}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True) # 줄 맞춤
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
 
-            # 3행
             embed.add_field(name="경험치", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True) # 빈 공간
-            embed.add_field(name="\u200b", value="\u200b", inline=True) # 줄 맞춤
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
             
-            # 4행
             embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=True)
             embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) 
@@ -613,30 +608,39 @@ class PetSystem(commands.Cog):
                 embed.add_field(name="✨ 남은 스탯 포인트", value=f"**{stat_points}**", inline=False)
 
             # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
-            # StatAllocationView와 동일한 방식으로 최종 스탯을 계산합니다.
-            base_stats = self.get_base_stats(pet_data)
-            
-            final_stats = {}
-            base_plus_natural = {}
-            allocated_stats = {}
+            # 1. 펫이 부화했을 때의 기본 능력치를 계산합니다.
+            hatch_base_stats = {
+                'hp': species_info.get('base_hp', 0) + pet_data.get('natural_bonus_hp', 0),
+                'attack': species_info.get('base_attack', 0) + pet_data.get('natural_bonus_attack', 0),
+                'defense': species_info.get('base_defense', 0) + pet_data.get('natural_bonus_defense', 0),
+                'speed': species_info.get('base_speed', 0) + pet_data.get('natural_bonus_speed', 0)
+            }
 
-            for key in ['hp', 'attack', 'defense', 'speed']:
-                base = base_stats[key]
-                natural_bonus = pet_data.get(f"natural_bonus_{key}", 0)
-                allocated = pet_data.get(f"allocated_{key}", 0)
-                
-                final_stats[key] = base + natural_bonus + allocated
-                base_plus_natural[key] = base + natural_bonus
-                allocated_stats[key] = allocated
+            # 2. 레벨업, 스탯 분배 등 모든 추가 성장치를 계산합니다.
+            level = pet_data.get('level', 1)
+            total_bonus_stats = {
+                'hp': (level - 1) * species_info.get('hp_growth', 0) + pet_data.get('allocated_hp', 0),
+                'attack': (level - 1) * species_info.get('attack_growth', 0) + pet_data.get('allocated_attack', 0),
+                'defense': (level - 1) * species_info.get('defense_growth', 0) + pet_data.get('allocated_defense', 0),
+                'speed': (level - 1) * species_info.get('speed_growth', 0) + pet_data.get('allocated_speed', 0)
+            }
+
+            # 3. 최종 능력치를 계산합니다.
+            current_stats = {
+                'hp': hatch_base_stats['hp'] + total_bonus_stats['hp'],
+                'attack': hatch_base_stats['attack'] + total_bonus_stats['attack'],
+                'defense': hatch_base_stats['defense'] + total_bonus_stats['defense'],
+                'speed': hatch_base_stats['speed'] + total_bonus_stats['speed']
+            }
             # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
-            # 3. 능력치 2x2 그리드를 강제 정렬합니다. (계산된 최종 스탯을 사용하도록 수정)
-            embed.add_field(name="❤️ 체력", value=f"**{final_stats['hp']}** (`{base_plus_natural['hp']}` + `{allocated_stats['hp']}`)", inline=True)
-            embed.add_field(name="⚔️ 공격력", value=f"**{final_stats['attack']}** (`{base_plus_natural['attack']}` + `{allocated_stats['attack']}`)", inline=True)
+            # 4. 수정된 계산식을 사용하여 능력치를 표시합니다.
+            embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)", inline=True)
+            embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) 
 
-            embed.add_field(name="🛡️ 방어력", value=f"**{final_stats['defense']}** (`{base_plus_natural['defense']}` + `{allocated_stats['defense']}`)", inline=True)
-            embed.add_field(name="👟 스피드", value=f"**{final_stats['speed']}** (`{base_plus_natural['speed']}` + `{allocated_stats['speed']}`)", inline=True)
+            embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)", inline=True)
+            embed.add_field(name="👟 스피드", value=f"**{current_stats['speed']}** (`{hatch_base_stats['speed']}` + `{total_bonus_stats['speed']}`)", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) 
             
         return embed
