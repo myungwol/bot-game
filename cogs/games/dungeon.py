@@ -54,11 +54,12 @@ MONSTER_BASE_DATA = {
     "dark":     {"name": "어둠의 슬라임", "base_hp": 28, "base_attack": 12},
 }
 
+# [수정] 펫 경험치 물약 보상 제거
 LOOT_TABLE = {
-    "beginner":     {"슬라임의 정수": (0.8, 1, 2), "하급 펫 경험치 물약": (0.1, 1, 1)},
-    "intermediate": {"슬라임의 정수": (0.9, 1, 3), "하급 펫 경험치 물약": (0.2, 1, 2)},
-    "advanced":     {"응축된 슬라임 핵": (0.7, 1, 2), "중급 펫 경험치 물약": (0.15, 1, 1)},
-    "master":       {"응축된 슬라임 핵": (0.8, 2, 4), "상급 펫 경험치 물약": (0.2, 1, 1), "슬라임 왕관": (0.01, 1, 1)},
+    "beginner":     {"슬라임의 정수": (0.8, 1, 2)},
+    "intermediate": {"슬라임의 정수": (0.9, 1, 3)},
+    "advanced":     {"응축된 슬라임 핵": (0.7, 1, 2)},
+    "master":       {"응축된 슬라임 핵": (0.8, 2, 4), "슬라임 왕관": (0.01, 1, 1)},
 }
 
 class DungeonGameView(ui.View):
@@ -76,7 +77,6 @@ class DungeonGameView(ui.View):
 
         self.build_components()
 
-    # [수정] start 메서드가 interaction 대신 thread를 받도록 변경
     async def start(self, thread: discord.Thread):
         embed = self.build_embed()
         self.message = await thread.send(embed=embed, view=self)
@@ -92,7 +92,6 @@ class DungeonGameView(ui.View):
         attack = int(base_monster['base_attack'] * tier_modifier['atk_mult'])
         xp = int(hp * tier_modifier['xp_mult'])
         
-        # [수정] 이미지 URL 생성 후 로그를 남겨 디버깅을 쉽게 만듭니다.
         image_url = f"{self.storage_base_url}/{element}_{tier_modifier['image_suffix']}.png"
         logger.info(f"[Dungeon] Generating monster image URL: {image_url}")
 
@@ -105,14 +104,13 @@ class DungeonGameView(ui.View):
     def build_embed(self) -> discord.Embed:
         dungeon_info = DUNGEON_DATA[self.dungeon_tier]
         embed = discord.Embed(title=f"탐험 중... - {dungeon_info['name']}", color=0x71368A)
-        # [수정] footer에 discord.utils.format_dt를 사용하여 올바른 타임스탬프 문자열 생성
-        embed.set_footer(text=f"던전은 {discord.utils.format_dt(self.end_time, 'R')}에 닫힙니다.")
+        description_content = ""
 
         pet_hp_bar = f"❤️ {self.pet_current_hp} / {self.pet_data['current_hp']}"
         embed.add_field(name=f"🐾 {self.pet_data['nickname']}", value=pet_hp_bar, inline=False)
         
         if self.state == "exploring":
-            embed.description = "깊은 곳으로 나아가 몬스터를 찾아보자."
+            description_content = "깊은 곳으로 나아가 몬스터를 찾아보자."
         elif self.state == "in_battle" and self.current_monster:
             embed.title = f"전투 중! - {self.current_monster['name']}"
             embed.set_image(url=self.current_monster['image_url'])
@@ -122,13 +120,17 @@ class DungeonGameView(ui.View):
                 embed.add_field(name="⚔️ 전투 기록", value="```" + "\n".join(self.battle_log) + "```", inline=False)
         elif self.state == "battle_over":
             embed.title = "전투 종료"
-            embed.description = "```\n" + "\n".join(self.battle_log) + "\n```"
+            description_content = "```\n" + "\n".join(self.battle_log) + "\n```"
             if self.current_monster and self.current_monster.get('image_url'):
                 embed.set_thumbnail(url=self.current_monster['image_url'])
         
         if self.rewards:
             rewards_str = "\n".join([f"> {item}: {qty}개" for item, qty in self.rewards.items()])
             embed.add_field(name="--- 현재까지 획득한 보상 ---", value=rewards_str, inline=False)
+            
+        # [수정] 시간 표시를 description으로 이동
+        closing_time_text = f"\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n던전은 {discord.utils.format_dt(self.end_time, 'R')}에 닫힙니다."
+        embed.description = (description_content + closing_time_text) if description_content else closing_time_text.strip()
             
         return embed
     
@@ -273,7 +275,6 @@ class Dungeon(commands.Cog):
         self.active_sessions[user.id] = view
         
         await interaction.followup.send(f"던전에 입장했습니다! {thread.mention}", ephemeral=True)
-        # [수정] view.start에 interaction 대신 thread를 전달
         await view.start(thread)
 
     async def close_dungeon_session(self, user_id: int, rewards: Dict, thread: Optional[discord.TextChannel] = None):
@@ -288,6 +289,10 @@ class Dungeon(commands.Cog):
         await supabase.table('dungeon_sessions').delete().eq('user_id', str(user_id)).execute()
         
         user = self.bot.get_user(user_id)
+        panel_channel = None # 패널 재생성을 위해 채널 객체 저장
+        if (panel_ch_id := get_id("dungeon_panel_channel_id")) and (panel_ch := self.bot.get_channel(panel_ch_id)):
+            panel_channel = panel_ch
+
         if user and rewards:
             tasks = [update_inventory(user.id, item, qty) for item, qty in rewards.items()]
             await asyncio.gather(*tasks)
@@ -298,14 +303,18 @@ class Dungeon(commands.Cog):
             log_embed = format_embed_from_db(embed_data, user_mention=user.mention, dungeon_name=DUNGEON_DATA[session_data['dungeon_tier']]['name'], rewards_list=rewards_text)
             if user.display_avatar: log_embed.set_thumbnail(url=user.display_avatar.url)
             
-            if (panel_ch_id := get_id("dungeon_panel_channel_id")) and (panel_ch := self.bot.get_channel(panel_ch_id)):
-                await panel_ch.send(embed=log_embed)
+            if panel_channel:
+                await panel_channel.send(embed=log_embed)
         
         try:
             if not thread: thread = self.bot.get_channel(int(session_data['thread_id'])) or await self.bot.fetch_channel(int(session_data['thread_id']))
             await thread.send("**던전이 닫혔습니다.**", delete_after=10)
             await asyncio.sleep(1); await thread.edit(archived=True, locked=True)
         except (discord.NotFound, discord.Forbidden): pass
+        
+        # [수정] 던전 종료 후 패널 재생성
+        if panel_channel:
+            await self.regenerate_panel(panel_channel)
 
     async def register_persistent_views(self): self.bot.add_view(DungeonPanelView(self))
     
