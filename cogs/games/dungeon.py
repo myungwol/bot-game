@@ -14,54 +14,42 @@ from collections import defaultdict
 
 from utils.database import (
     get_inventory, update_inventory, supabase, get_id,
-    save_panel_id, get_panel_id, get_embed_from_db, get_item_database
+    save_panel_id, get_panel_id, get_embed_from_db
 )
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# --- 던전 및 몬스터 데이터 ---
+# --- 데이터베이스에서 로드될 데이터 구조 ---
+# 이 Cog는 이제 DB에서 직접 데이터를 로드하므로, 하드코딩된 데이터는 제거됩니다.
 
-DUNGEON_TICKETS = {
-    "초급 던전 입장권": "beginner", "중급 던전 입장권": "intermediate",
-    "상급 던전 입장권": "advanced", "최상급 던전 입장권": "master",
-}
+async def load_dungeon_data_from_db() -> Dict[str, Any]:
+    """Supabase에서 던전 관련 모든 데이터를 로드하고 파이썬 객체로 재구성합니다."""
+    try:
+        dungeons_res, monsters_res, loot_res = await asyncio.gather(
+            supabase.table('dungeons').select('*').execute(),
+            supabase.table('monster_species').select('*').execute(),
+            supabase.table('dungeon_loot').select('*').execute()
+        )
+        
+        dungeon_data = {d['tier_key']: d for d in dungeons_res.data} if dungeons_res.data else {}
+        monster_base_data = {m['element_key']: m for m in monsters_res.data} if monsters_res.data else {}
+        
+        loot_table = defaultdict(dict)
+        if loot_res.data:
+            for item in loot_res.data:
+                loot_table[item['dungeon_tier']][item['item_name']] = (item['drop_chance'], item['min_qty'], item['max_qty'])
+        
+        logger.info(f"✅ 던전 데이터 로드 완료: 던전({len(dungeon_data)}), 몬스터({len(monster_base_data)}), 보상({len(loot_table)})")
+        return {"dungeons": dungeon_data, "monsters": monster_base_data, "loot": dict(loot_table)}
 
-DUNGEON_TIER_MAP = {
-    "beginner": "초급", "intermediate": "중급", "advanced": "상급", "master": "최상급"
-}
-
-TIER_MODIFIERS = {
-    "beginner":     {"hp_mult": 1.0, "atk_mult": 1.0, "def_mult": 1.0, "spd_mult": 1.0, "xp_mult": 1.0, "image_suffix": "beginner"},
-    "intermediate": {"hp_mult": 2.5, "atk_mult": 2.5, "def_mult": 2.0, "spd_mult": 1.2, "xp_mult": 2.0, "image_suffix": "intermediate"},
-    "advanced":     {"hp_mult": 5.0, "atk_mult": 5.0, "def_mult": 4.0, "spd_mult": 1.5, "xp_mult": 4.0, "image_suffix": "advanced"},
-    "master":       {"hp_mult": 10.0, "atk_mult": 10.0, "def_mult": 8.0, "spd_mult": 2.0, "xp_mult": 8.0, "image_suffix": "master"},
-}
-
-DUNGEON_DATA = {
-    "beginner":     {"name": "초급 던전", "elements": ["fire", "water", "grass"]},
-    "intermediate": {"name": "중급 던전", "elements": ["fire", "water", "grass", "electric"]},
-    "advanced":     {"name": "상급 던전", "elements": ["electric", "light", "dark"]},
-    "master":       {"name": "최상급 던전", "elements": ["light", "dark"]},
-}
-
-MONSTER_BASE_DATA = {
-    "fire":     {"name": "불의 슬라임",   "base_hp": 30, "base_attack": 12, "base_defense": 2, "base_speed": 4},
-    "water":    {"name": "물의 슬라임",   "base_hp": 40, "base_attack": 6,  "base_defense": 8, "base_speed": 2},
-    "grass":    {"name": "풀의 슬라임",   "base_hp": 50, "base_attack": 7,  "base_defense": 4, "base_speed": 3},
-    "electric": {"name": "전기 슬라임", "base_hp": 25, "base_attack": 8,  "base_defense": 2, "base_speed": 12},
-    "light":    {"name": "빛의 슬라임",   "base_hp": 45, "base_attack": 5,  "base_defense": 7, "base_speed": 3},
-    "dark":     {"name": "어둠의 슬라임", "base_hp": 28, "base_attack": 11, "base_defense": 2, "base_speed": 9},
-}
-
-LOOT_TABLE = {
-    "beginner":     {"슬라임의 정수": (0.8, 1, 2)},
-    "intermediate": {"슬라임의 정수": (0.9, 1, 3)},
-    "advanced":     {"응축된 슬라임 핵": (0.7, 1, 2)},
-    "master":       {"응축된 슬라임 핵": (0.8, 2, 4), "슬라임 왕관": (0.01, 1, 1)},
-}
+    except Exception as e:
+        logger.error(f"❌ 던전 데이터 DB 로드 실패: {e}", exc_info=True)
+        return {"dungeons": {}, "monsters": {}, "loot": {}}
 
 class DungeonGameView(ui.View):
+    # ... (내부 코드는 이전과 동일하므로 생략) ...
+    # ... (단, 이제 self.cog.dungeon_data, self.cog.monster_base_data 등을 사용) ...
     def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime):
         super().__init__(timeout=(end_time - datetime.now(timezone.utc)).total_seconds() + 30)
         self.cog = cog; self.user = user; self.pet_data_raw = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
@@ -95,10 +83,10 @@ class DungeonGameView(ui.View):
         self.message = await thread.send(embed=embed, view=self)
 
     def generate_monster(self) -> Dict:
-        dungeon_info = DUNGEON_DATA[self.dungeon_tier]
-        tier_modifier = TIER_MODIFIERS[self.dungeon_tier]
+        dungeon_info = self.cog.dungeon_data[self.dungeon_tier]
+        tier_modifier = dungeon_info
         element = random.choice(dungeon_info['elements'])
-        base_monster = MONSTER_BASE_DATA[element]
+        base_monster = self.cog.monster_base_data[element]
         hp = int(base_monster['base_hp'] * tier_modifier['hp_mult'])
         attack = int(base_monster['base_attack'] * tier_modifier['atk_mult'])
         defense = int(base_monster['base_defense'] * tier_modifier['def_mult'])
@@ -106,10 +94,10 @@ class DungeonGameView(ui.View):
         xp = int(hp * tier_modifier['xp_mult'])
         image_url = f"{self.storage_base_url}/{element}_{tier_modifier['image_suffix']}.png"
         logger.info(f"[Dungeon] Generating monster image URL: {image_url}")
-        return {"name": f"{DUNGEON_TIER_MAP[self.dungeon_tier]} {base_monster['name']}", "hp": hp, "attack": attack, "defense": defense, "speed": speed, "xp": xp, "element": element, "image_url": image_url}
+        return {"name": f"{dungeon_info['name'].replace('던전', '')} {base_monster['name']}", "hp": hp, "attack": attack, "defense": defense, "speed": speed, "xp": xp, "element": element, "image_url": image_url}
 
     def build_embed(self) -> discord.Embed:
-        dungeon_info = DUNGEON_DATA[self.dungeon_tier]
+        dungeon_info = self.cog.dungeon_data[self.dungeon_tier]
         embed = discord.Embed(title=f"탐험 중... - {dungeon_info['name']}", color=0x71368A)
         description_content = ""
         pet_stats = (f"❤️ **체력**: {self.pet_current_hp} / {self.final_pet_stats['hp']}\n"
@@ -198,7 +186,7 @@ class DungeonGameView(ui.View):
         pet_exp_gain = self.current_monster['xp']
         await supabase.rpc('add_xp_to_pet', {'p_user_id': self.user.id, 'p_xp_to_add': pet_exp_gain}).execute()
         self.battle_log.append(f"✨ 펫이 경험치 {pet_exp_gain}을 획득했다!")
-        for item, (chance, min_qty, max_qty) in LOOT_TABLE.get(self.dungeon_tier, {}).items():
+        for item, (chance, min_qty, max_qty) in self.cog.loot_table.get(self.dungeon_tier, {}).items():
             if random.random() < chance:
                 qty = random.randint(min_qty, max_qty)
                 self.rewards[item] += qty; self.battle_log.append(f"🎁 {item} {qty}개를 획득했다!")
@@ -224,7 +212,20 @@ class DungeonGameView(ui.View):
 class Dungeon(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot; self.active_sessions: Dict[int, DungeonGameView] = {}
+        # [수정] Cog 인스턴스 변수로 데이터 저장
+        self.dungeon_data: Dict = {}
+        self.monster_base_data: Dict = {}
+        self.loot_table: Dict = {}
+        
         self.check_expired_dungeons.start()
+
+    # [수정] cog_load 추가
+    async def cog_load(self):
+        """Cog가 로드될 때 데이터베이스에서 던전 데이터를 불러옵니다."""
+        data = await load_dungeon_data_from_db()
+        self.dungeon_data = data["dungeons"]
+        self.monster_base_data = data["monsters"]
+        self.loot_table = data["loot"]
 
     def cog_unload(self): self.check_expired_dungeons.cancel()
 
@@ -253,11 +254,15 @@ class Dungeon(commands.Cog):
             return await interaction.followup.send(f"❌ 이미 던전에 입장해 있습니다. {thread.mention}", ephemeral=True)
         pet_data = await self.get_user_pet(user.id)
         if not pet_data: return await interaction.followup.send("❌ 던전에 입장하려면 펫이 필요합니다.", ephemeral=True)
-        dungeon_name = DUNGEON_DATA[tier]['name']; ticket_name = f"{dungeon_name} 입장권"
+        
+        dungeon_name = self.dungeon_data[tier]['name']
+        ticket_name = f"{dungeon_name} 입장권"
+        
         if (await get_inventory(user)).get(ticket_name, 0) < 1: return await interaction.followup.send(f"❌ '{ticket_name}'이 부족합니다.", ephemeral=True)
-        try:
-            thread = await interaction.channel.create_thread(name=f"🛡️｜{user.display_name}의 {dungeon_name}", type=discord.ChannelType.private_thread, auto_archive_duration=1440)
+        
+        try: thread = await interaction.channel.create_thread(name=f"🛡️｜{user.display_name}의 {dungeon_name}", type=discord.ChannelType.private_thread, auto_archive_duration=1440)
         except Exception: return await interaction.followup.send("❌ 던전을 여는 데 실패했습니다.", ephemeral=True)
+        
         await update_inventory(user.id, ticket_name, -1); await thread.add_user(user)
         end_time = datetime.now(timezone.utc) + timedelta(hours=24)
         await supabase.table('dungeon_sessions').upsert({"user_id": str(user.id), "thread_id": str(thread.id), "end_time": end_time.isoformat(), "pet_id": pet_data['id'], "dungeon_tier": tier, "rewards_json": "{}"}, on_conflict="user_id").execute()
@@ -280,7 +285,7 @@ class Dungeon(commands.Cog):
             await asyncio.gather(*[update_inventory(user.id, item, qty) for item, qty in rewards.items()])
             rewards_text = "\n".join([f"> {item}: {qty}개" for item, qty in rewards.items()]) or "> 획득한 아이템이 없습니다."
             embed_data = await get_embed_from_db("log_dungeon_result")
-            log_embed = format_embed_from_db(embed_data, user_mention=user.mention, dungeon_name=DUNGEON_DATA[session_data['dungeon_tier']]['name'], rewards_list=rewards_text)
+            log_embed = format_embed_from_db(embed_data, user_mention=user.mention, dungeon_name=self.dungeon_data[session_data['dungeon_tier']]['name'], rewards_list=rewards_text)
             if user.display_avatar: log_embed.set_thumbnail(url=user.display_avatar.url)
             if panel_channel: await panel_channel.send(embed=log_embed)
         try:
@@ -308,7 +313,8 @@ class DungeonPanelView(ui.View):
     def __init__(self, cog_instance: 'Dungeon'):
         super().__init__(timeout=None)
         self.cog = cog_instance
-        for tier, data in DUNGEON_DATA.items():
+        # [수정] Cog에 저장된 데이터를 사용하여 동적으로 버튼 생성
+        for tier, data in self.cog.dungeon_data.items():
             button = ui.Button(label=data['name'], style=discord.ButtonStyle.secondary, custom_id=f"enter_dungeon_{tier}")
             button.callback = self.dispatch_callback
             self.add_item(button)
