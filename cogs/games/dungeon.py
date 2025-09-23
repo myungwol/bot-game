@@ -42,7 +42,7 @@ DUNGEON_DATA = {
     "beginner":     {"name": "초급 던전", "elements": ["fire", "water", "grass"]},
     "intermediate": {"name": "중급 던전", "elements": ["fire", "water", "grass", "electric"]},
     "advanced":     {"name": "상급 던전", "elements": ["electric", "light", "dark"]},
-    "master":       {"name": "최상급 던전", "elements": ["light", "dark"]}, # [수정] "gold" 제거
+    "master":       {"name": "최상급 던전", "elements": ["light", "dark"]},
 }
 
 MONSTER_BASE_DATA = {
@@ -52,7 +52,6 @@ MONSTER_BASE_DATA = {
     "electric": {"name": "전기 슬라임", "base_hp": 25, "base_attack": 10},
     "light":    {"name": "빛의 슬라임",   "base_hp": 50, "base_attack": 5},
     "dark":     {"name": "어둠의 슬라임", "base_hp": 28, "base_attack": 12},
-    # [수정] "gold" 슬라임 데이터 제거
 }
 
 LOOT_TABLE = {
@@ -77,6 +76,7 @@ class DungeonGameView(ui.View):
 
         self.build_components()
 
+    # [수정] start 메서드가 interaction 대신 thread를 받도록 변경
     async def start(self, thread: discord.Thread):
         embed = self.build_embed()
         self.message = await thread.send(embed=embed, view=self)
@@ -91,16 +91,21 @@ class DungeonGameView(ui.View):
         hp = int(base_monster['base_hp'] * tier_modifier['hp_mult'])
         attack = int(base_monster['base_attack'] * tier_modifier['atk_mult'])
         xp = int(hp * tier_modifier['xp_mult'])
+        
+        # [수정] 이미지 URL 생성 후 로그를 남겨 디버깅을 쉽게 만듭니다.
+        image_url = f"{self.storage_base_url}/{element}_{tier_modifier['image_suffix']}.png"
+        logger.info(f"[Dungeon] Generating monster image URL: {image_url}")
 
         return {
             "name": f"{DUNGEON_TIER_MAP[self.dungeon_tier]} {base_monster['name']}",
             "hp": hp, "attack": attack, "xp": xp, "element": element,
-            "image_url": f"{self.storage_base_url}/{element}_{tier_modifier['image_suffix']}.png"
+            "image_url": image_url
         }
 
     def build_embed(self) -> discord.Embed:
         dungeon_info = DUNGEON_DATA[self.dungeon_tier]
         embed = discord.Embed(title=f"탐험 중... - {dungeon_info['name']}", color=0x71368A)
+        # [수정] footer에 discord.utils.format_dt를 사용하여 올바른 타임스탬프 문자열 생성
         embed.set_footer(text=f"던전은 {discord.utils.format_dt(self.end_time, 'R')}에 닫힙니다.")
 
         pet_hp_bar = f"❤️ {self.pet_current_hp} / {self.pet_data['current_hp']}"
@@ -268,6 +273,7 @@ class Dungeon(commands.Cog):
         self.active_sessions[user.id] = view
         
         await interaction.followup.send(f"던전에 입장했습니다! {thread.mention}", ephemeral=True)
+        # [수정] view.start에 interaction 대신 thread를 전달
         await view.start(thread)
 
     async def close_dungeon_session(self, user_id: int, rewards: Dict, thread: Optional[discord.TextChannel] = None):
@@ -284,7 +290,7 @@ class Dungeon(commands.Cog):
         user = self.bot.get_user(user_id)
         if user and rewards:
             tasks = [update_inventory(user.id, item, qty) for item, qty in rewards.items()]
-            await asyncio.gather(tasks)
+            await asyncio.gather(*tasks)
 
             rewards_text = "\n".join([f"> {item}: {qty}개" for item, qty in rewards.items()]) or "> 획득한 아이템이 없습니다."
             
