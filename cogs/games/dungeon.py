@@ -14,8 +14,7 @@ from collections import defaultdict
 
 from utils.database import (
     get_inventory, update_inventory, supabase, get_id,
-    save_panel_id, get_panel_id, get_embed_from_db,
-    get_item_database # [수정] 누락된 import 추가
+    save_panel_id, get_panel_id, get_embed_from_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -41,7 +40,6 @@ async def load_dungeon_data_from_db() -> Dict[str, Any]:
         return {"dungeons": {}, "monsters": {}, "loot": {}}
 
 class DungeonGameView(ui.View):
-    # ... (내부 코드는 변경 없음, 생략) ...
     def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime):
         super().__init__(timeout=(end_time - datetime.now(timezone.utc)).total_seconds() + 30)
         self.cog = cog; self.user = user; self.pet_data_raw = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
@@ -115,14 +113,15 @@ class DungeonGameView(ui.View):
         embed.description = (description_content + closing_time_text) if description_content else closing_time_text.strip()
         return embed
     
+    # [수정] 잘못된 이모지 수정
     def build_components(self):
         self.clear_items()
         if self.state in ["exploring", "battle_over"] or self.pet_is_defeated:
             self.add_item(ui.Button(label="탐색하기", style=discord.ButtonStyle.success, emoji="🗺️", custom_id="explore", disabled=self.pet_is_defeated))
-            self.add_item(ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji=" M túi", custom_id="use_item"))
+            self.add_item(ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji="👜", custom_id="use_item"))
         elif self.state == "in_battle":
             self.add_item(ui.Button(label="공격", style=discord.ButtonStyle.primary, emoji="⚔️", custom_id="attack"))
-            self.add_item(ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji=" M túi", custom_id="use_item"))
+            self.add_item(ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji="👜", custom_id="use_item"))
             self.add_item(ui.Button(label="도망가기", style=discord.ButtonStyle.danger, emoji="🏃", custom_id="flee"))
         self.add_item(ui.Button(label="던전 나가기", style=discord.ButtonStyle.grey, emoji="🚪", custom_id="leave"))
         for item in self.children: item.callback = self.dispatch_callback
