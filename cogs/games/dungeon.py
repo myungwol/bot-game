@@ -31,11 +31,12 @@ DUNGEON_TIER_MAP = {
     "beginner": "초급", "intermediate": "중급", "advanced": "상급", "master": "최상급"
 }
 
+# [수정] 방어력, 스피드 배율 추가
 TIER_MODIFIERS = {
-    "beginner":     {"hp_mult": 1.0, "atk_mult": 1.0, "xp_mult": 1.0, "image_suffix": "beginner"},
-    "intermediate": {"hp_mult": 2.5, "atk_mult": 2.5, "xp_mult": 2.0, "image_suffix": "intermediate"},
-    "advanced":     {"hp_mult": 5.0, "atk_mult": 5.0, "xp_mult": 4.0, "image_suffix": "advanced"},
-    "master":       {"hp_mult": 10.0, "atk_mult": 10.0, "xp_mult": 8.0, "image_suffix": "master"},
+    "beginner":     {"hp_mult": 1.0, "atk_mult": 1.0, "def_mult": 1.0, "spd_mult": 1.0, "xp_mult": 1.0, "image_suffix": "beginner"},
+    "intermediate": {"hp_mult": 2.5, "atk_mult": 2.5, "def_mult": 2.0, "spd_mult": 1.2, "xp_mult": 2.0, "image_suffix": "intermediate"},
+    "advanced":     {"hp_mult": 5.0, "atk_mult": 5.0, "def_mult": 4.0, "spd_mult": 1.5, "xp_mult": 4.0, "image_suffix": "advanced"},
+    "master":       {"hp_mult": 10.0, "atk_mult": 10.0, "def_mult": 8.0, "spd_mult": 2.0, "xp_mult": 8.0, "image_suffix": "master"},
 }
 
 DUNGEON_DATA = {
@@ -45,16 +46,16 @@ DUNGEON_DATA = {
     "master":       {"name": "최상급 던전", "elements": ["light", "dark"]},
 }
 
+# [수정] 몬스터 기본 방어력, 스피드 추가
 MONSTER_BASE_DATA = {
-    "fire":     {"name": "불의 슬라임",   "base_hp": 30, "base_attack": 8},
-    "water":    {"name": "물의 슬라임",   "base_hp": 40, "base_attack": 6},
-    "grass":    {"name": "풀의 슬라임",   "base_hp": 35, "base_attack": 7},
-    "electric": {"name": "전기 슬라임", "base_hp": 25, "base_attack": 10},
-    "light":    {"name": "빛의 슬라임",   "base_hp": 50, "base_attack": 5},
-    "dark":     {"name": "어둠의 슬라임", "base_hp": 28, "base_attack": 12},
+    "fire":     {"name": "불의 슬라임",   "base_hp": 30, "base_attack": 8, "base_defense": 2, "base_speed": 5},
+    "water":    {"name": "물의 슬라임",   "base_hp": 40, "base_attack": 6, "base_defense": 4, "base_speed": 3},
+    "grass":    {"name": "풀의 슬라임",   "base_hp": 35, "base_attack": 7, "base_defense": 3, "base_speed": 4},
+    "electric": {"name": "전기 슬라임", "base_hp": 25, "base_attack": 10, "base_defense": 1, "base_speed": 8},
+    "light":    {"name": "빛의 슬라임",   "base_hp": 50, "base_attack": 5, "base_defense": 5, "base_speed": 2},
+    "dark":     {"name": "어둠의 슬라임", "base_hp": 28, "base_attack": 12, "base_defense": 2, "base_speed": 6},
 }
 
-# [수정] 펫 경험치 물약 보상 제거
 LOOT_TABLE = {
     "beginner":     {"슬라임의 정수": (0.8, 1, 2)},
     "intermediate": {"슬라임의 정수": (0.9, 1, 3)},
@@ -72,6 +73,7 @@ class DungeonGameView(ui.View):
 
         self.pet_current_hp: int = pet_data['current_hp']
         self.current_monster: Optional[Dict] = None; self.monster_current_hp: int = 0
+        self.is_pet_turn: bool = True # [추가] 턴 관리 변수
         
         self.storage_base_url = f"{os.environ.get('SUPABASE_URL')}/storage/v1/object/public/monster_images"
 
@@ -88,8 +90,11 @@ class DungeonGameView(ui.View):
         element = random.choice(dungeon_info['elements'])
         base_monster = MONSTER_BASE_DATA[element]
         
+        # [수정] 방어력, 스피드 스탯 계산 추가
         hp = int(base_monster['base_hp'] * tier_modifier['hp_mult'])
         attack = int(base_monster['base_attack'] * tier_modifier['atk_mult'])
+        defense = int(base_monster['base_defense'] * tier_modifier['def_mult'])
+        speed = int(base_monster['base_speed'] * tier_modifier['spd_mult'])
         xp = int(hp * tier_modifier['xp_mult'])
         
         image_url = f"{self.storage_base_url}/{element}_{tier_modifier['image_suffix']}.png"
@@ -97,7 +102,7 @@ class DungeonGameView(ui.View):
 
         return {
             "name": f"{DUNGEON_TIER_MAP[self.dungeon_tier]} {base_monster['name']}",
-            "hp": hp, "attack": attack, "xp": xp, "element": element,
+            "hp": hp, "attack": attack, "defense": defense, "speed": speed, "xp": xp, "element": element,
             "image_url": image_url
         }
 
@@ -114,8 +119,14 @@ class DungeonGameView(ui.View):
         elif self.state == "in_battle" and self.current_monster:
             embed.title = f"전투 중! - {self.current_monster['name']}"
             embed.set_image(url=self.current_monster['image_url'])
-            monster_hp_bar = f"❤️ {self.monster_current_hp} / {self.current_monster['hp']}"
-            embed.add_field(name=f"몬스터: {self.current_monster['name']}", value=monster_hp_bar, inline=True)
+            
+            # [수정] 몬스터 스탯 표시 강화
+            monster_stats = (
+                f"❤️ {self.monster_current_hp} / {self.current_monster['hp']}\n"
+                f"⚔️ {self.current_monster['attack']} | 🛡️ {self.current_monster['defense']} | 💨 {self.current_monster['speed']}"
+            )
+            embed.add_field(name=f"몬스터: {self.current_monster['name']}", value=monster_stats, inline=True)
+
             if self.battle_log:
                 embed.add_field(name="⚔️ 전투 기록", value="```" + "\n".join(self.battle_log) + "```", inline=False)
         elif self.state == "battle_over":
@@ -128,7 +139,6 @@ class DungeonGameView(ui.View):
             rewards_str = "\n".join([f"> {item}: {qty}개" for item, qty in self.rewards.items()])
             embed.add_field(name="--- 현재까지 획득한 보상 ---", value=rewards_str, inline=False)
             
-        # [수정] 시간 표시를 description으로 이동
         closing_time_text = f"\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n던전은 {discord.utils.format_dt(self.end_time, 'R')}에 닫힙니다."
         embed.description = (description_content + closing_time_text) if description_content else closing_time_text.strip()
             
@@ -148,10 +158,8 @@ class DungeonGameView(ui.View):
 
     async def refresh_ui(self, interaction: Optional[discord.Interaction] = None):
         if interaction and not interaction.response.is_done(): await interaction.response.defer()
-        
         self.build_components()
         embed = self.build_embed()
-        
         if self.message:
             try: await self.message.edit(embed=embed, view=self)
             except discord.NotFound: self.stop()
@@ -165,22 +173,52 @@ class DungeonGameView(ui.View):
         self.current_monster = self.generate_monster()
         self.monster_current_hp = self.current_monster['hp']
         self.battle_log = [f"{self.current_monster['name']} 이(가) 나타났다!"]
+        
+        # [수정] 스피드 비교로 선공 결정
+        pet_speed = self.pet_data.get('current_speed', 0)
+        monster_speed = self.current_monster.get('speed', 0)
+        
+        if pet_speed >= monster_speed:
+            self.is_pet_turn = True
+            self.battle_log.append(f"{self.pet_data['nickname']}이(가) 민첩하게 먼저 움직인다!")
+        else:
+            self.is_pet_turn = False
+            self.battle_log.append(f"{self.current_monster['name']}의 기습 공격!")
+            # 몬스터가 선공일 경우, 바로 한 턴 진행
+            await self._execute_monster_turn()
+
         self.state = "in_battle"
         await self.refresh_ui(interaction)
+
+    async def _execute_pet_turn(self):
+        pet_atk = self.pet_data.get('current_attack', 1)
+        monster_def = self.current_monster.get('defense', 0)
+        damage = max(1, pet_atk - monster_def)
+        
+        self.monster_current_hp = max(0, self.monster_current_hp - damage)
+        self.battle_log.append(f"▶ {self.pet_data['nickname']}의 공격! {damage}의 데미지!")
+
+    async def _execute_monster_turn(self):
+        monster_atk = self.current_monster.get('attack', 1)
+        pet_def = self.pet_data.get('current_defense', 0)
+        damage = max(1, monster_atk - pet_def)
+
+        self.pet_current_hp = max(0, self.pet_current_hp - damage)
+        self.battle_log.append(f"◀ {self.current_monster['name']}의 공격! {damage}의 데미지!")
 
     async def handle_attack(self, interaction: discord.Interaction):
         if self.state != "in_battle" or not self.current_monster: return
 
-        pet_atk = self.pet_data['current_attack']; monster_atk = self.current_monster['attack']
-        self.monster_current_hp = max(0, self.monster_current_hp - pet_atk)
-        self.battle_log = [f"▶ {self.pet_data['nickname']}의 공격! {pet_atk}의 데미지!"]
-        
+        self.battle_log = [] # 매 턴 로그 초기화
+
+        # 펫의 턴
+        await self._execute_pet_turn()
         if self.monster_current_hp <= 0: return await self.handle_battle_win(interaction)
 
-        self.pet_current_hp = max(0, self.pet_current_hp - monster_atk)
-        self.battle_log.append(f"◀ {self.current_monster['name']}의 공격! {monster_atk}의 데미지!")
-
+        # 몬스터의 턴
+        await self._execute_monster_turn()
         if self.pet_current_hp <= 0: return await self.handle_battle_lose(interaction)
+        
         await self.refresh_ui(interaction)
 
     async def handle_battle_win(self, interaction: discord.Interaction):
@@ -200,7 +238,8 @@ class DungeonGameView(ui.View):
 
     async def handle_battle_lose(self, interaction: discord.Interaction):
         self.state = "battle_over"; self.battle_log.append(f"\n☠️ {self.pet_data['nickname']}이(가) 쓰러졌다..."); self.battle_log.append("체력이 모두 회복되었지만, 이번 전투의 보상은 없다.")
-        self.pet_current_hp = self.pet_data['current_hp']; self.current_monster = None
+        self.pet_current_hp = self.pet_data['current_hp']
+        self.current_monster = None
         await self.refresh_ui(interaction)
 
     async def handle_flee(self, interaction: discord.Interaction):
@@ -289,7 +328,7 @@ class Dungeon(commands.Cog):
         await supabase.table('dungeon_sessions').delete().eq('user_id', str(user_id)).execute()
         
         user = self.bot.get_user(user_id)
-        panel_channel = None # 패널 재생성을 위해 채널 객체 저장
+        panel_channel = None
         if (panel_ch_id := get_id("dungeon_panel_channel_id")) and (panel_ch := self.bot.get_channel(panel_ch_id)):
             panel_channel = panel_ch
 
@@ -312,7 +351,6 @@ class Dungeon(commands.Cog):
             await asyncio.sleep(1); await thread.edit(archived=True, locked=True)
         except (discord.NotFound, discord.Forbidden): pass
         
-        # [수정] 던전 종료 후 패널 재생성
         if panel_channel:
             await self.regenerate_panel(panel_channel)
 
