@@ -64,18 +64,35 @@ LOOT_TABLE = {
 class DungeonGameView(ui.View):
     def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime):
         super().__init__(timeout=(end_time - datetime.now(timezone.utc)).total_seconds() + 30)
-        self.cog = cog; self.user = user; self.pet_data = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
+        self.cog = cog; self.user = user; self.pet_data_raw = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
+        
+        # [수정] 최종 능력치를 계산하여 별도로 저장
+        self.final_pet_stats = self._calculate_final_pet_stats()
         
         self.state = "exploring"; self.message: Optional[discord.Message] = None
         self.battle_log: List[str] = []; self.rewards: Dict[str, int] = defaultdict(int)
 
-        self.pet_current_hp: int = pet_data['current_hp']
+        self.pet_current_hp: int = self.final_pet_stats['hp']
         self.current_monster: Optional[Dict] = None; self.monster_current_hp: int = 0
         self.is_pet_turn: bool = True
         
         self.storage_base_url = f"{os.environ.get('SUPABASE_URL')}/storage/v1/object/public/monster_images"
 
         self.build_components()
+
+    # [추가] 펫의 최종 능력치를 계산하는 헬퍼 함수
+    def _calculate_final_pet_stats(self) -> Dict[str, int]:
+        species_info = self.pet_data_raw.get('pet_species', {})
+        level = self.pet_data_raw.get('level', 1)
+
+        stats = {}
+        for key in ['hp', 'attack', 'defense', 'speed']:
+            base = species_info.get(f'base_{key}', 0) + (level - 1) * species_info.get(f'{key}_growth', 0)
+            natural_bonus = self.pet_data_raw.get(f"natural_bonus_{key}", 0)
+            allocated = self.pet_data_raw.get(f"allocated_{key}", 0)
+            stats[key] = round(base) + natural_bonus + allocated
+        
+        return stats
 
     async def start(self, thread: discord.Thread):
         embed = self.build_embed()
@@ -108,14 +125,14 @@ class DungeonGameView(ui.View):
         embed = discord.Embed(title=f"탐험 중... - {dungeon_info['name']}", color=0x71368A)
         description_content = ""
 
-        # [수정] 펫 능력치 표시를 여러 줄로 변경 (전체 능력치 반영)
+        # [수정] 계산된 최종 능력치를 사용하도록 변경
         pet_stats = (
-            f"❤️ **체력**: {self.pet_current_hp} / {self.pet_data['current_hp']}\n"
-            f"⚔️ **공격력**: {self.pet_data['current_attack']}\n"
-            f"🛡️ **방어력**: {self.pet_data['current_defense']}\n"
-            f"💨 **스피드**: {self.pet_data['current_speed']}"
+            f"❤️ **체력**: {self.pet_current_hp} / {self.final_pet_stats['hp']}\n"
+            f"⚔️ **공격력**: {self.final_pet_stats['attack']}\n"
+            f"🛡️ **방어력**: {self.final_pet_stats['defense']}\n"
+            f"💨 **스피드**: {self.final_pet_stats['speed']}"
         )
-        embed.add_field(name=f"🐾 {self.pet_data['nickname']}", value=pet_stats, inline=False)
+        embed.add_field(name=f"🐾 {self.pet_data_raw['nickname']}", value=pet_stats, inline=False)
         
         if self.state == "exploring":
             description_content = "깊은 곳으로 나아가 몬스터를 찾아보자."
@@ -178,12 +195,12 @@ class DungeonGameView(ui.View):
         self.monster_current_hp = self.current_monster['hp']
         self.battle_log = [f"{self.current_monster['name']} 이(가) 나타났다!"]
         
-        pet_speed = self.pet_data.get('current_speed', 0)
+        pet_speed = self.final_pet_stats['speed'] # [수정]
         monster_speed = self.current_monster.get('speed', 0)
         
         if pet_speed >= monster_speed:
             self.is_pet_turn = True
-            self.battle_log.append(f"{self.pet_data['nickname']}이(가) 민첩하게 먼저 움직인다!")
+            self.battle_log.append(f"{self.pet_data_raw['nickname']}이(가) 민첩하게 먼저 움직인다!")
         else:
             self.is_pet_turn = False
             self.battle_log.append(f"{self.current_monster['name']}의 기습 공격!")
@@ -193,15 +210,15 @@ class DungeonGameView(ui.View):
         await self.refresh_ui(interaction)
 
     async def _execute_pet_turn(self):
-        pet_atk = self.pet_data.get('current_attack', 1)
+        pet_atk = self.final_pet_stats['attack'] # [수정]
         monster_def = self.current_monster.get('defense', 0)
         damage = max(1, pet_atk - monster_def)
         self.monster_current_hp = max(0, self.monster_current_hp - damage)
-        self.battle_log.append(f"▶ {self.pet_data['nickname']}의 공격! {damage}의 데미지!")
+        self.battle_log.append(f"▶ {self.pet_data_raw['nickname']}의 공격! {damage}의 데미지!")
 
     async def _execute_monster_turn(self):
         monster_atk = self.current_monster.get('attack', 1)
-        pet_def = self.pet_data.get('current_defense', 0)
+        pet_def = self.final_pet_stats['defense'] # [수정]
         damage = max(1, monster_atk - pet_def)
         self.pet_current_hp = max(0, self.pet_current_hp - damage)
         self.battle_log.append(f"◀ {self.current_monster['name']}의 공격! {damage}의 데미지!")
@@ -231,8 +248,9 @@ class DungeonGameView(ui.View):
         await self.refresh_ui(interaction)
 
     async def handle_battle_lose(self, interaction: discord.Interaction):
-        self.state = "battle_over"; self.battle_log.append(f"\n☠️ {self.pet_data['nickname']}이(가) 쓰러졌다..."); self.battle_log.append("체력이 모두 회복되었지만, 이번 전투의 보상은 없다.")
-        self.pet_current_hp = self.pet_data['current_hp']; self.current_monster = None
+        self.state = "battle_over"; self.battle_log.append(f"\n☠️ {self.pet_data_raw['nickname']}이(가) 쓰러졌다..."); self.battle_log.append("체력이 모두 회복되었지만, 이번 전투의 보상은 없다.")
+        self.pet_current_hp = self.final_pet_stats['hp'] # [수정]
+        self.current_monster = None
         await self.refresh_ui(interaction)
 
     async def handle_flee(self, interaction: discord.Interaction):
@@ -272,7 +290,6 @@ class Dungeon(commands.Cog):
     @check_expired_dungeons.before_loop
     async def before_check_expired_dungeons(self): await self.bot.wait_until_ready()
     
-    # [수정] 펫 정보를 가져올 때 species 정보도 함께 join합니다.
     async def get_user_pet(self, user_id: int) -> Optional[Dict]:
         res = await supabase.table('pets').select('*, pet_species(*)').eq('user_id', user_id).gt('current_stage', 1).maybe_single().execute()
         return res.data if res and res.data else None
@@ -343,7 +360,7 @@ class Dungeon(commands.Cog):
             if not thread: thread = self.bot.get_channel(int(session_data['thread_id'])) or await self.bot.fetch_channel(int(session_data['thread_id']))
             await thread.send("**던전이 닫혔습니다. 이 채널은 5초 후에 삭제됩니다.**", delete_after=5)
             await asyncio.sleep(5)
-            await thread.delete() # [수정] 스레드 잠금 대신 삭제
+            await thread.delete()
         except (discord.NotFound, discord.Forbidden): pass
         
         if panel_channel:
