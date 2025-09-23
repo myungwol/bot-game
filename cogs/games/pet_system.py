@@ -568,8 +568,6 @@ class PetSystem(commands.Cog):
             hatches_at = datetime.fromisoformat(pet_data['hatches_at'])
             embed.add_field(name="예상 부화 시간", value=f"{discord.utils.format_dt(hatches_at, style='R')}", inline=False)
             embed.set_footer(text="시간이 되면 자동으로 부화합니다.")
-# cogs/games/pet_system.py - build_pet_ui_embed 함수 내부
-
         else:
             stage_info_json = species_info.get('stage_info', {})
             stage_name = stage_info_json.get(str(current_stage), {}).get('name', '알 수 없는 단계')
@@ -614,32 +612,31 @@ class PetSystem(commands.Cog):
             if stat_points > 0:
                 embed.add_field(name="✨ 남은 스탯 포인트", value=f"**{stat_points}**", inline=False)
 
-            current_stats = {
-                'hp': pet_data['current_hp'],
-                'attack': pet_data['current_attack'],
-                'defense': pet_data['current_defense'],
-                'speed': pet_data['current_speed']
-            }
-            hatch_base_stats = {
-                'hp': species_info.get('base_hp', 0),
-                'attack': species_info.get('base_attack', 0),
-                'defense': species_info.get('base_defense', 0),
-                'speed': species_info.get('base_speed', 0)
-            }
-            total_bonus_stats = {
-                'hp': current_stats['hp'] - hatch_base_stats['hp'],
-                'attack': current_stats['attack'] - hatch_base_stats['attack'],
-                'defense': current_stats['defense'] - hatch_base_stats['defense'],
-                'speed': current_stats['speed'] - hatch_base_stats['speed']
-            }
+            # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+            # StatAllocationView와 동일한 방식으로 최종 스탯을 계산합니다.
+            base_stats = self.get_base_stats(pet_data)
+            
+            final_stats = {}
+            base_plus_natural = {}
+            allocated_stats = {}
 
-            # 3. 능력치 2x2 그리드를 강제 정렬합니다.
-            embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)", inline=True)
-            embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)", inline=True)
+            for key in ['hp', 'attack', 'defense', 'speed']:
+                base = base_stats[key]
+                natural_bonus = pet_data.get(f"natural_bonus_{key}", 0)
+                allocated = pet_data.get(f"allocated_{key}", 0)
+                
+                final_stats[key] = base + natural_bonus + allocated
+                base_plus_natural[key] = base + natural_bonus
+                allocated_stats[key] = allocated
+            # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+
+            # 3. 능력치 2x2 그리드를 강제 정렬합니다. (계산된 최종 스탯을 사용하도록 수정)
+            embed.add_field(name="❤️ 체력", value=f"**{final_stats['hp']}** (`{base_plus_natural['hp']}` + `{allocated_stats['hp']}`)", inline=True)
+            embed.add_field(name="⚔️ 공격력", value=f"**{final_stats['attack']}** (`{base_plus_natural['attack']}` + `{allocated_stats['attack']}`)", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) 
 
-            embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)", inline=True)
-            embed.add_field(name="👟 스피드", value=f"**{current_stats['speed']}** (`{hatch_base_stats['speed']}` + `{total_bonus_stats['speed']}`)", inline=True)
+            embed.add_field(name="🛡️ 방어력", value=f"**{final_stats['defense']}** (`{base_plus_natural['defense']}` + `{allocated_stats['defense']}`)", inline=True)
+            embed.add_field(name="👟 스피드", value=f"**{final_stats['speed']}** (`{base_plus_natural['speed']}` + `{allocated_stats['speed']}`)", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) 
             
         return embed
