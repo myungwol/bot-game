@@ -608,7 +608,8 @@ class PetSystem(commands.Cog):
             # 4행
             embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=True)
             embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=True)
-            
+            embed.add_field(name="\u200b", value="\u200b", inline=True) 
+
             stat_points = pet_data.get('stat_points', 0)
             if stat_points > 0:
                 embed.add_field(name="✨ 남은 스탯 포인트", value=f"**{stat_points}**", inline=False)
