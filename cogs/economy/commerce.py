@@ -77,6 +77,7 @@ class ShopViewBase(ui.View):
             await interaction.response.send_message(message_content, ephemeral=True, delete_after=5)
 
 class BuyItemView(ShopViewBase):
+    # ... (BuyItemView의 다른 메서드들은 변경 없음, 생략) ...
     def __init__(self, user: discord.Member, category: str):
         super().__init__(user)
         self.category = category
@@ -84,24 +85,12 @@ class BuyItemView(ShopViewBase):
         self.page_index = 0
         self.items_per_page = 20
 
-    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def _filter_items_for_user(self):
-        """요청된 카테고리에 맞는 아이템 목록을 DB에서 필터링하여 준비합니다."""
-        
-        target_categories = [self.category]
-        # '펫' 버튼을 눌렀을 경우, '펫 아이템'과 '알' 카테고리를 모두 포함
-        if self.category == "펫 아이템":
-            target_categories.append("알")
-
-        all_items = get_item_database().items()
-        
-        filtered_items = [
-            (name, data) for name, data in all_items
-            if data.get('buyable') and data.get('category', '').strip() in target_categories
-        ]
-        
-        self.items_in_category = sorted(filtered_items, key=lambda item: item[1].get('price', 0))
-    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+        all_items_in_category = sorted(
+            [(n, d) for n, d in get_item_database().items() if d.get('buyable') and d.get('category', '').strip() == self.category],
+            key=lambda item: item[1].get('price', 0)
+        )
+        self.items_in_category = all_items_in_category
 
     async def build_embed(self) -> discord.Embed:
         wallet = await get_wallet(self.user.id)
@@ -110,7 +99,7 @@ class BuyItemView(ShopViewBase):
         commerce_strings = all_ui_strings.get("commerce", {})
         category_display_names = { 
             "아이템": "잡화점", "장비": "장비점", "미끼": "미끼가게", "농장_씨앗": "씨앗가게", 
-            "펫 아이템": "펫 상점", "조미료": "조미료 가게", "입장권": "입장권 판매소"
+            "펫 아이템": "펫 상점", "알": "알 상점", "조미료": "조미료 가게", "입장권": "입장권 판매소"
         }
         display_name = category_display_names.get(self.category, self.category.replace("_", " "))
         description_template = commerce_strings.get("item_view_desc", "현재 소지금: `{balance}`{currency_icon}\n구매하고 싶은 상품을 선택해주세요.")
@@ -218,14 +207,20 @@ class BuyCategoryView(ShopViewBase):
         title = commerce_strings.get("category_view_title", "🏪 구매함"); description = commerce_strings.get("category_view_desc", "구매하고 싶은 아이템의 카테고리를 선택해주세요.")
         embed = discord.Embed(title=title, description=description, color=discord.Color.green()); embed.set_footer(text="매일 00:05(KST)에 시세 변동"); return embed
     
+    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def build_components(self):
         self.clear_items()
-        layout = [[("아이템", "아이템"), ("입장권", "입장권"), ("장비", "장비")], [("미끼", "미끼"), ("조미료", "조미료"), ("농장_씨앗", "씨앗"), ("펫 아이템", "펫")]]
+        layout = [
+            [("아이템", "아이템"), ("입장권", "입장권"), ("장비", "장비")],
+            [("미끼", "미끼"), ("조미료", "조미료"), ("농장_씨앗", "씨앗"), ("펫 아이템", "펫 아이템"), ("알", "알")]
+        ]
+        
         for row_index, row_items in enumerate(layout):
             for label, category_key in row_items:
-                # [수정] '펫' 버튼의 custom_id를 '펫 아이템'으로 명시
-                final_key = "펫 아이템" if category_key == "펫" else category_key
-                button = ui.Button(label=label, custom_id=f"buy_category_{final_key}", row=row_index); button.callback = self.category_callback; self.add_item(button)
+                button = ui.Button(label=label, custom_id=f"buy_category_{category_key}", row=row_index)
+                button.callback = self.category_callback
+                self.add_item(button)
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
     
     async def category_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -233,7 +228,7 @@ class BuyCategoryView(ShopViewBase):
         item_view = BuyItemView(self.user, category); item_view.message = self.message; await item_view.update_view(interaction)
 
 class SellFishView(ShopViewBase):
-    # ... (변경 없음) ...
+    # ... (변경 없음, 생략) ...
     def __init__(self, user: discord.Member):
         super().__init__(user)
         self.fish_data_map: Dict[str, Dict[str, Any]] = {}
@@ -289,7 +284,7 @@ class SellFishView(ShopViewBase):
         view = SellCategoryView(self.user); view.message = self.message; await view.update_view(interaction)
 
 class SellCropView(ShopViewBase):
-    # ... (변경 없음) ...
+    # ... (변경 없음, 생략) ...
     def __init__(self, user: discord.Member):
         super().__init__(user)
         self.crop_data_map: Dict[str, Dict[str, Any]] = {}
@@ -334,7 +329,7 @@ class SellCropView(ShopViewBase):
         view = SellCategoryView(self.user); view.message = self.message; await view.update_view(interaction)
 
 class SellMineralView(ShopViewBase):
-    # ... (변경 없음) ...
+    # ... (변경 없음, 생략) ...
     def __init__(self, user: discord.Member):
         super().__init__(user)
         self.mineral_data_map: Dict[str, Dict[str, Any]] = {}
@@ -379,7 +374,7 @@ class SellMineralView(ShopViewBase):
         view = SellCategoryView(self.user); view.message = self.message; await view.update_view(interaction)
 
 class SellCookingView(ShopViewBase):
-    # ... (변경 없음) ...
+    # ... (변경 없음, 생략) ...
     def __init__(self, user: discord.Member):
         super().__init__(user)
         self.cooking_data_map: Dict[str, Dict[str, Any]] = {}
@@ -424,6 +419,7 @@ class SellCookingView(ShopViewBase):
         view = SellCategoryView(self.user); view.message = self.message; await view.update_view(interaction)
 
 class SellLootView(ShopViewBase):
+    # ... (변경 없음, 생략) ...
     def __init__(self, user: discord.Member):
         super().__init__(user)
         self.loot_data_map: Dict[str, Dict[str, Any]] = {}
