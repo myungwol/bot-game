@@ -15,7 +15,6 @@ from collections import defaultdict
 from utils.database import (
     get_inventory, update_inventory, supabase, get_id,
     save_panel_id, get_panel_id, get_embed_from_db
-    get_item_database # [수정] 누락된 import 추가
 )
 from utils.helpers import format_embed_from_db
 
