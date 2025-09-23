@@ -40,6 +40,7 @@ async def load_dungeon_data_from_db() -> Dict[str, Any]:
         return {"dungeons": {}, "monsters": {}, "loot": {}}
 
 class DungeonGameView(ui.View):
+    # ... (내부 코드는 이전과 거의 동일) ...
     def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime):
         super().__init__(timeout=(end_time - datetime.now(timezone.utc)).total_seconds() + 30)
         self.cog = cog; self.user = user; self.pet_data_raw = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
@@ -67,18 +68,33 @@ class DungeonGameView(ui.View):
     async def start(self, thread: discord.Thread):
         embed = self.build_embed()
         self.message = await thread.send(embed=embed, view=self)
-
+        
+    # [수정] 몬스터 생성 시 레벨 시스템 적용
     def generate_monster(self) -> Dict:
         dungeon_info = self.cog.dungeon_data[self.dungeon_tier]
         element = random.choice(dungeon_info['elements'])
         base_monster = self.cog.monster_base_data[element]
-        hp = int(base_monster['base_hp'] * dungeon_info['hp_mult'])
-        attack = int(base_monster['base_attack'] * dungeon_info['atk_mult'])
-        defense = int(base_monster['base_defense'] * dungeon_info['def_mult'])
-        speed = int(base_monster['base_speed'] * dungeon_info['spd_mult'])
-        xp = max(1, int(hp * dungeon_info['xp_mult']) // 20)
+        
+        # 몬스터 레벨 랜덤 생성
+        monster_level = random.randint(dungeon_info.get('min_monster_level', 1), dungeon_info.get('max_monster_level', 5))
+
+        # 레벨 보너스 계산
+        hp_bonus = (monster_level - 1) * 8
+        other_stat_bonus = (monster_level - 1) * 5
+
+        # 최종 스탯 계산
+        hp = int(base_monster['base_hp'] * dungeon_info['hp_mult']) + hp_bonus
+        attack = int(base_monster['base_attack'] * dungeon_info['atk_mult']) + other_stat_bonus
+        defense = int(base_monster['base_defense'] * dungeon_info['def_mult']) + other_stat_bonus
+        speed = int(base_monster['base_speed'] * dungeon_info['spd_mult']) + other_stat_bonus
+        xp = max(1, int(hp * dungeon_info['xp_mult']) // 20) + (monster_level * 2)
+
         image_url = f"{self.storage_base_url}/{element}_{dungeon_info['image_suffix']}.png"
-        return {"name": f"{dungeon_info['name'].replace('던전', '')} {base_monster['name']}", "hp": hp, "attack": attack, "defense": defense, "speed": speed, "xp": xp, "element": element, "image_url": image_url}
+        return {
+            "name": f"Lv.{monster_level} {dungeon_info['name'].replace('던전', '')} {base_monster['name']}",
+            "hp": hp, "attack": attack, "defense": defense, "speed": speed, "xp": xp, "element": element,
+            "image_url": image_url, "level": monster_level
+        }
 
     def build_embed(self) -> discord.Embed:
         dungeon_info = self.cog.dungeon_data[self.dungeon_tier]
@@ -113,6 +129,7 @@ class DungeonGameView(ui.View):
         embed.description = (description_content + closing_time_text) if description_content else closing_time_text.strip()
         return embed
     
+    # ... (build_components 및 이하 다른 메서드들은 변경 없음, 생략) ...
     def build_components(self):
         self.clear_items()
         if self.state in ["exploring", "battle_over"]:
@@ -260,23 +277,11 @@ class Dungeon(commands.Cog):
         if user and (rewards or total_xp > 0):
             if rewards:
                 await asyncio.gather(*[update_inventory(user.id, item, qty) for item, qty in rewards.items()])
-            
             rewards_text = "\n".join([f"> {item}: {qty}개" for item, qty in rewards.items()]) or "> 획득한 아이템이 없습니다."
-            
             embed_data = await get_embed_from_db("log_dungeon_result")
-            # --- ▼▼▼▼▼ 핵심 수정 ▼▼▼▼▼ ---
-            log_embed = format_embed_from_db(
-                embed_data, 
-                user_mention=user.mention, 
-                dungeon_name=self.dungeon_data[session_data['dungeon_tier']]['name'], 
-                rewards_list=rewards_text, 
-                pet_xp_gained=f"{total_xp:,}" # 쉼표 포맷팅 추가
-            )
-            # --- ▲▲▲▲▲ 핵심 수정 ▲▲▲▲▲ ---
+            log_embed = format_embed_from_db(embed_data, user_mention=user.mention, dungeon_name=self.dungeon_data[session_data['dungeon_tier']]['name'], rewards_list=rewards_text, pet_xp_gained=f"{total_xp:,}")
             if user.display_avatar: log_embed.set_thumbnail(url=user.display_avatar.url)
-            
-            if panel_channel:
-                await panel_channel.send(embed=log_embed)
+            if panel_channel: await panel_channel.send(embed=log_embed)
         
         try:
             if not thread: thread = self.bot.get_channel(int(session_data['thread_id'])) or await self.bot.fetch_channel(int(session_data['thread_id']))
@@ -284,13 +289,13 @@ class Dungeon(commands.Cog):
             await asyncio.sleep(5); await thread.delete()
         except (discord.NotFound, discord.Forbidden): pass
         
-        if panel_channel:
-            await self.regenerate_panel(panel_channel)
+        if panel_channel: await self.regenerate_panel(panel_channel)
 
     @commands.Cog.listener()
     async def on_ready(self):
         self.bot.add_view(await DungeonPanelView.create(self))
     
+    # [수정] regenerate_panel에 새로운 임베드 포맷팅 로직 추가
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_dungeon"):
         panel_name = panel_key.replace("panel_", "")
         if panel_info := get_panel_id(panel_name):
@@ -299,11 +304,19 @@ class Dungeon(commands.Cog):
                     old_message = await channel.fetch_message(msg_id)
                     await old_message.delete()
                 except (discord.NotFound, discord.Forbidden): pass
+
         if embed_data := await get_embed_from_db(panel_key):
+            # DB에서 던전 데이터를 가져와 포맷팅에 필요한 값들을 준비
+            dungeon_levels = {
+                f"{tier}_rec_level": f"Lv.{data.get('recommended_level', '?')}"
+                for tier, data in self.dungeon_data.items()
+            }
+            embed = format_embed_from_db(embed_data, **dungeon_levels)
             view = await DungeonPanelView.create(self)
-            new_message = await channel.send(embed=format_embed_from_db(embed_data), view=view)
+            new_message = await channel.send(embed=embed, view=view)
             await save_panel_id(panel_name, new_message.id, channel.id)
 
+# [수정] DungeonPanelView 버튼 생성 로직 변경
 class DungeonPanelView(ui.View):
     def __init__(self, cog_instance: 'Dungeon'):
         super().__init__(timeout=None)
@@ -316,11 +329,10 @@ class DungeonPanelView(ui.View):
         return view
 
     async def _add_buttons(self):
-        while not self.cog.dungeon_data:
-            await asyncio.sleep(0.1)
+        while not self.cog.dungeon_data: await asyncio.sleep(0.1)
+        # DB에서 가져온 데이터는 recommended_level 순으로 정렬되어 있음
         for tier, data in self.cog.dungeon_data.items():
-            label = f"{data['name']} (권장 Lv.{data.get('recommended_level', '?')})"
-            button = ui.Button(label=label, style=discord.ButtonStyle.secondary, custom_id=f"enter_dungeon_{tier}")
+            button = ui.Button(label=data['name'], style=discord.ButtonStyle.secondary, custom_id=f"enter_dungeon_{tier}")
             button.callback = self.dispatch_callback
             self.add_item(button)
 
