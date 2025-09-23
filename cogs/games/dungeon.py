@@ -14,7 +14,8 @@ from collections import defaultdict
 
 from utils.database import (
     get_inventory, update_inventory, supabase, get_id,
-    save_panel_id, get_panel_id, get_embed_from_db
+    save_panel_id, get_panel_id, get_embed_from_db,
+    get_item_database # [수정] 누락된 import 추가
 )
 from utils.helpers import format_embed_from_db
 
@@ -40,6 +41,7 @@ async def load_dungeon_data_from_db() -> Dict[str, Any]:
         return {"dungeons": {}, "monsters": {}, "loot": {}}
 
 class DungeonGameView(ui.View):
+    # ... (내부 코드는 변경 없음, 생략) ...
     def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime):
         super().__init__(timeout=(end_time - datetime.now(timezone.utc)).total_seconds() + 30)
         self.cog = cog; self.user = user; self.pet_data_raw = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
@@ -48,7 +50,7 @@ class DungeonGameView(ui.View):
         self.battle_log: List[str] = []; self.rewards: Dict[str, int] = defaultdict(int)
         self.total_pet_xp_gained: int = 0
         self.pet_current_hp: int = self.final_pet_stats['hp']
-        self.pet_is_defeated: bool = False # [추가] 펫 전투 불능 상태
+        self.pet_is_defeated: bool = False
         self.current_monster: Optional[Dict] = None; self.monster_current_hp: int = 0
         self.storage_base_url = f"{os.environ.get('SUPABASE_URL')}/storage/v1/object/public/monster_images"
         self.build_components()
@@ -193,46 +195,25 @@ class DungeonGameView(ui.View):
 
     async def handle_use_item(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        inventory = await get_inventory(self.user)
-        usable_items = []
+        inventory = await get_inventory(self.user); usable_items = []
         for name, qty in inventory.items():
-            item_data = self.cog.item_db.get(name, {})
-            effect = item_data.get('effect_type')
-            if effect == 'pet_revive' and self.pet_is_defeated:
-                usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="💊"))
-            elif effect == 'pet_heal' and not self.pet_is_defeated and self.pet_current_hp < self.final_pet_stats['hp']:
-                 usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="🧪"))
-        
-        if not usable_items:
-            return await interaction.followup.send("사용할 수 있는 아이템이 없습니다.", ephemeral=True, delete_after=5)
-
+            item_data = self.cog.item_db.get(name, {}); effect = item_data.get('effect_type')
+            if effect == 'pet_revive' and self.pet_is_defeated: usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="💊"))
+            elif effect == 'pet_heal' and not self.pet_is_defeated and self.pet_current_hp < self.final_pet_stats['hp']: usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="🧪"))
+        if not usable_items: return await interaction.followup.send("사용할 수 있는 아이템이 없습니다.", ephemeral=True, delete_after=5)
         select = ui.Select(placeholder="사용할 아이템을 선택하세요...", options=usable_items)
-        
         async def on_item_select(select_interaction: discord.Interaction):
             await select_interaction.response.defer()
-            item_name = select_interaction.data['values'][0]
-            item_data = self.cog.item_db.get(item_name, {})
-            effect = item_data.get('effect_type')
-            
+            item_name = select_interaction.data['values'][0]; item_data = self.cog.item_db.get(item_name, {}); effect = item_data.get('effect_type')
             await update_inventory(self.user.id, item_name, -1)
-            
             if effect == 'pet_revive':
-                self.pet_is_defeated = False
-                self.pet_current_hp = self.final_pet_stats['hp']
-                self.state = "exploring"
-                self.battle_log = [f"💊 '{item_name}'을(를) 사용해 펫이 완전히 회복되었다!"]
+                self.pet_is_defeated = False; self.pet_current_hp = self.final_pet_stats['hp']; self.state = "exploring"; self.battle_log = [f"💊 '{item_name}'을(를) 사용해 펫이 완전히 회복되었다!"]
             elif effect == 'pet_heal':
-                heal_amount = item_data.get('power', 0)
-                self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + heal_amount)
-                self.battle_log = [f"🧪 '{item_name}'을(를) 사용해 체력을 {heal_amount} 회복했다!"]
+                heal_amount = item_data.get('power', 0); self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + heal_amount); self.battle_log = [f"🧪 '{item_name}'을(를) 사용해 체력을 {heal_amount} 회복했다!"]
                 if self.state == "in_battle":
                     await self._execute_monster_turn()
-                    if self.pet_current_hp <= 0:
-                        return await self.handle_battle_lose(interaction)
-            
-            await self.refresh_ui()
-            await select_interaction.delete_original_response()
-
+                    if self.pet_current_hp <= 0: return await self.handle_battle_lose(interaction)
+            await self.refresh_ui(); await select_interaction.delete_original_response()
         select.callback = on_item_select
         view = ui.View(timeout=60).add_item(select)
         await interaction.followup.send(view=view, ephemeral=True)
