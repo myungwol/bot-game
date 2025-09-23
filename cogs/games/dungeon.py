@@ -23,28 +23,23 @@ logger = logging.getLogger(__name__)
 async def load_dungeon_data_from_db() -> Dict[str, Any]:
     try:
         dungeons_res, monsters_res, loot_res = await asyncio.gather(
-            supabase.table('dungeons').select('*').order('recommended_level').execute(), # 권장 레벨 순으로 정렬
+            supabase.table('dungeons').select('*').order('recommended_level').execute(),
             supabase.table('monster_species').select('*').execute(),
             supabase.table('dungeon_loot').select('*').execute()
         )
-        
         dungeon_data = {d['tier_key']: d for d in dungeons_res.data} if dungeons_res.data else {}
         monster_base_data = {m['element_key']: m for m in monsters_res.data} if monsters_res.data else {}
-        
         loot_table = defaultdict(dict)
         if loot_res.data:
             for item in loot_res.data:
                 loot_table[item['dungeon_tier']][item['item_name']] = (item['drop_chance'], item['min_qty'], item['max_qty'])
-        
         logger.info(f"✅ 던전 데이터 로드 완료: 던전({len(dungeon_data)}), 몬스터({len(monster_base_data)}), 보상({len(loot_table)})")
         return {"dungeons": dungeon_data, "monsters": monster_base_data, "loot": dict(loot_table)}
-
     except Exception as e:
         logger.error(f"❌ 던전 데이터 DB 로드 실패: {e}", exc_info=True)
         return {"dungeons": {}, "monsters": {}, "loot": {}}
 
 class DungeonGameView(ui.View):
-    # ... (내부 코드는 변경 없음, 생략) ...
     def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime):
         super().__init__(timeout=(end_time - datetime.now(timezone.utc)).total_seconds() + 30)
         self.cog = cog; self.user = user; self.pet_data_raw = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
@@ -262,18 +257,26 @@ class Dungeon(commands.Cog):
         user = self.bot.get_user(user_id)
         panel_channel = self.bot.get_channel(get_id("dungeon_panel_channel_id")) if get_id("dungeon_panel_channel_id") else None
         
-        # [수정] 템플릿에 pet_xp_gained 변수 전달
         if user and (rewards or total_xp > 0):
             if rewards:
                 await asyncio.gather(*[update_inventory(user.id, item, qty) for item, qty in rewards.items()])
+            
             rewards_text = "\n".join([f"> {item}: {qty}개" for item, qty in rewards.items()]) or "> 획득한 아이템이 없습니다."
+            
             embed_data = await get_embed_from_db("log_dungeon_result")
-            log_embed = format_embed_from_db(embed_data, user_mention=user.mention, 
-                                             dungeon_name=self.dungeon_data[session_data['dungeon_tier']]['name'], 
-                                             rewards_list=rewards_text, 
-                                             pet_xp_gained=total_xp)
+            # --- ▼▼▼▼▼ 핵심 수정 ▼▼▼▼▼ ---
+            log_embed = format_embed_from_db(
+                embed_data, 
+                user_mention=user.mention, 
+                dungeon_name=self.dungeon_data[session_data['dungeon_tier']]['name'], 
+                rewards_list=rewards_text, 
+                pet_xp_gained=f"{total_xp:,}" # 쉼표 포맷팅 추가
+            )
+            # --- ▲▲▲▲▲ 핵심 수정 ▲▲▲▲▲ ---
             if user.display_avatar: log_embed.set_thumbnail(url=user.display_avatar.url)
-            if panel_channel: await panel_channel.send(embed=log_embed)
+            
+            if panel_channel:
+                await panel_channel.send(embed=log_embed)
         
         try:
             if not thread: thread = self.bot.get_channel(int(session_data['thread_id'])) or await self.bot.fetch_channel(int(session_data['thread_id']))
@@ -281,15 +284,11 @@ class Dungeon(commands.Cog):
             await asyncio.sleep(5); await thread.delete()
         except (discord.NotFound, discord.Forbidden): pass
         
-        if panel_channel: await self.regenerate_panel(panel_channel)
-
-    async def register_persistent_views(self):
-        # [수정] 비동기 뷰 생성을 위해 on_ready 리스너로 이동
-        pass
+        if panel_channel:
+            await self.regenerate_panel(panel_channel)
 
     @commands.Cog.listener()
     async def on_ready(self):
-        # 봇이 준비되고 Cog의 데이터가 로드된 후 View를 등록
         self.bot.add_view(await DungeonPanelView.create(self))
     
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_dungeon"):
@@ -301,11 +300,10 @@ class Dungeon(commands.Cog):
                     await old_message.delete()
                 except (discord.NotFound, discord.Forbidden): pass
         if embed_data := await get_embed_from_db(panel_key):
-            view = await DungeonPanelView.create(self) # [수정] 비동기 생성 메서드 사용
+            view = await DungeonPanelView.create(self)
             new_message = await channel.send(embed=format_embed_from_db(embed_data), view=view)
             await save_panel_id(panel_name, new_message.id, channel.id)
 
-# [수정] DungeonPanelView를 비동기적으로 생성하도록 변경
 class DungeonPanelView(ui.View):
     def __init__(self, cog_instance: 'Dungeon'):
         super().__init__(timeout=None)
@@ -318,10 +316,8 @@ class DungeonPanelView(ui.View):
         return view
 
     async def _add_buttons(self):
-        # Cog 데이터 로드를 기다림
         while not self.cog.dungeon_data:
             await asyncio.sleep(0.1)
-
         for tier, data in self.cog.dungeon_data.items():
             label = f"{data['name']} (권장 Lv.{data.get('recommended_level', '?')})"
             button = ui.Button(label=label, style=discord.ButtonStyle.secondary, custom_id=f"enter_dungeon_{tier}")
