@@ -192,7 +192,6 @@ class DungeonGameView(ui.View):
         await interaction.response.send_message("던전에서 나가는 중입니다...", ephemeral=True, delete_after=5)
         await self.cog.close_dungeon_session(self.user.id, self.rewards, self.total_pet_xp_gained, interaction.channel)
 
-    # [수정] followup.send에서 delete_after 제거
     async def handle_use_item(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         inventory = await get_inventory(self.user); usable_items = []
@@ -200,12 +199,9 @@ class DungeonGameView(ui.View):
             item_data = self.cog.item_db.get(name, {}); effect = item_data.get('effect_type')
             if effect == 'pet_revive' and self.pet_is_defeated: usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="💊"))
             elif effect == 'pet_heal' and not self.pet_is_defeated and self.pet_current_hp < self.final_pet_stats['hp']: usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="🧪"))
-        
         if not usable_items:
             msg = await interaction.followup.send("사용할 수 있는 아이템이 없습니다.", ephemeral=True)
-            self.cog.bot.loop.create_task(msg.delete(delay=5))
-            return
-
+            self.cog.bot.loop.create_task(msg.delete(delay=5)); return
         select = ui.Select(placeholder="사용할 아이템을 선택하세요...", options=usable_items)
         async def on_item_select(select_interaction: discord.Interaction):
             await select_interaction.response.defer()
@@ -275,7 +271,9 @@ class Dungeon(commands.Cog):
         end_time = datetime.now(timezone.utc) + timedelta(hours=24)
         await supabase.table('dungeon_sessions').upsert({"user_id": str(user.id), "thread_id": str(thread.id), "end_time": end_time.isoformat(), "pet_id": pet_data['id'], "dungeon_tier": tier, "rewards_json": "{}"}, on_conflict="user_id").execute()
         view = DungeonGameView(self, user, pet_data, tier, end_time)
-        self.active_sessions[user_id] = view
+        # --- ▼▼▼▼▼ 핵심 수정 ▼▼▼▼▼ ---
+        self.active_sessions[user.id] = view
+        # --- ▲▲▲▲▲ 핵심 수정 ▲▲▲▲▲ ---
         await interaction.followup.send(f"던전에 입장했습니다! {thread.mention}", ephemeral=True)
         await view.start(thread)
 
