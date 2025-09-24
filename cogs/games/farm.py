@@ -280,17 +280,6 @@ async def dispatch_callback(self, interaction: discord.Interaction):
         if cid and hasattr(self, method_name):
             await getattr(self, method_name)(interaction)
 
-        method_name = f"on_{cid}_click" if cid else None
-        if not cid or not hasattr(self, method_name):
-            if not interaction.response.is_done():
-                try:
-                    await interaction.response.defer()
-                except discord.NotFound:
-                    pass
-            return
-
-        await getattr(self, method_name)(interaction)
-
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         self.farm_owner_id = await get_farm_owner_by_thread(interaction.channel.id)
     
