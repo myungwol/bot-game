@@ -195,13 +195,17 @@ class DungeonGameView(ui.View):
     async def _execute_pet_turn(self):
         damage = max(1, self.final_pet_stats['attack'] - self.current_monster.get('defense', 0))
         self.monster_current_hp = max(0, self.monster_current_hp - damage)
-        self.battle_log.append(f"▶ {self.pet_data_raw['nickname']}의 공격! {damage}의 데미지!")
+        # ▼▼▼ [핵심 수정] 닉네임은 20칸, 데미지는 3칸으로 정렬하여 가독성을 높입니다. ▼▼▼
+        log_message = f"▶ {self.pet_data_raw['nickname']:<20} | {damage:>3}의 데미지!"
+        self.battle_log.append(log_message)
 
     async def _execute_monster_turn(self):
         damage = max(1, self.current_monster.get('attack', 1) - self.final_pet_stats['defense'])
         self.pet_current_hp = max(0, self.pet_current_hp - damage)
         await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
-        self.battle_log.append(f"◀ {self.current_monster['name']}의 공격! {damage}의 데미지!")
+        # ▼▼▼ [핵심 수정] 몬스터 이름은 20칸, 데미지는 3칸으로 정렬하여 가독성을 높입니다. ▼▼▼
+        log_message = f"◀ {self.current_monster['name']:<20} | {damage:>3}의 데미지!"
+        self.battle_log.append(log_message)
         
     async def handle_explore(self, interaction: discord.Interaction):
         if self.pet_is_defeated: return await interaction.response.send_message("펫이 쓰러져서 탐색할 수 없습니다.", ephemeral=True, delete_after=5)
