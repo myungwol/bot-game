@@ -42,7 +42,6 @@ async def load_dungeon_data_from_db() -> Dict[str, Any]:
 
 class DungeonGameView(ui.View):
     def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime, session_id: int):
-        # ▼▼▼ [핵심 수정 1] timeout을 None으로 변경하여 영구 View로 만듭니다. ▼▼▼
         super().__init__(timeout=None)
         self.cog = cog; self.user = user; self.pet_data_raw = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
         self.session_id = session_id
@@ -56,6 +55,8 @@ class DungeonGameView(ui.View):
         
         self.current_monster: Optional[Dict] = None; self.monster_current_hp: int = 0
         self.storage_base_url = f"{os.environ.get('SUPABASE_URL')}/storage/v1/object/public/monster_images"
+        
+        # ▼▼▼ [핵심 수정] __init__의 마지막에서 build_components를 호출하여 custom_id를 먼저 설정합니다. ▼▼▼
         self.build_components()
 
     # _calculate_final_pet_stats, start, generate_monster, build_embed 메서드는 변경 없음 (생략)
@@ -123,57 +124,74 @@ class DungeonGameView(ui.View):
         closing_time_text = f"\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n던전은 {discord.utils.format_dt(self.end_time, 'R')}에 닫힙니다."
         embed.description = (description_content + closing_time_text) if description_content else closing_time_text.strip()
         return embed
-
-    # ▼▼▼ [핵심 수정 2] 모든 버튼에 custom_id를 명시적으로 부여합니다. ▼▼▼
+    
+    # ▼▼▼ [핵심 수정] build_components 메서드를 다시 수정합니다. ▼▼▼
     def build_components(self):
         self.clear_items()
         
-        # 유저 ID를 custom_id에 포함시켜 각 View를 고유하게 만듭니다.
         base_id = f"dungeon_view:{self.user.id}"
+        
+        # 버튼 정보를 딕셔너리로 관리
+        buttons_map = {
+            "explore": ui.Button(label="탐색하기", style=discord.ButtonStyle.success, emoji="🗺️", custom_id=f"{base_id}:explore"),
+            "use_item": ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji="👜", custom_id=f"{base_id}:use_item"),
+            "attack": ui.Button(label="공격", style=discord.ButtonStyle.primary, emoji="⚔️", custom_id=f"{base_id}:attack"),
+            "flee": ui.Button(label="도망가기", style=discord.ButtonStyle.danger, emoji="🏃", custom_id=f"{base_id}:flee"),
+            "leave": ui.Button(label="던전 나가기", style=discord.ButtonStyle.grey, emoji="🚪", custom_id=f"{base_id}:leave"),
+            "explore_disabled": ui.Button(label="탐색 불가", style=discord.ButtonStyle.secondary, emoji="☠️", custom_id=f"{base_id}:explore_disabled", disabled=True)
+        }
 
         if self.pet_is_defeated:
-            self.add_item(ui.Button(label="탐색 불가", style=discord.ButtonStyle.secondary, emoji="☠️", custom_id=f"{base_id}:explore_disabled", disabled=True))
-            self.add_item(ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji="👜", custom_id=f"{base_id}:use_item"))
+            self.add_item(buttons_map["explore_disabled"])
+            self.add_item(buttons_map["use_item"])
         elif self.state in ["exploring", "battle_over"]:
-            self.add_item(ui.Button(label="탐색하기", style=discord.ButtonStyle.success, emoji="🗺️", custom_id=f"{base_id}:explore"))
-            self.add_item(ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji="👜", custom_id=f"{base_id}:use_item"))
+            self.add_item(buttons_map["explore"])
+            self.add_item(buttons_map["use_item"])
         elif self.state == "in_battle":
-            self.add_item(ui.Button(label="공격", style=discord.ButtonStyle.primary, emoji="⚔️", custom_id=f"{base_id}:attack"))
-            self.add_item(ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji="👜", custom_id=f"{base_id}:use_item"))
-            self.add_item(ui.Button(label="도망가기", style=discord.ButtonStyle.danger, emoji="🏃", custom_id=f"{base_id}:flee"))
+            self.add_item(buttons_map["attack"])
+            self.add_item(buttons_map["use_item"])
+            self.add_item(buttons_map["flee"])
         
-        self.add_item(ui.Button(label="던전 나가기", style=discord.ButtonStyle.grey, emoji="🚪", custom_id=f"{base_id}:leave"))
+        self.add_item(buttons_map["leave"])
         
-        # 콜백을 on_timeout에서 처리하므로 개별 콜백 설정은 제거합니다.
+        # 생성된 모든 버튼에 콜백을 할당
+        for item in self.children:
+            if isinstance(item, ui.Button):
+                item.callback = self.dispatch_callback
 
-    # ▼▼▼ [핵심 수정 3] on_timeout 메서드를 제거하고, dispatch_callback과 interaction_check를 추가/수정합니다. ▼▼▼
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # custom_id에 포함된 유저 ID와 상호작용을 한 유저의 ID가 일치하는지 확인
-        try:
-            prefix, view_user_id, action = interaction.data['custom_id'].split(':')
-            if int(view_user_id) != interaction.user.id:
-                await interaction.response.send_message("자신의 던전만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
-                return False
-        except (ValueError, KeyError):
-             # custom_id 형식이 맞지 않는 경우 (예: 다른 View의 상호작용)
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message("자신의 던전만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
             return False
         return True
 
     async def dispatch_callback(self, interaction: discord.Interaction):
-        # interaction_check를 통과했으므로, 이 View에 대한 올바른 상호작용임이 보장됨
-        action = interaction.data['custom_id'].split(':')[-1]
-        method_map = {"explore": self.handle_explore, "attack": self.handle_attack, "flee": self.handle_flee, "leave": self.handle_leave, "use_item": self.handle_use_item}
+        # custom_id를 파싱하여 액션을 결정
+        try:
+            action = interaction.data['custom_id'].split(':')[-1]
+        except (KeyError, IndexError):
+            return
+
+        method_map = {
+            "explore": self.handle_explore, 
+            "attack": self.handle_attack, 
+            "flee": self.handle_flee, 
+            "leave": self.handle_leave, 
+            "use_item": self.handle_use_item
+        }
+        
         if method := method_map.get(action): 
             await method(interaction)
+        # 'explore_disabled'는 콜백이 없으므로 아무 작업도 하지 않음
 
-    # ... (refresh_ui, _execute_pet_turn, _execute_monster_turn, handle_... 메서드들은 변경 없음, 생략) ...
+    # ... (나머지 메서드는 이전과 동일하게 유지) ...
     async def refresh_ui(self, interaction: Optional[discord.Interaction] = None):
         if interaction and not interaction.response.is_done(): await interaction.response.defer()
         self.build_components(); embed = self.build_embed()
         if self.message:
             try: await self.message.edit(embed=embed, view=self)
             except discord.NotFound: self.stop()
-
+    
     async def _execute_pet_turn(self):
         damage = max(1, self.final_pet_stats['attack'] - self.current_monster.get('defense', 0))
         self.monster_current_hp = max(0, self.monster_current_hp - damage)
@@ -264,7 +282,7 @@ class DungeonGameView(ui.View):
     def stop(self):
         if self.cog and self.user: self.cog.active_sessions.pop(self.user.id, None)
         super().stop()
-
+        
 class Dungeon(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot; self.active_sessions: Dict[int, DungeonGameView] = {}
