@@ -268,9 +268,8 @@ class FarmUIView(ui.View):
             item.callback = self.dispatch_callback
             self.add_item(item)
     
-async def dispatch_callback(self, interaction: discord.Interaction):
+    async def dispatch_callback(self, interaction: discord.Interaction):
         # ▼▼▼ [핵심 수정] 모든 버튼에 대해 일관되게 defer를 호출하도록 변경합니다. ▼▼▼
-        # 각 버튼 핸들러 내부에서 응답 방식을 결정하므로, 여기서 미리 defer하는 것이 안전합니다.
         if not interaction.response.is_done():
             await interaction.response.defer()
         
@@ -279,16 +278,16 @@ async def dispatch_callback(self, interaction: discord.Interaction):
 
         if cid and hasattr(self, method_name):
             await getattr(self, method_name)(interaction)
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
+    # ▼▼▼ [핵심 수정] 아래 메서드의 들여쓰기를 클래스에 맞게 수정합니다. ▼▼▼
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         self.farm_owner_id = await get_farm_owner_by_thread(interaction.channel.id)
     
-        # ▼▼▼ [수정] 아래 None 체크 로직 추가 ▼▼▼
         if not self.farm_owner_id: 
             if not interaction.response.is_done():
                 await interaction.response.send_message("❌ 이 농장의 정보를 찾을 수 없습니다.", ephemeral=True, delete_after=5)
             return False
-        # ▲▲▲ [수정] 완료 ▲▲▲
     
         if interaction.user.id == self.farm_owner_id: 
             return True
@@ -520,8 +519,7 @@ async def dispatch_callback(self, interaction: discord.Interaction):
                     await level_cog.handle_level_up_event(owner, res.data)
                 break
     
-async def on_farm_invite_click(self, i: discord.Interaction):
-        # ▼▼▼ [핵심 수정] defer는 dispatch_callback에서 이미 처리되었으므로, 바로 followup을 사용합니다. ▼▼▼
+    async def on_farm_invite_click(self, i: discord.Interaction):
         view = ui.View(timeout=180)
         select = ui.UserSelect(placeholder="농장에 초대할 유저를 선택하세요...")
         async def cb(si: discord.Interaction):
@@ -529,16 +527,11 @@ async def on_farm_invite_click(self, i: discord.Interaction):
             for user_id_str in si.data.get('values', []):
                 try: 
                     user = self.cog.bot.get_user(int(user_id_str))
-                    if user: await i.channel.add_user(user) # i.channel은 원래 스레드 채널을 가리킵니다.
+                    if user: await i.channel.add_user(user)
                 except Exception: pass
-            
-            # UserSelect에 대한 응답으로 원래 followup 메시지를 수정합니다.
             await i.edit_original_response(content="초대가 완료되었습니다.", view=None)
-
         select.callback = cb
         view.add_item(select)
-        
-        # defer된 상호작용에 대한 후속 응답으로 메시지를 보냅니다.
         await i.followup.send("누구를 농장에 초대하시겠습니까?", view=view, ephemeral=True)
 
     async def on_farm_share_click(self, i: discord.Interaction):
