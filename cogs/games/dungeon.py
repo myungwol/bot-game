@@ -250,8 +250,12 @@ class DungeonGameView(ui.View):
     async def handle_use_item(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         inventory = await get_inventory(self.user); usable_items = []
+        
+        # ▼▼▼ [핵심 수정] self.cog.item_db 대신 get_item_database()를 직접 호출합니다. ▼▼▼
+        item_db = get_item_database()
         for name, qty in inventory.items():
-            item_data = self.cog.item_db.get(name, {}); effect = item_data.get('effect_type')
+            item_data = item_db.get(name, {}); effect = item_data.get('effect_type')
+            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
             if effect == 'pet_revive' and self.pet_is_defeated: usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="💊"))
             elif effect == 'pet_heal' and not self.pet_is_defeated and self.pet_current_hp < self.final_pet_stats['hp']: usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="🧪"))
         if not usable_items:
@@ -260,7 +264,13 @@ class DungeonGameView(ui.View):
         select = ui.Select(placeholder="사용할 아이템을 선택하세요...", options=usable_items)
         async def on_item_select(select_interaction: discord.Interaction):
             await select_interaction.response.defer()
-            item_name = select_interaction.data['values'][0]; item_data = self.cog.item_db.get(item_name, {}); effect = item_data.get('effect_type')
+            item_name = select_interaction.data['values'][0]
+            
+            # ▼▼▼ [핵심 수정] 여기서도 get_item_database()를 사용합니다. ▼▼▼
+            item_data = get_item_database().get(item_name, {})
+            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+            
+            effect = item_data.get('effect_type')
             await update_inventory(self.user.id, item_name, -1)
             db_update_task = None
             if effect == 'pet_revive':
@@ -286,14 +296,13 @@ class DungeonGameView(ui.View):
 class Dungeon(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot; self.active_sessions: Dict[int, DungeonGameView] = {}
-        self.dungeon_data: Dict = {}; self.monster_base_data: Dict = {}; self.loot_table: Dict = {}; self.item_db: Dict = {}
+        self.dungeon_data: Dict = {}; self.monster_base_data: Dict = {}; self.loot_table: Dict = {}
         self.check_expired_dungeons.start()
         self.active_views_loaded = False
 
     async def cog_load(self):
         data = await load_dungeon_data_from_db()
         self.dungeon_data = data["dungeons"]; self.monster_base_data = data["monsters"]; self.loot_table = data["loot"]
-        self.item_db = get_item_database()
 
     def cog_unload(self): self.check_expired_dungeons.cancel()
 
