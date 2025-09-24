@@ -268,7 +268,7 @@ class FarmUIView(ui.View):
             item.callback = self.dispatch_callback
             self.add_item(item)
     
-async def dispatch_callback(self, interaction: discord.Interaction):
+    async def dispatch_callback(self, interaction: discord.Interaction):
         cid = (interaction.data or {}).get('custom_id')
 
         # ▼▼▼ [핵심 수정] 모달을 보내는 등 자체적인 초기 응답이 필요한 액션을 제외하고 defer를 호출합니다. ▼▼▼
