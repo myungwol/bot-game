@@ -41,18 +41,19 @@ async def load_dungeon_data_from_db() -> Dict[str, Any]:
         return {"dungeons": {}, "monsters": {}, "loot": {}}
 
 class DungeonGameView(ui.View):
-    # ▼▼▼ [수정] __init__ 메서드에 session_id 추가 ▼▼▼
     def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime, session_id: int):
         super().__init__(timeout=(end_time - datetime.now(timezone.utc)).total_seconds() + 30)
         self.cog = cog; self.user = user; self.pet_data_raw = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
-        # ▼▼▼ [추가] DB 레코드 식별을 위한 session_id 저장 ▼▼▼
         self.session_id = session_id
         self.final_pet_stats = self._calculate_final_pet_stats()
         self.state = "exploring"; self.message: Optional[discord.Message] = None
         self.battle_log: List[str] = []; self.rewards: Dict[str, int] = defaultdict(int)
         self.total_pet_xp_gained: int = 0
-        self.pet_current_hp: int = self.final_pet_stats['hp']
-        self.pet_is_defeated: bool = False
+        
+        # [수정] DB의 current_hp를 사용하고, 없으면 최대 체력으로 초기화
+        self.pet_current_hp: int = self.pet_data_raw.get('current_hp') or self.final_pet_stats['hp']
+        self.pet_is_defeated: bool = self.pet_current_hp <= 0
+        
         self.current_monster: Optional[Dict] = None; self.monster_current_hp: int = 0
         self.storage_base_url = f"{os.environ.get('SUPABASE_URL')}/storage/v1/object/public/monster_images"
         self.build_components()
@@ -68,12 +69,10 @@ class DungeonGameView(ui.View):
             stats[key] = round(base) + natural_bonus + allocated
         return stats
 
-    # ▼▼▼ [수정] start 메서드 수정 ▼▼▼
     async def start(self, thread: discord.Thread):
         embed = self.build_embed()
         self.message = await thread.send(embed=embed, view=self)
         
-        # [핵심 추가] 메시지 ID를 DB에 저장
         try:
             await supabase.table('dungeon_sessions').update({'message_id': self.message.id}).eq('id', self.session_id).execute()
         except Exception as e:
@@ -126,15 +125,21 @@ class DungeonGameView(ui.View):
     
     def build_components(self):
         self.clear_items()
-        if self.state in ["exploring", "battle_over"] or self.pet_is_defeated:
-            self.add_item(ui.Button(label="탐색하기", style=discord.ButtonStyle.success, emoji="🗺️", custom_id="explore", disabled=self.pet_is_defeated))
+        if self.pet_is_defeated:
+            self.add_item(ui.Button(label="탐색 불가", style=discord.ButtonStyle.secondary, emoji="☠️", custom_id="explore_disabled", disabled=True))
+            self.add_item(ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji="👜", custom_id="use_item"))
+        elif self.state in ["exploring", "battle_over"]:
+            self.add_item(ui.Button(label="탐색하기", style=discord.ButtonStyle.success, emoji="🗺️", custom_id="explore"))
             self.add_item(ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji="👜", custom_id="use_item"))
         elif self.state == "in_battle":
             self.add_item(ui.Button(label="공격", style=discord.ButtonStyle.primary, emoji="⚔️", custom_id="attack"))
             self.add_item(ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji="👜", custom_id="use_item"))
             self.add_item(ui.Button(label="도망가기", style=discord.ButtonStyle.danger, emoji="🏃", custom_id="flee"))
+        
         self.add_item(ui.Button(label="던전 나가기", style=discord.ButtonStyle.grey, emoji="🚪", custom_id="leave"))
-        for item in self.children: item.callback = self.dispatch_callback
+        for item in self.children: 
+            if hasattr(item, 'callback'):
+                item.callback = self.dispatch_callback
 
     async def refresh_ui(self, interaction: Optional[discord.Interaction] = None):
         if interaction and not interaction.response.is_done(): await interaction.response.defer()
@@ -166,6 +171,7 @@ class DungeonGameView(ui.View):
     async def _execute_monster_turn(self):
         damage = max(1, self.current_monster.get('attack', 1) - self.final_pet_stats['defense'])
         self.pet_current_hp = max(0, self.pet_current_hp - damage)
+        await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
         self.battle_log.append(f"◀ {self.current_monster['name']}의 공격! {damage}의 데미지!")
 
     async def handle_attack(self, interaction: discord.Interaction):
@@ -217,13 +223,18 @@ class DungeonGameView(ui.View):
             await select_interaction.response.defer()
             item_name = select_interaction.data['values'][0]; item_data = self.cog.item_db.get(item_name, {}); effect = item_data.get('effect_type')
             await update_inventory(self.user.id, item_name, -1)
+            db_update_task = None
             if effect == 'pet_revive':
                 self.pet_is_defeated = False; self.pet_current_hp = self.final_pet_stats['hp']; self.state = "exploring"; self.battle_log = [f"💊 '{item_name}'을(를) 사용해 펫이 완전히 회복되었다!"]
+                db_update_task = supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
             elif effect == 'pet_heal':
                 heal_amount = item_data.get('power', 0); self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + heal_amount); self.battle_log = [f"🧪 '{item_name}'을(를) 사용해 체력을 {heal_amount} 회복했다!"]
+                db_update_task = supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
                 if self.state == "in_battle":
                     await self._execute_monster_turn()
                     if self.pet_current_hp <= 0: return await self.handle_battle_lose(interaction)
+            
+            if db_update_task: await db_update_task
             await self.refresh_ui(); await select_interaction.delete_original_response()
         select.callback = on_item_select
         view = ui.View(timeout=60).add_item(select)
@@ -235,12 +246,10 @@ class DungeonGameView(ui.View):
         super().stop()
 
 class Dungeon(commands.Cog):
-    # ▼▼▼ [수정] __init__ 메서드 수정 ▼▼▼
     def __init__(self, bot: commands.Bot):
         self.bot = bot; self.active_sessions: Dict[int, DungeonGameView] = {}
         self.dungeon_data: Dict = {}; self.monster_base_data: Dict = {}; self.loot_table: Dict = {}; self.item_db: Dict = {}
         self.check_expired_dungeons.start()
-        # [핵심 추가] 영구 View가 로드되었는지 확인하는 플래그
         self.active_views_loaded = False
 
     async def cog_load(self):
@@ -250,22 +259,17 @@ class Dungeon(commands.Cog):
 
     def cog_unload(self): self.check_expired_dungeons.cancel()
 
-    # ▼▼▼ [수정] on_ready 리스너를 영구 View 로드를 포함하도록 확장 ▼▼▼
     @commands.Cog.listener()
     async def on_ready(self):
-        # [핵심 추가] 던전 입장 패널 View 등록
         self.bot.add_view(await DungeonPanelView.create(self))
         
-        # [핵심 추가] 활성화된 던전 게임 View 재연결
         if not self.active_views_loaded:
             await self.reload_active_dungeon_views()
             self.active_views_loaded = True
 
-    # [핵심 추가] 활성화된 던전 게임 View를 다시 로드하는 메서드
     async def reload_active_dungeon_views(self):
         logger.info("[Dungeon] 활성화된 던전 게임 UI를 다시 로드합니다...")
         try:
-            # message_id가 null이 아닌 모든 활성 세션을 가져옵니다. 펫 정보도 함께 join합니다.
             res = await supabase.table('dungeon_sessions').select('*, pets(*, pet_species(*))').not_.is_('message_id', 'null').execute()
             if not res.data:
                 logger.info("[Dungeon] 다시 로드할 활성 던전 UI가 없습니다.")
@@ -290,10 +294,8 @@ class Dungeon(commands.Cog):
                         logger.warning(f"던전 UI 로드 중 유저(ID:{user_id})를 찾을 수 없습니다.")
                         continue
 
-                    # DungeonGameView 인스턴스 재생성
                     view = DungeonGameView(self, user, pet_data, dungeon_tier, end_time, session_id)
                     
-                    # 봇에 View를 다시 등록하고, 메모리 내 세션에도 추가
                     self.bot.add_view(view, message_id=message_id)
                     self.active_sessions[user_id] = view
                     reloaded_count += 1
@@ -337,7 +339,6 @@ class Dungeon(commands.Cog):
         await update_inventory(user.id, ticket_name, -1); await thread.add_user(user)
         end_time = datetime.now(timezone.utc) + timedelta(hours=24)
         
-        # ▼▼▼ [핵심 수정] .select().single() 체인을 제거하고, upsert의 결과를 직접 사용합니다. ▼▼▼
         session_res = await supabase.table('dungeon_sessions').upsert({
             "user_id": str(user.id), 
             "thread_id": str(thread.id), 
@@ -347,7 +348,6 @@ class Dungeon(commands.Cog):
             "rewards_json": "{}"
         }, on_conflict="user_id").execute()
         
-        # upsert가 성공적으로 데이터를 반환했는지 확인
         if not (session_res and session_res.data):
             logger.error(f"던전 세션 생성/업데이트 실패 (User: {user.id})")
             await interaction.followup.send("❌ 던전 입장에 실패했습니다. (DB 오류)", ephemeral=True)
@@ -389,8 +389,6 @@ class Dungeon(commands.Cog):
         except (discord.NotFound, discord.Forbidden): pass
         
         if panel_channel: await self.regenerate_panel(panel_channel)
-
-    # [수정] 기존 on_ready 리스너는 영구 View 로딩 로직으로 대체되었으므로, 별도의 register_persistent_views는 필요 없습니다.
     
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_dungeon"):
         panel_name = panel_key.replace("panel_", "")
