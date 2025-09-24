@@ -41,9 +41,12 @@ async def load_dungeon_data_from_db() -> Dict[str, Any]:
         return {"dungeons": {}, "monsters": {}, "loot": {}}
 
 class DungeonGameView(ui.View):
-    def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime):
+    # ▼▼▼ [수정] __init__ 메서드에 session_id 추가 ▼▼▼
+    def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime, session_id: int):
         super().__init__(timeout=(end_time - datetime.now(timezone.utc)).total_seconds() + 30)
         self.cog = cog; self.user = user; self.pet_data_raw = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
+        # ▼▼▼ [추가] DB 레코드 식별을 위한 session_id 저장 ▼▼▼
+        self.session_id = session_id
         self.final_pet_stats = self._calculate_final_pet_stats()
         self.state = "exploring"; self.message: Optional[discord.Message] = None
         self.battle_log: List[str] = []; self.rewards: Dict[str, int] = defaultdict(int)
@@ -65,9 +68,16 @@ class DungeonGameView(ui.View):
             stats[key] = round(base) + natural_bonus + allocated
         return stats
 
+    # ▼▼▼ [수정] start 메서드 수정 ▼▼▼
     async def start(self, thread: discord.Thread):
         embed = self.build_embed()
         self.message = await thread.send(embed=embed, view=self)
+        
+        # [핵심 추가] 메시지 ID를 DB에 저장
+        try:
+            await supabase.table('dungeon_sessions').update({'message_id': self.message.id}).eq('id', self.session_id).execute()
+        except Exception as e:
+            logger.error(f"던전 세션(ID:{self.session_id})의 message_id 업데이트 실패: {e}")
 
     def generate_monster(self) -> Dict:
         dungeon_info = self.cog.dungeon_data[self.dungeon_tier]
@@ -225,10 +235,13 @@ class DungeonGameView(ui.View):
         super().stop()
 
 class Dungeon(commands.Cog):
+    # ▼▼▼ [수정] __init__ 메서드 수정 ▼▼▼
     def __init__(self, bot: commands.Bot):
         self.bot = bot; self.active_sessions: Dict[int, DungeonGameView] = {}
         self.dungeon_data: Dict = {}; self.monster_base_data: Dict = {}; self.loot_table: Dict = {}; self.item_db: Dict = {}
         self.check_expired_dungeons.start()
+        # [핵심 추가] 영구 View가 로드되었는지 확인하는 플래그
+        self.active_views_loaded = False
 
     async def cog_load(self):
         data = await load_dungeon_data_from_db()
@@ -236,6 +249,60 @@ class Dungeon(commands.Cog):
         self.item_db = get_item_database()
 
     def cog_unload(self): self.check_expired_dungeons.cancel()
+
+    # ▼▼▼ [수정] on_ready 리스너를 영구 View 로드를 포함하도록 확장 ▼▼▼
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # [핵심 추가] 던전 입장 패널 View 등록
+        self.bot.add_view(await DungeonPanelView.create(self))
+        
+        # [핵심 추가] 활성화된 던전 게임 View 재연결
+        if not self.active_views_loaded:
+            await self.reload_active_dungeon_views()
+            self.active_views_loaded = True
+
+    # [핵심 추가] 활성화된 던전 게임 View를 다시 로드하는 메서드
+    async def reload_active_dungeon_views(self):
+        logger.info("[Dungeon] 활성화된 던전 게임 UI를 다시 로드합니다...")
+        try:
+            # message_id가 null이 아닌 모든 활성 세션을 가져옵니다. 펫 정보도 함께 join합니다.
+            res = await supabase.table('dungeon_sessions').select('*, pets(*, pet_species(*))').not_.is_('message_id', 'null').execute()
+            if not res.data:
+                logger.info("[Dungeon] 다시 로드할 활성 던전 UI가 없습니다.")
+                return
+
+            reloaded_count = 0
+            for session_data in res.data:
+                try:
+                    user_id = int(session_data['user_id'])
+                    message_id = int(session_data['message_id'])
+                    pet_data = session_data.get('pets')
+                    dungeon_tier = session_data['dungeon_tier']
+                    end_time = datetime.fromisoformat(session_data['end_time'])
+                    session_id = session_data['id']
+                    
+                    if not pet_data:
+                        logger.warning(f"던전 세션(ID:{session_id})에 연결된 펫 정보가 없어 UI를 로드할 수 없습니다.")
+                        continue
+                    
+                    user = self.bot.get_user(user_id)
+                    if not user:
+                        logger.warning(f"던전 UI 로드 중 유저(ID:{user_id})를 찾을 수 없습니다.")
+                        continue
+
+                    # DungeonGameView 인스턴스 재생성
+                    view = DungeonGameView(self, user, pet_data, dungeon_tier, end_time, session_id)
+                    
+                    # 봇에 View를 다시 등록하고, 메모리 내 세션에도 추가
+                    self.bot.add_view(view, message_id=message_id)
+                    self.active_sessions[user_id] = view
+                    reloaded_count += 1
+                except Exception as e:
+                    logger.error(f"던전 세션(ID: {session_data.get('id')}) UI 재로드 중 오류 발생: {e}", exc_info=True)
+
+            logger.info(f"[Dungeon] 총 {reloaded_count}개의 던전 게임 UI를 성공적으로 다시 로드했습니다.")
+        except Exception as e:
+            logger.error(f"활성 던전 UI 로드 중 오류 발생: {e}", exc_info=True)
 
     @tasks.loop(minutes=5)
     async def check_expired_dungeons(self):
@@ -269,11 +336,21 @@ class Dungeon(commands.Cog):
         except Exception: return await interaction.followup.send("❌ 던전을 여는 데 실패했습니다.", ephemeral=True)
         await update_inventory(user.id, ticket_name, -1); await thread.add_user(user)
         end_time = datetime.now(timezone.utc) + timedelta(hours=24)
-        await supabase.table('dungeon_sessions').upsert({"user_id": str(user.id), "thread_id": str(thread.id), "end_time": end_time.isoformat(), "pet_id": pet_data['id'], "dungeon_tier": tier, "rewards_json": "{}"}, on_conflict="user_id").execute()
-        view = DungeonGameView(self, user, pet_data, tier, end_time)
-        # --- ▼▼▼▼▼ 핵심 수정 ▼▼▼▼▼ ---
+        
+        # ▼▼▼ [수정] upsert 후 생성된 레코드를 받아오도록 변경 ▼▼▼
+        session_res = await supabase.table('dungeon_sessions').upsert({
+            "user_id": str(user.id), 
+            "thread_id": str(thread.id), 
+            "end_time": end_time.isoformat(), 
+            "pet_id": pet_data['id'], 
+            "dungeon_tier": tier, 
+            "rewards_json": "{}"
+        }, on_conflict="user_id").select().single().execute()
+        
+        session_id = session_res.data['id']
+        view = DungeonGameView(self, user, pet_data, tier, end_time, session_id)
+        
         self.active_sessions[user.id] = view
-        # --- ▲▲▲▲▲ 핵심 수정 ▲▲▲▲▲ ---
         await interaction.followup.send(f"던전에 입장했습니다! {thread.mention}", ephemeral=True)
         await view.start(thread)
 
@@ -307,9 +384,7 @@ class Dungeon(commands.Cog):
         
         if panel_channel: await self.regenerate_panel(panel_channel)
 
-    @commands.Cog.listener()
-    async def on_ready(self):
-        self.bot.add_view(await DungeonPanelView.create(self))
+    # [수정] 기존 on_ready 리스너는 영구 View 로딩 로직으로 대체되었으므로, 별도의 register_persistent_views는 필요 없습니다.
     
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_dungeon"):
         panel_name = panel_key.replace("panel_", "")
