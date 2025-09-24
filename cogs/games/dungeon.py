@@ -337,7 +337,7 @@ class Dungeon(commands.Cog):
         await update_inventory(user.id, ticket_name, -1); await thread.add_user(user)
         end_time = datetime.now(timezone.utc) + timedelta(hours=24)
         
-        # ▼▼▼ [수정] upsert 후 생성된 레코드를 받아오도록 변경 ▼▼▼
+        # ▼▼▼ [핵심 수정] .select().single() 체인을 제거하고, upsert의 결과를 직접 사용합니다. ▼▼▼
         session_res = await supabase.table('dungeon_sessions').upsert({
             "user_id": str(user.id), 
             "thread_id": str(thread.id), 
@@ -345,9 +345,15 @@ class Dungeon(commands.Cog):
             "pet_id": pet_data['id'], 
             "dungeon_tier": tier, 
             "rewards_json": "{}"
-        }, on_conflict="user_id").select().single().execute()
+        }, on_conflict="user_id").execute()
         
-        session_id = session_res.data['id']
+        # upsert가 성공적으로 데이터를 반환했는지 확인
+        if not (session_res and session_res.data):
+            logger.error(f"던전 세션 생성/업데이트 실패 (User: {user.id})")
+            await interaction.followup.send("❌ 던전 입장에 실패했습니다. (DB 오류)", ephemeral=True)
+            return
+            
+        session_id = session_res.data[0]['id']
         view = DungeonGameView(self, user, pet_data, tier, end_time, session_id)
         
         self.active_sessions[user.id] = view
