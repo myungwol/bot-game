@@ -237,12 +237,20 @@ class DungeonGameView(ui.View):
         if self.final_pet_stats['speed'] >= self.current_monster.get('speed', 0):
             self.is_pet_turn = True
             self.battle_log.append(f"**{self.pet_data_raw['nickname']}**이(가) 민첩하게 먼저 움직인다!")
+            self.state = "in_battle"
+            await self.refresh_ui(interaction)
         else:
             self.is_pet_turn = False
             self.battle_log.append(f"**{self.current_monster['name']}**의 기습 공격!")
             await self._execute_monster_turn()
-        self.state = "in_battle"
-        await self.refresh_ui(interaction)
+            
+            # ▼▼▼ [핵심 추가] 기습 공격 후 펫의 HP를 확인하여 즉시 패배 처리합니다. ▼▼▼
+            if self.pet_current_hp <= 0:
+                await self.handle_battle_lose(interaction)
+            else:
+                self.state = "in_battle"
+                await self.refresh_ui(interaction)
+            # ▲▲▲ [핵심 추가] 완료 ▲▲▲
 
     async def handle_attack(self, interaction: discord.Interaction):
         if self.state != "in_battle" or not self.current_monster: return
