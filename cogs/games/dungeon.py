@@ -213,7 +213,7 @@ class DungeonGameView(ui.View):
         damage = max(1, self.final_pet_stats['attack'] - self.current_monster.get('defense', 0))
         self.monster_current_hp = max(0, self.monster_current_hp - damage)
         # ▼▼▼ [핵심 수정] 새로운 헬퍼 함수를 사용하여 정렬합니다. ▼▼▼
-        padded_name = pad_korean_string(self.pet_data_raw['nickname'], 24)
+        padded_name = pad_korean_string(self.pet_data_raw['nickname'], 30)
         log_message = f"▶ {padded_name} | {damage:>3}의 데미지!"
         self.battle_log.append(log_message)
 
@@ -222,7 +222,7 @@ class DungeonGameView(ui.View):
         self.pet_current_hp = max(0, self.pet_current_hp - damage)
         await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
         # ▼▼▼ [핵심 수정] 새로운 헬퍼 함수를 사용하여 정렬합니다. ▼▼▼
-        padded_name = pad_korean_string(self.current_monster['name'], 24)
+        padded_name = pad_korean_string(self.current_monster['name'], 30)
         log_message = f"◀ {padded_name} | {damage:>3}의 데미지!"
         self.battle_log.append(log_message)
         
