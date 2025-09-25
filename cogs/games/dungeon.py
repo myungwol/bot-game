@@ -131,9 +131,14 @@ class DungeonGameView(ui.View):
                              f"🛡️ **방어력**: {self.current_monster['defense']}\n"
                              f"💨 **스피드**: {self.current_monster['speed']}")
             embed.add_field(name=f"몬스터: {self.current_monster['name']}", value=monster_stats, inline=False)
-            if self.battle_log: embed.add_field(name="⚔️ 전투 기록", value="```" + "\n".join(self.battle_log) + "```", inline=False)
+            # ▼▼▼ [핵심 수정] 전투 기록을 코드 블록 대신 일반 필드로 변경합니다. ▼▼▼
+            if self.battle_log:
+                log_text = "\n".join(self.battle_log)
+                embed.add_field(name="⚔️ 전투 기록", value=log_text, inline=False)
         elif self.state == "battle_over":
-            embed.title = "전투 종료"; description_content = "```\n" + "\n".join(self.battle_log) + "\n```"
+            embed.title = "전투 종료"
+            # ▼▼▼ [핵심 수정] 전투 종료 시에도 일반 텍스트로 표시합니다. ▼▼▼
+            description_content = "\n".join(self.battle_log)
             if self.current_monster and self.current_monster.get('image_url'): embed.set_thumbnail(url=self.current_monster['image_url'])
         if self.rewards:
             rewards_str = "\n".join([f"> {item}: {qty}개" for item, qty in self.rewards.items()])
@@ -212,17 +217,15 @@ class DungeonGameView(ui.View):
     async def _execute_pet_turn(self):
         damage = max(1, self.final_pet_stats['attack'] - self.current_monster.get('defense', 0))
         self.monster_current_hp = max(0, self.monster_current_hp - damage)
-        # ▼▼▼ [핵심 수정] 가독성을 위해 로그를 두 줄로 나눕니다. ▼▼▼
-        self.battle_log.append(f"▶ {self.pet_data_raw['nickname']}의 공격!")
-        self.battle_log.append(f"  └> {self.current_monster['name']}에게 {damage}의 데미지!")
+        # ▼▼▼ [핵심 수정] 로그 포맷을 일반 텍스트에 맞게 변경합니다. ▼▼▼
+        self.battle_log.append(f"▶️ **{self.pet_data_raw['nickname']}**의 공격! **{self.current_monster['name']}**에게 **{damage}**의 데미지를 입혔다!")
 
     async def _execute_monster_turn(self):
         damage = max(1, self.current_monster.get('attack', 1) - self.final_pet_stats['defense'])
         self.pet_current_hp = max(0, self.pet_current_hp - damage)
         await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
-        # ▼▼▼ [핵심 수정] 가독성을 위해 로그를 두 줄로 나눕니다. ▼▼▼
-        self.battle_log.append(f"◀ {self.current_monster['name']}의 공격!")
-        self.battle_log.append(f"  └> {self.pet_data_raw['nickname']}에게 {damage}의 데미지!")
+        # ▼▼▼ [핵심 수정] 로그 포맷을 일반 텍스트에 맞게 변경합니다. ▼▼▼
+        self.battle_log.append(f"◀️ **{self.current_monster['name']}**의 공격! **{self.pet_data_raw['nickname']}**에게 **{damage}**의 데미지를 입혔다!")
         
     async def handle_explore(self, interaction: discord.Interaction):
         if self.pet_is_defeated: return await interaction.response.send_message("펫이 쓰러져서 탐색할 수 없습니다.", ephemeral=True, delete_after=5)
