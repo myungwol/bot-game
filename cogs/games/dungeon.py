@@ -64,7 +64,8 @@ class DungeonGameView(ui.View):
         self.session_id = session_id
         self.final_pet_stats = self._calculate_final_pet_stats()
         self.state = "exploring"; self.message: Optional[discord.Message] = None
-        self.battle_log: List[str] = []; self.rewards: Dict[str, int] = defaultdict(int)
+        self.battle_log: List[Any] = [] # 딕셔너리와 문자열을 모두 저장할 수 있도록 Any 사용
+        self.rewards: Dict[str, int] = defaultdict(int)
         self.total_pet_xp_gained: int = 0
         
         self.pet_current_hp: int = self.pet_data_raw.get('current_hp') or self.final_pet_stats['hp']
@@ -73,10 +74,8 @@ class DungeonGameView(ui.View):
         self.current_monster: Optional[Dict] = None; self.monster_current_hp: int = 0
         self.storage_base_url = f"{os.environ.get('SUPABASE_URL')}/storage/v1/object/public/monster_images"
         
-        # ▼▼▼ [핵심 수정] __init__의 마지막에서 build_components를 호출하여 custom_id를 먼저 설정합니다. ▼▼▼
         self.build_components()
 
-    # _calculate_final_pet_stats, start, generate_monster, build_embed 메서드는 변경 없음 (생략)
     def _calculate_final_pet_stats(self) -> Dict[str, int]:
         species_info = self.pet_data_raw.get('pet_species', {})
         level = self.pet_data_raw.get('level', 1)
@@ -131,20 +130,24 @@ class DungeonGameView(ui.View):
                              f"🛡️ **방어력**: {self.current_monster['defense']}\n"
                              f"💨 **스피드**: {self.current_monster['speed']}")
             embed.add_field(name=f"몬스터: {self.current_monster['name']}", value=monster_stats, inline=False)
-            # ▼▼▼ [핵심 수정] 전투 기록을 여러 개의 필드로 분리하여 표시합니다. ▼▼▼
             if self.battle_log:
                 embed.add_field(name="⚔️ 전투 기록", value="\u200b", inline=False)
-                # 최근 3개의 로그만 표시하여 임베드가 너무 길어지는 것을 방지
                 for log_entry in self.battle_log[-3:]:
                     if isinstance(log_entry, dict):
                         embed.add_field(name=log_entry['title'], value=log_entry['value'], inline=False)
-                    else: # 이전 형식의 로그나 일반 텍스트(예: 나타났다!)
+                    else:
                         embed.add_field(name="\u200b", value=log_entry, inline=False)
-
         elif self.state == "battle_over":
             embed.title = "전투 종료"
-            description_content = "\n".join(str(log) for log in self.battle_log) # 기존 방식 유지
-            if self.current_monster and self.current_monster.get('image_url'): embed.set_thumbnail(url=self.current_monster['image_url'])
+            if self.current_monster and self.current_monster.get('image_url'):
+                embed.set_thumbnail(url=self.current_monster['image_url'])
+            if self.battle_log:
+                embed.add_field(name="⚔️ 전투 결과", value="\u200b", inline=False)
+                for log_entry in self.battle_log:
+                    if isinstance(log_entry, dict):
+                        embed.add_field(name=log_entry['title'], value=log_entry['value'], inline=False)
+                    else:
+                        embed.add_field(name="\u200b", value=log_entry, inline=False)
         if self.rewards:
             rewards_str = "\n".join([f"> {item}: {qty}개" for item, qty in self.rewards.items()])
             embed.add_field(name="--- 현재까지 획득한 보상 ---", value=rewards_str, inline=False)
@@ -152,13 +155,9 @@ class DungeonGameView(ui.View):
         embed.description = (description_content + closing_time_text) if description_content else closing_time_text.strip()
         return embed
     
-    # ▼▼▼ [핵심 수정] build_components 메서드를 다시 수정합니다. ▼▼▼
     def build_components(self):
         self.clear_items()
-        
         base_id = f"dungeon_view:{self.user.id}"
-        
-        # 버튼 정보를 딕셔너리로 관리
         buttons_map = {
             "explore": ui.Button(label="탐색하기", style=discord.ButtonStyle.success, emoji="🗺️", custom_id=f"{base_id}:explore"),
             "use_item": ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji="👜", custom_id=f"{base_id}:use_item"),
@@ -167,7 +166,6 @@ class DungeonGameView(ui.View):
             "leave": ui.Button(label="던전 나가기", style=discord.ButtonStyle.grey, emoji="🚪", custom_id=f"{base_id}:leave"),
             "explore_disabled": ui.Button(label="탐색 불가", style=discord.ButtonStyle.secondary, emoji="☠️", custom_id=f"{base_id}:explore_disabled", disabled=True)
         }
-
         if self.pet_is_defeated:
             self.add_item(buttons_map["explore_disabled"])
             self.add_item(buttons_map["use_item"])
@@ -178,10 +176,7 @@ class DungeonGameView(ui.View):
             self.add_item(buttons_map["attack"])
             self.add_item(buttons_map["use_item"])
             self.add_item(buttons_map["flee"])
-        
         self.add_item(buttons_map["leave"])
-        
-        # 생성된 모든 버튼에 콜백을 할당
         for item in self.children:
             if isinstance(item, ui.Button):
                 item.callback = self.dispatch_callback
@@ -193,12 +188,10 @@ class DungeonGameView(ui.View):
         return True
 
     async def dispatch_callback(self, interaction: discord.Interaction):
-        # custom_id를 파싱하여 액션을 결정
         try:
             action = interaction.data['custom_id'].split(':')[-1]
         except (KeyError, IndexError):
             return
-
         method_map = {
             "explore": self.handle_explore, 
             "attack": self.handle_attack, 
@@ -206,23 +199,20 @@ class DungeonGameView(ui.View):
             "leave": self.handle_leave, 
             "use_item": self.handle_use_item
         }
-        
         if method := method_map.get(action): 
             await method(interaction)
-        # 'explore_disabled'는 콜백이 없으므로 아무 작업도 하지 않음
 
-    # ... (나머지 메서드는 이전과 동일하게 유지) ...
     async def refresh_ui(self, interaction: Optional[discord.Interaction] = None):
         if interaction and not interaction.response.is_done(): await interaction.response.defer()
-        self.build_components(); embed = self.build_embed()
+        self.build_components()
+        embed = self.build_embed()
         if self.message:
             try: await self.message.edit(embed=embed, view=self)
             except discord.NotFound: self.stop()
-    
+
     async def _execute_pet_turn(self):
         damage = max(1, self.final_pet_stats['attack'] - self.current_monster.get('defense', 0))
         self.monster_current_hp = max(0, self.monster_current_hp - damage)
-        # ▼▼▼ [핵심 수정] 로그를 구조화된 딕셔너리로 저장합니다. ▼▼▼
         log_entry = {
             "title": f"▶️ **{self.pet_data_raw['nickname']}**의 공격!",
             "value": f"> **{self.current_monster['name']}**에게 **{damage}**의 데미지!"
@@ -233,7 +223,6 @@ class DungeonGameView(ui.View):
         damage = max(1, self.current_monster.get('attack', 1) - self.final_pet_stats['defense'])
         self.pet_current_hp = max(0, self.pet_current_hp - damage)
         await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
-        # ▼▼▼ [핵심 수정] 로그를 구조화된 딕셔너리로 저장합니다. ▼▼▼
         log_entry = {
             "title": f"◀️ **{self.current_monster['name']}**의 공격!",
             "value": f"> **{self.pet_data_raw['nickname']}**에게 **{damage}**의 데미지!"
@@ -242,42 +231,69 @@ class DungeonGameView(ui.View):
         
     async def handle_explore(self, interaction: discord.Interaction):
         if self.pet_is_defeated: return await interaction.response.send_message("펫이 쓰러져서 탐색할 수 없습니다.", ephemeral=True, delete_after=5)
-        self.current_monster = self.generate_monster(); self.monster_current_hp = self.current_monster['hp']
-        self.battle_log = [f"{self.current_monster['name']} 이(가) 나타났다!"]
+        self.current_monster = self.generate_monster()
+        self.monster_current_hp = self.current_monster['hp']
+        self.battle_log = [f"**{self.current_monster['name']}** 이(가) 나타났다!"]
         if self.final_pet_stats['speed'] >= self.current_monster.get('speed', 0):
-            self.is_pet_turn = True; self.battle_log.append(f"{self.pet_data_raw['nickname']}이(가) 민첩하게 먼저 움직인다!")
+            self.is_pet_turn = True
+            self.battle_log.append(f"**{self.pet_data_raw['nickname']}**이(가) 민첩하게 먼저 움직인다!")
         else:
-            self.is_pet_turn = False; self.battle_log.append(f"{self.current_monster['name']}의 기습 공격!"); await self._execute_monster_turn()
-        self.state = "in_battle"; await self.refresh_ui(interaction)
+            self.is_pet_turn = False
+            self.battle_log.append(f"**{self.current_monster['name']}**의 기습 공격!")
+            await self._execute_monster_turn()
+        self.state = "in_battle"
+        await self.refresh_ui(interaction)
 
     async def handle_attack(self, interaction: discord.Interaction):
         if self.state != "in_battle" or not self.current_monster: return
         self.battle_log = []
         await self._execute_pet_turn()
-        if self.monster_current_hp <= 0: return await self.handle_battle_win(interaction)
+        if self.monster_current_hp <= 0:
+            await self.handle_battle_win(interaction)
+            return
         await self._execute_monster_turn()
-        if self.pet_current_hp <= 0: return await self.handle_battle_lose(interaction)
+        if self.pet_current_hp <= 0:
+            await self.handle_battle_lose(interaction)
+            return
         await self.refresh_ui(interaction)
 
     async def handle_battle_win(self, interaction: discord.Interaction):
-        self.state = "battle_over"; self.battle_log.append(f"\n🎉 {self.current_monster['name']}을(를) 물리쳤다!")
+        self.state = "battle_over"
+        self.battle_log.append({
+            "title": f"🎉 **{self.current_monster['name']}**을(를) 물리쳤다!",
+            "value": "> 전투에서 승리했습니다."
+        })
         pet_exp_gain = self.current_monster['xp']
         self.total_pet_xp_gained += pet_exp_gain
         await supabase.rpc('add_xp_to_pet', {'p_user_id': self.user.id, 'p_xp_to_add': pet_exp_gain}).execute()
-        self.battle_log.append(f"✨ 펫이 경험치 {pet_exp_gain}을 획득했다!")
+        self.battle_log.append({
+            "title": "✨ 경험치 획득",
+            "value": f"> 펫이 **{pet_exp_gain} XP**를 획득했다!"
+        })
         for item, (chance, min_qty, max_qty) in self.cog.loot_table.get(self.dungeon_tier, {}).items():
             if random.random() < chance:
                 qty = random.randint(min_qty, max_qty)
-                self.rewards[item] += qty; self.battle_log.append(f"🎁 {item} {qty}개를 획득했다!")
+                self.rewards[item] += qty
+                self.battle_log.append({
+                    "title": "🎁 전리품 획득",
+                    "value": f"> **{item}** {qty}개를 획득했다!"
+                })
         await self.refresh_ui(interaction)
 
     async def handle_battle_lose(self, interaction: discord.Interaction):
-        self.state = "battle_over"; self.pet_is_defeated = True
-        self.battle_log.append(f"\n☠️ {self.pet_data_raw['nickname']}이(가) 쓰러졌다..."); self.current_monster = None
+        self.state = "battle_over"
+        self.pet_is_defeated = True
+        self.battle_log.append({
+            "title": f"☠️ **{self.pet_data_raw['nickname']}**이(가) 쓰러졌다...",
+            "value": "> 전투에서 패배했습니다."
+        })
+        self.current_monster = None
         await self.refresh_ui(interaction)
 
     async def handle_flee(self, interaction: discord.Interaction):
-        self.state = "exploring"; self.current_monster = None; self.battle_log = ["무사히 도망쳤다..."]
+        self.state = "exploring"
+        self.current_monster = None
+        self.battle_log = ["무사히 도망쳤다..."]
         await self.refresh_ui(interaction)
 
     async def handle_leave(self, interaction: discord.Interaction):
@@ -286,48 +302,55 @@ class DungeonGameView(ui.View):
 
     async def handle_use_item(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        inventory = await get_inventory(self.user); usable_items = []
-        
-        # ▼▼▼ [핵심 수정] self.cog.item_db 대신 get_item_database()를 직접 호출합니다. ▼▼▼
+        inventory = await get_inventory(self.user)
+        usable_items = []
         item_db = get_item_database()
         for name, qty in inventory.items():
-            item_data = item_db.get(name, {}); effect = item_data.get('effect_type')
-            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
-            if effect == 'pet_revive' and self.pet_is_defeated: usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="💊"))
-            elif effect == 'pet_heal' and not self.pet_is_defeated and self.pet_current_hp < self.final_pet_stats['hp']: usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="🧪"))
+            item_data = item_db.get(name, {})
+            effect = item_data.get('effect_type')
+            if effect == 'pet_revive' and self.pet_is_defeated:
+                usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="💊"))
+            elif effect == 'pet_heal' and not self.pet_is_defeated and self.pet_current_hp < self.final_pet_stats['hp']:
+                usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="🧪"))
         if not usable_items:
             msg = await interaction.followup.send("사용할 수 있는 아이템이 없습니다.", ephemeral=True)
-            self.cog.bot.loop.create_task(msg.delete(delay=5)); return
+            self.cog.bot.loop.create_task(msg.delete(delay=5))
+            return
         select = ui.Select(placeholder="사용할 아이템을 선택하세요...", options=usable_items)
         async def on_item_select(select_interaction: discord.Interaction):
             await select_interaction.response.defer()
             item_name = select_interaction.data['values'][0]
-            
-            # ▼▼▼ [핵심 수정] 여기서도 get_item_database()를 사용합니다. ▼▼▼
             item_data = get_item_database().get(item_name, {})
-            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
-            
             effect = item_data.get('effect_type')
             await update_inventory(self.user.id, item_name, -1)
             db_update_task = None
             if effect == 'pet_revive':
-                self.pet_is_defeated = False; self.pet_current_hp = self.final_pet_stats['hp']; self.state = "exploring"; self.battle_log = [f"💊 '{item_name}'을(를) 사용해 펫이 완전히 회복되었다!"]
+                self.pet_is_defeated = False
+                self.pet_current_hp = self.final_pet_stats['hp']
+                self.state = "exploring"
+                self.battle_log = [f"💊 '{item_name}'을(를) 사용해 펫이 완전히 회복되었다!"]
                 db_update_task = supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
             elif effect == 'pet_heal':
-                heal_amount = item_data.get('power', 0); self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + heal_amount); self.battle_log = [f"🧪 '{item_name}'을(를) 사용해 체력을 {heal_amount} 회복했다!"]
+                heal_amount = item_data.get('power', 0)
+                self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + heal_amount)
+                self.battle_log = [f"🧪 '{item_name}'을(를) 사용해 체력을 {heal_amount} 회복했다!"]
                 db_update_task = supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
                 if self.state == "in_battle":
                     await self._execute_monster_turn()
-                    if self.pet_current_hp <= 0: return await self.handle_battle_lose(interaction)
-            
-            if db_update_task: await db_update_task
-            await self.refresh_ui(); await select_interaction.delete_original_response()
+                    if self.pet_current_hp <= 0:
+                        await self.handle_battle_lose(interaction)
+                        return
+            if db_update_task:
+                await db_update_task
+            await self.refresh_ui()
+            await select_interaction.delete_original_response()
         select.callback = on_item_select
         view = ui.View(timeout=60).add_item(select)
         await interaction.followup.send(view=view, ephemeral=True)
         
     def stop(self):
-        if self.cog and self.user: self.cog.active_sessions.pop(self.user.id, None)
+        if self.cog and self.user:
+            self.cog.active_sessions.pop(self.user.id, None)
         super().stop()
         
 class Dungeon(commands.Cog):
