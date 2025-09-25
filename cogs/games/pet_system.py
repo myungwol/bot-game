@@ -967,5 +967,6 @@ class IncubatorPanelView(ui.View):
         view = EggSelectView(interaction.user, self.cog)
         await view.start(interaction)
 
+# ▼▼▼ [핵심 수정] 아래 setup 함수가 클래스 밖으로 나오도록 들여쓰기를 제거합니다. ▼▼▼
 async def setup(bot: commands.Bot):
     await bot.add_cog(PetSystem(bot))
