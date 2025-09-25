@@ -466,7 +466,7 @@ class PetSystem(commands.Cog):
         except Exception as e:
             logger.error(f"활성 펫 UI 로드 중 오류 발생: {e}", exc_info=True)
 
-@tasks.loop(minutes=30)
+    @tasks.loop(minutes=30)
     async def hunger_and_stat_decay(self):
         try:
             # ▼▼▼ [핵심 수정] 두 개의 RPC 호출을 새로운 통합 함수 호출 하나로 변경합니다. ▼▼▼
