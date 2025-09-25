@@ -371,19 +371,20 @@ class EggSelectView(ui.View):
         await self.message.edit(content=f"'{egg_name}'을 선택했습니다. 부화 절차를 시작합니다...", view=self)
         await self.cog.start_incubation_process(interaction, egg_name)
 
+# ▼▼▼ [핵심 수정] PetSystem 클래스 선언을 추가하고 __init__ 메서드를 그 안에 넣습니다. ▼▼▼
+class PetSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_views_loaded = False
         self.hatch_checker.start()
         self.hunger_and_stat_decay.start()
-        # ▼▼▼ [핵심 추가] 자동 새로고침 루프를 시작합니다. ▼▼▼
         self.auto_refresh_pet_uis.start()
 
     def cog_unload(self):
         self.hatch_checker.cancel()
         self.hunger_and_stat_decay.cancel()
-        # ▼▼▼ [핵심 추가] Cog가 언로드될 때 루프를 취소합니다. ▼▼▼
         self.auto_refresh_pet_uis.cancel()
+# ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
     @commands.Cog.listener()
     async def on_ready(self):
