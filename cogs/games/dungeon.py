@@ -212,19 +212,17 @@ class DungeonGameView(ui.View):
     async def _execute_pet_turn(self):
         damage = max(1, self.final_pet_stats['attack'] - self.current_monster.get('defense', 0))
         self.monster_current_hp = max(0, self.monster_current_hp - damage)
-        # ▼▼▼ [핵심 수정] 새로운 헬퍼 함수를 사용하여 정렬합니다. ▼▼▼
-        padded_name = pad_korean_string(self.pet_data_raw['nickname'], 30)
-        log_message = f"▶ {padded_name} | {damage:>3}의 데미지!"
-        self.battle_log.append(log_message)
+        # ▼▼▼ [핵심 수정] 가독성을 위해 로그를 두 줄로 나눕니다. ▼▼▼
+        self.battle_log.append(f"▶ {self.pet_data_raw['nickname']}의 공격!")
+        self.battle_log.append(f"  └> {self.current_monster['name']}에게 {damage}의 데미지!")
 
     async def _execute_monster_turn(self):
         damage = max(1, self.current_monster.get('attack', 1) - self.final_pet_stats['defense'])
         self.pet_current_hp = max(0, self.pet_current_hp - damage)
         await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
-        # ▼▼▼ [핵심 수정] 새로운 헬퍼 함수를 사용하여 정렬합니다. ▼▼▼
-        padded_name = pad_korean_string(self.current_monster['name'], 30)
-        log_message = f"◀ {padded_name} | {damage:>3}의 데미지!"
-        self.battle_log.append(log_message)
+        # ▼▼▼ [핵심 수정] 가독성을 위해 로그를 두 줄로 나눕니다. ▼▼▼
+        self.battle_log.append(f"◀ {self.current_monster['name']}의 공격!")
+        self.battle_log.append(f"  └> {self.pet_data_raw['nickname']}에게 {damage}의 데미지!")
         
     async def handle_explore(self, interaction: discord.Interaction):
         if self.pet_is_defeated: return await interaction.response.send_message("펫이 쓰러져서 탐색할 수 없습니다.", ephemeral=True, delete_after=5)
