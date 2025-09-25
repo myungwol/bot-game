@@ -371,16 +371,19 @@ class EggSelectView(ui.View):
         await self.message.edit(content=f"'{egg_name}'을 선택했습니다. 부화 절차를 시작합니다...", view=self)
         await self.cog.start_incubation_process(interaction, egg_name)
 
-class PetSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_views_loaded = False
         self.hatch_checker.start()
         self.hunger_and_stat_decay.start()
+        # ▼▼▼ [핵심 추가] 자동 새로고침 루프를 시작합니다. ▼▼▼
+        self.auto_refresh_pet_uis.start()
 
     def cog_unload(self):
         self.hatch_checker.cancel()
         self.hunger_and_stat_decay.cancel()
+        # ▼▼▼ [핵심 추가] Cog가 언로드될 때 루프를 취소합니다. ▼▼▼
+        self.auto_refresh_pet_uis.cancel()
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -473,6 +476,66 @@ class PetSystem(commands.Cog):
             await supabase.rpc('process_pet_hunger_decay', {'p_amount': 1}).execute()
         except Exception as e:
             logger.error(f"펫 배고픔 및 스탯 감소 처리 중 오류: {e}", exc_info=True)
+    @tasks.loop(minutes=5)
+    async def auto_refresh_pet_uis(self):
+        logger.info("[Pet UI Auto-Refresh] 모든 활성 펫 UI의 자동 새로고침을 시작합니다.")
+        try:
+            # message_id가 있는 모든 활성 펫 세션을 가져옵니다.
+            res = await supabase.table('pets').select('*') \
+                .gt('current_stage', 1) \
+                .not_.is_('message_id', 'null') \
+                .not_.is_('thread_id', 'null') \
+                .execute()
+
+            if not (res and res.data):
+                logger.info("[Pet UI Auto-Refresh] 새로고침할 활성 펫 UI가 없습니다.")
+                return
+
+            stale_sessions_to_clear = []
+            logger.info(f"[Pet UI Auto-Refresh] {len(res.data)}개의 활성 펫 UI를 새로고침합니다.")
+
+            for pet_data in res.data:
+                try:
+                    user_id = int(pet_data['user_id'])
+                    thread_id = int(pet_data['thread_id'])
+                    message_id = int(pet_data['message_id'])
+
+                    user = self.bot.get_user(user_id)
+                    thread = self.bot.get_channel(thread_id)
+                    
+                    if not user or not thread:
+                        # 유저나 스레드를 찾을 수 없으면 DB 정리 대상으로 추가
+                        stale_sessions_to_clear.append(pet_data['id'])
+                        logger.warning(f"유저(ID:{user_id}) 또는 스레드(ID:{thread_id})를 찾을 수 없어 펫 UI를 정리합니다.")
+                        continue
+
+                    message = await thread.fetch_message(message_id)
+                    
+                    # update_pet_ui 함수를 재사용하여 UI를 업데이트합니다.
+                    await self.update_pet_ui(user_id, thread, message)
+                    
+                    # API 제한을 피하기 위해 약간의 딜레이를 줍니다.
+                    await asyncio.sleep(1.5)
+
+                except discord.NotFound:
+                    # 메시지를 찾을 수 없는 경우, DB 정리 대상으로 추가
+                    stale_sessions_to_clear.append(pet_data['id'])
+                    logger.warning(f"펫 메시지(ID:{message_id})를 찾을 수 없어 UI를 정리합니다.")
+                except Exception as e:
+                    logger.error(f"펫 UI 자동 새로고침 중 개별 처리 오류 (Pet ID: {pet_data.get('id')}): {e}", exc_info=True)
+
+            # 한 번에 모든 비활성 세션 정보를 DB에서 정리합니다.
+            if stale_sessions_to_clear:
+                logger.info(f"[Pet UI Auto-Refresh] {len(stale_sessions_to_clear)}개의 비활성 세션 정보를 DB에서 정리합니다.")
+                await supabase.table('pets').update({'message_id': None, 'thread_id': None}).in_('id', stale_sessions_to_clear).execute()
+
+        except Exception as e:
+            logger.error(f"펫 UI 자동 새로고침 루프에서 오류 발생: {e}", exc_info=True)
+
+    @auto_refresh_pet_uis.before_loop
+    async def before_auto_refresh_pet_uis(self):
+        await self.bot.wait_until_ready()
+    # ▲▲▲ [핵심 추가] 완료 ▲▲▲
     @tasks.loop(seconds=30)
     async def hatch_checker(self):
         try:
