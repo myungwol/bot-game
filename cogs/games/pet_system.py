@@ -664,9 +664,9 @@ class PetSystem(commands.Cog):
             embed.add_field(name="경험치", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=False)
             
             # 배고픔과 친밀도를 한 줄에 표시하고, 세 번째 칸은 빈 필드로 채워 안정성 확보
-            embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=True)
-            embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True) # 3열 채우기용 빈 필드
+            embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=False)
+            
+            embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=False)
             # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
             stat_points = pet_data.get('stat_points', 0)
