@@ -252,6 +252,20 @@ async def set_cooldown(subject_id_int: int, cooldown_key: str): # pet_id -> subj
     iso_timestamp = datetime.now(timezone.utc).isoformat()
     await supabase.table('cooldowns').upsert({"subject_id": subject_id_str, "cooldown_key": cooldown_key, "last_cooldown_timestamp": iso_timestamp}).execute() # pet_id -> subject_id
 
+# ▼▼▼ [핵심 추가] 신규 유저의 모든 기본 데이터를 생성하는 함수 ▼▼▼
+@supabase_retry_handler()
+async def create_initial_user_data(user_id: int):
+    """
+    신규 유저가 서버에 참여했을 때 지갑, 레벨, 장비 등 필수 데이터를 생성합니다.
+    이미 데이터가 있는 경우 ON CONFLICT 덕분에 아무 작업도 하지 않습니다.
+    """
+    try:
+        await supabase.rpc('create_new_user_records', {'p_user_id': user_id}).execute()
+        logger.info(f"신규 유저(ID: {user_id})의 초기 데이터 생성을 요청했습니다.")
+    except Exception as e:
+        logger.error(f"신규 유저(ID: {user_id}) 데이터 생성 중 오류 발생: {e}", exc_info=True)
+# ▲▲▲ [핵심 추가] 완료 ▲▲▲
+
 @supabase_retry_handler()
 async def log_activity(
     user_id: int, activity_type: str, amount: int = 1,
