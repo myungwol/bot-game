@@ -77,11 +77,15 @@ class FriendInvite(commands.Cog):
         if not server_id_str or not invite.guild or invite.guild.id != int(server_id_str): return
         if invite.code in self.invite_cache: del self.invite_cache[invite.code]
 
-    # [핵심 변경] on_member_join은 이제 '기록'만 합니다.
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
         server_id_str = get_config("SERVER_ID")
         if not server_id_str or member.guild.id != int(server_id_str): return
+        
+        # ▼▼▼ [핵심 추가] 데이터베이스 임포트 및 유저 데이터 생성 호출 ▼▼▼
+        from utils.database import create_initial_user_data
+        await create_initial_user_data(member.id)
+        # ▲▲▲ [핵심 추가] 완료 ▲▲▲
         
         await asyncio.sleep(5) 
 
