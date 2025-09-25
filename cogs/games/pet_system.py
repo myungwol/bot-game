@@ -466,13 +466,13 @@ class PetSystem(commands.Cog):
         except Exception as e:
             logger.error(f"활성 펫 UI 로드 중 오류 발생: {e}", exc_info=True)
 
-    @tasks.loop(minutes=30)
+@tasks.loop(minutes=30)
     async def hunger_and_stat_decay(self):
         try:
-            await supabase.rpc('decrease_all_pets_hunger', {'p_amount': 1}).execute()
-            await supabase.rpc('update_pet_stats_on_hunger').execute()
+            # ▼▼▼ [핵심 수정] 두 개의 RPC 호출을 새로운 통합 함수 호출 하나로 변경합니다. ▼▼▼
+            await supabase.rpc('process_pet_hunger_decay', {'p_amount': 1}).execute()
         except Exception as e:
-            logger.error(f"펫 배고픔 감소 처리 중 오류: {e}", exc_info=True)
+            logger.error(f"펫 배고픔 및 스탯 감소 처리 중 오류: {e}", exc_info=True)
     @tasks.loop(seconds=30)
     async def hatch_checker(self):
         try:
