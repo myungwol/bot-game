@@ -587,21 +587,23 @@ class PetSystem(commands.Cog):
             friendship = pet_data.get('friendship', 0)
             friendship_bar = create_bar(friendship, 100, full_char='❤️', empty_char='🖤')
 
+# ▼▼▼ [핵심 수정] 필드 레이아웃 안정화를 위해 빈 필드 위치 조정 ▼▼▼
             embed.add_field(name="단계", value=f"**{stage_name}**", inline=True)
             embed.add_field(name="타입", value=f"{ELEMENT_TO_TYPE.get(species_info['element'], '알 수 없음')}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True)
+            embed.add_field(name="\u200b", value="\u200b", inline=True) # 3열 채우기용 빈 필드
 
             embed.add_field(name="레벨", value=f"**Lv. {current_level}**", inline=True)
             embed.add_field(name="속성", value=f"{species_info['element']}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True)
+            embed.add_field(name="\u200b", value="\u200b", inline=True) # 3열 채우기용 빈 필드
 
-            embed.add_field(name="경험치", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True)
+            # 경험치 바는 한 줄을 모두 사용하도록 설정
+            embed.add_field(name="경험치", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=False)
             
+            # 배고픔과 친밀도를 한 줄에 표시하고, 세 번째 칸은 빈 필드로 채워 안정성 확보
             embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=True)
             embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True) 
+            embed.add_field(name="\u200b", value="\u200b", inline=True) # 3열 채우기용 빈 필드
+            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
             stat_points = pet_data.get('stat_points', 0)
             if stat_points > 0:
