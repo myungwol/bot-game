@@ -118,7 +118,7 @@ class SkillAcquisitionView(ui.View):
         pass_button.callback = self.on_pass
         self.add_item(pass_button)
 
-async def on_learn(self, interaction: discord.Interaction):
+    async def on_learn(self, interaction: discord.Interaction):
         await interaction.response.defer()
         learned_skills = self.pet_data.get('learned_skills', [])
         empty_slot = next((s for s in range(1, 5) if s not in [ls['slot_number'] for ls in learned_skills]), None)
@@ -1010,7 +1010,7 @@ class PetSystem(commands.Cog):
             return True
         return False
 
-async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: Optional[discord.Message] = None, is_refresh: bool = False, pet_data_override: Optional[Dict] = None):
+    async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: Optional[discord.Message] = None, is_refresh: bool = False, pet_data_override: Optional[Dict] = None):
         # ▼▼▼ [핵심 수정] pet_data_override가 있으면 DB 조회를 건너뜁니다. ▼▼▼
         pet_data = pet_data_override if pet_data_override else await get_user_pet(user_id)
         
