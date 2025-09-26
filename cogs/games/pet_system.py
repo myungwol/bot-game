@@ -168,18 +168,24 @@ class SkillChangeView(ui.View):
         self.user_id = parent_view.user_id
         self.pet_data = parent_view.pet_data
         self.learnable_skills: List[Dict] = []
-        self.selected_slot_to_change: Optional[int] = None
+        self.selected_slot: Optional[int] = None
         self.selected_new_skill_id: Optional[int] = None
         
     async def start(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        
+        # 유저가 배울 수 있는 모든 스킬을 미리 로드
+        learned_skill_ids = [s['skill_id'] for s in self.pet_data.get('learned_skills', [])]
+        all_possible_skills = await get_skills_unlocked_at_level(self.pet_data['level'], self.pet_data['pet_species']['element'])
+        self.learnable_skills = [s for s in all_possible_skills if s['id'] not in learned_skill_ids]
+
         self.update_components()
         embed = self.build_embed()
         await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     def build_embed(self) -> discord.Embed:
-        embed = discord.Embed(title="🔧 스킬 변경", color=0xFFA500)
-        embed.description = "교체할 스킬과 새로 배울 스킬을 선택해주세요.\n비용: `1,000` 코인"
+        embed = discord.Embed(title="🔧 스킬 관리", color=0xFFA500)
+        embed.description = "스킬을 배우거나 교체할 슬롯과 새로 배울 스킬을 선택해주세요.\n**비용: `1,000` 코인**"
         return embed
 
     def update_components(self):
@@ -187,17 +193,21 @@ class SkillChangeView(ui.View):
         
         learned_skills = self.pet_data.get('learned_skills', [])
         
-        current_skill_options = [
-            discord.SelectOption(label=f"{s['slot_number']}번 슬롯: {s['pet_skills']['skill_name']}", value=str(s['slot_number']))
-            for s in learned_skills
-        ]
-        if not current_skill_options:
-            self.add_item(ui.Button(label="교체할 스킬이 없습니다.", disabled=True))
-            return
+        # ▼▼▼ [핵심 수정] 빈 슬롯도 선택지에 포함시킵니다. ▼▼▼
+        slot_options = []
+        for i in range(1, 5):
+            learned_skill_in_slot = next((s for s in learned_skills if s['slot_number'] == i), None)
+            label = f"{i}번 슬롯"
+            if learned_skill_in_slot:
+                label += f" (현재: {learned_skill_in_slot['pet_skills']['skill_name']})"
+            else:
+                label += " (비어있음)"
+            slot_options.append(discord.SelectOption(label=label, value=str(i)))
 
-        current_skill_select = ui.Select(placeholder="① 교체할 현재 스킬을 선택하세요...", options=current_skill_options)
-        current_skill_select.callback = self.on_current_skill_select
-        self.add_item(current_skill_select)
+        slot_select = ui.Select(placeholder="① 스킬을 배우거나 교체할 슬롯 선택...", options=slot_options)
+        slot_select.callback = self.on_slot_select
+        self.add_item(slot_select)
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
         new_skill_options = [
             discord.SelectOption(label=s['skill_name'], value=str(s['id']), description=f"위력:{s['power']}, 속성:{s['element']}")
@@ -207,19 +217,14 @@ class SkillChangeView(ui.View):
         new_skill_select.callback = self.on_new_skill_select
         self.add_item(new_skill_select)
 
-        confirm_button = ui.Button(label="변경 확정 (1,000 코인)", style=discord.ButtonStyle.success, disabled=(self.selected_slot_to_change is None or self.selected_new_skill_id is None))
+        confirm_button = ui.Button(label="확정 (1,000 코인)", style=discord.ButtonStyle.success, disabled=(self.selected_slot is None or self.selected_new_skill_id is None))
         confirm_button.callback = self.on_confirm
         self.add_item(confirm_button)
 
-    async def on_current_skill_select(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        self.selected_slot_to_change = int(interaction.data['values'][0])
-        
-        learned_skill_ids = [s['skill_id'] for s in self.pet_data.get('learned_skills', [])]
-        self.learnable_skills = await get_learnable_skills(self.pet_data['id'], self.pet_data['pet_species']['element'], learned_skill_ids)
-        
+    async def on_slot_select(self, interaction: discord.Interaction):
+        self.selected_slot = int(interaction.data['values'][0])
         self.update_components()
-        await interaction.edit_original_response(view=self)
+        await interaction.response.edit_message(view=self)
 
     async def on_new_skill_select(self, interaction: discord.Interaction):
         self.selected_new_skill_id = int(interaction.data['values'][0])
@@ -234,14 +239,18 @@ class SkillChangeView(ui.View):
             return await interaction.edit_original_response(content="❌ 코인이 부족합니다.", view=None)
 
         await update_wallet(interaction.user, -1000)
-        success = await set_pet_skill(self.pet_data['id'], self.selected_new_skill_id, self.selected_slot_to_change)
+        success = await set_pet_skill(self.pet_data['id'], self.selected_new_skill_id, self.selected_slot)
         
         if success:
-            await interaction.edit_original_response(content="✅ 스킬을 성공적으로 변경했습니다!", view=None)
-            await self.cog.update_pet_ui(self.user_id, interaction.channel)
+            await interaction.edit_original_response(content="✅ 스킬을 성공적으로 배웠습니다/변경했습니다!", view=None)
+            
+            # UI 업데이트를 위해 최신 데이터 다시 로드
+            updated_pet_data = await get_user_pet(self.user_id)
+            if updated_pet_data:
+                await self.cog.update_pet_ui(self.user_id, interaction.channel, pet_data_override=updated_pet_data)
         else:
             await update_wallet(interaction.user, 1000)
-            await interaction.edit_original_response(content="❌ 스킬 변경에 실패했습니다. 코인이 환불되었습니다.", view=None)
+            await interaction.edit_original_response(content="❌ 스킬 설정에 실패했습니다. 코인이 환불되었습니다.", view=None)
 
 class StatAllocationView(ui.View):
     def __init__(self, parent_view: 'PetUIView', message: discord.Message):
@@ -941,26 +950,14 @@ class PetSystem(commands.Cog):
 
         nickname = pet_data.get('nickname', '이름 없는 펫')
         
-        pet_element = pet_data.get('pet_species', {}).get('element')
-        unlocked_skills_data = [] # 기본값 빈 리스트로 초기화
-        if pet_element:
-            # ▼▼▼ [핵심 수정] 불필요한 세 번째 인자 'True'를 제거합니다. ▼▼▼
-            unlocked_skills_data = await get_skills_unlocked_at_level(new_level, pet_element)
-        
-        # None일 경우를 대비하여 안전하게 처리
-        unlocked_skills_names = [s['skill_name'] for s in unlocked_skills_data] if unlocked_skills_data else []
-        
+        # ▼▼▼ [핵심 수정] 5레벨 단위 체크 및 랜덤 스킬 2개 추출 로직 ▼▼▼
+        # 레벨업 공지는 항상 보냅니다.
         log_channel_id = get_id("log_pet_levelup_channel_id")
         if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
             message_text = (
                 f"🎉 {user.mention}님의 '**{nickname}**'이(가) **레벨 {new_level}**(으)로 성장했습니다! "
                 f"스탯 포인트 **{points_awarded}**개를 획득했습니다. ✨"
             )
-            
-            if unlocked_skills_names:
-                skills_str = ", ".join([f"**{skill}**" for skill in unlocked_skills_names])
-                message_text += f"\n\n새로운 스킬을 배웠습니다: {skills_str} 📖"
-
             try: await log_channel.send(message_text)
             except Exception as e: logger.error(f"펫 레벨업 로그 전송 실패: {e}")
 
@@ -971,14 +968,26 @@ class PetSystem(commands.Cog):
         
         await self.update_pet_ui(user_id, thread)
 
-        if unlocked_skills_data:
-            fresh_pet_data = await get_user_pet(user_id)
-            if not fresh_pet_data: return
-            
-            for skill_data in unlocked_skills_data:
-                acquisition_view = SkillAcquisitionView(self, user_id, fresh_pet_data, skill_data)
-                await acquisition_view.start(thread)
-                await asyncio.sleep(1)
+        # 5레벨 단위일 때만 스킬 학습 절차를 진행합니다.
+        if new_level % 5 == 0:
+            pet_element = pet_data.get('pet_species', {}).get('element')
+            if not pet_element: return
+
+            # 해당 레벨에 '정확히' 해금되는 스킬만 필터링
+            all_learnable_skills = await get_skills_unlocked_at_level(new_level, pet_element)
+            newly_unlocked_skills = [s for s in all_learnable_skills if s.get('unlock_level') == new_level]
+
+            if newly_unlocked_skills:
+                # 랜덤으로 2개의 스킬을 선택 (선택지가 2개 미만이면 있는 만큼만)
+                skills_to_present = random.sample(newly_unlocked_skills, k=min(2, len(newly_unlocked_skills)))
+                
+                if skills_to_present:
+                    fresh_pet_data = await get_user_pet(user_id)
+                    if not fresh_pet_data: return
+                    
+                    selection_view = SkillSelectionView(self, user_id, fresh_pet_data, skills_to_present)
+                    await selection_view.start(thread)
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
     async def check_and_process_auto_evolution(self, user_ids: set):
         for user_id in user_ids:
