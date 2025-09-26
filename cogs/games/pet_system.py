@@ -938,36 +938,56 @@ class PetSystem(commands.Cog):
         nickname = pet_data.get('nickname', '이름 없는 펫')
         log_channel_id = get_id("log_pet_levelup_channel_id")
         
+        # 1. 공개 로그 채널에는 버튼 없는 정보 메시지만 전송
         if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
             message_text = (
                 f"🎉 {user.mention}님의 '**{nickname}**'이(가) **레벨 {new_level}**(으)로 성장했습니다! "
                 f"스탯 포인트 **{points_awarded}**개를 획득했습니다. ✨"
             )
-            
-            view = ui.View(timeout=None)
-            skill_button = ui.Button(label="새로운 스킬 배우기", style=discord.ButtonStyle.success, emoji="🎓", custom_id=f"learn_skill:{user_id}")
-            
-            async def skill_button_callback(interaction: discord.Interaction):
-                target_user_id = int(interaction.data['custom_id'].split(':')[1])
-                if interaction.user.id != target_user_id:
-                    await interaction.response.send_message("펫 주인만 스킬을 배울 수 있습니다.", ephemeral=True, delete_after=5)
-                    return
-                
-                p_data = await get_user_pet(target_user_id)
-                if p_data:
-                    learning_view = SkillLearningView(
-                        self, target_user_id, p_data['id'], 
-                        p_data['pet_species']['element'], p_data.get('learned_skills', [])
-                    )
-                    await learning_view.start(interaction)
-
-            skill_button.callback = skill_button_callback
-            view.add_item(skill_button)
-            
             try:
-                await log_channel.send(message_text, view=view)
+                # view=None 으로 수정하여 버튼 없이 메시지만 전송
+                await log_channel.send(message_text)
             except Exception as e:
-                logger.error(f"펫 레벨업 로그/버튼 전송 실패: {e}")
+                logger.error(f"펫 레벨업 로그 전송 실패: {e}")
+
+        # 2. 펫 개인 스레드에 스킬 배우기 UI 전송 및 기존 UI 업데이트
+        if thread_id := pet_data.get('thread_id'):
+            if thread := self.bot.get_channel(thread_id):
+                # 스킬 배우기 버튼이 포함된 View 생성
+                view = ui.View(timeout=None)
+                skill_button = ui.Button(label="새로운 스킬 배우기", style=discord.ButtonStyle.success, emoji="🎓", custom_id=f"learn_skill:{user_id}")
+                
+                async def skill_button_callback(interaction: discord.Interaction):
+                    target_user_id = int(interaction.data['custom_id'].split(':')[1])
+                    if interaction.user.id != target_user_id:
+                        await interaction.response.send_message("펫 주인만 스킬을 배울 수 있습니다.", ephemeral=True, delete_after=5)
+                        return
+                    
+                    p_data = await get_user_pet(target_user_id)
+                    if p_data:
+                        learning_view = SkillLearningView(
+                            self, target_user_id, p_data['id'], 
+                            p_data['pet_species']['element'], p_data.get('learned_skills', [])
+                        )
+                        await learning_view.start(interaction)
+                        # 버튼을 누른 후에는 버튼이 포함된 메시지를 삭제
+                        try:
+                            await interaction.message.delete()
+                        except (discord.NotFound, discord.Forbidden):
+                            pass
+
+
+                skill_button.callback = skill_button_callback
+                view.add_item(skill_button)
+
+                try:
+                    # 펫 스레드에 버튼이 있는 메시지 전송
+                    await thread.send(f"{user.mention}, 펫이 레벨업하여 새로운 스킬을 배울 수 있습니다!", view=view)
+                except Exception as e:
+                     logger.error(f"펫 스레드 스킬 학습 버튼 전송 실패: {e}")
+
+                # 마지막으로 펫의 메인 UI를 업데이트하여 최신 정보를 반영
+                await self.update_pet_ui(user_id, thread)
 
         if thread_id := pet_data.get('thread_id'):
             if thread := self.bot.get_channel(thread_id):
