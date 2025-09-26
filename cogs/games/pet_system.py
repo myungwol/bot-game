@@ -927,12 +927,13 @@ class PetSystem(commands.Cog):
         nickname = pet_data.get('nickname', '이름 없는 펫')
         
         pet_element = pet_data.get('pet_species', {}).get('element')
-        unlocked_skills_names = []
-        unlocked_skills_data = []
+        unlocked_skills_data = [] # 기본값 빈 리스트로 초기화
         if pet_element:
-            # ▼▼▼ [핵심 수정] 스킬 이름이 아닌 스킬 데이터 전체를 가져옵니다. ▼▼▼
-            unlocked_skills_data = await get_skills_unlocked_at_level(new_level, pet_element, True)
-            unlocked_skills_names = [s['skill_name'] for s in unlocked_skills_data]
+            # ▼▼▼ [핵심 수정] 불필요한 세 번째 인자 'True'를 제거합니다. ▼▼▼
+            unlocked_skills_data = await get_skills_unlocked_at_level(new_level, pet_element)
+        
+        # None일 경우를 대비하여 안전하게 처리
+        unlocked_skills_names = [s['skill_name'] for s in unlocked_skills_data] if unlocked_skills_data else []
         
         log_channel_id = get_id("log_pet_levelup_channel_id")
         if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
@@ -953,7 +954,6 @@ class PetSystem(commands.Cog):
         thread = self.bot.get_channel(thread_id)
         if not thread: return
         
-        # ▼▼▼ [핵심 수정] UI 업데이트와 스킬 학습 UI 전송 로직을 분리하고 강화합니다. ▼▼▼
         await self.update_pet_ui(user_id, thread)
 
         if unlocked_skills_data:
