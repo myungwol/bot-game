@@ -533,6 +533,21 @@ class EggSelectView(ui.View):
         await self.cog.start_incubation_process(interaction, egg_name)
 # ▲▲▲ [수정] 완료 ▲▲▲
 
+# ▼▼▼ [수정] IncubatorPanelView 클래스를 PetSystem 클래스 위로 이동 ▼▼▼
+class IncubatorPanelView(ui.View):
+    def __init__(self, cog_instance: 'PetSystem'):
+        super().__init__(timeout=None)
+        self.cog = cog_instance
+    @ui.button(label="알 부화시키기", style=discord.ButtonStyle.secondary, emoji="🥚", custom_id="incubator_start")
+    async def start_incubation_button(self, interaction: discord.Interaction, button: ui.Button):
+        if await get_user_pet(interaction.user.id):
+            await interaction.response.send_message("❌ 이미 펫을 소유하고 있습니다. 펫은 한 마리만 키울 수 있습니다.", ephemeral=True, delete_after=5)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        view = EggSelectView(interaction.user, self.cog)
+        await view.start(interaction)
+# ▲▲▲ [수정] 완료 ▲▲▲
+
 class PetSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -1020,6 +1035,7 @@ class PetSystem(commands.Cog):
             await message.edit(embed=embed, view=view)
             
     async def register_persistent_views(self):
+        # 이제 IncubatorPanelView가 정의되었으므로 정상적으로 작동
         self.bot.add_view(IncubatorPanelView(self))
         logger.info("✅ 펫 시스템(인큐베이터)의 영구 View가 성공적으로 등록되었습니다.")
         
