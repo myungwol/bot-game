@@ -79,7 +79,8 @@ class SkillAcquisitionView(ui.View):
     async def start(self, thread: discord.TextChannel):
         embed = self.build_embed()
         self.update_components()
-        message_text = f"{thread.owner.mention}, 펫이 성장하여 새로운 스킬을 배울 수 있게 되었습니다!"
+        # ▼▼▼ [핵심 수정] thread.owner 대신 self.user_id를 사용하여 유저를 멘션합니다. ▼▼▼
+        message_text = f"<@{self.user_id}>, 펫이 성장하여 새로운 스킬을 배울 수 있게 되었습니다!"
         await thread.send(message_text, embed=embed, view=self)
 
     def build_embed(self) -> discord.Embed:
