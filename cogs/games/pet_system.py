@@ -787,8 +787,7 @@ class PetSystem(commands.Cog):
             embed.add_field(name="\u200b", value="\u200b", inline=True)
             embed.add_field(name="경험치", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=False)
             embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=False)
-            embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True)
+            embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=False)
 
             stat_points = pet_data.get('stat_points', 0)
             if stat_points > 0:
