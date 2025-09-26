@@ -9,6 +9,7 @@ from typing import Dict, Callable, Any, List, Optional
 
 import discord
 from supabase import create_client, AsyncClient
+from postgrest.exceptions import APIError
 
 logger = logging.getLogger(__name__)
 
@@ -252,7 +253,52 @@ async def set_cooldown(subject_id_int: int, cooldown_key: str): # pet_id -> subj
     iso_timestamp = datetime.now(timezone.utc).isoformat()
     await supabase.table('cooldowns').upsert({"subject_id": subject_id_str, "cooldown_key": cooldown_key, "last_cooldown_timestamp": iso_timestamp}).execute() # pet_id -> subject_id
 
-# ▼▼▼ [핵심 추가] 신규 유저의 모든 기본 데이터를 생성하는 함수 ▼▼▼
+# ▼▼▼ [핵심 추가] 펫 스킬 관련 함수 ▼▼▼
+@supabase_retry_handler()
+async def get_pet_learned_skills(pet_id: int) -> List[Dict[str, Any]]:
+    """펫이 배운 스킬 목록을 모든 정보와 함께 가져옵니다."""
+    response = await supabase.table('pet_learned_skills').select('slot_number, pet_skills(*)').eq('pet_id', pet_id).order('slot_number').execute()
+    return response.data if response and response.data else []
+
+@supabase_retry_handler()
+async def get_learnable_skills(pet_id: int, pet_element: str, learned_skill_ids: List[int]) -> List[Dict[str, Any]]:
+    """펫이 현재 배울 수 있는 스킬 목록을 가져옵니다."""
+    query = supabase.table('pet_skills').select('*')
+    # '노말' 속성이거나 펫의 속성과 일치하는 스킬만 필터링
+    query = query.in_('element', ['노말', pet_element])
+    # 이미 배운 스킬은 제외
+    if learned_skill_ids:
+        query = query.not_.in_('id', learned_skill_ids)
+    
+    response = await query.order('element').order('power').execute()
+    return response.data if response and response.data else []
+
+@supabase_retry_handler()
+async def set_pet_skill(pet_id: int, skill_id: int, slot: int) -> bool:
+    """펫의 스킬을 특정 슬롯에 배우거나 교체합니다."""
+    try:
+        await supabase.table('pet_learned_skills').upsert({
+            'pet_id': pet_id,
+            'skill_id': skill_id,
+            'slot_number': slot
+        }, on_conflict='pet_id, slot_number').execute()
+        return True
+    except APIError as e:
+        # 이미 다른 슬롯에 배운 스킬을 배우려고 할 때 발생하는 고유성 제약 조건 위반 처리
+        if '23505' in str(e.code) and 'pet_learned_skills_pet_id_skill_id_key' in str(e.message):
+            logger.warning(f"펫(ID:{pet_id})이 이미 배운 스킬(ID:{skill_id})을 다른 슬롯에 배우려고 시도했습니다.")
+            return False
+        logger.error(f"펫 스킬 설정 중 DB 오류: {e}", exc_info=True)
+        return False
+# ▲▲▲ [핵심 추가] 완료 ▲▲▲
+
+# ▼▼▼ [핵심 수정] get_user_pet 함수가 스킬 정보도 함께 가져오도록 수정 ▼▼▼
+@supabase_retry_handler()
+async def get_user_pet(user_id: int) -> Optional[Dict]:
+    res = await supabase.table('pets').select('*, pet_species(*), learned_skills:pet_learned_skills(*, pet_skills(*))').eq('user_id', user_id).gt('current_stage', 1).maybe_single().execute()
+    return res.data if res and res.data else None
+# ▲▲▲ [핵심 수정] 완료 ▲▲▲
+
 @supabase_retry_handler()
 async def create_initial_user_data(user_id: int):
     """
@@ -264,7 +310,6 @@ async def create_initial_user_data(user_id: int):
         logger.info(f"신규 유저(ID: {user_id})의 초기 데이터 생성을 요청했습니다.")
     except Exception as e:
         logger.error(f"신규 유저(ID: {user_id}) 데이터 생성 중 오류 발생: {e}", exc_info=True)
-# ▲▲▲ [핵심 추가] 완료 ▲▲▲
 
 @supabase_retry_handler()
 async def log_activity(
