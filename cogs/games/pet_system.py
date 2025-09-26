@@ -18,6 +18,7 @@ from utils.database import (
     save_panel_id, get_panel_id, get_embed_from_db, set_cooldown, get_cooldown,
     save_config_to_db, delete_config_from_db, get_id, get_user_pet,
     get_learnable_skills, set_pet_skill, get_wallet, update_wallet
+    get_skills_unlocked_at_level  # <-- 이 부분을 추가하세요
 )
 from utils.helpers import format_embed_from_db
 
@@ -1008,25 +1009,47 @@ class PetSystem(commands.Cog):
             except Exception as e:
                 logger.error(f"펫 레벨 설정 요청 처리 중 오류: {e}", exc_info=True)
 
-    async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded: int):
-        pet_data = await get_user_pet(user_id)
+async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded: int):
+        pet_data = await self.get_user_pet(user_id)
         if not pet_data: return
+
         user = self.bot.get_user(user_id)
         if not user: return
 
         nickname = pet_data.get('nickname', '이름 없는 펫')
-        log_channel_id = get_id("log_pet_levelup_channel_id")
         
-        # 1. 공개 로그 채널에는 버튼 없는 정보 메시지만 전송
+        # ▼▼▼ [핵심 수정] 새로 배운 스킬을 확인하는 로직 추가 ▼▼▼
+        pet_element = pet_data.get('pet_species', {}).get('element')
+        unlocked_skills = []
+        if pet_element:
+            unlocked_skills = await get_skills_unlocked_at_level(new_level, pet_element)
+        
+        log_channel_id = get_id("log_pet_levelup_channel_id")
         if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
             message_text = (
                 f"🎉 {user.mention}님의 '**{nickname}**'이(가) **레벨 {new_level}**(으)로 성장했습니다! "
                 f"스탯 포인트 **{points_awarded}**개를 획득했습니다. ✨"
             )
+            
+            # 새로 배운 스킬이 있으면 메시지에 추가
+            if unlocked_skills:
+                skills_str = ", ".join([f"**{skill}**" for skill in unlocked_skills])
+                message_text += f"\n\n새로운 스킬을 배웠습니다: {skills_str} 📖"
+
             try:
                 await log_channel.send(message_text)
             except Exception as e:
                 logger.error(f"펫 레벨업 로그 전송 실패: {e}")
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+
+        if thread_id := pet_data.get('thread_id'):
+            if thread := self.bot.get_channel(thread_id):
+                if message_id := pet_data.get('message_id'):
+                    try:
+                        message = await thread.fetch_message(message_id)
+                        await self.update_pet_ui(user_id, thread, message)
+                    except (discord.NotFound, discord.Forbidden):
+                        logger.warning(f"펫 레벨업 후 UI 업데이트 실패: 메시지(ID: {message_id})를 찾을 수 없습니다.")
 
         # 2. 펫 개인 스레드에 UI 업데이트 및 스킬 학습 UI 전송
         if thread_id := pet_data.get('thread_id'):
@@ -1131,4 +1154,4 @@ class PetSystem(commands.Cog):
         logger.info(f"✅ {panel_key} 패널을 #{channel.name} 채널에 성공적으로 생성했습니다.")
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(PetSystem(bot))/
+    await bot.add_cog(PetSystem(bot))
