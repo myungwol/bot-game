@@ -241,17 +241,16 @@ async def get_user_abilities(user_id: int) -> List[str]:
 @supabase_retry_handler()
 async def get_skills_unlocked_at_level(level: int, element: str) -> List[Dict]:
     """
-    특정 레벨에 도달했을 때 해금되는 스킬의 전체 데이터 목록을 반환합니다.
+    특정 레벨 '이하'에서 해금되는 모든 스킬의 전체 데이터 목록을 반환합니다.
     해당 펫의 속성 스킬과 모든 펫이 배울 수 있는 '노말' 속성 스킬을 모두 확인합니다.
     """
     try:
-        # ▼▼▼ [핵심 수정] 'skill_name' 대신 '*'를 사용하여 모든 데이터를 가져옵니다. ▼▼▼
+        # ▼▼▼ [핵심 수정] .eq()를 .lte() (less than or equal)로 변경합니다. ▼▼▼
         res = await supabase.table('pet_skills').select('*') \
-            .eq('unlock_level', level) \
+            .lte('unlock_level', level) \
             .filter('element', 'in', f'({element},노말)') \
             .execute()
         
-        # ▼▼▼ [핵심 수정] 스킬 이름 리스트가 아닌, 딕셔너리 리스트를 그대로 반환합니다. ▼▼▼
         return res.data if res and res.data else []
     except Exception as e:
         logger.error(f"{level}레벨, '{element}'속성 스킬 조회 중 오류: {e}", exc_info=True)
