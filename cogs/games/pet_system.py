@@ -18,7 +18,7 @@ from utils.database import (
     save_panel_id, get_panel_id, get_embed_from_db, set_cooldown, get_cooldown,
     save_config_to_db, delete_config_from_db, get_id, get_user_pet,
     get_learnable_skills, set_pet_skill, get_wallet, update_wallet
-    get_skills_unlocked_at_level  # <-- 이 부분을 추가하세요
+    get_skills_unlocked_at_level
 )
 from utils.helpers import format_embed_from_db
 
