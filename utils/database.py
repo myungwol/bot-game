@@ -272,7 +272,13 @@ async def get_learnable_skills(pet_id: int, pet_element: str, learned_skill_ids:
     
     response = await query.order('element').order('power').execute()
     return response.data if response and response.data else []
-
+    
+@supabase_retry_handler()
+async def get_skills_unlocked_at_level(level: int, pet_element: str) -> List[Dict[str, Any]]:
+    """특정 레벨에 도달했을 때 해금되는 스킬 목록을 가져옵니다."""
+    response = await supabase.table('pet_skills').select('*').eq('required_level', level).in_('element', ['노말', pet_element]).execute()
+    return response.data if response and response.data else []
+    
 @supabase_retry_handler()
 async def set_pet_skill(pet_id: int, skill_id: int, slot: int) -> bool:
     """펫의 스킬을 특정 슬롯에 배우거나 교체합니다."""
