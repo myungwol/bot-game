@@ -240,12 +240,29 @@ class DungeonGameView(ui.View):
             except discord.NotFound: self.stop()
 
     async def _execute_monster_turn(self):
-        damage = max(1, self.current_monster.get('attack', 1) - self.final_pet_stats['defense'])
+        # ▼▼▼ [핵심 수정] 데미지 계산 공식 변경 ▼▼▼
+        base_damage = self.current_monster.get('attack', 1) - self.final_pet_stats['defense']
+        
+        # 1. 최소 데미지 보장
+        base_damage = max(1, base_damage)
+
+        # 2. 데미지 변동성 적용 (±15%)
+        damage_variance = random.uniform(0.85, 1.15)
+        damage = round(base_damage * damage_variance)
+        
+        # 3. 크리티컬 히트 판정 (5% 확률)
+        is_critical = random.random() < 0.05
+        if is_critical:
+            damage = round(damage * 1.5)
+
         self.pet_current_hp = max(0, self.pet_current_hp - damage)
         await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
+        
+        # 4. 전투 로그 메시지 수정
+        crit_text = " 🔥**치명타!**🔥" if is_critical else ""
         log_entry = {
             "title": f"◀️ **{self.current_monster['name']}**의 공격!",
-            "value": f"> **{self.pet_data_raw['nickname']}**에게 **{damage}**의 데미지!"
+            "value": f"> **{self.pet_data_raw['nickname']}**은(는) **{damage}**의 데미지를 받았다!{crit_text}"
         }
         self.battle_log.append(log_entry)
         
@@ -289,12 +306,31 @@ class DungeonGameView(ui.View):
             return
 
         # TODO: 여기에 속성 상성, 버프/디버프 등 복잡한 스킬 효과 로직 추가
-        damage = max(1, self.final_pet_stats['attack'] + skill_to_use.get('power', 0) - self.current_monster.get('defense', 0))
-        self.monster_current_hp = max(0, self.monster_current_hp - damage)
+        # 현재는 위력 기반의 데미지 계산만 구현합니다.
+        # TODO: 여기에 속성 상성, 버프/디버프 등 복잡한 스킬 효과 로직 추가
+
+        # ▼▼▼ [핵심 수정] 데미지 계산 공식 변경 ▼▼▼
+        base_damage = self.final_pet_stats['attack'] + skill_to_use.get('power', 0) - self.current_monster.get('defense', 0)
         
+        # 1. 최소 데미지를 1로 보장
+        base_damage = max(1, base_damage)
+
+        # 2. 데미지 변동성 적용 (±15%)
+        damage_variance = random.uniform(0.85, 1.15)
+        damage = round(base_damage * damage_variance)
+
+        # 3. 크리티컬 히트 판정 (10% 확률)
+        is_critical = random.random() < 0.10
+        if is_critical:
+            damage = round(damage * 1.5)
+        
+        self.monster_current_hp = max(0, self.monster_current_hp - damage)
+
+        # 4. 전투 로그 메시지 수정
+        crit_text = " ✨**크리티컬!**✨" if is_critical else ""
         log_entry = {
             "title": f"▶️ **{self.pet_data_raw['nickname']}**의 **{skill_to_use['skill_name']}**!",
-            "value": f"> **{self.current_monster['name']}**에게 **{damage}**의 데미지!"
+            "value": f"> **{self.current_monster['name']}**에게 **{damage}**의 데미지를 입혔다!{crit_text}"
         }
         self.battle_log.append(log_entry)
 
