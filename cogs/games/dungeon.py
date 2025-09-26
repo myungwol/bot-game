@@ -66,6 +66,7 @@ class DungeonGameView(ui.View):
         self.pet_is_defeated: bool = self.pet_current_hp <= 0
         
         self.current_monster: Optional[Dict] = None; self.monster_current_hp: int = 0
+        self.defeated_by: Optional[str] = None # ◀◀◀ 이 줄을 추가하세요
         self.storage_base_url = f"{os.environ.get('SUPABASE_URL')}/storage/v1/object/public/monster_images"
         
         self.build_components()
@@ -113,7 +114,16 @@ class DungeonGameView(ui.View):
                      f"💨 **스피드**: {self.final_pet_stats['speed']}")
         embed.add_field(name=f"🐾 {self.pet_data_raw['nickname']}", value=pet_stats, inline=False)
         if self.pet_is_defeated:
-            description_content = "☠️ 펫이 쓰러졌습니다! '아이템'을 사용해 '치료제'로 회복시키거나 던전을 나가야 합니다."
+            # ▼▼▼ [핵심 수정] 패배 원인 몬스터를 표시하는 로직 추가 ▼▼▼
+            defeat_reason = ""
+            if self.defeated_by:
+                defeat_reason = f"\n> **{self.defeated_by}** 와(과)의 전투에서 패배했습니다."
+            
+            description_content = (
+                f"☠️ 펫이 쓰러졌습니다!{defeat_reason}\n"
+                "'아이템'을 사용해 '치료제'로 회복시키거나 던전을 나가야 합니다."
+            )
+            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
         elif self.state == "exploring":
             description_content = "깊은 곳으로 나아가 몬스터를 찾아보자."
         elif self.state == "in_battle" and self.current_monster:
@@ -327,10 +337,20 @@ class DungeonGameView(ui.View):
     async def handle_battle_lose(self, interaction: discord.Interaction):
         self.state = "battle_over"
         self.pet_is_defeated = True
+        
+        # ▼▼▼ [핵심 수정] 몬스터 정보를 저장하고 전투 로그를 수정합니다. ▼▼▼
+        if self.current_monster:
+            self.defeated_by = self.current_monster['name']
+            defeat_log_value = f"> **{self.defeated_by}** 와(과)의 전투에서 패배했습니다."
+        else:
+            defeat_log_value = "> 전투에서 패배했습니다."
+
         self.battle_log.append({
             "title": f"☠️ **{self.pet_data_raw['nickname']}**이(가) 쓰러졌다...",
-            "value": "> 전투에서 패배했습니다."
+            "value": defeat_log_value
         })
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+
         self.current_monster = None
         await self.refresh_ui(interaction)
 
