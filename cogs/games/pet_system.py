@@ -17,7 +17,7 @@ from utils.database import (
     supabase, get_inventory, update_inventory, get_item_database,
     save_panel_id, get_panel_id, get_embed_from_db, set_cooldown, get_cooldown,
     save_config_to_db, delete_config_from_db, get_id, get_user_pet,
-    get_learnable_skills, set_pet_skill, get_wallet, update_wallet
+    get_learnable_skills, set_pet_skill, get_wallet, update_wallet,
     get_skills_unlocked_at_level
 )
 from utils.helpers import format_embed_from_db
@@ -66,7 +66,6 @@ async def delete_message_after(message: discord.InteractionMessage, delay: int):
         await message.delete()
     except (discord.NotFound, discord.Forbidden):
         pass
-# cogs/games/pet_system.py (파일 상단에 추가)
 
 class SkillAcquisitionView(ui.View):
     def __init__(self, cog: 'PetSystem', user_id: int, pet_data: Dict, unlocked_skill: Dict):
@@ -144,94 +143,6 @@ class SkillAcquisitionView(ui.View):
         await interaction.response.defer()
         await interaction.message.edit(content="스킬을 배우지 않고 넘어갔습니다.", embed=None, view=None)
         self.stop()
-
-
-class SkillLearningView(ui.View):
-    def __init__(self, cog: 'PetSystem', user_id: int, pet_id: int, pet_element: str, learned_skills: List[Dict]):
-        super().__init__(timeout=600)
-        self.cog = cog
-        self.user_id = user_id
-        self.pet_id = pet_id
-        self.pet_element = pet_element
-        self.learned_skills = learned_skills
-        self.learnable_skills: List[Dict] = []
-        self.selected_skill_id: Optional[int] = None
-        self.selected_slot: Optional[int] = None
-
-    async def start(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        learned_skill_ids = [s['skill_id'] for s in self.learned_skills]
-        self.learnable_skills = await get_learnable_skills(self.pet_id, self.pet_element, learned_skill_ids)
-        
-        self.update_components()
-        embed = self.build_embed()
-        
-        await interaction.followup.send(embed=embed, view=self, ephemeral=True)
-
-    def build_embed(self) -> discord.Embed:
-        embed = discord.Embed(title="✨ 새로운 스킬 배우기", color=0x00FF00)
-        embed.description = "새로 배우거나 교체할 스킬과 슬롯을 선택해주세요."
-        
-        if self.selected_skill_id:
-            skill = next((s for s in self.learnable_skills if s['id'] == self.selected_skill_id), None)
-            if skill:
-                embed.add_field(name="선택한 스킬", value=f"**{skill['skill_name']}**\n> {skill['description']}", inline=False)
-
-        if self.selected_slot:
-            embed.add_field(name="선택한 슬롯", value=f"**{self.selected_slot}번 슬롯**", inline=False)
-
-        return embed
-        
-    def update_components(self):
-        self.clear_items()
-        
-        skill_options = [discord.SelectOption(label=s['skill_name'], value=str(s['id']), description=f"위력:{s['power']}, 속성:{s['element']}") for s in self.learnable_skills[:25]]
-        if not skill_options:
-            self.add_item(ui.Button(label="배울 수 있는 스킬이 없습니다.", disabled=True))
-            return
-            
-        skill_select = ui.Select(placeholder="① 새로 배울 스킬을 선택하세요...", options=skill_options)
-        skill_select.callback = self.on_skill_select
-        self.add_item(skill_select)
-
-        slot_options = []
-        for i in range(1, 5):
-            learned_skill_in_slot = next((s for s in self.learned_skills if s['slot_number'] == i), None)
-            label = f"{i}번 슬롯"
-            if learned_skill_in_slot:
-                label += f" (현재: {learned_skill_in_slot['pet_skills']['skill_name']})"
-            else:
-                label += " (비어있음)"
-            slot_options.append(discord.SelectOption(label=label, value=str(i)))
-        
-        slot_select = ui.Select(placeholder="② 적용할 슬롯을 선택하세요...", options=slot_options, disabled=(self.selected_skill_id is None))
-        slot_select.callback = self.on_slot_select
-        self.add_item(slot_select)
-        
-        confirm_button = ui.Button(label="확정", style=discord.ButtonStyle.success, disabled=(self.selected_skill_id is None or self.selected_slot is None))
-        confirm_button.callback = self.on_confirm
-        self.add_item(confirm_button)
-
-    async def on_skill_select(self, interaction: discord.Interaction):
-        self.selected_skill_id = int(interaction.data['values'][0])
-        self.update_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
-
-    async def on_slot_select(self, interaction: discord.Interaction):
-        self.selected_slot = int(interaction.data['values'][0])
-        self.update_components()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
-
-    async def on_confirm(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        success = await set_pet_skill(self.pet_id, self.selected_skill_id, self.selected_slot)
-        
-        if success:
-            await interaction.edit_original_response(content="✅ 스킬을 성공적으로 배웠습니다!", embed=None, view=None)
-            await self.cog.update_pet_ui(self.user_id, interaction.channel)
-        else:
-            await interaction.edit_original_response(content="❌ 이미 다른 슬롯에 배운 스킬입니다.", embed=None, view=None)
 
 class SkillChangeView(ui.View):
     def __init__(self, parent_view: 'PetUIView'):
@@ -315,7 +226,7 @@ class SkillChangeView(ui.View):
         else:
             await update_wallet(interaction.user, 1000)
             await interaction.edit_original_response(content="❌ 스킬 변경에 실패했습니다. 코인이 환불되었습니다.", view=None)
-        
+
 class StatAllocationView(ui.View):
     def __init__(self, parent_view: 'PetUIView', message: discord.Message):
         super().__init__(timeout=180)
@@ -586,7 +497,6 @@ class PetUIView(ui.View):
         await interaction.response.defer()
         await self.cog.update_pet_ui(interaction.user.id, interaction.channel, interaction.message, is_refresh=True)
 
-# ▼▼▼ [수정] 누락되었던 EggSelectView 클래스 추가 ▼▼▼
 class EggSelectView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'PetSystem'):
         super().__init__(timeout=180)
@@ -611,9 +521,7 @@ class EggSelectView(ui.View):
             item.disabled = True
         await self.message.edit(content=f"'{egg_name}'을 선택했습니다. 부화 절차를 시작합니다...", view=self)
         await self.cog.start_incubation_process(interaction, egg_name)
-# ▲▲▲ [수정] 완료 ▲▲▲
 
-# ▼▼▼ [수정] IncubatorPanelView 클래스를 PetSystem 클래스 위로 이동 ▼▼▼
 class IncubatorPanelView(ui.View):
     def __init__(self, cog_instance: 'PetSystem'):
         super().__init__(timeout=None)
@@ -626,7 +534,6 @@ class IncubatorPanelView(ui.View):
         await interaction.response.defer(ephemeral=True, thinking=False)
         view = EggSelectView(interaction.user, self.cog)
         await view.start(interaction)
-# ▲▲▲ [수정] 완료 ▲▲▲
 
 class PetSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -879,8 +786,9 @@ class PetSystem(commands.Cog):
             embed.add_field(name="속성", value=f"{species_info['element']}", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True)
             embed.add_field(name="경험치", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=False)
-            embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=False)
-            embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=False)
+            embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=True)
+            embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=True)
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
 
             stat_points = pet_data.get('stat_points', 0)
             if stat_points > 0:
@@ -1009,8 +917,8 @@ class PetSystem(commands.Cog):
             except Exception as e:
                 logger.error(f"펫 레벨 설정 요청 처리 중 오류: {e}", exc_info=True)
 
-async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded: int):
-        pet_data = await self.get_user_pet(user_id)
+    async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded: int):
+        pet_data = await get_user_pet(user_id)
         if not pet_data: return
 
         user = self.bot.get_user(user_id)
@@ -1018,11 +926,13 @@ async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded
 
         nickname = pet_data.get('nickname', '이름 없는 펫')
         
-        # ▼▼▼ [핵심 수정] 새로 배운 스킬을 확인하는 로직 추가 ▼▼▼
         pet_element = pet_data.get('pet_species', {}).get('element')
-        unlocked_skills = []
+        unlocked_skills_names = []
+        unlocked_skills_data = []
         if pet_element:
-            unlocked_skills = await get_skills_unlocked_at_level(new_level, pet_element)
+            # ▼▼▼ [핵심 수정] 스킬 이름이 아닌 스킬 데이터 전체를 가져옵니다. ▼▼▼
+            unlocked_skills_data = await get_skills_unlocked_at_level(new_level, pet_element, True)
+            unlocked_skills_names = [s['skill_name'] for s in unlocked_skills_data]
         
         log_channel_id = get_id("log_pet_levelup_channel_id")
         if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
@@ -1031,42 +941,29 @@ async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded
                 f"스탯 포인트 **{points_awarded}**개를 획득했습니다. ✨"
             )
             
-            # 새로 배운 스킬이 있으면 메시지에 추가
-            if unlocked_skills:
-                skills_str = ", ".join([f"**{skill}**" for skill in unlocked_skills])
+            if unlocked_skills_names:
+                skills_str = ", ".join([f"**{skill}**" for skill in unlocked_skills_names])
                 message_text += f"\n\n새로운 스킬을 배웠습니다: {skills_str} 📖"
 
-            try:
-                await log_channel.send(message_text)
-            except Exception as e:
-                logger.error(f"펫 레벨업 로그 전송 실패: {e}")
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+            try: await log_channel.send(message_text)
+            except Exception as e: logger.error(f"펫 레벨업 로그 전송 실패: {e}")
 
-        if thread_id := pet_data.get('thread_id'):
-            if thread := self.bot.get_channel(thread_id):
-                if message_id := pet_data.get('message_id'):
-                    try:
-                        message = await thread.fetch_message(message_id)
-                        await self.update_pet_ui(user_id, thread, message)
-                    except (discord.NotFound, discord.Forbidden):
-                        logger.warning(f"펫 레벨업 후 UI 업데이트 실패: 메시지(ID: {message_id})를 찾을 수 없습니다.")
+        thread_id = pet_data.get('thread_id')
+        if not thread_id: return
+        thread = self.bot.get_channel(thread_id)
+        if not thread: return
+        
+        # ▼▼▼ [핵심 수정] UI 업데이트와 스킬 학습 UI 전송 로직을 분리하고 강화합니다. ▼▼▼
+        await self.update_pet_ui(user_id, thread)
 
-        # 2. 펫 개인 스레드에 UI 업데이트 및 스킬 학습 UI 전송
-        if thread_id := pet_data.get('thread_id'):
-            if thread := self.bot.get_channel(thread_id):
-                # 먼저 펫 UI를 업데이트하여 최신 레벨/스탯을 보여줌
-                await self.update_pet_ui(user_id, thread)
-
-                # 새로 해금된 스킬이 있는지 확인
-                pet_element = pet_data['pet_species']['element']
-                unlocked_skills = await get_skills_unlocked_at_level(new_level, pet_element)
-
-                if unlocked_skills:
-                    # 여러 스킬이 해금될 경우를 대비해 루프 사용 (보통은 1개)
-                    for skill in unlocked_skills:
-                        acquisition_view = SkillAcquisitionView(self, user_id, pet_data, skill)
-                        await acquisition_view.start(thread)
-                        await asyncio.sleep(1) # 동시 전송 방지
+        if unlocked_skills_data:
+            fresh_pet_data = await get_user_pet(user_id)
+            if not fresh_pet_data: return
+            
+            for skill_data in unlocked_skills_data:
+                acquisition_view = SkillAcquisitionView(self, user_id, fresh_pet_data, skill_data)
+                await acquisition_view.start(thread)
+                await asyncio.sleep(1)
 
     async def check_and_process_auto_evolution(self, user_ids: set):
         for user_id in user_ids:
@@ -1079,8 +976,7 @@ async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded
 
     async def notify_pet_evolution(self, user_id: int, new_stage_num: int, points_granted: int):
         pet_data = await get_user_pet(user_id)
-        if not pet_data or not (thread_id := pet_data.get('thread_id')):
-            return
+        if not pet_data or not (thread_id := pet_data.get('thread_id')): return
 
         species_info = pet_data.get('pet_species', {})
         stage_info_json = species_info.get('stage_info', {})
@@ -1088,15 +984,9 @@ async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded
         
         if thread := self.bot.get_channel(thread_id):
             user = self.bot.get_user(user_id)
-            if user:
-                await thread.send(f"🌟 {user.mention}님의 펫이 **{new_stage_name}**(으)로 진화했습니다! 스탯 포인트 **{points_granted}**개를 획득했습니다!")
+            if user: await thread.send(f"🌟 {user.mention}님의 펫이 **{new_stage_name}**(으)로 진화했습니다! 스탯 포인트 **{points_granted}**개를 획득했습니다!")
             
-            if message_id := pet_data.get('message_id'):
-                try:
-                    message = await thread.fetch_message(message_id)
-                    await self.update_pet_ui(user_id, thread, message)
-                except (discord.NotFound, discord.Forbidden):
-                    pass
+            await self.update_pet_ui(user_id, thread)
 
     async def handle_evolution(self, user_id: int, channel: discord.TextChannel) -> bool:
         res = await supabase.rpc('attempt_pet_evolution', {'p_user_id': user_id}).single().execute()
@@ -1106,10 +996,12 @@ async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded
         return False
 
     async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: Optional[discord.Message] = None, is_refresh: bool = False):
-        pet_data, inventory = await asyncio.gather(get_user_pet(user_id), get_inventory(self.bot.get_user(user_id)))
+        pet_data = await get_user_pet(user_id)
         if not pet_data:
             if message: await message.edit(content="펫 정보를 찾을 수 없습니다.", embed=None, view=None)
             return
+            
+        inventory = await get_inventory(self.bot.get_user(user_id))
         user = self.bot.get_user(user_id)
         embed = self.build_pet_ui_embed(user, pet_data)
         cooldown_active = await self._is_play_on_cooldown(pet_data['id'])
@@ -1130,7 +1022,6 @@ async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded
             await message.edit(embed=embed, view=view)
             
     async def register_persistent_views(self):
-        # 이제 IncubatorPanelView가 정의되었으므로 정상적으로 작동
         self.bot.add_view(IncubatorPanelView(self))
         logger.info("✅ 펫 시스템(인큐베이터)의 영구 View가 성공적으로 등록되었습니다.")
         
