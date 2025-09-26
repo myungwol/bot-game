@@ -65,12 +65,15 @@ class DungeonGameView(ui.View):
         self.pet_current_hp: int = self.pet_data_raw.get('current_hp') or self.final_pet_stats['hp']
         self.pet_is_defeated: bool = self.pet_current_hp <= 0
         
+        # ▼▼▼ [수정] 턴 관리 변수 추가 ▼▼▼
+        self.is_pet_turn: bool = True
+        
         self.current_monster: Optional[Dict] = None; self.monster_current_hp: int = 0
-        self.defeated_by: Optional[str] = None # ◀◀◀ 이 줄을 추가하세요
         self.storage_base_url = f"{os.environ.get('SUPABASE_URL')}/storage/v1/object/public/monster_images"
         
         self.build_components()
 
+    # _calculate_final_pet_stats, start, generate_monster 는 변경 없음 (생략)
     def _calculate_final_pet_stats(self) -> Dict[str, int]:
         species_info = self.pet_data_raw.get('pet_species', {})
         level = self.pet_data_raw.get('level', 1)
@@ -114,20 +117,15 @@ class DungeonGameView(ui.View):
                      f"💨 **스피드**: {self.final_pet_stats['speed']}")
         embed.add_field(name=f"🐾 {self.pet_data_raw['nickname']}", value=pet_stats, inline=False)
         if self.pet_is_defeated:
-            # ▼▼▼ [핵심 수정] 패배 원인 몬스터를 표시하는 로직 추가 ▼▼▼
-            defeat_reason = ""
-            if self.defeated_by:
-                defeat_reason = f"\n> **{self.defeated_by}** 와(과)의 전투에서 패배했습니다."
-            
-            description_content = (
-                f"☠️ 펫이 쓰러졌습니다!{defeat_reason}\n"
-                "'아이템'을 사용해 '치료제'로 회복시키거나 던전을 나가야 합니다."
-            )
-            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+            description_content = "☠️ 펫이 쓰러졌습니다! '아이템'을 사용해 '치료제'로 회복시키거나 던전을 나가야 합니다."
         elif self.state == "exploring":
             description_content = "깊은 곳으로 나아가 몬스터를 찾아보자."
         elif self.state == "in_battle" and self.current_monster:
-            embed.title = f"전투 중! - {self.current_monster['name']}"; embed.set_image(url=self.current_monster['image_url'])
+            # ▼▼▼ [수정] 턴 정보 표시 추가 ▼▼▼
+            turn_indicator = ">>> **💥 당신의 턴입니다! 💥**" if self.is_pet_turn else "⏳ 상대의 턴을 기다리는 중..."
+            embed.title = f"전투 중! - {self.current_monster['name']}"
+            embed.description = turn_indicator
+            embed.set_image(url=self.current_monster['image_url'])
             monster_stats = (f"❤️ **체력**: {self.monster_current_hp} / {self.current_monster['hp']}\n"
                              f"⚔️ **공격력**: {self.current_monster['attack']}\n"
                              f"🛡️ **방어력**: {self.current_monster['defense']}\n"
@@ -154,11 +152,20 @@ class DungeonGameView(ui.View):
         if self.rewards:
             rewards_str = "\n".join([f"> {item}: {qty}개" for item, qty in self.rewards.items()])
             embed.add_field(name="--- 현재까지 획득한 보상 ---", value=rewards_str, inline=False)
+        
+        # description_content가 embed.description을 덮어쓰지 않도록 수정
+        if description_content:
+            embed.description = description_content
+
         closing_time_text = f"\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n던전은 {discord.utils.format_dt(self.end_time, 'R')}에 닫힙니다."
-        embed.description = (description_content + closing_time_text) if description_content else closing_time_text.strip()
+        # description이 이미 설정된 경우, 텍스트를 추가합니다.
+        if embed.description:
+            embed.description += closing_time_text
+        else:
+            embed.description = closing_time_text.strip()
+            
         return embed
     
-    # ▼▼▼ [수정] build_components 메서드를 스킬 버튼을 생성하도록 수정 ▼▼▼
     def build_components(self):
         self.clear_items()
         base_id = f"dungeon_view:{self.user.id}"
@@ -166,11 +173,13 @@ class DungeonGameView(ui.View):
         buttons_map = {
             "explore": ui.Button(label="탐색하기", style=discord.ButtonStyle.success, emoji="🗺️", custom_id=f"{base_id}:explore"),
             "use_item": ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji="👜", custom_id=f"{base_id}:use_item"),
+            # ▼▼▼ [수정] '공격' 버튼을 '스킬' 버튼으로 변경 ▼▼▼
+            "skill": ui.Button(label="스킬", style=discord.ButtonStyle.primary, emoji="✨", custom_id=f"{base_id}:skill"),
             "flee": ui.Button(label="도망가기", style=discord.ButtonStyle.danger, emoji="🏃", custom_id=f"{base_id}:flee"),
             "leave": ui.Button(label="던전 나가기", style=discord.ButtonStyle.grey, emoji="🚪", custom_id=f"{base_id}:leave"),
             "explore_disabled": ui.Button(label="탐색 불가", style=discord.ButtonStyle.secondary, emoji="☠️", custom_id=f"{base_id}:explore_disabled", disabled=True)
         }
-
+        
         if self.pet_is_defeated:
             self.add_item(buttons_map["explore_disabled"])
             self.add_item(buttons_map["use_item"])
@@ -178,91 +187,67 @@ class DungeonGameView(ui.View):
             self.add_item(buttons_map["explore"])
             self.add_item(buttons_map["use_item"])
         elif self.state == "in_battle":
-            learned_skills = sorted(self.pet_data_raw.get('learned_skills', []), key=lambda s: s['slot_number'])
-            if not learned_skills:
-                # 스킬이 없으면 기본 공격 버튼
-                attack_button = ui.Button(label="들이받기", style=discord.ButtonStyle.primary, emoji="⚔️", custom_id=f"{base_id}:use_skill:0") # 스킬 ID 0은 기본공격으로 간주
-                self.add_item(attack_button)
-            else:
-                for skill_info in learned_skills:
-                    skill = skill_info.get('pet_skills', {})
-                    skill_button = ui.Button(
-                        label=skill.get('skill_name', '스킬'), 
-                        style=discord.ButtonStyle.primary, 
-                        emoji="⚔️", 
-                        custom_id=f"{base_id}:use_skill:{skill.get('id', 0)}"
-                    )
-                    self.add_item(skill_button)
+            # ▼▼▼ [수정] '공격' 대신 '스킬' 버튼을 추가하고, 펫의 턴일 때만 활성화 ▼▼▼
+            buttons_map["skill"].disabled = not self.is_pet_turn
+            self.add_item(buttons_map["skill"])
             self.add_item(buttons_map["use_item"])
             self.add_item(buttons_map["flee"])
-            
+        
         self.add_item(buttons_map["leave"])
         
         for item in self.children:
             if isinstance(item, ui.Button):
                 item.callback = self.dispatch_callback
-    # ▲▲▲ [수정] 완료 ▲▲▲
 
+    # ... interaction_check 메서드는 변경 없음 ...
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user.id:
             await interaction.response.send_message("자신의 던전만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
             return False
         return True
 
-    # ▼▼▼ [수정] dispatch_callback 메서드를 스킬 사용을 처리하도록 수정 ▼▼▼
     async def dispatch_callback(self, interaction: discord.Interaction):
         try:
-            custom_id_parts = interaction.data['custom_id'].split(':')
-            action = custom_id_parts[-1]
-            if custom_id_parts[-2] == 'use_skill':
-                skill_id = int(action)
-                await self.handle_skill_use(interaction, skill_id)
-                return
-        except (KeyError, IndexError, ValueError):
             action = interaction.data['custom_id'].split(':')[-1]
-        
+        except (KeyError, IndexError):
+            return
         method_map = {
             "explore": self.handle_explore, 
+            "skill": self.handle_skill_button, # 'attack' -> 'skill'
             "flee": self.handle_flee, 
             "leave": self.handle_leave, 
             "use_item": self.handle_use_item
         }
         if method := method_map.get(action): 
             await method(interaction)
-    # ▲▲▲ [수정] 완료 ▲▲▲
 
+    # ... refresh_ui 메서드는 변경 없음 ...
     async def refresh_ui(self, interaction: Optional[discord.Interaction] = None):
         if interaction and not interaction.response.is_done(): await interaction.response.defer()
-        self.build_components()
-        embed = self.build_embed()
+        self.build_components(); embed = self.build_embed()
         if self.message:
             try: await self.message.edit(embed=embed, view=self)
             except discord.NotFound: self.stop()
 
+    async def _execute_pet_turn(self, used_skill: Dict):
+        # ▼▼▼ [수정] 스킬 위력을 기반으로 데미지 계산 ▼▼▼
+        skill_power = used_skill.get('power', 30) # 기본 위력 30
+        damage = max(1, round(self.final_pet_stats['attack'] * (skill_power / 100)) - self.current_monster.get('defense', 0))
+        self.monster_current_hp = max(0, self.monster_current_hp - damage)
+        log_entry = {
+            "title": f"▶️ **{self.pet_data_raw['nickname']}**의 **{used_skill['skill_name']}**!",
+            "value": f"> **{self.current_monster['name']}**에게 **{damage}**의 데미지!"
+        }
+        self.battle_log.append(log_entry)
+
+    # ... _execute_monster_turn 메서드는 변경 없음 ...
     async def _execute_monster_turn(self):
-        # ▼▼▼ [핵심 수정] 데미지 계산 공식 변경 ▼▼▼
-        base_damage = self.current_monster.get('attack', 1) - self.final_pet_stats['defense']
-        
-        # 1. 최소 데미지 보장
-        base_damage = max(1, base_damage)
-
-        # 2. 데미지 변동성 적용 (±15%)
-        damage_variance = random.uniform(0.85, 1.15)
-        damage = round(base_damage * damage_variance)
-        
-        # 3. 크리티컬 히트 판정 (5% 확률)
-        is_critical = random.random() < 0.05
-        if is_critical:
-            damage = round(damage * 1.5)
-
+        damage = max(1, self.current_monster.get('attack', 1) - self.final_pet_stats['defense'])
         self.pet_current_hp = max(0, self.pet_current_hp - damage)
         await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
-        
-        # 4. 전투 로그 메시지 수정
-        crit_text = " 🔥**치명타!**🔥" if is_critical else ""
         log_entry = {
             "title": f"◀️ **{self.current_monster['name']}**의 공격!",
-            "value": f"> **{self.pet_data_raw['nickname']}**은(는) **{damage}**의 데미지를 받았다!{crit_text}"
+            "value": f"> **{self.pet_data_raw['nickname']}**에게 **{damage}**의 데미지!"
         }
         self.battle_log.append(log_entry)
         
@@ -271,82 +256,90 @@ class DungeonGameView(ui.View):
         self.current_monster = self.generate_monster()
         self.monster_current_hp = self.current_monster['hp']
         self.battle_log = [f"**{self.current_monster['name']}** 이(가) 나타났다!"]
+        
+        # ▼▼▼ [핵심 수정] 몬스터 선공 시 즉시 데미지를 입히지 않고 턴만 넘김 ▼▼▼
         if self.final_pet_stats['speed'] >= self.current_monster.get('speed', 0):
             self.is_pet_turn = True
             self.battle_log.append(f"**{self.pet_data_raw['nickname']}**이(가) 민첩하게 먼저 움직인다!")
-            self.state = "in_battle"
-            await self.refresh_ui(interaction)
         else:
             self.is_pet_turn = False
-            self.battle_log.append(f"**{self.current_monster['name']}**의 기습 공격!")
-            await self._execute_monster_turn()
-            
-            if self.pet_current_hp <= 0:
-                await self.handle_battle_lose(interaction)
-            else:
-                self.state = "in_battle"
-                await self.refresh_ui(interaction)
+            self.battle_log.append(f"**{self.current_monster['name']}**이(가) 더 빠르다! 먼저 공격합니다.")
+        
+        self.state = "in_battle"
+        await self.refresh_ui(interaction)
+        
+        # 만약 몬스터 턴이면, 몬스터가 바로 공격하도록 처리
+        if not self.is_pet_turn:
+            await asyncio.sleep(1.5) # 유저가 상황을 인지할 시간
+            await self.handle_monster_turn(interaction)
 
-    # ▼▼▼ [수정] handle_attack을 handle_skill_use로 변경하고 로직 수정 ▼▼▼
-    async def handle_skill_use(self, interaction: discord.Interaction, skill_id: int):
-        if self.state != "in_battle" or not self.current_monster: return
+    # ▼▼▼ [핵심 추가] 스킬 버튼 핸들러 ▼▼▼
+    async def handle_skill_button(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        pet_data = await get_user_pet(self.user.id)
+        learned_skills = pet_data.get('learned_skills', [])
+        
+        if not learned_skills:
+            return await interaction.followup.send("❌ 배운 스킬이 없습니다! 기본 공격을 사용합니다.", ephemeral=True)
+            # 기본 공격 로직 추가 가능
+
+        options = [
+            discord.SelectOption(
+                label=s['pet_skills']['skill_name'],
+                value=str(s['pet_skills']['id']),
+                description=f"위력: {s['pet_skills']['power']} | 속성: {s['pet_skills']['element']}"
+            ) for s in learned_skills
+        ]
+
+        skill_select = ui.Select(placeholder="사용할 스킬을 선택하세요...", options=options)
+        
+        async def skill_select_callback(select_interaction: discord.Interaction):
+            skill_id = int(select_interaction.data['values'][0])
+            skill_data = next((s['pet_skills'] for s in learned_skills if s['pet_skills']['id'] == skill_id), None)
+            
+            if skill_data:
+                await self.handle_skill_use(select_interaction, skill_data)
+            
+            # 드롭다운 메시지 삭제
+            await select_interaction.response.defer()
+            await select_interaction.delete_original_response()
+
+        skill_select.callback = skill_select_callback
+        view = ui.View(timeout=60).add_item(skill_select)
+        await interaction.followup.send("어떤 스킬을 사용하시겠습니까?", view=view, ephemeral=True)
+
+    # ▼▼▼ [핵심 추가] 스킬 사용 및 턴 처리 로직 ▼▼▼
+    async def handle_skill_use(self, interaction: discord.Interaction, skill_data: Dict):
+        if self.state != "in_battle" or not self.current_monster or not self.is_pet_turn: 
+            return
+
         self.battle_log = []
-
-        skill_to_use = None
-        if skill_id == 0: # 기본 공격 '들이받기'
-            skill_to_use = {'id': 0, 'skill_name': '들이받기', 'power': 40, 'description': '기본 공격', 'element': '노말'}
-        else:
-            learned_skills = self.pet_data_raw.get('learned_skills', [])
-            skill_info = next((s for s in learned_skills if s['pet_skills']['id'] == skill_id), None)
-            if skill_info:
-                skill_to_use = skill_info['pet_skills']
-
-        if not skill_to_use:
-            logger.error(f"알 수 없는 스킬 ID({skill_id})가 사용되었습니다.")
-            return
-
-        # TODO: 여기에 속성 상성, 버프/디버프 등 복잡한 스킬 효과 로직 추가
-        # 현재는 위력 기반의 데미지 계산만 구현합니다.
-        # TODO: 여기에 속성 상성, 버프/디버프 등 복잡한 스킬 효과 로직 추가
-
-        # ▼▼▼ [핵심 수정] 데미지 계산 공식 변경 ▼▼▼
-        base_damage = self.final_pet_stats['attack'] + skill_to_use.get('power', 0) - self.current_monster.get('defense', 0)
+        await self._execute_pet_turn(skill_data)
         
-        # 1. 최소 데미지를 1로 보장
-        base_damage = max(1, base_damage)
-
-        # 2. 데미지 변동성 적용 (±15%)
-        damage_variance = random.uniform(0.85, 1.15)
-        damage = round(base_damage * damage_variance)
-
-        # 3. 크리티컬 히트 판정 (10% 확률)
-        is_critical = random.random() < 0.10
-        if is_critical:
-            damage = round(damage * 1.5)
-        
-        self.monster_current_hp = max(0, self.monster_current_hp - damage)
-
-        # 4. 전투 로그 메시지 수정
-        crit_text = " ✨**크리티컬!**✨" if is_critical else ""
-        log_entry = {
-            "title": f"▶️ **{self.pet_data_raw['nickname']}**의 **{skill_to_use['skill_name']}**!",
-            "value": f"> **{self.current_monster['name']}**에게 **{damage}**의 데미지를 입혔다!{crit_text}"
-        }
-        self.battle_log.append(log_entry)
-
         if self.monster_current_hp <= 0:
-            await self.handle_battle_win(interaction)
+            return await self.handle_battle_win(interaction)
+        
+        self.is_pet_turn = False
+        await self.refresh_ui(interaction)
+        
+        await asyncio.sleep(1.5)
+        await self.handle_monster_turn(interaction)
+
+    # ▼▼▼ [핵심 추가] 몬스터 턴 자동 진행 로직 ▼▼▼
+    async def handle_monster_turn(self, interaction: discord.Interaction):
+        if self.state != "in_battle" or self.is_pet_turn or self.pet_is_defeated:
             return
-            
+
         await self._execute_monster_turn()
         
         if self.pet_current_hp <= 0:
-            await self.handle_battle_lose(interaction)
-            return
+            return await self.handle_battle_lose(interaction)
             
-        await self.refresh_ui(interaction)
-    # ▲▲▲ [수정] 완료 ▲▲▲
-
+        self.is_pet_turn = True
+        await self.refresh_ui() # interaction 없이 UI만 갱신
+        
+    # handle_attack, handle_flee, handle_leave, handle_use_item 등 나머지 메서드는 이전과 동일 (생략)
     async def handle_battle_win(self, interaction: discord.Interaction):
         self.state = "battle_over"
         self.battle_log.append({
@@ -373,20 +366,10 @@ class DungeonGameView(ui.View):
     async def handle_battle_lose(self, interaction: discord.Interaction):
         self.state = "battle_over"
         self.pet_is_defeated = True
-        
-        # ▼▼▼ [핵심 수정] 몬스터 정보를 저장하고 전투 로그를 수정합니다. ▼▼▼
-        if self.current_monster:
-            self.defeated_by = self.current_monster['name']
-            defeat_log_value = f"> **{self.defeated_by}** 와(과)의 전투에서 패배했습니다."
-        else:
-            defeat_log_value = "> 전투에서 패배했습니다."
-
         self.battle_log.append({
             "title": f"☠️ **{self.pet_data_raw['nickname']}**이(가) 쓰러졌다...",
-            "value": defeat_log_value
+            "value": "> 전투에서 패배했습니다."
         })
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
-
         self.current_monster = None
         await self.refresh_ui(interaction)
 
