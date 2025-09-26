@@ -295,14 +295,17 @@ class DungeonGameView(ui.View):
         skill_select = ui.Select(placeholder="사용할 스킬을 선택하세요...", options=options)
         
         async def skill_select_callback(select_interaction: discord.Interaction):
+            # ▼▼▼ [핵심 수정] select_interaction에 대한 응답을 먼저 처리합니다. ▼▼▼
+            await select_interaction.response.defer()
+            
             skill_id = int(select_interaction.data['values'][0])
             skill_data = next((s['pet_skills'] for s in learned_skills if s['pet_skills']['id'] == skill_id), None)
             
             if skill_data:
-                await self.handle_skill_use(select_interaction, skill_data)
+                # handle_skill_use에는 더 이상 interaction 객체를 넘기지 않습니다.
+                await self.handle_skill_use(skill_data)
             
-            # 드롭다운 메시지 삭제
-            await select_interaction.response.defer()
+            # 임시 메시지를 삭제합니다.
             await select_interaction.delete_original_response()
 
         skill_select.callback = skill_select_callback
@@ -310,7 +313,7 @@ class DungeonGameView(ui.View):
         await interaction.followup.send("어떤 스킬을 사용하시겠습니까?", view=view, ephemeral=True)
 
     # ▼▼▼ [핵심 추가] 스킬 사용 및 턴 처리 로직 ▼▼▼
-    async def handle_skill_use(self, interaction: discord.Interaction, skill_data: Dict):
+    async def handle_skill_use(self, skill_data: Dict):
         if self.state != "in_battle" or not self.current_monster or not self.is_pet_turn: 
             return
 
@@ -318,29 +321,34 @@ class DungeonGameView(ui.View):
         await self._execute_pet_turn(skill_data)
         
         if self.monster_current_hp <= 0:
-            return await self.handle_battle_win(interaction)
+            # handle_battle_win은 여전히 interaction이 필요하므로,
+            # View에 저장된 원래 메시지의 interaction을 사용하거나 None을 전달합니다.
+            # 이 경우에는 UI 업데이트만 필요하므로 interaction 없이 호출하도록 수정합니다.
+            await self.handle_battle_win()
+            return
         
         self.is_pet_turn = False
-        await self.refresh_ui(interaction)
+        await self.refresh_ui() # interaction 없이 호출
         
         await asyncio.sleep(1.5)
-        await self.handle_monster_turn(interaction)
+        await self.handle_monster_turn()
 
     # ▼▼▼ [핵심 추가] 몬스터 턴 자동 진행 로직 ▼▼▼
-    async def handle_monster_turn(self, interaction: discord.Interaction):
+    async def handle_monster_turn(self):
         if self.state != "in_battle" or self.is_pet_turn or self.pet_is_defeated:
             return
 
         await self._execute_monster_turn()
         
         if self.pet_current_hp <= 0:
-            return await self.handle_battle_lose(interaction)
+            await self.handle_battle_lose()
+            return
             
         self.is_pet_turn = True
-        await self.refresh_ui() # interaction 없이 UI만 갱신
+        await self.refresh_ui()
         
     # handle_attack, handle_flee, handle_leave, handle_use_item 등 나머지 메서드는 이전과 동일 (생략)
-    async def handle_battle_win(self, interaction: discord.Interaction):
+    async def handle_battle_win(self):
         self.state = "battle_over"
         self.battle_log.append({
             "title": f"🎉 **{self.current_monster['name']}**을(를) 물리쳤다!",
@@ -361,9 +369,9 @@ class DungeonGameView(ui.View):
                     "title": "🎁 전리품 획득",
                     "value": f"> **{item}** {qty}개를 획득했다!"
                 })
-        await self.refresh_ui(interaction)
+        await self.refresh_ui()
 
-    async def handle_battle_lose(self, interaction: discord.Interaction):
+    async def handle_battle_lose(self):
         self.state = "battle_over"
         self.pet_is_defeated = True
         self.battle_log.append({
@@ -371,7 +379,7 @@ class DungeonGameView(ui.View):
             "value": "> 전투에서 패배했습니다."
         })
         self.current_monster = None
-        await self.refresh_ui(interaction)
+        await self.refresh_ui()
 
     async def handle_flee(self, interaction: discord.Interaction):
         self.state = "exploring"
