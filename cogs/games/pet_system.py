@@ -143,7 +143,7 @@ async def on_learn(self, interaction: discord.Interaction):
         self.update_components()
         await interaction.response.edit_message(view=self)
 
-async def on_confirm_replace(self, interaction: discord.Interaction):
+    async def on_confirm_replace(self, interaction: discord.Interaction):
         await interaction.response.defer()
         await set_pet_skill(self.pet_data['id'], self.unlocked_skill['id'], self.selected_slot_to_replace)
         await interaction.message.edit(content=f"✅ **{self.unlocked_skill['skill_name']}** 스킬로 교체했습니다!", embed=None, view=None)
