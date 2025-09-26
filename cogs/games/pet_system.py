@@ -1131,4 +1131,4 @@ class PetSystem(commands.Cog):
         logger.info(f"✅ {panel_key} 패널을 #{channel.name} 채널에 성공적으로 생성했습니다.")
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(PetSystem(bot))
+    await bot.add_cog(PetSystem(bot))/
