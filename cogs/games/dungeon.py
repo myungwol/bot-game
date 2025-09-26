@@ -251,27 +251,24 @@ class DungeonGameView(ui.View):
         }
         self.battle_log.append(log_entry)
         
-    async def handle_explore(self, interaction: discord.Interaction):
+async def handle_explore(self, interaction: discord.Interaction):
         if self.pet_is_defeated: return await interaction.response.send_message("펫이 쓰러져서 탐색할 수 없습니다.", ephemeral=True, delete_after=5)
+        
         self.current_monster = self.generate_monster()
         self.monster_current_hp = self.current_monster['hp']
         self.battle_log = [f"**{self.current_monster['name']}** 이(가) 나타났다!"]
         
-        # ▼▼▼ [핵심 수정] 몬스터 선공 시 즉시 데미지를 입히지 않고 턴만 넘김 ▼▼▼
+        # ▼▼▼ [핵심 수정] 턴 순서만 결정하고 즉시 공격하지 않습니다. ▼▼▼
         if self.final_pet_stats['speed'] >= self.current_monster.get('speed', 0):
             self.is_pet_turn = True
             self.battle_log.append(f"**{self.pet_data_raw['nickname']}**이(가) 민첩하게 먼저 움직인다!")
         else:
             self.is_pet_turn = False
-            self.battle_log.append(f"**{self.current_monster['name']}**이(가) 더 빠르다! 먼저 공격합니다.")
-        
+            self.battle_log.append(f"**{self.current_monster['name']}**이(가) 더 빠르다! 먼저 공격할 것이다.")
+            
         self.state = "in_battle"
         await self.refresh_ui(interaction)
-        
-        # 만약 몬스터 턴이면, 몬스터가 바로 공격하도록 처리
-        if not self.is_pet_turn:
-            await asyncio.sleep(1.5) # 유저가 상황을 인지할 시간
-            await self.handle_monster_turn(interaction)
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
     # ▼▼▼ [핵심 추가] 스킬 버튼 핸들러 ▼▼▼
     async def handle_skill_button(self, interaction: discord.Interaction):
@@ -314,24 +311,39 @@ class DungeonGameView(ui.View):
 
     # ▼▼▼ [핵심 추가] 스킬 사용 및 턴 처리 로직 ▼▼▼
     async def handle_skill_use(self, skill_data: Dict):
-        if self.state != "in_battle" or not self.current_monster or not self.is_pet_turn: 
+        if self.state != "in_battle" or not self.current_monster: 
             return
 
         self.battle_log = []
-        await self._execute_pet_turn(skill_data)
         
-        if self.monster_current_hp <= 0:
-            # handle_battle_win은 여전히 interaction이 필요하므로,
-            # View에 저장된 원래 메시지의 interaction을 사용하거나 None을 전달합니다.
-            # 이 경우에는 UI 업데이트만 필요하므로 interaction 없이 호출하도록 수정합니다.
-            await self.handle_battle_win()
-            return
-        
-        self.is_pet_turn = False
-        await self.refresh_ui() # interaction 없이 호출
-        
-        await asyncio.sleep(1.5)
-        await self.handle_monster_turn()
+        # ▼▼▼ [핵심 수정] 턴 순서에 따라 공격 순서를 결정합니다. ▼▼▼
+        if self.is_pet_turn:
+            # 펫 선공
+            await self._execute_pet_turn(skill_data)
+            if self.monster_current_hp <= 0:
+                return await self.handle_battle_win()
+            
+            await self._execute_monster_turn()
+            if self.pet_current_hp <= 0:
+                return await self.handle_battle_lose()
+        else:
+            # 몬스터 선공
+            await self._execute_monster_turn()
+            if self.pet_current_hp <= 0:
+                return await self.handle_battle_lose()
+            
+            # 몬스터의 공격 후 UI를 잠시 갱신하여 보여줌
+            await self.refresh_ui()
+            await asyncio.sleep(1.5)
+
+            await self._execute_pet_turn(skill_data)
+            if self.monster_current_hp <= 0:
+                return await self.handle_battle_win()
+
+        # 다음 턴을 위해 턴 순서를 교체합니다.
+        self.is_pet_turn = not self.is_pet_turn
+        await self.refresh_ui()
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
     # ▼▼▼ [핵심 추가] 몬스터 턴 자동 진행 로직 ▼▼▼
     async def handle_monster_turn(self):
