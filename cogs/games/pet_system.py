@@ -117,14 +117,24 @@ class SkillAcquisitionView(ui.View):
         pass_button.callback = self.on_pass
         self.add_item(pass_button)
 
-    async def on_learn(self, interaction: discord.Interaction):
+async def on_learn(self, interaction: discord.Interaction):
         await interaction.response.defer()
         learned_skills = self.pet_data.get('learned_skills', [])
         empty_slot = next((s for s in range(1, 5) if s not in [ls['slot_number'] for ls in learned_skills]), None)
         if empty_slot:
+            # 1. DB에 스킬을 먼저 저장합니다.
             await set_pet_skill(self.pet_data['id'], self.unlocked_skill['id'], empty_slot)
+            
+            # 2. 스킬 학습 UI 메시지를 수정합니다.
             await interaction.message.edit(content=f"✅ **{self.unlocked_skill['skill_name']}** 스킬을 배웠습니다!", embed=None, view=None)
-            await self.cog.update_pet_ui(self.user_id, interaction.channel)
+            
+            # ▼▼▼ [핵심 수정] DB에서 최신 데이터를 다시 불러온 후 메인 UI를 업데이트합니다. ▼▼▼
+            # 3. DB에서 최신 펫 데이터를 다시 가져옵니다.
+            updated_pet_data = await get_user_pet(self.user_id)
+            if updated_pet_data:
+                # 4. 최신 데이터로 메인 UI를 업데이트합니다.
+                await self.cog.update_pet_ui(self.user_id, interaction.channel, pet_data_override=updated_pet_data)
+            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
         self.stop()
 
     async def on_replace_select(self, interaction: discord.Interaction):
@@ -132,11 +142,16 @@ class SkillAcquisitionView(ui.View):
         self.update_components()
         await interaction.response.edit_message(view=self)
 
-    async def on_confirm_replace(self, interaction: discord.Interaction):
+async def on_confirm_replace(self, interaction: discord.Interaction):
         await interaction.response.defer()
         await set_pet_skill(self.pet_data['id'], self.unlocked_skill['id'], self.selected_slot_to_replace)
         await interaction.message.edit(content=f"✅ **{self.unlocked_skill['skill_name']}** 스킬로 교체했습니다!", embed=None, view=None)
-        await self.cog.update_pet_ui(self.user_id, interaction.channel)
+        
+        # ▼▼▼ [핵심 수정] 여기에도 동일한 로직을 적용합니다. ▼▼▼
+        updated_pet_data = await get_user_pet(self.user_id)
+        if updated_pet_data:
+            await self.cog.update_pet_ui(self.user_id, interaction.channel, pet_data_override=updated_pet_data)
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
         self.stop()
         
     async def on_pass(self, interaction: discord.Interaction):
@@ -994,13 +1009,16 @@ class PetSystem(commands.Cog):
             return True
         return False
 
-    async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: Optional[discord.Message] = None, is_refresh: bool = False):
-        pet_data = await get_user_pet(user_id)
+async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: Optional[discord.Message] = None, is_refresh: bool = False, pet_data_override: Optional[Dict] = None):
+        # ▼▼▼ [핵심 수정] pet_data_override가 있으면 DB 조회를 건너뜁니다. ▼▼▼
+        pet_data = pet_data_override if pet_data_override else await get_user_pet(user_id)
+        
         if not pet_data:
             if message: await message.edit(content="펫 정보를 찾을 수 없습니다.", embed=None, view=None)
             return
-            
+        
         inventory = await get_inventory(self.bot.get_user(user_id))
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
         user = self.bot.get_user(user_id)
         embed = self.build_pet_ui_embed(user, pet_data)
         cooldown_active = await self._is_play_on_cooldown(pet_data['id'])
