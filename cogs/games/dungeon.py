@@ -251,7 +251,7 @@ class DungeonGameView(ui.View):
         }
         self.battle_log.append(log_entry)
         
-async def handle_explore(self, interaction: discord.Interaction):
+    async def handle_explore(self, interaction: discord.Interaction):
         if self.pet_is_defeated: return await interaction.response.send_message("펫이 쓰러져서 탐색할 수 없습니다.", ephemeral=True, delete_after=5)
         
         self.current_monster = self.generate_monster()
