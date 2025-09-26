@@ -65,6 +65,85 @@ async def delete_message_after(message: discord.InteractionMessage, delay: int):
         await message.delete()
     except (discord.NotFound, discord.Forbidden):
         pass
+# cogs/games/pet_system.py (파일 상단에 추가)
+
+class SkillAcquisitionView(ui.View):
+    def __init__(self, cog: 'PetSystem', user_id: int, pet_data: Dict, unlocked_skill: Dict):
+        super().__init__(timeout=86400) # 24시간 동안 유효
+        self.cog = cog
+        self.user_id = user_id
+        self.pet_data = pet_data
+        self.unlocked_skill = unlocked_skill
+        self.selected_slot_to_replace: Optional[int] = None
+
+    async def start(self, thread: discord.TextChannel):
+        embed = self.build_embed()
+        self.update_components()
+        message_text = f"{thread.owner.mention}, 펫이 성장하여 새로운 스킬을 배울 수 있게 되었습니다!"
+        await thread.send(message_text, embed=embed, view=self)
+
+    def build_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title=f"🎓 새로운 스킬 습득 가능: {self.unlocked_skill['skill_name']}",
+            description=f"> {self.unlocked_skill['description']}",
+            color=0x00FF00
+        )
+        embed.add_field(name="속성", value=self.unlocked_skill['element'], inline=True)
+        embed.add_field(name="위력", value=str(self.unlocked_skill['power']), inline=True)
+        return embed
+        
+    def update_components(self):
+        self.clear_items()
+        learned_skills = self.pet_data.get('learned_skills', [])
+        
+        if len(learned_skills) < 4:
+            learn_button = ui.Button(label="새로운 스킬 배우기", style=discord.ButtonStyle.success, emoji="✅")
+            learn_button.callback = self.on_learn
+            self.add_item(learn_button)
+        else:
+            replace_options = [
+                discord.SelectOption(label=f"{s['slot_number']}번 슬롯: {s['pet_skills']['skill_name']}", value=str(s['slot_number']))
+                for s in learned_skills
+            ]
+            replace_select = ui.Select(placeholder="교체할 스킬을 선택하세요...", options=replace_options)
+            replace_select.callback = self.on_replace_select
+            self.add_item(replace_select)
+            
+            confirm_replace_button = ui.Button(label="이 스킬로 교체하기", style=discord.ButtonStyle.primary, emoji="🔄", disabled=(self.selected_slot_to_replace is None))
+            confirm_replace_button.callback = self.on_confirm_replace
+            self.add_item(confirm_replace_button)
+
+        pass_button = ui.Button(label="배우지 않기", style=discord.ButtonStyle.grey, emoji="❌")
+        pass_button.callback = self.on_pass
+        self.add_item(pass_button)
+
+    async def on_learn(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        learned_skills = self.pet_data.get('learned_skills', [])
+        empty_slot = next((s for s in range(1, 5) if s not in [ls['slot_number'] for ls in learned_skills]), None)
+        if empty_slot:
+            await set_pet_skill(self.pet_data['id'], self.unlocked_skill['id'], empty_slot)
+            await interaction.message.edit(content=f"✅ **{self.unlocked_skill['skill_name']}** 스킬을 배웠습니다!", embed=None, view=None)
+            await self.cog.update_pet_ui(self.user_id, interaction.channel)
+        self.stop()
+
+    async def on_replace_select(self, interaction: discord.Interaction):
+        self.selected_slot_to_replace = int(interaction.data['values'][0])
+        self.update_components()
+        await interaction.response.edit_message(view=self)
+
+    async def on_confirm_replace(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        await set_pet_skill(self.pet_data['id'], self.unlocked_skill['id'], self.selected_slot_to_replace)
+        await interaction.message.edit(content=f"✅ **{self.unlocked_skill['skill_name']}** 스킬로 교체했습니다!", embed=None, view=None)
+        await self.cog.update_pet_ui(self.user_id, interaction.channel)
+        self.stop()
+        
+    async def on_pass(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        await interaction.message.edit(content="스킬을 배우지 않고 넘어갔습니다.", embed=None, view=None)
+        self.stop()
+
 
 class SkillLearningView(ui.View):
     def __init__(self, cog: 'PetSystem', user_id: int, pet_id: int, pet_element: str, learned_skills: List[Dict]):
@@ -945,53 +1024,26 @@ class PetSystem(commands.Cog):
                 f"스탯 포인트 **{points_awarded}**개를 획득했습니다. ✨"
             )
             try:
-                # view=None 으로 수정하여 버튼 없이 메시지만 전송
                 await log_channel.send(message_text)
             except Exception as e:
                 logger.error(f"펫 레벨업 로그 전송 실패: {e}")
 
-        # 2. 펫 개인 스레드에 스킬 배우기 UI 전송 및 기존 UI 업데이트
+        # 2. 펫 개인 스레드에 UI 업데이트 및 스킬 학습 UI 전송
         if thread_id := pet_data.get('thread_id'):
             if thread := self.bot.get_channel(thread_id):
-                # 스킬 배우기 버튼이 포함된 View 생성
-                view = ui.View(timeout=None)
-                skill_button = ui.Button(label="새로운 스킬 배우기", style=discord.ButtonStyle.success, emoji="🎓", custom_id=f"learn_skill:{user_id}")
-                
-                async def skill_button_callback(interaction: discord.Interaction):
-                    target_user_id = int(interaction.data['custom_id'].split(':')[1])
-                    if interaction.user.id != target_user_id:
-                        await interaction.response.send_message("펫 주인만 스킬을 배울 수 있습니다.", ephemeral=True, delete_after=5)
-                        return
-                    
-                    p_data = await get_user_pet(target_user_id)
-                    if p_data:
-                        learning_view = SkillLearningView(
-                            self, target_user_id, p_data['id'], 
-                            p_data['pet_species']['element'], p_data.get('learned_skills', [])
-                        )
-                        await learning_view.start(interaction)
-                        # 버튼을 누른 후에는 버튼이 포함된 메시지를 삭제
-                        try:
-                            await interaction.message.delete()
-                        except (discord.NotFound, discord.Forbidden):
-                            pass
-
-
-                skill_button.callback = skill_button_callback
-                view.add_item(skill_button)
-
-                try:
-                    # 펫 스레드에 버튼이 있는 메시지 전송
-                    await thread.send(f"{user.mention}, 펫이 레벨업하여 새로운 스킬을 배울 수 있습니다!", view=view)
-                except Exception as e:
-                     logger.error(f"펫 스레드 스킬 학습 버튼 전송 실패: {e}")
-
-                # 마지막으로 펫의 메인 UI를 업데이트하여 최신 정보를 반영
+                # 먼저 펫 UI를 업데이트하여 최신 레벨/스탯을 보여줌
                 await self.update_pet_ui(user_id, thread)
 
-        if thread_id := pet_data.get('thread_id'):
-            if thread := self.bot.get_channel(thread_id):
-                await self.update_pet_ui(user_id, thread)
+                # 새로 해금된 스킬이 있는지 확인
+                pet_element = pet_data['pet_species']['element']
+                unlocked_skills = await get_skills_unlocked_at_level(new_level, pet_element)
+
+                if unlocked_skills:
+                    # 여러 스킬이 해금될 경우를 대비해 루프 사용 (보통은 1개)
+                    for skill in unlocked_skills:
+                        acquisition_view = SkillAcquisitionView(self, user_id, pet_data, skill)
+                        await acquisition_view.start(thread)
+                        await asyncio.sleep(1) # 동시 전송 방지
 
     async def check_and_process_auto_evolution(self, user_ids: set):
         for user_id in user_ids:
