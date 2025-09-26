@@ -8,8 +8,8 @@ import random
 import os
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List, Any
-import asyncio
-import re
+import asyncio 
+import re 
 from collections import defaultdict
 from postgrest.exceptions import APIError
 
@@ -17,7 +17,7 @@ from utils.database import (
     supabase, get_inventory, update_inventory, get_item_database,
     save_panel_id, get_panel_id, get_embed_from_db, set_cooldown, get_cooldown,
     save_config_to_db, delete_config_from_db, get_id, get_user_pet,
-    get_learnable_skills, set_pet_skill, get_wallet, update_wallet # [수정] get_user_pet, get_learnable_skills, set_pet_skill, get_wallet, update_wallet 추가
+    get_learnable_skills, set_pet_skill, get_wallet, update_wallet
 )
 from utils.helpers import format_embed_from_db
 
@@ -65,9 +65,7 @@ async def delete_message_after(message: discord.InteractionMessage, delay: int):
         await message.delete()
     except (discord.NotFound, discord.Forbidden):
         pass
-
-# ▼▼▼ [신규 추가] 스킬 학습/변경을 위한 View 클래스들 ▼▼▼
-
+        
 class SkillLearningView(ui.View):
     def __init__(self, cog: 'PetSystem', user_id: int, pet_id: int, pet_element: str, learned_skills: List[Dict]):
         super().__init__(timeout=600)
@@ -238,8 +236,6 @@ class SkillChangeView(ui.View):
             await update_wallet(interaction.user, 1000)
             await interaction.edit_original_response(content="❌ 스킬 변경에 실패했습니다. 코인이 환불되었습니다.", view=None)
 
-# ▲▲▲ [신규 추가] 완료 ▲▲▲
-        
 class StatAllocationView(ui.View):
     def __init__(self, parent_view: 'PetUIView', message: discord.Message):
         super().__init__(timeout=180)
@@ -385,12 +381,11 @@ class PetUIView(ui.View):
         self.feed_pet_button.custom_id = f"pet_feed:{user_id}"
         self.play_with_pet_button.custom_id = f"pet_play:{user_id}"
         self.rename_pet_button.custom_id = f"pet_rename:{user_id}"
+        self.change_skills_button.custom_id = f"pet_change_skills:{user_id}"
         self.release_pet_button.custom_id = f"pet_release:{user_id}"
         self.refresh_button.custom_id = f"pet_refresh:{user_id}"
         self.allocate_stats_button.custom_id = f"pet_allocate_stats:{user_id}"
         self.evolve_button.custom_id = f"pet_evolve:{user_id}"
-        # ▼▼▼ [수정] 스킬 변경 버튼 custom_id 추가 ▼▼▼
-        self.change_skills_button.custom_id = f"pet_change_skills:{user_id}"
 
         if self.pet_data.get('hunger', 0) >= 100:
             self.feed_pet_button.disabled = True
@@ -444,22 +439,17 @@ class PetUIView(ui.View):
     async def play_with_pet_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         cooldown_key = f"daily_pet_play"
-        
         pet_id = self.pet_data['id']
         if await self.cog._is_play_on_cooldown(pet_id):
              return await interaction.followup.send("❌ 오늘은 이미 놀아주었습니다. 내일 다시 시도해주세요.", ephemeral=True)
         inventory = await get_inventory(interaction.user)
         if inventory.get("공놀이 세트", 0) < 1:
             return await interaction.followup.send("❌ '공놀이 세트' 아이템이 부족합니다.", ephemeral=True)
-            
         await update_inventory(self.user_id, "공놀이 세트", -1)
-        
         friendship_amount = 1; stat_increase_amount = 1
         await supabase.rpc('increase_pet_friendship_and_stats', {'p_user_id': self.user_id, 'p_friendship_amount': friendship_amount, 'p_stat_amount': stat_increase_amount}).execute()
-
         await set_cooldown(pet_id, cooldown_key)
         await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
-        
         msg = await interaction.followup.send(f"❤️ 펫과 즐거운 시간을 보냈습니다! 친밀도가 {friendship_amount} 오르고 모든 스탯이 {stat_increase_amount} 상승했습니다.", ephemeral=True)
         self.cog.bot.loop.create_task(delete_message_after(msg, 5))
 
@@ -486,12 +476,10 @@ class PetUIView(ui.View):
             await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
             await interaction.followup.send(f"펫의 이름이 '{new_name}'(으)로 변경되었습니다.", ephemeral=True, delete_after=5)
 
-    # ▼▼▼ [신규 추가] 스킬 변경 버튼과 콜백 ▼▼▼
     @ui.button(label="스킬 변경", style=discord.ButtonStyle.secondary, emoji="🔧", row=1)
     async def change_skills_button(self, interaction: discord.Interaction, button: ui.Button):
         change_view = SkillChangeView(self)
         await change_view.start(interaction)
-    # ▲▲▲ [신규 추가] 완료 ▲▲▲
 
     @ui.button(label="놓아주기", style=discord.ButtonStyle.danger, emoji="👋", row=1)
     async def release_pet_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -518,30 +506,20 @@ class PetUIView(ui.View):
         await interaction.response.defer()
         await self.cog.update_pet_ui(interaction.user.id, interaction.channel, interaction.message, is_refresh=True)
 
-class EggSelectView(ui.View):
-    def __init__(self, user: discord.Member, cog_instance: 'PetSystem'):
-        super().__init__(timeout=180)
-        self.user = user
+class IncubatorPanelView(ui.View):
+    def __init__(self, cog_instance: 'PetSystem'):
+        super().__init__(timeout=None)
         self.cog = cog_instance
-        self.message: Optional[discord.WebhookMessage] = None
-    async def start(self, interaction: discord.Interaction):
-        inventory = await get_inventory(self.user)
-        egg_items = {name: qty for name, qty in inventory.items() if get_item_database().get(name, {}).get('category') == '알'}
-        if not egg_items:
-            await interaction.followup.send("❌ 부화시킬 수 있는 알이 없습니다.", ephemeral=True)
+    @ui.button(label="알 부화시키기", style=discord.ButtonStyle.secondary, emoji="🥚", custom_id="incubator_start")
+    async def start_incubation_button(self, interaction: discord.Interaction, button: ui.Button):
+        # ▼▼▼ [수정] self.cog.get_user_pet -> get_user_pet 으로 수정 ▼▼▼
+        if await get_user_pet(interaction.user.id):
+            await interaction.response.send_message("❌ 이미 펫을 소유하고 있습니다. 펫은 한 마리만 키울 수 있습니다.", ephemeral=True, delete_after=5)
             return
-        options = [discord.SelectOption(label=f"{name} ({qty}개 보유)", value=name) for name, qty in egg_items.items()]
-        select = ui.Select(placeholder="부화시킬 알을 선택하세요...", options=options)
-        select.callback = self.select_callback
-        self.add_item(select)
-        self.message = await interaction.followup.send("어떤 알을 부화기에 넣으시겠습니까?", view=self, ephemeral=True)
-    async def select_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        egg_name = interaction.data['values'][0]
-        for item in self.children:
-            item.disabled = True
-        await self.message.edit(content=f"'{egg_name}'을 선택했습니다. 부화 절차를 시작합니다...", view=self)
-        await self.cog.start_incubation_process(interaction, egg_name)
+        # ▲▲▲ [수정] 완료 ▲▲▲
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        view = EggSelectView(interaction.user, self.cog)
+        await view.start(interaction)
 
 class PetSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -827,7 +805,6 @@ class PetSystem(commands.Cog):
             embed.add_field(name="👟 스피드", value=f"**{current_stats['speed']}** (`{hatch_base_stats['speed']}` + `{total_bonus_stats['speed']}`)", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) 
             
-            # ▼▼▼ [수정] 스킬 정보 필드 추가 ▼▼▼
             learned_skills = sorted(pet_data.get('learned_skills', []), key=lambda s: s['slot_number'])
             skill_texts = []
             if not learned_skills:
@@ -838,8 +815,7 @@ class PetSystem(commands.Cog):
                     skill_texts.append(f"・ **{skill.get('skill_name', '알수없음')}** (속성: {skill.get('element')}, 위력: {skill.get('power')})")
             
             embed.add_field(name="🐾 배운 스킬", value="\n".join(skill_texts), inline=False)
-            # ▲▲▲ [수정] 완료 ▲▲▲
-
+            
         return embed
     
     async def process_hatching(self, pet_data: Dict):
@@ -926,12 +902,13 @@ class PetSystem(commands.Cog):
             except Exception as e:
                 logger.error(f"펫 레벨 설정 요청 처리 중 오류: {e}", exc_info=True)
 
-    # ▼▼▼ [수정] notify_pet_level_up 함수를 스킬 배우기 버튼을 포함하도록 수정 ▼▼▼
     async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded: int):
-        pet_data = await self.get_user_pet(user_id)
+        # ▼▼▼ [수정] self.get_user_pet -> get_user_pet 으로 수정 ▼▼▼
+        pet_data = await get_user_pet(user_id)
         if not pet_data: return
         user = self.bot.get_user(user_id)
         if not user: return
+        # ▲▲▲ [수정] 완료 ▲▲▲
 
         nickname = pet_data.get('nickname', '이름 없는 펫')
         log_channel_id = get_id("log_pet_levelup_channel_id")
@@ -951,7 +928,9 @@ class PetSystem(commands.Cog):
                     await interaction.response.send_message("펫 주인만 스킬을 배울 수 있습니다.", ephemeral=True, delete_after=5)
                     return
                 
-                p_data = await self.get_user_pet(target_user_id)
+                # ▼▼▼ [수정] self.get_user_pet -> get_user_pet 으로 수정 ▼▼▼
+                p_data = await get_user_pet(target_user_id)
+                # ▲▲▲ [수정] 완료 ▲▲▲
                 if p_data:
                     learning_view = SkillLearningView(
                         self, target_user_id, p_data['id'], 
@@ -970,7 +949,6 @@ class PetSystem(commands.Cog):
         if thread_id := pet_data.get('thread_id'):
             if thread := self.bot.get_channel(thread_id):
                 await self.update_pet_ui(user_id, thread)
-    # ▲▲▲ [수정] 완료 ▲▲▲
 
     async def check_and_process_auto_evolution(self, user_ids: set):
         for user_id in user_ids:
@@ -982,8 +960,11 @@ class PetSystem(commands.Cog):
                 logger.error(f"자동 진화 처리 중 오류 (유저: {user_id}): {e}", exc_info=True)
 
     async def notify_pet_evolution(self, user_id: int, new_stage_num: int, points_granted: int):
-        pet_data = await self.get_user_pet(user_id)
-        if not pet_data or not (thread_id := pet_data.get('thread_id')): return
+        # ▼▼▼ [수정] self.get_user_pet -> get_user_pet 으로 수정 ▼▼▼
+        pet_data = await get_user_pet(user_id)
+        # ▲▲▲ [수정] 완료 ▲▲▲
+        if not pet_data or not (thread_id := pet_data.get('thread_id')):
+            return
 
         species_info = pet_data.get('pet_species', {})
         stage_info_json = species_info.get('stage_info', {})
@@ -998,7 +979,8 @@ class PetSystem(commands.Cog):
                 try:
                     message = await thread.fetch_message(message_id)
                     await self.update_pet_ui(user_id, thread, message)
-                except (discord.NotFound, discord.Forbidden): pass
+                except (discord.NotFound, discord.Forbidden):
+                    pass
 
     async def handle_evolution(self, user_id: int, channel: discord.TextChannel) -> bool:
         res = await supabase.rpc('attempt_pet_evolution', {'p_user_id': user_id}).single().execute()
@@ -1008,7 +990,9 @@ class PetSystem(commands.Cog):
         return False
 
     async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: Optional[discord.Message] = None, is_refresh: bool = False):
-        pet_data, inventory = await asyncio.gather(self.get_user_pet(user_id), get_inventory(self.bot.get_user(user_id)))
+        # ▼▼▼ [수정] self.get_user_pet -> get_user_pet 으로 수정 ▼▼▼
+        pet_data, inventory = await asyncio.gather(get_user_pet(user_id), get_inventory(self.bot.get_user(user_id)))
+        # ▲▲▲ [수정] 완료 ▲▲▲
         if not pet_data:
             if message: await message.edit(content="펫 정보를 찾을 수 없습니다.", embed=None, view=None)
             return
@@ -1053,19 +1037,6 @@ class PetSystem(commands.Cog):
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_name, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} 패널을 #{channel.name} 채널에 성공적으로 생성했습니다.")
-
-class IncubatorPanelView(ui.View):
-    def __init__(self, cog_instance: 'PetSystem'):
-        super().__init__(timeout=None)
-        self.cog = cog_instance
-    @ui.button(label="알 부화시키기", style=discord.ButtonStyle.secondary, emoji="🥚", custom_id="incubator_start")
-    async def start_incubation_button(self, interaction: discord.Interaction, button: ui.Button):
-        if await self.cog.get_user_pet(interaction.user.id):
-            await interaction.response.send_message("❌ 이미 펫을 소유하고 있습니다. 펫은 한 마리만 키울 수 있습니다.", ephemeral=True, delete_after=5)
-            return
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        view = EggSelectView(interaction.user, self.cog)
-        await view.start(interaction)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(PetSystem(bot))
