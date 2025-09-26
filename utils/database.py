@@ -237,6 +237,27 @@ async def get_user_abilities(user_id: int) -> List[str]:
     abilities = response.data if response and hasattr(response, 'data') and response.data else []
     _user_abilities_cache[user_id] = (abilities, now)
     return abilities
+    
+# ▼▼▼ [핵심 추가] 누락되었던 펫 스킬 해금 확인 함수를 추가합니다. ▼▼▼
+@supabase_retry_handler()
+async def get_skills_unlocked_at_level(level: int, element: str) -> List[str]:
+    """
+    특정 레벨에 도달했을 때 해금되는 스킬 목록을 반환합니다.
+    해당 펫의 속성 스킬과 모든 펫이 배울 수 있는 '노말' 속성 스킬을 모두 확인합니다.
+    """
+    try:
+        res = await supabase.table('pet_skills').select('skill_name') \
+            .eq('unlock_level', level) \
+            .filter('element', 'in', f'({element},노말)') \
+            .execute()
+        
+        if res and res.data:
+            return [skill['skill_name'] for skill in res.data]
+        return []
+    except Exception as e:
+        logger.error(f"{level}레벨, '{element}'속성 스킬 조회 중 오류: {e}", exc_info=True)
+        return []
+# ▲▲▲ [핵심 추가] 완료 ▲▲▲
 
 @supabase_retry_handler()
 async def get_cooldown(subject_id_int: int, cooldown_key: str) -> float: # pet_id -> subject_id_int
