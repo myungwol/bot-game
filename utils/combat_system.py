@@ -42,8 +42,6 @@ def _apply_skill_effect(
     log_value = ""
     log_title = f"✨ 스킬 효과: {skill['skill_name']}"
 
-    # [수정] 효과 적용 시, 동일한 타입의 효과가 이미 있다면 지속시간만 갱신하도록 변경
-    # 이렇게 하면 버프/디버프가 무한정 중첩되지 않습니다.
     existing_effect = next((e for e in target['effects'] if e.get('type') == effect_type), None)
     if existing_effect:
         existing_effect['duration'] = duration + 1
@@ -85,14 +83,11 @@ def _process_turn_end_effects(combatant: Combatant) -> Tuple[Combatant, List[str
     effect_name_map = {'BURN': '화상', 'ATK_BUFF': '공격력 증가', 'DEF_BUFF': '방어력 증가', 'SPD_BUFF': '스피드 증가', 'EVA_BUFF': '회피율 증가', 'ATK_DEBUFF': '공격력 감소', 'DEF_DEBUFF': '방어력 감소', 'SPD_DEBUFF': '스피드 감소', 'ACC_DEBUFF': '명중률 감소', 'PARALYZE': '마비', 'SLEEP': '수면'}
 
     for effect in combatant['effects']:
-        # [추가] 화상 데미지 로직
         if effect.get('type') == 'BURN':
             dot_damage = max(1, round(effect.get('value', 0)))
             combatant['current_hp'] = max(0, combatant['current_hp'] - dot_damage)
             logs.append(f"🔥 **{combatant['name']}**은(는) 화상 데미지로 **{dot_damage}**의 피해를 입었다!")
         
-        # [수정] 수면 상태는 공격받으면 깨어나므로, 여기서는 턴만 감소시킵니다.
-        # 실제 행동 불가 로직은 process_turn 시작 부분에 있습니다.
         effect['duration'] -= 1
         if effect.get('duration', 0) <= 0:
             effects_to_remove.append(effect)
@@ -111,8 +106,7 @@ def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Com
     """
     battle_logs: List[CombatLog | str] = []
 
-    # [추가] 1. 턴 시작 시 상태 이상 확인 (수면, 마비 등)
-    for effect in list(caster['effects']): # 복사본으로 순회하여 안전하게 원본 수정
+    for effect in list(caster['effects']):
         if effect.get('type') == 'SLEEP':
             battle_logs.append(f"💤 **{caster['name']}**은(는) 깊은 잠에 빠져있다...")
             caster, end_of_turn_logs = _process_turn_end_effects(caster)
@@ -124,19 +118,22 @@ def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Com
             battle_logs.extend(end_of_turn_logs)
             return caster, target, battle_logs
 
-    # 2. 스킬 처리 (데미지 및 효과)
     skill_power = skill.get('power', 0)
     damage_dealt = 0
 
-    if skill_power == 0:  # 비공격 스킬
+    if skill_power == 0:
         caster, target, effect_log = _apply_skill_effect(skill, caster, target, 0)
         if effect_log:
             battle_logs.append(effect_log)
-    else:  # 공격 스킬
+    else:
         final_attack = _get_stat_with_effects(caster['stats']['attack'], 'ATK', caster['effects'])
         final_defense = _get_stat_with_effects(target['stats']['defense'], 'DEF', target['effects'])
         
-        damage_dealt = max(1, round(final_attack * (skill_power / 100)) - final_defense)
+        # ▼▼▼ [핵심 수정] 새로운 데미지 계산 공식을 적용합니다. ▼▼▼
+        base_damage = max(1, final_attack - final_defense)
+        damage_dealt = round(base_damage * (1 + (skill_power / 100)))
+        # ▲▲▲ [수정] 완료 ▲▲▲
+
         target['current_hp'] = max(0, target['current_hp'] - damage_dealt)
         
         battle_logs.append({
@@ -144,25 +141,21 @@ def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Com
             "value": f"> **{target['name']}**에게 **{damage_dealt}**의 데미지!"
         })
 
-        # 공격 후 수면 상태는 해제됩니다.
         sleep_effect = next((e for e in target['effects'] if e.get('type') == 'SLEEP'), None)
         if sleep_effect:
             target['effects'].remove(sleep_effect)
             battle_logs.append(f"❗ **{target['name']}**은(는) 공격을 받고 잠에서 깨어났다!")
 
-        # 스킬의 부가 효과 적용
         if skill.get('effect_type'):
             caster, target, effect_log = _apply_skill_effect(skill, caster, target, damage_dealt)
             if effect_log:
                 battle_logs.append(effect_log)
 
-        # 반동 데미지 처리
         if skill.get('effect_type') == 'RECOIL':
             recoil_damage = max(1, round(damage_dealt * skill.get('effect_value', 0)))
             caster['current_hp'] = max(0, caster['current_hp'] - recoil_damage)
             battle_logs.append(f"💥 **{caster['name']}**은(는) 반동으로 **{recoil_damage}**의 데미지를 입었다!")
 
-    # 3. 턴 종료 시 효과 처리 (caster)
     caster, end_of_turn_logs = _process_turn_end_effects(caster)
     battle_logs.extend(end_of_turn_logs)
     
