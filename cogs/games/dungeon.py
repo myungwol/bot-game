@@ -293,17 +293,16 @@ class DungeonGameView(ui.View):
         duration = skill_data.get('effect_duration', 0)
         
         log_value = ""
+        
+        # [수정] 조건문을 더 명확하게 변경
         # 버프 (자신에게 적용)
         if 'BUFF' in effect_type:
-            # ATK_BUFF, DEF_BUFF, SPD_BUFF, EVA_BUFF 등
             caster_effects.append({'type': effect_type, 'value': value, 'duration': duration})
             stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "EVA": "회피율"}.get(effect_type.split('_')[0], "능력")
             log_value = f"> **{caster_name}**의 **{stat_name}**이(가) 상승했다!"
         
         # 디버프 (상대에게 적용)
         elif 'DEBUFF' in effect_type:
-            # ATK_DEBUFF, DEF_DEBUFF, SPD_DEBUFF, ACC_DEBUFF 등
-            # [수정] caster_effects -> target_effects 로 변경
             target_effects.append({'type': effect_type, 'value': value, 'duration': duration})
             stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "ACC": "명중률"}.get(effect_type.split('_')[0], "능력")
             log_value = f"> **{target_name}**의 **{stat_name}**이(가) 하락했다!"
@@ -322,12 +321,26 @@ class DungeonGameView(ui.View):
         
         # 지속 데미지 (상대에게 적용)
         elif effect_type == 'BURN':
-             # [수정] caster_effects -> target_effects 로 변경
             target_effects.append({'type': effect_type, 'value': value, 'duration': duration})
             log_value = f"> **{target_name}**은(는) 화상을 입었다!"
 
         if log_value:
             self.battle_log.append({"title": f"✨ 스킬 효과: {skill_data['skill_name']}", "value": log_value})
+
+    # [수정] _get_stat_with_effects 로직도 더 명확하게 변경합니다.
+    def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
+        """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
+        multiplier = 1.0
+        for effect in effects:
+            # 예시: effect['type'] = ATK_BUFF, stat_key = ATK
+            # effect['type'] = ATK_DEBUFF, stat_key = ATK
+            # effect['type'] = DEF_BUFF, stat_key = ATK (이 경우는 무시됨)
+            if effect['type'].startswith(stat_key.upper()):
+                if 'BUFF' in effect['type']:
+                    multiplier += effect['value']
+                elif 'DEBUFF' in effect['type']:
+                    multiplier -= effect['value']
+        return max(1, round(base_stat * multiplier))
 
     def _process_turn_end_effects(self, effects: List[Dict], target_name: str, is_pet: bool):
         """턴 종료 시 지속 효과(데미지, 지속시간 감소)를 처리합니다."""
