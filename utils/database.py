@@ -6,6 +6,7 @@ import time
 from functools import wraps
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Callable, Any, List, Optional
+from collections import defaultdict # 파일 상단에 import 구문이 없다면 추가해주세요.
 
 import discord
 from supabase import create_client, AsyncClient
