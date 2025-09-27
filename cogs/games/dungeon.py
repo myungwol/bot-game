@@ -11,7 +11,7 @@ import os
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List, Any
 from collections import defaultdict
-from discord.ext.commands import is_owner
+from discord import app_commands
 
 from utils.database import (
     get_inventory, update_inventory, supabase, get_id,
@@ -748,73 +748,73 @@ class Dungeon(commands.Cog):
             new_message = await channel.send(embed=embed, view=view)
             await save_panel_id(panel_name, new_message.id, channel.id)
             
-    @commands.command(name="던전테스트")
-    @is_owner() # 봇 소유자만 사용할 수 있도록 제한
-    async def dungeon_test(self, ctx: commands.Context, action: str, *, params: str = None):
+    # ▼▼▼ [수정] 이전에 추가했던 테스트용 명령어를 아래 코드로 교체합니다. ▼▼▼
+    @app_commands.command(name="던전테스트", description="[관리자] 던전 전투 시스템을 테스트합니다.")
+    @app_commands.describe(
+        action="실행할 작업을 선택하세요.",
+        params="작업에 필요한 추가 정보입니다. (예: 스킬이름 슬롯번호)"
+    )
+    @app_commands.choices(action=[
+        app_commands.Choice(name="스킬부여", value="스킬부여"),
+        app_commands.Choice(name="몬스터소환", value="몬스터소환"),
+        app_commands.Choice(name="효과확인", value="효과확인"),
+    ])
+    async def dungeon_test(self, interaction: discord.Interaction, action: str, params: Optional[str] = None):
         """
         던전 전투 시스템을 테스트하기 위한 관리자 명령어입니다.
-        사용법:
-        !던전테스트 스킬부여 [스킬이름] [슬롯번호]
-        !던전테스트 몬스터소환 [속성] [레벨]
-        !던전테스트 효과확인
         """
-        if ctx.author.id not in self.active_sessions:
-            return await ctx.send("❌ 먼저 던전에 입장해주세요.")
+        # 봇 소유자인지 확인
+        if not await self.bot.is_owner(interaction.user):
+            return await interaction.response.send_message("❌ 봇 소유자만 사용할 수 있는 명령어입니다.", ephemeral=True)
 
-        view = self.active_sessions[ctx.author.id]
+        if interaction.user.id not in self.active_sessions:
+            return await interaction.response.send_message("❌ 먼저 던전에 입장해주세요.", ephemeral=True)
+        
+        # 슬래시 명령어에서는 응답을 먼저 해야 합니다.
+        await interaction.response.defer(ephemeral=True)
+
+        view = self.active_sessions[interaction.user.id]
 
         if action == "스킬부여":
             if not params or len(params.split()) != 2:
-                return await ctx.send("사용법: `!던전테스트 스킬부여 [스킬이름] [슬롯번호(1-4)]`")
+                return await interaction.followup.send("사용법: `params`에 `[스킬이름] [슬롯번호(1-4)]` 형식으로 입력하세요.")
             
             skill_name, slot_str = params.split(maxsplit=1)
             try:
                 slot = int(slot_str)
                 if not 1 <= slot <= 4: raise ValueError
             except ValueError:
-                return await ctx.send("❌ 슬롯 번호는 1에서 4 사이의 숫자여야 합니다.")
+                return await interaction.followup.send("❌ 슬롯 번호는 1에서 4 사이의 숫자여야 합니다.")
 
-            # DB에서 스킬 정보 찾기
             res = await supabase.table('pet_skills').select('*').eq('skill_name', skill_name).maybe_single().execute()
             if not (res and res.data):
-                return await ctx.send(f"❌ '{skill_name}' 스킬을 찾을 수 없습니다.")
+                return await interaction.followup.send(f"❌ '{skill_name}' 스킬을 찾을 수 없습니다.")
             
             skill_data = res.data
             pet_id = view.pet_data_raw['id']
 
-            # 펫에게 스킬 부여 (DB 업데이트)
             await supabase.table('pet_learned_skills').upsert({
-                'pet_id': pet_id,
-                'skill_id': skill_data['id'],
-                'slot_number': slot
+                'pet_id': pet_id, 'skill_id': skill_data['id'], 'slot_number': slot
             }, on_conflict='pet_id, slot_number').execute()
 
-            # 현재 실행 중인 View의 펫 데이터에도 반영 (DB 재조회 없이)
-            # learned_skills 리스트에서 같은 슬롯 번호가 있으면 제거하고 새로 추가
             view.pet_data_raw['learned_skills'] = [s for s in view.pet_data_raw.get('learned_skills', []) if s['slot_number'] != slot]
-            view.pet_data_raw['learned_skills'].append({
-                'slot_number': slot,
-                'pet_skills': skill_data
-            })
+            view.pet_data_raw['learned_skills'].append({'slot_number': slot, 'pet_skills': skill_data})
             
-            await ctx.send(f"✅ 펫에게 **{skill_name}** 스킬을 {slot}번 슬롯에 임시로 부여했습니다.")
+            await interaction.followup.send(f"✅ 펫에게 **{skill_name}** 스킬을 {slot}번 슬롯에 임시로 부여했습니다.")
 
         elif action == "몬스터소환":
             if not params or len(params.split()) != 2:
-                return await ctx.send("사용법: `!던전테스트 몬스터소환 [속성] [레벨]`")
+                return await interaction.followup.send("사용법: `params`에 `[속성] [레벨]` 형식으로 입력하세요.")
 
             element, level_str = params.split(maxsplit=1)
-            try:
-                level = int(level_str)
-            except ValueError:
-                return await ctx.send("❌ 레벨은 숫자여야 합니다.")
-
+            try: level = int(level_str)
+            except ValueError: return await interaction.followup.send("❌ 레벨은 숫자여야 합니다.")
             if element not in self.monster_base_data:
-                return await ctx.send(f"❌ 유효하지 않은 속성입니다. ({', '.join(self.monster_base_data.keys())})")
+                return await interaction.followup.send(f"❌ 유효하지 않은 속성입니다. ({', '.join(self.monster_base_data.keys())})")
 
-            # 지정된 속성과 레벨로 몬스터 강제 생성
+            # ... (몬스터 생성 로직은 동일) ...
             base_monster = self.monster_base_data[element]
-            dungeon_info = self.dungeon_data[view.dungeon_tier] # 현재 입장한 던전 정보 기준
+            dungeon_info = self.dungeon_data[view.dungeon_tier]
             hp_bonus = (level - 1) * 8; other_stat_bonus = (level - 1) * 5
             hp = int(base_monster['base_hp'] * dungeon_info['hp_mult']) + hp_bonus
             attack = int(base_monster['base_attack'] * dungeon_info['atk_mult']) + other_stat_bonus
@@ -829,21 +829,21 @@ class Dungeon(commands.Cog):
             view.is_pet_turn = True
             view.battle_log = [f"테스트 몬스터 **{view.current_monster['name']}** 이(가) 나타났다!"]
             await view.refresh_ui()
-            await ctx.send(f"✅ **{view.current_monster['name']}**을(를) 강제로 소환했습니다.")
+            await interaction.followup.send(f"✅ **{view.current_monster['name']}**을(를) 강제로 소환했습니다.")
 
         elif action == "효과확인":
             if view.state != "in_battle":
-                return await ctx.send("❌ 전투 중에만 사용할 수 있습니다.")
+                return await interaction.followup.send("❌ 전투 중에만 사용할 수 있습니다.")
             
             embed = discord.Embed(title="🕵️ 현재 효과 상태 (디버그)", color=0xFFD700)
             pet_effects_str = "\n".join([f"`{e}`" for e in view.pet_effects]) or "없음"
             monster_effects_str = "\n".join([f"`{e}`" for e in view.monster_effects]) or "없음"
             embed.add_field(name="펫 효과", value=pet_effects_str, inline=False)
             embed.add_field(name="몬스터 효과", value=monster_effects_str, inline=False)
-            await ctx.send(embed=embed)
+            await interaction.followup.send(embed=embed)
 
         else:
-            await ctx.send("❌ 알 수 없는 명령어입니다. (`스킬부여`, `몬스터소환`, `효과확인`)")
+            await interaction.followup.send("❌ 알 수 없는 명령어입니다.")
 
 class DungeonPanelView(ui.View):
     def __init__(self, cog_instance: 'Dungeon'):
