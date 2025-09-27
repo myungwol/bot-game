@@ -355,39 +355,51 @@ class DungeonGameView(ui.View):
                 self.battle_log.append(f"💨 **{target_name}**에게 걸려있던 **{effect_name}** 효과가 사라졌다.")
         for expired_effect in effects_to_remove: effects.remove(expired_effect)
 
-    async def _execute_pet_turn(self):
-        # ... (이전 답변의 상태이상 체크 로직을 포함)
+    async def _execute_pet_turn(self, used_skill: Dict):
+        # [수정] 턴 시작 시 상태 이상 효과를 체크하는 로직은 그대로 둡니다.
         for effect in self.pet_effects:
             if effect['type'] == 'SLEEP':
                 self.battle_log.append(f"💤 **{self.pet_data_raw['nickname']}**은(는) 깊은 잠에 빠져있다...")
                 self._process_turn_end_effects(self.pet_effects, self.pet_data_raw['nickname'], is_pet=True)
-                return
+                return # 턴 종료
             if effect['type'] == 'PARALYZE':
                 if random.random() < 0.25:
                     self.battle_log.append(f"⚡ **{self.pet_data_raw['nickname']}**은(는) 몸이 마비되어 움직일 수 없다!")
                     self._process_turn_end_effects(self.pet_effects, self.pet_data_raw['nickname'], is_pet=True)
-                    return
-        skill_power = self.used_skill_data.get('power', 0)
-        # ... (이하 로직은 이전 답변과 동일) ...
-        if skill_power == 0: self._apply_skill_effect(self.used_skill_data, self.pet_effects, self.monster_effects, self.pet_data_raw['nickname'], self.current_monster['name'], self.final_pet_stats['hp'])
+                    return # 턴 종료
+        
+        # [수정] self.used_skill_data 대신 전달받은 used_skill을 사용합니다.
+        skill_power = used_skill.get('power', 0)
+        
+        if skill_power == 0:
+            self._apply_skill_effect(used_skill, self.pet_effects, self.monster_effects, self.pet_data_raw['nickname'], self.current_monster['name'], self.final_pet_stats['hp'])
         else:
             final_attack = self._get_stat_with_effects(self.final_pet_stats['attack'], 'ATK', self.pet_effects)
             final_defense = self._get_stat_with_effects(self.current_monster.get('defense', 0), 'DEF', self.monster_effects)
             damage = max(1, round(final_attack * (skill_power / 100)) - final_defense)
             self.monster_current_hp = max(0, self.monster_current_hp - damage)
-            self.battle_log.append({ "title": f"▶️ **{self.pet_data_raw['nickname']}**의 **{self.used_skill_data['skill_name']}**!", "value": f"> **{self.current_monster['name']}**에게 **{damage}**의 데미지!"})
-            if self.used_skill_data.get('effect_type'): self._apply_skill_effect(self.used_skill_data, self.pet_effects, self.monster_effects, self.pet_data_raw['nickname'], self.current_monster['name'], damage_dealt=damage)
-            if self.used_skill_data.get('effect_type') == 'RECOIL':
-                recoil_damage = max(1, round(damage * self.used_skill_data.get('effect_value', 0)))
+            
+            # [수정] self.used_skill_data 대신 전달받은 used_skill을 사용합니다.
+            self.battle_log.append({ "title": f"▶️ **{self.pet_data_raw['nickname']}**의 **{used_skill['skill_name']}**!", "value": f"> **{self.current_monster['name']}**에게 **{damage}**의 데미지!"})
+            
+            if used_skill.get('effect_type'):
+                self._apply_skill_effect(used_skill, self.pet_effects, self.monster_effects, self.pet_data_raw['nickname'], self.current_monster['name'], damage_dealt=damage)
+            
+            if used_skill.get('effect_type') == 'RECOIL':
+                recoil_damage = max(1, round(damage * used_skill.get('effect_value', 0)))
                 self.pet_current_hp = max(0, self.pet_current_hp - recoil_damage)
                 self.battle_log.append(f"💥 **{self.pet_data_raw['nickname']}**은(는) 반동으로 **{recoil_damage}**의 데미지를 입었다!")
+
         self._process_turn_end_effects(self.pet_effects, self.pet_data_raw['nickname'], is_pet=True)
-        if self.pet_current_hp <= 0: self.pet_is_defeated = True
+        if self.pet_current_hp <= 0:
+            self.pet_is_defeated = True
 
     # [핵심 수정 1-1] 전투의 한 턴을 처리하는 별도의 비동기 함수를 만듭니다.
-    async def _process_battle_turn(self):
-        # 1. 펫의 턴 실행
-        await self._execute_pet_turn()
+    async def _process_battle_turn(self, skill_data: Dict):
+        # [수정] skill_data를 인자로 받습니다.
+
+        # 1. 펫의 턴 실행 시, skill_data를 전달합니다.
+        await self._execute_pet_turn(skill_data)
         if self.monster_current_hp <= 0:
             return await self.handle_battle_win()
         
@@ -403,34 +415,29 @@ class DungeonGameView(ui.View):
         self.is_pet_turn = True
         await self.refresh_ui()
 
-    # [핵심 수정 1-2] handle_skill_use 함수를 수정하여 상호작용에 즉시 응답하고, 전투 처리는 백그라운드 작업으로 넘깁니다.
     async def handle_skill_use(self, skill_data: Dict, skill_interaction: discord.Interaction):
         if self.state != "in_battle" or not self.current_monster or not self.is_pet_turn:
-            # 상호작용에 응답해야 하므로 defer()를 호출합니다.
             if not skill_interaction.response.is_done():
                 try: await skill_interaction.response.defer()
                 except discord.NotFound: pass
             return
 
-        # 1. 상호작용에 즉시 응답하여 'Unknown Interaction' 오류를 방지합니다.
         await skill_interaction.response.edit_message(content="처리 중...", view=None)
 
-        # 2. 턴 시작 준비
         self.is_pet_turn = False
         self.battle_log = []
-        self.used_skill_data = skill_data # 사용할 스킬 데이터를 임시 저장
         
-        # 3. 메인 UI를 '상대의 턴' 상태로 업데이트합니다.
+        # [수정] self.used_skill_data 변수는 이제 사용하지 않으므로 삭제합니다.
+        
         await self.refresh_ui()
         
-        # 4. 스킬 선택창(임시 메시지)을 삭제합니다.
         try:
             await skill_interaction.delete_original_response()
         except discord.NotFound:
             logger.warning(f"SkillSelectView 메시지 삭제 시도 중 찾지 못함 (User: {self.user.id})")
         
-        # 5. 시간이 걸리는 전투 로직을 백그라운드 작업으로 실행시킵니다.
-        asyncio.create_task(self._process_battle_turn())
+        # [수정] _process_battle_turn에 skill_data를 인자로 전달합니다.
+        asyncio.create_task(self._process_battle_turn(skill_data))
         
     # [핵심 수정 2] 몬스터 턴 로직을 수정하여 상태 이상을 먼저 체크하도록 합니다.
     async def _execute_monster_turn(self):
