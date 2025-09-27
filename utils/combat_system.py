@@ -3,21 +3,19 @@
 import random
 from typing import Dict, List, Tuple, TypedDict, Optional
 
-# 전투 참여자의 정보를 표준화하기 위한 데이터 구조
+# ... (Combatant, CombatLog 클래스, _get_stat_with_effects 함수는 변경 없음) ...
 class Combatant(TypedDict):
     name: str
-    stats: Dict[str, int]  # 최종 계산된 스탯 (공격력, 방어력, 스피드 등)
+    stats: Dict[str, int]
     current_hp: int
     max_hp: int
     effects: List[Dict]
 
-# 전투 로그의 형식을 표준화하기 위한 데이터 구조
 class CombatLog(TypedDict):
     title: str
     value: str
 
 def _get_stat_with_effects(base_stat: int, stat_key: str, effects: List[Dict]) -> int:
-    """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
     multiplier = 1.0
     for effect in effects:
         if effect.get('type') == f"{stat_key}_BUFF":
@@ -26,13 +24,13 @@ def _get_stat_with_effects(base_stat: int, stat_key: str, effects: List[Dict]) -
             multiplier -= effect.get('value', 0)
     return max(1, round(base_stat * multiplier))
 
+
 def _apply_skill_effect(
     skill: Dict, 
     caster: Combatant, 
     target: Combatant, 
     damage_dealt: int
 ) -> Tuple[Combatant, Combatant, Optional[CombatLog]]:
-    """스킬의 부가 효과를 적용하고 로그를 반환합니다."""
     effect_type = skill.get('effect_type')
     if not effect_type:
         return caster, target, None
@@ -43,7 +41,11 @@ def _apply_skill_effect(
     log_title = f"✨ 스킬 효과: {skill['skill_name']}"
 
     existing_effect = next((e for e in target['effects'] if e.get('type') == effect_type), None)
-    if existing_effect:
+    
+    # [수정] 길동무(DESTINY_BOND)는 시전자에게 효과를 부여합니다.
+    if effect_type == 'DESTINY_BOND':
+        caster['effects'].append({'type': 'DESTINY_BOND', 'duration': duration + 1})
+    elif existing_effect:
         existing_effect['duration'] = duration + 1
     else:
         if 'DEBUFF' in effect_type or effect_type in ['BURN', 'PARALYZE', 'SLEEP', 'PARALYZE_ON_HIT']:
@@ -71,16 +73,20 @@ def _apply_skill_effect(
         log_value = f"> **{target['name']}**은(는) 마비되었다!"
     elif effect_type == 'SLEEP':
         log_value = f"> **{target['name']}**은(는) 잠이 들었다!"
+    # [추가] 길동무 스킬 사용 시 로그 추가
+    elif effect_type == 'DESTINY_BOND':
+        log_value = f"> **{caster['name']}**은(는) 상대를 길동무로 삼았다!"
+
 
     if log_value:
         return caster, target, {"title": log_title, "value": log_value}
     return caster, target, None
 
+# ... (_process_turn_end_effects 함수는 변경 없음) ...
 def _process_turn_end_effects(combatant: Combatant) -> Tuple[Combatant, List[str]]:
-    """턴 종료 시 지속 데미지, 효과 지속시간 감소 등을 처리합니다."""
     logs = []
     effects_to_remove = []
-    effect_name_map = {'BURN': '화상', 'ATK_BUFF': '공격력 증가', 'DEF_BUFF': '방어력 증가', 'SPD_BUFF': '스피드 증가', 'EVA_BUFF': '회피율 증가', 'ATK_DEBUFF': '공격력 감소', 'DEF_DEBUFF': '방어력 감소', 'SPD_DEBUFF': '스피드 감소', 'ACC_DEBUFF': '명중률 감소', 'PARALYZE': '마비', 'SLEEP': '수면'}
+    effect_name_map = {'BURN': '화상', 'ATK_BUFF': '공격력 증가', 'DEF_BUFF': '방어력 증가', 'SPD_BUFF': '스피드 증가', 'EVA_BUFF': '회피율 증가', 'ATK_DEBUFF': '공격력 감소', 'DEF_DEBUFF': '방어력 감소', 'SPD_DEBUFF': '스피드 감소', 'ACC_DEBUFF': '명중률 감소', 'PARALYZE': '마비', 'SLEEP': '수면', 'DESTINY_BOND': '길동무'}
 
     for effect in combatant['effects']:
         if effect.get('type') == 'BURN':
@@ -101,9 +107,6 @@ def _process_turn_end_effects(combatant: Combatant) -> Tuple[Combatant, List[str
     return combatant, logs
 
 def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Combatant, Combatant, List[CombatLog | str]]:
-    """
-    한 턴의 전투를 처리하고, 변경된 상태와 전투 로그를 반환합니다.
-    """
     battle_logs: List[CombatLog | str] = []
 
     for effect in list(caster['effects']):
@@ -129,11 +132,8 @@ def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Com
         final_attack = _get_stat_with_effects(caster['stats']['attack'], 'ATK', caster['effects'])
         final_defense = _get_stat_with_effects(target['stats']['defense'], 'DEF', target['effects'])
         
-        # ▼▼▼ [핵심 수정] 새로운 데미지 계산 공식을 적용합니다. ▼▼▼
         base_damage = max(1, final_attack - final_defense)
         damage_dealt = round(base_damage * (1 + (skill_power / 100)))
-        # ▲▲▲ [수정] 완료 ▲▲▲
-
         target['current_hp'] = max(0, target['current_hp'] - damage_dealt)
         
         battle_logs.append({
@@ -155,6 +155,14 @@ def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Com
             recoil_damage = max(1, round(damage_dealt * skill.get('effect_value', 0)))
             caster['current_hp'] = max(0, caster['current_hp'] - recoil_damage)
             battle_logs.append(f"💥 **{caster['name']}**은(는) 반동으로 **{recoil_damage}**의 데미지를 입었다!")
+
+    # [추가] 길동무 효과 발동 체크
+    if target['current_hp'] <= 0:
+        destiny_bond_effect = next((e for e in target['effects'] if e.get('type') == 'DESTINY_BOND'), None)
+        if destiny_bond_effect:
+            caster['current_hp'] = 0
+            battle_logs.append(f"🔗 **{target['name']}**의 길동무 효과가 발동하여 **{caster['name']}**도 함께 쓰러졌다!")
+            target['effects'].remove(destiny_bond_effect)
 
     caster, end_of_turn_logs = _process_turn_end_effects(caster)
     battle_logs.extend(end_of_turn_logs)
