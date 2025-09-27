@@ -259,9 +259,13 @@ class SellFishView(ShopViewBase):
                 price = int(base_value + (fish['size'] * loot_info.get('size_multiplier', 0)))
                 self.fish_data_map[fish_id] = {'price': price, 'name': fish['name']}
                 options.append(discord.SelectOption(label=f"{fish['name']} ({fish['size']}cm)", value=fish_id, description=f"{price}{self.currency_icon}", emoji=coerce_item_emoji(loot_info.get('emoji'))))
+        
         if options:
-            select = ui.Select(placeholder="판매할 물고기를 선택하세요...", options=options, min_values=1, max_values=min(len(options), 25))
+            # ▼▼▼ [수정] options 리스트를 25개로 제한합니다. ▼▼▼
+            select = ui.Select(placeholder="판매할 물고기를 선택하세요...(최대 25종)", options=options[:25], min_values=1, max_values=min(len(options), 25))
+            # ▲▲▲ [수정] 완료 ▲▲▲
             select.callback = self.on_select; self.add_item(select)
+        
         sell_button = ui.Button(label="선택한 물고기 판매", style=discord.ButtonStyle.success, disabled=True, custom_id="sell_fish_confirm"); sell_button.callback = self.sell_fish; self.add_item(sell_button)
         back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey); back_button.callback = self.go_back; self.add_item(back_button)
     async def on_select(self, interaction: discord.Interaction):
@@ -309,8 +313,12 @@ class SellCropView(ShopViewBase):
                 item_data = item_db.get(name, {}); price = item_data.get('current_price', int(item_data.get('sell_price', item_data.get('price', 10) * 0.8))) 
                 self.crop_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
                 options.append(discord.SelectOption(label=f"{name} (보유: {qty}개)", value=name, description=f"개당: {price}{self.currency_icon}", emoji=item_data.get('emoji')))
+        
         if options:
-            select = ui.Select(placeholder="판매할 작물을 선택하세요...", options=options); select.callback = self.on_select; self.add_item(select)
+            # ▼▼▼ [수정] options 리스트를 25개로 제한합니다. ▼▼▼
+            select = ui.Select(placeholder="판매할 작물을 선택하세요...(최대 25종)", options=options[:25]); select.callback = self.on_select; self.add_item(select)
+            # ▲▲▲ [수정] 완료 ▲▲▲
+        
         back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=1); back_button.callback = self.go_back; self.add_item(back_button)
     async def on_select(self, interaction: discord.Interaction):
         selected_crop = interaction.data['values'][0]; crop_info = self.crop_data_map.get(selected_crop)
@@ -354,8 +362,12 @@ class SellMineralView(ShopViewBase):
                 item_data = item_db.get(name, {}); price = item_data.get('current_price', item_data.get('sell_price', 0))
                 self.mineral_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
                 options.append(discord.SelectOption(label=f"{name} (보유: {qty}개)", value=name, description=f"개당: {price}{self.currency_icon}", emoji=item_data.get('emoji', '💎')))
+        
         if options:
-            select = ui.Select(placeholder="판매할 광물을 선택하세요...", options=options); select.callback = self.on_select; self.add_item(select)
+            # ▼▼▼ [수정] options 리스트를 25개로 제한합니다. ▼▼▼
+            select = ui.Select(placeholder="판매할 광물을 선택하세요...(최대 25종)", options=options[:25]); select.callback = self.on_select; self.add_item(select)
+            # ▲▲▲ [수정] 완료 ▲▲▲
+        
         back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=1); back_button.callback = self.go_back; self.add_item(back_button)
     async def on_select(self, interaction: discord.Interaction):
         selected_mineral = interaction.data['values'][0]; mineral_info = self.mineral_data_map.get(selected_mineral)
@@ -399,8 +411,12 @@ class SellCookingView(ShopViewBase):
                 item_data = item_db.get(name, {}); price = item_data.get('current_price', item_data.get('sell_price', 0)) 
                 self.cooking_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
                 options.append(discord.SelectOption(label=f"{name} (보유: {qty}개)", value=name, description=f"개당: {price}{self.currency_icon}", emoji=item_data.get('emoji', '🍲')))
+        
         if options:
-            select = ui.Select(placeholder="판매할 음식을 선택하세요...", options=options); select.callback = self.on_select; self.add_item(select)
+            # ▼▼▼ [수정] options 리스트를 25개로 제한합니다. ▼▼▼
+            select = ui.Select(placeholder="판매할 음식을 선택하세요...(최대 25종)", options=options[:25]); select.callback = self.on_select; self.add_item(select)
+            # ▲▲▲ [수정] 완료 ▲▲▲
+        
         back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=1); back_button.callback = self.go_back; self.add_item(back_button)
     async def on_select(self, interaction: discord.Interaction):
         selected_cooking = interaction.data['values'][0]; cooking_info = self.cooking_data_map.get(selected_cooking)
@@ -443,8 +459,12 @@ class SellLootView(ShopViewBase):
                 item_data = item_db.get(name, {}); price = item_data.get('sell_price', 0)
                 self.loot_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
                 options.append(discord.SelectOption(label=f"{name} (보유: {qty}개)", value=name, description=f"개당: {price}{self.currency_icon}", emoji=item_data.get('emoji', '🏆')))
+        
         if options:
-            select = ui.Select(placeholder="판매할 전리품을 선택하세요...", options=options); select.callback = self.on_select; self.add_item(select)
+            # ▼▼▼ [수정] options 리스트를 25개로 제한합니다. ▼▼▼
+            select = ui.Select(placeholder="판매할 전리품을 선택하세요...(최대 25종)", options=options[:25]); select.callback = self.on_select; self.add_item(select)
+            # ▲▲▲ [수정] 완료 ▲▲▲
+        
         back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=1); back_button.callback = self.go_back; self.add_item(back_button)
     async def on_select(self, interaction: discord.Interaction):
         selected_loot = interaction.data['values'][0]; loot_info = self.loot_data_map.get(selected_loot)
