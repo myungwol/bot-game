@@ -158,30 +158,66 @@ class DungeonGameView(ui.View):
         image_url = f"{self.storage_base_url}/{element}_{dungeon_info['image_suffix']}.png"
         return {"name": f"Lv.{monster_level} {dungeon_info['name'].replace('던전', '')} {base_monster['name']}", "hp": hp, "attack": attack, "defense": defense, "speed": speed, "xp": xp, "element": element, "image_url": image_url}
 
+    # ▼▼▼ [교체] build_embed 메서드 전체를 아래 코드로 교체해주세요 ▼▼▼
     def build_embed(self) -> discord.Embed:
         dungeon_info = self.cog.dungeon_data[self.dungeon_tier]
         embed = discord.Embed(title=f"탐험 중... - {dungeon_info['name']}", color=0x71368A)
         description_content = ""
-        pet_stats = (f"❤️ **체력**: {self.pet_current_hp} / {self.final_pet_stats['hp']}\n"
-                     f"⚔️ **공격력**: {self.final_pet_stats['attack']}\n"
-                     f"🛡️ **방어력**: {self.final_pet_stats['defense']}\n"
-                     f"💨 **스피드**: {self.final_pet_stats['speed']}")
-        embed.add_field(name=f"🐾 {self.pet_data_raw['nickname']}", value=pet_stats, inline=False)
+
+        # --- 펫 스탯 표시 로직 (수정됨) ---
+        pet_base_stats = self.final_pet_stats
+        
+        # 현재 효과를 적용한 최종 스탯 계산
+        pet_final_attack = self._get_stat_with_effects(pet_base_stats['attack'], 'ATK', self.pet_effects)
+        pet_final_defense = self._get_stat_with_effects(pet_base_stats['defense'], 'DEF', self.pet_effects)
+        pet_final_speed = self._get_stat_with_effects(pet_base_stats['speed'], 'SPD', self.pet_effects)
+        
+        # 스탯 변동량에 따라 색상과 화살표 추가하는 함수
+        def get_stat_change_indicator(base_stat, final_stat):
+            if final_stat > base_stat:
+                return f"🔺 (+{final_stat - base_stat})"
+            elif final_stat < base_stat:
+                return f"🔻 ({final_stat - base_stat})"
+            return ""
+
+        pet_attack_str = f"{pet_final_attack} {get_stat_change_indicator(pet_base_stats['attack'], pet_final_attack)}"
+        pet_defense_str = f"{pet_final_defense} {get_stat_change_indicator(pet_base_stats['defense'], pet_final_defense)}"
+        pet_speed_str = f"{pet_final_speed} {get_stat_change_indicator(pet_base_stats['speed'], pet_final_speed)}"
+
+        pet_stats_text = (f"❤️ **체력**: {self.pet_current_hp} / {pet_base_stats['hp']}\n"
+                          f"⚔️ **공격력**: {pet_attack_str}\n"
+                          f"🛡️ **방어력**: {pet_defense_str}\n"
+                          f"💨 **스피드**: {pet_speed_str}")
+        
+        embed.add_field(name=f"🐾 {self.pet_data_raw['nickname']}", value=pet_stats_text, inline=False)
+        
         if self.pet_is_defeated:
             description_content = "☠️ 펫이 쓰러졌습니다! '아이템'을 사용해 '치료제'로 회복시키거나 던전을 나가야 합니다."
         elif self.state == "exploring":
             description_content = "깊은 곳으로 나아가 몬스터를 찾아보자."
         elif self.state == "in_battle" and self.current_monster:
-            # ▼▼▼ [수정] 턴 정보 표시 추가 ▼▼▼
             turn_indicator = ">>> **💥 당신의 턴입니다! 💥**" if self.is_pet_turn else "⏳ 상대의 턴을 기다리는 중..."
             embed.title = f"전투 중! - {self.current_monster['name']}"
             embed.description = turn_indicator
             embed.set_image(url=self.current_monster['image_url'])
-            monster_stats = (f"❤️ **체력**: {self.monster_current_hp} / {self.current_monster['hp']}\n"
-                             f"⚔️ **공격력**: {self.current_monster['attack']}\n"
-                             f"🛡️ **방어력**: {self.current_monster['defense']}\n"
-                             f"💨 **스피드**: {self.current_monster['speed']}")
-            embed.add_field(name=f"몬스터: {self.current_monster['name']}", value=monster_stats, inline=False)
+
+            # --- 몬스터 스탯 표시 로직 (수정됨) ---
+            monster_base_stats = self.current_monster
+            monster_final_attack = self._get_stat_with_effects(monster_base_stats['attack'], 'ATK', self.monster_effects)
+            monster_final_defense = self._get_stat_with_effects(monster_base_stats['defense'], 'DEF', self.monster_effects)
+            monster_final_speed = self._get_stat_with_effects(monster_base_stats['speed'], 'SPD', self.monster_effects)
+            
+            monster_attack_str = f"{monster_final_attack} {get_stat_change_indicator(monster_base_stats['attack'], monster_final_attack)}"
+            monster_defense_str = f"{monster_final_defense} {get_stat_change_indicator(monster_base_stats['defense'], monster_final_defense)}"
+            monster_speed_str = f"{monster_final_speed} {get_stat_change_indicator(monster_base_stats['speed'], monster_final_speed)}"
+            
+            monster_stats_text = (f"❤️ **체력**: {self.monster_current_hp} / {monster_base_stats['hp']}\n"
+                                f"⚔️ **공격력**: {monster_attack_str}\n"
+                                f"🛡️ **방어력**: {monster_defense_str}\n"
+                                f"💨 **스피드**: {monster_speed_str}")
+                                
+            embed.add_field(name=f"몬스터: {self.current_monster['name']}", value=monster_stats_text, inline=False)
+            
             if self.battle_log:
                 embed.add_field(name="⚔️ 전투 기록", value="\u200b", inline=False)
                 for log_entry in self.battle_log[-3:]:
@@ -204,12 +240,10 @@ class DungeonGameView(ui.View):
             rewards_str = "\n".join([f"> {item}: {qty}개" for item, qty in self.rewards.items()])
             embed.add_field(name="--- 현재까지 획득한 보상 ---", value=rewards_str, inline=False)
         
-        # description_content가 embed.description을 덮어쓰지 않도록 수정
         if description_content:
             embed.description = description_content
 
         closing_time_text = f"\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n던전은 {discord.utils.format_dt(self.end_time, 'R')}에 닫힙니다."
-        # description이 이미 설정된 경우, 텍스트를 추가합니다.
         if embed.description:
             embed.description += closing_time_text
         else:
@@ -361,7 +395,10 @@ class DungeonGameView(ui.View):
             
         # 흡혈 (자신에게 적용)
         elif effect_type in ['DRAIN', 'LEECH']:
-            drain_amount = round(damage_dealt * value)
+            # ▼▼▼ [수정] 아래 value를 직접 0.5로 설정합니다. ▼▼▼
+            # drain_amount = round(damage_dealt * value) 
+            drain_amount = round(damage_dealt * 0.5) # '영혼 흡수'는 무조건 50% 회복
+            # ▲▲▲ [수정] 완료 ▲▲▲
             self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + drain_amount)
             log_value = f"> **{target_name}**에게서 체력을 **{drain_amount}** 흡수했다!"
         
