@@ -351,54 +351,26 @@ class DungeonGameView(ui.View):
             self.pet_is_defeated = True
 
     def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
-        """버프/디버프 효과가 적용된 최종 스탯을 계산합니다. (디버깅 로그 레벨: WARNING)"""
-        
-        # --- 로깅 시작 (WARNING 레벨로 변경) ---
-        logger.warning("="*50)
-        logger.warning(f"[DEBUG] _get_stat_with_effects 호출됨")
-        logger.warning(f"  - 입력값 base_stat: {base_stat}")
-        logger.warning(f"  - 입력값 stat_key: '{stat_key}'")
-        logger.warning(f"  - 입력값 effects: {effects}")
-        # --- 로깅 끝 ---
-
+        """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
         multiplier = 1.0
         
-        for effect in effects:
-            # --- 로깅 시작 (WARNING 레벨로 변경) ---
-            logger.warning(f"  -> 루프 시작: 현재 effect = {effect}")
-            # --- 로깅 끝 ---
-
-            pure_stat_key = effect['type'].replace('_BUFF', '').replace('_DEBUFF', '')
-            
-            # --- 로깅 시작 (WARNING 레벨로 변경) ---
-            logger.warning(f"     - pure_stat_key: '{pure_stat_key}'")
-            logger.warning(f"     - 조건 비교: '{pure_stat_key}' == '{stat_key}' ?  -> {pure_stat_key == stat_key}")
-            # --- 로깅 끝 ---
-
-            if pure_stat_key == stat_key:
-                old_multiplier = multiplier
-                if 'BUFF' in effect['type']:
-                    multiplier += effect['value']
-                    # --- 로깅 시작 (WARNING 레벨로 변경) ---
-                    logger.warning(f"       - BUFF 감지! multiplier 변경: {old_multiplier} -> {multiplier}")
-                    # --- 로깅 끝 ---
-                elif 'DEBUFF' in effect['type']:
-                    multiplier -= effect['value']
-                    # --- 로깅 시작 (WARNING 레벨로 변경) ---
-                    logger.warning(f"       - DEBUFF 감지! multiplier 변경: {old_multiplier} -> {multiplier}")
-                    # --- 로깅 끝 ---
-
-        raw_final_stat = base_stat * multiplier
-        final_stat = max(1, round(raw_final_stat))
+        # stat_key는 'ATK', 'DEF', 'SPD' 등으로 들어옵니다.
+        # effect['type']은 'ATK_BUFF', 'ATK_DEBUFF' 등으로 들어옵니다.
         
-        # --- 로깅 시작 (WARNING 레벨로 변경) ---
-        logger.warning(f"  - 최종 계산 전 multiplier: {multiplier}")
-        logger.warning(f"  - 최종 계산 (raw): {base_stat} * {multiplier} = {raw_final_stat}")
-        logger.warning(f"  - 최종 반환값 (final): {final_stat}")
-        logger.warning("="*50)
-        # --- 로깅 끝 ---
+        # effect 리스트를 순회하며 현재 계산하려는 스탯(stat_key)과 관련된 효과를 찾습니다.
+        for effect in effects:
+            # 1. 버프 효과 확인 (정확한 문자열 일치)
+            # 예: stat_key가 'ATK'일 때, effect['type']이 'ATK_BUFF'와 같은지 확인
+            if effect['type'] == f"{stat_key}_BUFF":
+                multiplier += effect['value']
+                
+            # 2. 디버프 효과 확인 (정확한 문자열 일치)
+            # 예: stat_key가 'ATK'일 때, effect['type']이 'ATK_DEBUFF'와 같은지 확인
+            elif effect['type'] == f"{stat_key}_DEBUFF":
+                multiplier -= effect['value']
 
-        return final_stat
+        # 최종 스탯 계산
+        return max(1, round(base_stat * multiplier))
         
     # ▼▼▼ [최종 수정] 아래 _apply_skill_effect 메서드 전체를 교체해주세요 ▼▼▼
     def _apply_skill_effect(self, skill_data: Dict, caster_effects: List[Dict], target_effects: List[Dict], caster_name: str, target_name: str, caster_max_hp: int = 0, damage_dealt: int = 0):
