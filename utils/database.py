@@ -415,3 +415,21 @@ async def get_farm_owner_by_thread(thread_id: int) -> Optional[int]:
 async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
     response = await supabase.table('farm_item_details').select('*').eq('item_name', item_name).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
+    
+@supabase_retry_handler()
+async def get_inventories_for_users(user_ids: List[int]) -> Dict[int, Dict[str, int]]:
+    """여러 유저 ID를 받아, 각 유저의 인벤토리를 한 번의 쿼리로 가져옵니다."""
+    if not user_ids:
+        return {}
+    
+    # 중복 제거 및 문자열로 변환
+    user_id_strs = list(set(map(str, user_ids)))
+    
+    response = await supabase.table('inventories').select('user_id, item_name, quantity').in_('user_id', user_id_strs).gt('quantity', 0).execute()
+    
+    inventories = defaultdict(dict)
+    if response and response.data:
+        for item in response.data:
+            inventories[int(item['user_id'])][item['item_name']] = item['quantity']
+    
+    return dict(inventories)
