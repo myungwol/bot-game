@@ -70,7 +70,7 @@ async def delete_message_after(message: discord.InteractionMessage, delay: int):
 
 class SkillAcquisitionView(ui.View):
     def __init__(self, cog: 'PetSystem', user_id: int, pet_data: Dict, unlocked_skill: Dict):
-        super().__init__(timeout=86400) # 24시간 동안 유효
+        super().__init__(timeout=86400)
         self.cog = cog
         self.user_id = user_id
         self.pet_data = pet_data
@@ -219,17 +219,21 @@ class SkillChangeView(ui.View):
         self.add_item(confirm_button)
 
     async def on_slot_select(self, interaction: discord.Interaction):
+        # ▼▼▼ [수정] Unknown Interaction 에러를 방지하기 위해 defer()를 먼저 호출합니다. ▼▼▼
+        await interaction.response.defer()
         self.selected_slot = int(interaction.data['values'][0])
         self.update_components()
-        await interaction.response.edit_message(view=self)
+        await interaction.edit_original_response(view=self)
 
     async def on_new_skill_select(self, interaction: discord.Interaction):
+        # ▼▼▼ [수정] Unknown Interaction 에러를 방지하고 플레이스홀더 로직을 처리합니다. ▼▼▼
+        await interaction.response.defer()
         if interaction.data['values'][0] == "no_skills_available":
-            return await interaction.response.defer()
-            
+            return # 플레이스홀더가 선택되면 아무 작업도 하지 않고 종료
+
         self.selected_new_skill_id = int(interaction.data['values'][0])
         self.update_components()
-        await interaction.response.edit_message(view=self)
+        await interaction.edit_original_response(view=self)
 
     async def on_confirm(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -885,17 +889,13 @@ class PetSystem(commands.Cog):
             'natural_bonus_speed': natural_bonus_stats['speed']
         }).eq('id', pet_data['id']).execute()
         
-        # ▼▼▼ [핵심 수정] 부화 직후 기본 스킬을 부여합니다. ▼▼▼
-        # '들이받기' 스킬의 ID는 1입니다. 1번 슬롯에 부여합니다.
         await set_pet_skill(pet_data['id'], 1, 1)
-        # ▲▲▲ [수정] 완료 ▲▲▲
         
         updated_pet_data = updated_pet_data_res.data[0]
         updated_pet_data['pet_species'] = species_info
         thread = self.bot.get_channel(pet_data['thread_id'])
         if thread:
             try:
-                # 최신 펫 정보를 다시 불러와서 UI를 업데이트합니다 (방금 배운 스킬 포함)
                 final_pet_data = await get_user_pet(user_id)
                 if not final_pet_data: return
 
