@@ -351,55 +351,55 @@ class DungeonGameView(ui.View):
             self.pet_is_defeated = True
 
     def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
-        """버프/디버프 효과가 적용된 최종 스탯을 계산합니다. (디버깅 로그 포함)"""
+        """버프/디버프 효과가 적용된 최종 스탯을 계산합니다. (디버깅 로그 레벨: WARNING)"""
         
-        # --- 로깅 시작 ---
-        logger.info("="*50)
-        logger.info(f"[DEBUG] _get_stat_with_effects 호출됨")
-        logger.info(f"  - 입력값 base_stat: {base_stat}")
-        logger.info(f"  - 입력값 stat_key: '{stat_key}'")
-        logger.info(f"  - 입력값 effects: {effects}")
+        # --- 로깅 시작 (WARNING 레벨로 변경) ---
+        logger.warning("="*50)
+        logger.warning(f"[DEBUG] _get_stat_with_effects 호출됨")
+        logger.warning(f"  - 입력값 base_stat: {base_stat}")
+        logger.warning(f"  - 입력값 stat_key: '{stat_key}'")
+        logger.warning(f"  - 입력값 effects: {effects}")
         # --- 로깅 끝 ---
 
         multiplier = 1.0
         
         for effect in effects:
-            # --- 로깅 시작 ---
-            logger.info(f"  -> 루프 시작: 현재 effect = {effect}")
+            # --- 로깅 시작 (WARNING 레벨로 변경) ---
+            logger.warning(f"  -> 루프 시작: 현재 effect = {effect}")
             # --- 로깅 끝 ---
 
             pure_stat_key = effect['type'].replace('_BUFF', '').replace('_DEBUFF', '')
             
-            # --- 로깅 시작 ---
-            logger.info(f"     - pure_stat_key: '{pure_stat_key}'")
-            logger.info(f"     - 조건 비교: '{pure_stat_key}' == '{stat_key}' ?  -> {pure_stat_key == stat_key}")
+            # --- 로깅 시작 (WARNING 레벨로 변경) ---
+            logger.warning(f"     - pure_stat_key: '{pure_stat_key}'")
+            logger.warning(f"     - 조건 비교: '{pure_stat_key}' == '{stat_key}' ?  -> {pure_stat_key == stat_key}")
             # --- 로깅 끝 ---
 
             if pure_stat_key == stat_key:
                 old_multiplier = multiplier
                 if 'BUFF' in effect['type']:
                     multiplier += effect['value']
-                    # --- 로깅 시작 ---
-                    logger.info(f"       - BUFF 감지! multiplier 변경: {old_multiplier} -> {multiplier}")
+                    # --- 로깅 시작 (WARNING 레벨로 변경) ---
+                    logger.warning(f"       - BUFF 감지! multiplier 변경: {old_multiplier} -> {multiplier}")
                     # --- 로깅 끝 ---
                 elif 'DEBUFF' in effect['type']:
                     multiplier -= effect['value']
-                    # --- 로깅 시작 ---
-                    logger.info(f"       - DEBUFF 감지! multiplier 변경: {old_multiplier} -> {multiplier}")
+                    # --- 로깅 시작 (WARNING 레벨로 변경) ---
+                    logger.warning(f"       - DEBUFF 감지! multiplier 변경: {old_multiplier} -> {multiplier}")
                     # --- 로깅 끝 ---
 
         raw_final_stat = base_stat * multiplier
         final_stat = max(1, round(raw_final_stat))
         
-        # --- 로깅 시작 ---
-        logger.info(f"  - 최종 계산 전 multiplier: {multiplier}")
-        logger.info(f"  - 최종 계산 (raw): {base_stat} * {multiplier} = {raw_final_stat}")
-        logger.info(f"  - 최종 반환값 (final): {final_stat}")
-        logger.info("="*50)
+        # --- 로깅 시작 (WARNING 레벨로 변경) ---
+        logger.warning(f"  - 최종 계산 전 multiplier: {multiplier}")
+        logger.warning(f"  - 최종 계산 (raw): {base_stat} * {multiplier} = {raw_final_stat}")
+        logger.warning(f"  - 최종 반환값 (final): {final_stat}")
+        logger.warning("="*50)
         # --- 로깅 끝 ---
 
         return final_stat
-
+        
     # ▼▼▼ [최종 수정] 아래 _apply_skill_effect 메서드 전체를 교체해주세요 ▼▼▼
     def _apply_skill_effect(self, skill_data: Dict, caster_effects: List[Dict], target_effects: List[Dict], caster_name: str, target_name: str, caster_max_hp: int = 0, damage_dealt: int = 0):
         """스킬의 특수 효과를 적용하고 배틀 로그를 추가합니다."""
