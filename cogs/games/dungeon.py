@@ -78,17 +78,17 @@ class SkillSelectView(ui.View):
         self.add_item(skill_select)
 
     async def on_skill_select(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        # [수정] 이 상호작용에 대한 직접적인 응답(defer)을 제거합니다.
+        # 모든 응답은 메인 View(DungeonGameView)에서 처리하도록 위임합니다.
+        
+        # 선택된 스킬 정보 찾기
         skill_id = int(interaction.data['values'][0])
         skill_data = next((s['pet_skills'] for s in self.learned_skills if s['pet_skills']['id'] == skill_id), None)
         
         if skill_data:
-            await self.main_view.handle_skill_use(skill_data)
-        
-        try:
-            await interaction.delete_original_response()
-        except discord.NotFound:
-            pass
+            # [수정] handle_skill_use에 interaction 객체를 전달하여 응답을 위임합니다.
+            # 또한, 임시 메시지였던 스킬 선택창을 삭제하도록 요청합니다.
+            await self.main_view.handle_skill_use(skill_data, interaction)
         
         self.stop()
 
@@ -532,21 +532,48 @@ class DungeonGameView(ui.View):
             
         self.is_pet_turn = True; await self.refresh_ui()
     
-    async def handle_skill_use(self, skill_data: Dict):
-        if self.state != "in_battle" or not self.current_monster or not self.is_pet_turn: return
+    async def handle_skill_use(self, skill_data: Dict, skill_interaction: discord.Interaction):
+        # [수정] 파라미터로 스킬 선택 상호작용(skill_interaction)을 받습니다.
 
-        self.is_pet_turn = False; self.battle_log = []
+        if self.state != "in_battle" or not self.current_monster or not self.is_pet_turn:
+            try:
+                # 만약의 경우를 대비해, 응답을 시도합니다.
+                if not skill_interaction.response.is_done():
+                    await skill_interaction.response.defer()
+            except discord.NotFound:
+                pass
+            return
+
+        # 턴 시작 시 버튼 비활성화를 위해 is_pet_turn을 False로 설정
+        self.is_pet_turn = False
+        self.battle_log = []
+        
+        # [수정] 메인 UI를 업데이트하기 전에, 먼저 스킬 선택창(임시 메시지)을 삭제합니다.
+        try:
+            await skill_interaction.delete_original_response()
+        except discord.NotFound:
+            logger.warning(f"SkillSelectView 메시지 삭제 시도 중 찾지 못함 (User: {self.user.id})")
+
+        # 이제 메인 UI(던전)를 업데이트합니다.
         await self.refresh_ui()
 
+        # 펫의 턴 실행
         await self._execute_pet_turn(skill_data)
-        if self.monster_current_hp <= 0: return await self.handle_battle_win()
+        if self.monster_current_hp <= 0:
+            return await self.handle_battle_win()
         
-        await self.refresh_ui(); await asyncio.sleep(1.5)
+        # 펫 공격 후 잠시 딜레이
+        await self.refresh_ui()
+        await asyncio.sleep(1.5)
 
+        # 몬스터의 반격
         await self._execute_monster_turn()
-        if self.pet_current_hp <= 0: return await self.handle_battle_lose()
+        if self.pet_current_hp <= 0:
+            return await self.handle_battle_lose()
 
-        self.is_pet_turn = True; await self.refresh_ui()
+        # 모든 행동이 끝나고 다시 플레이어의 턴으로 변경
+        self.is_pet_turn = True
+        await self.refresh_ui()
     
     # [수정 1-3] handle_battle_win, handle_battle_lose, handle_flee 함수에 DB 업데이트 로직을 추가합니다.
     async def handle_battle_win(self):
