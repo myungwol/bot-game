@@ -350,26 +350,29 @@ class DungeonGameView(ui.View):
         if self.pet_current_hp <= 0: # 지속 데미지로 쓰러질 경우
             self.pet_is_defeated = True
 
+    # ▼▼▼ [최종 수정] _get_stat_with_effects 메서드도 함께 교체해주세요 ▼▼▼
     def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
         """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
         multiplier = 1.0
-        
-        # stat_key는 'ATK', 'DEF', 'SPD' 등으로 들어옵니다.
-        # effect['type']은 'ATK_BUFF', 'ATK_DEBUFF' 등으로 들어옵니다.
-        
-        # effect 리스트를 순회하며 현재 계산하려는 스탯(stat_key)과 관련된 효과를 찾습니다.
         for effect in effects:
-            # 1. 버프 효과 확인 (정확한 문자열 일치)
-            # 예: stat_key가 'ATK'일 때, effect['type']이 'ATK_BUFF'와 같은지 확인
-            if effect['type'] == f"{stat_key}_BUFF":
-                multiplier += effect['value']
-                
-            # 2. 디버프 효과 확인 (정확한 문자열 일치)
-            # 예: stat_key가 'ATK'일 때, effect['type']이 'ATK_DEBUFF'와 같은지 확인
-            elif effect['type'] == f"{stat_key}_DEBUFF":
-                multiplier -= effect['value']
+            # effect['type'] 예시: 'ATK_BUFF', 'ATK_DEBUFF'
+            # stat_key 예시: 'attack'
+            # effect_type이 stat_key의 대문자 버전으로 시작하는지 확인 (예: 'ATK_BUFF'.startswith('ATTACK'))
+            if effect['type'].startswith(stat_key.upper()):
+                if 'BUFF' in effect['type']:
+                    multiplier += effect['value']
+                elif 'DEBUFF' in effect['type']:
+                    multiplier -= effect['value']
+        
+        # base_stat이 스탯 딕셔너리의 'attack' 키로 들어올 것을 대비하여, stat_key도 대문자화
+        final_stat_key = stat_key.upper()
+        for effect in effects:
+            if effect['type'].startswith(final_stat_key):
+                if 'BUFF' in effect['type']:
+                    multiplier += effect['value']
+                elif 'DEBUFF' in effect['type']:
+                    multiplier -= effect['value']
 
-        # 최종 스탯 계산
         return max(1, round(base_stat * multiplier))
         
     # ▼▼▼ [최종 수정] 아래 _apply_skill_effect 메서드 전체를 교체해주세요 ▼▼▼
@@ -767,6 +770,7 @@ class Dungeon(commands.Cog):
             logger.info(f"[Dungeon] 총 {reloaded_count}개의 던전 게임 UI를 성공적으로 다시 로드했습니다.")
         except Exception as e:
             logger.error(f"활성 던전 UI 로드 중 오류 발생: {e}", exc_info=True)
+
 
     @tasks.loop(minutes=5)
     async def check_expired_dungeons(self):
