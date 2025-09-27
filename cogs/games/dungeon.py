@@ -294,30 +294,34 @@ class DungeonGameView(ui.View):
         log_value = ""
         # 버프 (자신에게 적용)
         if 'BUFF' in effect_type:
+            # ATK_BUFF, DEF_BUFF, SPD_BUFF, EVA_BUFF 등
             caster_effects.append({'type': effect_type, 'value': value, 'duration': duration})
             stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "EVA": "회피율"}.get(effect_type.split('_')[0], "능력")
             log_value = f"> **{caster_name}**의 **{stat_name}**이(가) 상승했다!"
         
         # 디버프 (상대에게 적용)
         elif 'DEBUFF' in effect_type:
+            # ATK_DEBUFF, DEF_DEBUFF, SPD_DEBUFF, ACC_DEBUFF 등
+            # [수정] caster_effects -> target_effects 로 변경
             target_effects.append({'type': effect_type, 'value': value, 'duration': duration})
             stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "ACC": "명중률"}.get(effect_type.split('_')[0], "능력")
             log_value = f"> **{target_name}**의 **{stat_name}**이(가) 하락했다!"
         
-        # HP 회복
+        # HP 회복 (자신에게 적용)
         elif effect_type == 'HEAL_PERCENT':
             heal_amount = round(caster_max_hp * value)
             self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + heal_amount)
             log_value = f"> **{caster_name}**이(가) 체력을 **{heal_amount}** 회복했다!"
             
-        # 흡혈
+        # 흡혈 (자신에게 적용)
         elif effect_type in ['DRAIN', 'LEECH']:
             drain_amount = round(damage_dealt * value)
             self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + drain_amount)
             log_value = f"> **{target_name}**에게서 체력을 **{drain_amount}** 흡수했다!"
         
-        # 지속 데미지 (화상 등)
+        # 지속 데미지 (상대에게 적용)
         elif effect_type == 'BURN':
+             # [수정] caster_effects -> target_effects 로 변경
             target_effects.append({'type': effect_type, 'value': value, 'duration': duration})
             log_value = f"> **{target_name}**은(는) 화상을 입었다!"
 
