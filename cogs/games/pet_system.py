@@ -18,7 +18,9 @@ from utils.database import (
     save_panel_id, get_panel_id, get_embed_from_db, set_cooldown, get_cooldown,
     save_config_to_db, delete_config_from_db, get_id, get_user_pet,
     get_learnable_skills, set_pet_skill, get_wallet, update_wallet,
-    get_skills_unlocked_at_level
+    get_skills_unlocked_at_level,
+    # [수정] 레벨업 시 정확한 스킬을 조회하기 위한 함수를 import 목록에 추가합니다.
+    get_skills_unlocked_at_exact_level
 )
 from utils.helpers import format_embed_from_db
 
@@ -67,7 +69,6 @@ async def delete_message_after(message: discord.InteractionMessage, delay: int):
     except (discord.NotFound, discord.Forbidden):
         pass
 
-# [신규] 새로운 스킬을 제안하는 전용 View
 class SkillAcquisitionView(ui.View):
     def __init__(self, cog: 'PetSystem', user_id: int, pet_data: Dict, unlocked_skill: Dict):
         super().__init__(timeout=86400) # 24시간 동안 유효
@@ -239,7 +240,6 @@ class SkillChangeView(ui.View):
             await update_wallet(interaction.user, 1000)
             await interaction.edit_original_response(content="❌ 스킬 설정에 실패했습니다. 코인이 환불되었습니다.", view=None)
 
-# ... (StatAllocationView, PetNicknameModal, ConfirmReleaseView, PetUIView, EggSelectView, IncubatorPanelView 클래스는 이전과 동일하므로 생략하지 않고 모두 포함) ...
 class StatAllocationView(ui.View):
     def __init__(self, parent_view: 'PetUIView', message: discord.Message):
         super().__init__(timeout=180)
@@ -545,7 +545,6 @@ class IncubatorPanelView(ui.View):
             await interaction.response.send_message("❌ 이미 펫을 소유하고 있습니다. 펫은 한 마리만 키울 수 있습니다.", ephemeral=True, delete_after=5)
             return
         await interaction.response.defer(ephemeral=True, thinking=False)
-        # [수정] self 대신 self.cog를 전달하여 PetSystem의 인스턴스를 넘겨줍니다.
         view = EggSelectView(interaction.user, self.cog)
         await view.start(interaction)
 
@@ -930,7 +929,6 @@ class PetSystem(commands.Cog):
             except Exception as e:
                 logger.error(f"펫 레벨 설정 요청 처리 중 오류: {e}", exc_info=True)
 
-    # [수정] 레벨업 시 스킬 습득 로직 변경
     async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded: int):
         pet_data = await get_user_pet(user_id)
         if not pet_data: return
@@ -956,8 +954,8 @@ class PetSystem(commands.Cog):
         pet_element = pet_data.get('pet_species', {}).get('element')
         if not pet_element: return
 
-        all_learnable_skills = await get_skills_unlocked_at_level(new_level, pet_element)
-        newly_unlocked_skills = [s for s in all_learnable_skills if s.get('unlock_level') == new_level]
+        # [수정] 비효율적인 조회 및 필터링 대신, 새 레벨에 맞는 스킬만 직접 조회하는 방식으로 변경합니다.
+        newly_unlocked_skills = await get_skills_unlocked_at_exact_level(new_level, pet_element)
 
         if newly_unlocked_skills:
             logger.info(f"{user.display_name}의 펫이 {new_level}레벨에 도달하여 {len(newly_unlocked_skills)}개의 스킬을 해금했습니다.")
