@@ -65,8 +65,12 @@ class DungeonGameView(ui.View):
         self.pet_current_hp: int = self.pet_data_raw.get('current_hp') or self.final_pet_stats['hp']
         self.pet_is_defeated: bool = self.pet_current_hp <= 0
         
-        # ▼▼▼ [수정] 턴 관리 변수 추가 ▼▼▼
         self.is_pet_turn: bool = True
+        
+        # ▼▼▼ [신규 추가] 펫과 몬스터의 효과(버프/디버프)를 추적하는 리스트 ▼▼▼
+        self.pet_effects: List[Dict] = []
+        self.monster_effects: List[Dict] = []
+        # ▲▲▲ [신규 추가] 완료 ▲▲▲
         
         self.current_monster: Optional[Dict] = None; self.monster_current_hp: int = 0
         self.storage_base_url = f"{os.environ.get('SUPABASE_URL')}/storage/v1/object/public/monster_images"
@@ -230,26 +234,135 @@ class DungeonGameView(ui.View):
             except discord.NotFound: self.stop()
 
     async def _execute_pet_turn(self, used_skill: Dict):
-        # ▼▼▼ [수정] 스킬 위력을 기반으로 데미지 계산 ▼▼▼
-        skill_power = used_skill.get('power', 30) # 기본 위력 30
-        damage = max(1, round(self.final_pet_stats['attack'] * (skill_power / 100)) - self.current_monster.get('defense', 0))
-        self.monster_current_hp = max(0, self.monster_current_hp - damage)
-        log_entry = {
-            "title": f"▶️ **{self.pet_data_raw['nickname']}**의 **{used_skill['skill_name']}**!",
-            "value": f"> **{self.current_monster['name']}**에게 **{damage}**의 데미지!"
-        }
-        self.battle_log.append(log_entry)
+        skill_power = used_skill.get('power', 0)
+        
+        # 1. 비공격 기술 처리 (버프, 디버프, 힐 등)
+        if skill_power == 0:
+            self._apply_skill_effect(used_skill, self.pet_effects, self.monster_effects, self.pet_data_raw['nickname'], self.current_monster['name'], self.final_pet_stats['hp'])
+        # 2. 공격 기술 처리
+        else:
+            # 2a. 효과를 적용한 최종 스탯 계산
+            final_attack = self._get_stat_with_effects(self.final_pet_stats['attack'], 'ATK', self.pet_effects)
+            final_defense = self._get_stat_with_effects(self.current_monster.get('defense', 0), 'DEF', self.monster_effects)
+            
+            # 2b. 데미지 계산 및 적용
+            damage = max(1, round(final_attack * (skill_power / 100)) - final_defense)
+            self.monster_current_hp = max(0, self.monster_current_hp - damage)
+            
+            self.battle_log.append({
+                "title": f"▶️ **{self.pet_data_raw['nickname']}**의 **{used_skill['skill_name']}**!",
+                "value": f"> **{self.current_monster['name']}**에게 **{damage}**의 데미지!"
+            })
+            
+            # 2c. 공격 후 발생하는 부가 효과 처리 (흡혈, 반동 데미지 등)
+            if used_skill.get('effect_type'):
+                self._apply_skill_effect(used_skill, self.pet_effects, self.monster_effects, self.pet_data_raw['nickname'], self.current_monster['name'], damage_dealt=damage)
+            
+            # 2d. 반동 데미지 처리
+            if used_skill.get('effect_type') == 'RECOIL':
+                recoil_damage = max(1, round(damage * used_skill.get('effect_value', 0)))
+                self.pet_current_hp = max(0, self.pet_current_hp - recoil_damage)
+                self.battle_log.append(f"💥 **{self.pet_data_raw['nickname']}**은(는) 반동으로 **{recoil_damage}**의 데미지를 입었다!")
 
-    # ... _execute_monster_turn 메서드는 변경 없음 ...
+        # 3. 펫의 턴 종료 시 지속 효과 처리
+        self._process_turn_end_effects(self.pet_effects, self.pet_data_raw['nickname'], is_pet=True)
+        if self.pet_current_hp <= 0: # 지속 데미지로 쓰러질 경우
+            self.pet_is_defeated = True
+
+    def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
+        """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
+        multiplier = 1.0
+        for effect in effects:
+            # ATK_BUFF, DEF_DEBUFF 등
+            if stat_key.upper() in effect['type']:
+                if 'BUFF' in effect['type']:
+                    multiplier += effect['value']
+                elif 'DEBUFF' in effect['type']:
+                    multiplier -= effect['value']
+        return max(1, round(base_stat * multiplier))
+
+    def _apply_skill_effect(self, skill_data: Dict, caster_effects: List[Dict], target_effects: List[Dict], caster_name: str, target_name: str, caster_max_hp: int = 0, damage_dealt: int = 0):
+        """스킬의 특수 효과를 적용하고 배틀 로그를 추가합니다."""
+        effect_type = skill_data.get('effect_type')
+        if not effect_type:
+            return
+
+        value = skill_data.get('effect_value', 0)
+        duration = skill_data.get('effect_duration', 0)
+        
+        log_value = ""
+        # 버프 (자신에게 적용)
+        if 'BUFF' in effect_type:
+            caster_effects.append({'type': effect_type, 'value': value, 'duration': duration})
+            stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "EVA": "회피율"}.get(effect_type.split('_')[0], "능력")
+            log_value = f"> **{caster_name}**의 **{stat_name}**이(가) 상승했다!"
+        
+        # 디버프 (상대에게 적용)
+        elif 'DEBUFF' in effect_type:
+            target_effects.append({'type': effect_type, 'value': value, 'duration': duration})
+            stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "ACC": "명중률"}.get(effect_type.split('_')[0], "능력")
+            log_value = f"> **{target_name}**의 **{stat_name}**이(가) 하락했다!"
+        
+        # HP 회복
+        elif effect_type == 'HEAL_PERCENT':
+            heal_amount = round(caster_max_hp * value)
+            self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + heal_amount)
+            log_value = f"> **{caster_name}**이(가) 체력을 **{heal_amount}** 회복했다!"
+            
+        # 흡혈
+        elif effect_type in ['DRAIN', 'LEECH']:
+            drain_amount = round(damage_dealt * value)
+            self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + drain_amount)
+            log_value = f"> **{target_name}**에게서 체력을 **{drain_amount}** 흡수했다!"
+        
+        # 지속 데미지 (화상 등)
+        elif effect_type == 'BURN':
+            target_effects.append({'type': effect_type, 'value': value, 'duration': duration})
+            log_value = f"> **{target_name}**은(는) 화상을 입었다!"
+
+        if log_value:
+            self.battle_log.append({"title": f"✨ 스킬 효과: {skill_data['skill_name']}", "value": log_value})
+
+    def _process_turn_end_effects(self, effects: List[Dict], target_name: str, is_pet: bool):
+        """턴 종료 시 지속 효과(데미지, 지속시간 감소)를 처리합니다."""
+        effects_to_remove = []
+        for effect in effects:
+            # 지속 데미지 효과
+            if effect['type'] == 'BURN':
+                dot_damage = max(1, round(effect['value']))
+                if is_pet:
+                    self.pet_current_hp = max(0, self.pet_current_hp - dot_damage)
+                else:
+                    self.monster_current_hp = max(0, self.monster_current_hp - dot_damage)
+                self.battle_log.append(f"🔥 **{target_name}**은(는) 화상 데미지로 **{dot_damage}**의 피해를 입었다!")
+
+            # 지속시간 감소 및 만료 처리
+            effect['duration'] -= 1
+            if effect['duration'] <= 0:
+                effects_to_remove.append(effect)
+                self.battle_log.append(f"💨 **{target_name}**에게 걸려있던 **{effect['type']}** 효과가 사라졌다.")
+        
+        for expired_effect in effects_to_remove:
+            effects.remove(expired_effect)
+    
     async def _execute_monster_turn(self):
-        damage = max(1, self.current_monster.get('attack', 1) - self.final_pet_stats['defense'])
+        # 1. 효과를 적용한 최종 스탯 계산
+        final_attack = self._get_stat_with_effects(self.current_monster.get('attack', 1), 'ATK', self.monster_effects)
+        final_defense = self._get_stat_with_effects(self.final_pet_stats['defense'], 'DEF', self.pet_effects)
+
+        # 2. 데미지 계산 및 적용
+        damage = max(1, final_attack - final_defense)
         self.pet_current_hp = max(0, self.pet_current_hp - damage)
+        
         await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
-        log_entry = {
+        
+        self.battle_log.append({
             "title": f"◀️ **{self.current_monster['name']}**의 공격!",
             "value": f"> **{self.pet_data_raw['nickname']}**에게 **{damage}**의 데미지!"
-        }
-        self.battle_log.append(log_entry)
+        })
+
+        # 3. 몬스터의 턴 종료 시 지속 효과 처리
+        self._process_turn_end_effects(self.monster_effects, self.current_monster['name'], is_pet=False)
         
     async def handle_explore(self, interaction: discord.Interaction):
         if self.pet_is_defeated: return await interaction.response.send_message("펫이 쓰러져서 탐색할 수 없습니다.", ephemeral=True, delete_after=5)
@@ -257,6 +370,11 @@ class DungeonGameView(ui.View):
         self.current_monster = self.generate_monster()
         self.monster_current_hp = self.current_monster['hp']
         self.battle_log = [f"**{self.current_monster['name']}** 이(가) 나타났다!"]
+        
+        # ▼▼▼ [신규 추가] 효과 리스트 초기화 ▼▼▼
+        self.pet_effects.clear()
+        self.monster_effects.clear()
+        # ▲▲▲ [신규 추가] 완료 ▲▲▲
         
         if self.final_pet_stats['speed'] >= self.current_monster.get('speed', 0):
             self.is_pet_turn = True
