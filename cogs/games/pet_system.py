@@ -19,7 +19,8 @@ from utils.database import (
     save_config_to_db, delete_config_from_db, get_id, get_user_pet,
     get_learnable_skills, set_pet_skill, get_wallet, update_wallet,
     get_skills_unlocked_at_level,
-    get_skills_unlocked_at_exact_level
+    get_skills_unlocked_at_exact_level,
+    get_inventories_for_users # 방금 추가한 함수 import
 )
 from utils.helpers import format_embed_from_db
 
@@ -68,6 +69,7 @@ async def delete_message_after(message: discord.WebhookMessage, delay: int):
     except (discord.NotFound, discord.Forbidden):
         pass
 
+# ... (SkillAcquisitionView, SkillChangeView, StatAllocationView, PetNicknameModal, ConfirmReleaseView, PetUIView, EggSelectView, IncubatorPanelView 클래스는 변경 없이 그대로 유지) ...
 class SkillAcquisitionView(ui.View):
     def __init__(self, cog: 'PetSystem', user_id: int, pet_data: Dict, unlocked_skill: Dict):
         super().__init__(timeout=86400)
@@ -323,7 +325,6 @@ class StatAllocationView(ui.View):
         return btn
 
     async def on_stat_button_click(self, interaction: discord.Interaction):
-        # ▼▼▼ [수정] Unknown Interaction 에러를 방지하기 위해 defer 및 edit_original_response 사용 ▼▼▼
         await interaction.response.defer()
         async with self.lock:
             _, stat, amount_str = interaction.data['custom_id'].split('_')
@@ -493,7 +494,6 @@ class PetUIView(ui.View):
                 except (discord.Forbidden, discord.HTTPException) as e:
                     logger.warning(f"펫 스레드 이름 변경 실패: {e}")
             await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
-            # ▼▼▼ [수정] delete_after를 지원하지 않는 followup.send에서 해당 인자 제거 및 별도 삭제 작업 생성 ▼▼▼
             msg = await interaction.followup.send(f"펫의 이름이 '{new_name}'(으)로 변경되었습니다.", ephemeral=True)
             self.cog.bot.loop.create_task(delete_message_after(msg, 5))
 
@@ -566,17 +566,24 @@ class IncubatorPanelView(ui.View):
         await view.start(interaction)
 
 class PetSystem(commands.Cog):
+    # ▼▼▼ [수정] __init__ 과 cog_load/unload 를 수정하여 에러를 해결합니다. ▼▼▼
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_views_loaded = False
+        # __init__ 에서는 태스크를 시작하지 않습니다.
+
+    async def cog_load(self):
+        # Cog가 로드될 때 태스크를 시작합니다.
         self.hatch_checker.start()
         self.hunger_and_stat_decay.start()
         self.auto_refresh_pet_uis.start()
 
     def cog_unload(self):
+        # Cog가 언로드될 때 태스크를 취소합니다.
         self.hatch_checker.cancel()
         self.hunger_and_stat_decay.cancel()
         self.auto_refresh_pet_uis.cancel()
+    # ▲▲▲ [수정] 완료 ▲▲▲
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -625,16 +632,12 @@ class PetSystem(commands.Cog):
                 return
 
             all_user_ids = [int(pet['user_id']) for pet in res.data]
-            
-            # [수정] 여러 유저의 인벤토리를 한 번의 DB 요청으로 미리 가져옵니다.
             inventories = await get_inventories_for_users(all_user_ids)
             
             reloaded_count = 0
             for pet_data in res.data:
                 user_id = int(pet_data['user_id'])
                 message_id = int(pet_data['message_id'])
-                
-                # [수정] DB를 다시 조회하는 대신, 미리 가져온 데이터에서 찾습니다.
                 user_inventory = inventories.get(user_id, {})
                 
                 cooldown_active = await self._is_play_on_cooldown(pet_data['id'])
