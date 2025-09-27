@@ -545,7 +545,8 @@ class IncubatorPanelView(ui.View):
             await interaction.response.send_message("❌ 이미 펫을 소유하고 있습니다. 펫은 한 마리만 키울 수 있습니다.", ephemeral=True, delete_after=5)
             return
         await interaction.response.defer(ephemeral=True, thinking=False)
-        view = EggSelectView(interaction.user, self)
+        # [수정] self 대신 self.cog를 전달하여 PetSystem의 인스턴스를 넘겨줍니다.
+        view = EggSelectView(interaction.user, self.cog)
         await view.start(interaction)
 
 class PetSystem(commands.Cog):
