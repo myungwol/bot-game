@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List, Any
 from collections import defaultdict
 from discord import app_commands
+from typing import Optional # Optional import 했는지 확인
 
 from utils.database import (
     get_inventory, update_inventory, supabase, get_id,
@@ -752,43 +753,45 @@ class Dungeon(commands.Cog):
             new_message = await channel.send(embed=embed, view=view)
             await save_panel_id(panel_name, new_message.id, channel.id)
             
-    # ▼▼▼ [수정] 이전에 추가했던 테스트용 명령어를 아래 코드로 교체합니다. ▼▼▼
+    async def skill_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+        res = await supabase.table('pet_skills').select('skill_name').ilike('skill_name', f'%{current}%').limit(25).execute()
+        if not (res and res.data):
+            return []
+        return [app_commands.Choice(name=row['skill_name'], value=row['skill_name']) for row in res.data]
+
     @app_commands.command(name="던전테스트", description="[관리자] 던전 전투 시스템을 테스트합니다.")
     @app_commands.describe(
         action="실행할 작업을 선택하세요.",
-        params="작업에 필요한 추가 정보입니다. (예: 스킬이름 슬롯번호)"
+        skill_name="[스킬부여] 부여할 스킬의 이름입니다.",
+        slot="[스킬부여] 스킬을 부여할 슬롯 번호입니다.",
+        element="[몬스터소환] 소환할 몬스터의 속성입니다.",
+        level="[몬스터소환] 소환할 몬스터의 레벨입니다."
     )
     @app_commands.choices(action=[
-        app_commands.Choice(name="스킬부여", value="스킬부여"),
-        app_commands.Choice(name="몬스터소환", value="몬스터소환"),
-        app_commands.Choice(name="효과확인", value="효과확인"),
+        app_commands.Choice(name="스킬 부여", value="스킬부여"),
+        app_commands.Choice(name="몬스터 소환", value="몬스터소환"),
+        app_commands.Choice(name="현재 효과 확인", value="효과확인"),
     ])
-    async def dungeon_test(self, interaction: discord.Interaction, action: str, params: Optional[str] = None):
-        """
-        던전 전투 시스템을 테스트하기 위한 관리자 명령어입니다.
-        """
-        # 봇 소유자인지 확인
+    @app_commands.autocomplete(skill_name=skill_autocomplete)
+    async def dungeon_test(self, interaction: discord.Interaction, action: str, 
+                         skill_name: Optional[str] = None, 
+                         slot: Optional[app_commands.Range[int, 1, 4]] = None, 
+                         element: Optional[str] = None, 
+                         level: Optional[int] = None):
+        """던전 전투 시스템을 테스트하기 위한 관리자 명령어입니다."""
         if not await self.bot.is_owner(interaction.user):
             return await interaction.response.send_message("❌ 봇 소유자만 사용할 수 있는 명령어입니다.", ephemeral=True)
 
         if interaction.user.id not in self.active_sessions:
             return await interaction.response.send_message("❌ 먼저 던전에 입장해주세요.", ephemeral=True)
-        
-        # 슬래시 명령어에서는 응답을 먼저 해야 합니다.
+
         await interaction.response.defer(ephemeral=True)
 
         view = self.active_sessions[interaction.user.id]
 
         if action == "스킬부여":
-            if not params or len(params.split()) != 2:
-                return await interaction.followup.send("사용법: `params`에 `[스킬이름] [슬롯번호(1-4)]` 형식으로 입력하세요.")
-            
-            skill_name, slot_str = params.split(maxsplit=1)
-            try:
-                slot = int(slot_str)
-                if not 1 <= slot <= 4: raise ValueError
-            except ValueError:
-                return await interaction.followup.send("❌ 슬롯 번호는 1에서 4 사이의 숫자여야 합니다.")
+            if not skill_name or not slot:
+                return await interaction.followup.send("❌ '스킬 부여'를 선택한 경우, `skill_name`과 `slot` 옵션을 모두 입력해야 합니다.")
 
             res = await supabase.table('pet_skills').select('*').eq('skill_name', skill_name).maybe_single().execute()
             if not (res and res.data):
@@ -807,12 +810,9 @@ class Dungeon(commands.Cog):
             await interaction.followup.send(f"✅ 펫에게 **{skill_name}** 스킬을 {slot}번 슬롯에 임시로 부여했습니다.")
 
         elif action == "몬스터소환":
-            if not params or len(params.split()) != 2:
-                return await interaction.followup.send("사용법: `params`에 `[속성] [레벨]` 형식으로 입력하세요.")
+            if not element or not level:
+                return await interaction.followup.send("❌ '몬스터 소환'을 선택한 경우, `element`와 `level` 옵션을 모두 입력해야 합니다.")
 
-            element, level_str = params.split(maxsplit=1)
-            try: level = int(level_str)
-            except ValueError: return await interaction.followup.send("❌ 레벨은 숫자여야 합니다.")
             if element not in self.monster_base_data:
                 return await interaction.followup.send(f"❌ 유효하지 않은 속성입니다. ({', '.join(self.monster_base_data.keys())})")
 
@@ -837,7 +837,7 @@ class Dungeon(commands.Cog):
 
         elif action == "효과확인":
             if view.state != "in_battle":
-                return await interaction.followup.send("❌ 전투 중에만 사용할 수 있습니다.")
+                return await interaction.followup.send("❌ 전투 중에만 사용할 수 없습니다.")
             
             embed = discord.Embed(title="🕵️ 현재 효과 상태 (디버그)", color=0xFFD700)
             pet_effects_str = "\n".join([f"`{e}`" for e in view.pet_effects]) or "없음"
@@ -847,7 +847,7 @@ class Dungeon(commands.Cog):
             await interaction.followup.send(embed=embed)
 
         else:
-            await interaction.followup.send("❌ 알 수 없는 명령어입니다.")
+            await interaction.followup.send("❌ 알 수 없는 작업입니다.")
 
 class DungeonPanelView(ui.View):
     def __init__(self, cog_instance: 'Dungeon'):
