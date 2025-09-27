@@ -99,12 +99,15 @@ class SkillSelectView(ui.View):
 
 # 이제 DungeonGameView 클래스가 시작됩니다.
 class DungeonGameView(ui.View):
-    def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime, session_id: int):
+    def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime, session_id: int, current_state: str = "exploring", monster_data: Optional[Dict] = None):
         super().__init__(timeout=None)
         self.cog = cog; self.user = user; self.pet_data_raw = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
         self.session_id = session_id
         self.final_pet_stats = self._calculate_final_pet_stats()
-        self.state = "exploring"; self.message: Optional[discord.Message] = None
+        
+        # [수정] DB에서 불러온 state와 monster 데이터로 초기화합니다.
+        self.state = current_state
+        self.message: Optional[discord.Message] = None
         self.battle_log: List[Any] = []
         self.rewards: Dict[str, int] = defaultdict(int)
         self.total_pet_xp_gained: int = 0
@@ -114,12 +117,13 @@ class DungeonGameView(ui.View):
         
         self.is_pet_turn: bool = True
         
-        # ▼▼▼ [신규 추가] 펫과 몬스터의 효과(버프/디버프)를 추적하는 리스트 ▼▼▼
         self.pet_effects: List[Dict] = []
         self.monster_effects: List[Dict] = []
-        # ▲▲▲ [신규 추가] 완료 ▲▲▲
         
-        self.current_monster: Optional[Dict] = None; self.monster_current_hp: int = 0
+        # [수정] DB에서 불러온 monster 데이터로 복원합니다.
+        self.current_monster: Optional[Dict] = monster_data.get('data') if monster_data else None
+        self.monster_current_hp: int = monster_data.get('hp', 0) if monster_data else 0
+        
         self.storage_base_url = f"{os.environ.get('SUPABASE_URL')}/storage/v1/object/public/monster_images"
         
         self.build_components()
@@ -349,25 +353,6 @@ class DungeonGameView(ui.View):
         self._process_turn_end_effects(self.pet_effects, self.pet_data_raw['nickname'], is_pet=True)
         if self.pet_current_hp <= 0: # 지속 데미지로 쓰러질 경우
             self.pet_is_defeated = True
-
-    # ▼▼▼ [최종 수정] _get_stat_with_effects 메서드도 함께 교체해주세요 ▼▼▼
-    def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
-        """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
-        multiplier = 1.0
-        
-        # [수정] 중복된 루프를 제거하고, stat_key와 effect['type']을 정확히 비교하도록 로직을 변경합니다.
-        # stat_key는 'ATK', 'DEF', 'SPD' 등으로 들어옵니다.
-        # effect['type']은 'ATK_BUFF', 'ATK_DEBUFF' 등으로 들어옵니다.
-        for effect in effects:
-            # 예시: stat_key가 'ATK'일 때, effect['type']이 'ATK_BUFF'와 같은지 직접 비교
-            if effect['type'] == f"{stat_key}_BUFF":
-                multiplier += effect['value']
-            # 예시: stat_key가 'ATK'일 때, effect['type']이 'ATK_DEBUFF'와 같은지 직접 비교
-            elif effect['type'] == f"{stat_key}_DEBUFF":
-                multiplier -= effect['value']
-
-        # 최종 스탯 계산
-        return max(1, round(base_stat * multiplier))
         
     # ▼▼▼ [최종 수정] 아래 _apply_skill_effect 메서드 전체를 교체해주세요 ▼▼▼
     def _apply_skill_effect(self, skill_data: Dict, caster_effects: List[Dict], target_effects: List[Dict], caster_name: str, target_name: str, caster_max_hp: int = 0, damage_dealt: int = 0):
@@ -417,30 +402,17 @@ class DungeonGameView(ui.View):
         if log_value:
             self.battle_log.append({"title": f"✨ 스킬 효과: {skill_data['skill_name']}", "value": log_value})
 
-    # ▼▼▼ [최종 수정] _get_stat_with_effects 메서드도 함께 교체해주세요 ▼▼▼
-    def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
-        """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
-        multiplier = 1.0
-        for effect in effects:
-            # effect['type'] 예시: 'ATK_BUFF', 'ATK_DEBUFF'
-            # stat_key 예시: 'attack'
-            # effect_type이 stat_key의 대문자 버전으로 시작하는지 확인 (예: 'ATK_BUFF'.startswith('ATTACK'))
-            if effect['type'].startswith(stat_key.upper()):
-                if 'BUFF' in effect['type']:
-                    multiplier += effect['value']
-                elif 'DEBUFF' in effect['type']:
-                    multiplier -= effect['value']
-        
-        # base_stat이 스탯 딕셔너리의 'attack' 키로 들어올 것을 대비하여, stat_key도 대문자화
-        final_stat_key = stat_key.upper()
-        for effect in effects:
-            if effect['type'].startswith(final_stat_key):
-                if 'BUFF' in effect['type']:
-                    multiplier += effect['value']
-                elif 'DEBUFF' in effect['type']:
-                    multiplier -= effect['value']
-
-        return max(1, round(base_stat * multiplier))
+def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
+    """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
+    multiplier = 1.0
+    for effect in effects:
+        # [수정] stat_key('ATK')가 effect['type']('ATK_DEBUFF') 안에 포함되는지 확인합니다.
+        if stat_key in effect['type']:
+            if 'BUFF' in effect['type']:
+                multiplier += effect['value']
+            elif 'DEBUFF' in effect['type']:
+                multiplier -= effect['value']
+    return max(1, round(base_stat * multiplier))
 
     # ▼▼▼ [수정] _process_turn_end_effects 메서드를 아래 내용으로 교체합니다. ▼▼▼
     def _process_turn_end_effects(self, effects: List[Dict], target_name: str, is_pet: bool):
@@ -507,10 +479,8 @@ class DungeonGameView(ui.View):
         self.monster_current_hp = self.current_monster['hp']
         self.battle_log = [f"**{self.current_monster['name']}** 이(가) 나타났다!"]
         
-        # ▼▼▼ [신규 추가] 효과 리스트 초기화 ▼▼▼
         self.pet_effects.clear()
         self.monster_effects.clear()
-        # ▲▲▲ [신규 추가] 완료 ▲▲▲
         
         if self.final_pet_stats['speed'] >= self.current_monster.get('speed', 0):
             self.is_pet_turn = True
@@ -521,98 +491,28 @@ class DungeonGameView(ui.View):
             
         self.state = "in_battle"
         
-        # ▼▼▼ [수정] 아래 3줄 코드 추가 ▼▼▼
-        # is_pet_turn 이 False 라면(몬스터 선공) 즉시 몬스터 턴을 진행합니다.
+        # [추가] 상태 변경 시 DB에 현재 상태와 몬스터 정보를 저장합니다.
+        await supabase.table('dungeon_sessions').update({
+            'state': self.state,
+            'current_monster_json': {'data': self.current_monster, 'hp': self.monster_current_hp}
+        }).eq('id', self.session_id).execute()
+        
         if not self.is_pet_turn:
-            await self.handle_monster_turn(interaction) # interaction 객체 전달
+            await self.handle_monster_turn(interaction) 
         else:
             await self.refresh_ui(interaction)
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
-    # ▼▼▼ [핵심 추가] 스킬 버튼 핸들러 ▼▼▼
-    async def handle_skill_button(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        # get_user_pet은 이제 스킬 정보를 함께 가져옵니다.
-        pet_data = await get_user_pet(self.user.id)
-        learned_skills = pet_data.get('learned_skills', [])
-        
-        if not learned_skills:
-            return await interaction.followup.send("❌ 배운 스킬이 없습니다!", ephemeral=True)
-
-        # 새로 만든 SkillSelectView 클래스의 인스턴스를 생성
-        skill_selection_view = SkillSelectView(self, learned_skills)
-        await interaction.followup.send("어떤 스킬을 사용하시겠습니까?", view=skill_selection_view, ephemeral=True)
-
-    # ▼▼▼ [확실한 수정] 아래 메서드 전체를 복사하여 기존 handle_monster_turn 메서드를 덮어쓰세요 ▼▼▼
-    async def handle_monster_turn(self, interaction: Optional[discord.Interaction] = None):
-        # ▲▲▲▲▲ 이 함수의 첫 줄이 이렇게 생겼는지 반드시 확인해주세요 ▲▲▲▲▲
-        if self.state != "in_battle" or self.is_pet_turn or self.pet_is_defeated:
-            return
-
-        # 몬스터 턴 UI 갱신 (상대의 턴임을 표시)
-        await self.refresh_ui(interaction)
-        await asyncio.sleep(1.5)
-
-        # 몬스터 공격 실행
-        await self._execute_monster_turn()
-        
-        if self.pet_current_hp <= 0:
-            await self.handle_battle_lose()
-            return
-            
-        # 몬스터 턴이 끝나면 플레이어 턴으로 변경하고 UI 갱신
-        self.is_pet_turn = True
-        await self.refresh_ui()
-    
-    async def handle_skill_use(self, skill_data: Dict):
-        if self.state != "in_battle" or not self.current_monster or not self.is_pet_turn:
-            return
-
-        # 턴 시작 시 버튼 비활성화를 위해 is_pet_turn을 False로 설정
-        self.is_pet_turn = False
-        self.battle_log = []
-        await self.refresh_ui() # UI를 즉시 갱신하여 버튼을 비활성화
-
-        # 펫의 턴 실행
-        await self._execute_pet_turn(skill_data)
-        if self.monster_current_hp <= 0:
-            return await self.handle_battle_win()
-        
-        # 펫 공격 후 잠시 딜레이
-        await self.refresh_ui()
-        await asyncio.sleep(1.5)
-
-        # 몬스터의 반격
-        await self._execute_monster_turn()
-        if self.pet_current_hp <= 0:
-            return await self.handle_battle_lose()
-
-        # 모든 행동이 끝나고 다시 플레이어의 턴으로 변경
-        self.is_pet_turn = True
-        await self.refresh_ui()
-
-    # ▼▼▼ [핵심 추가] 몬스터 턴 자동 진행 로직 ▼▼▼
-    async def handle_monster_turn(self):
-        if self.state != "in_battle" or self.is_pet_turn or self.pet_is_defeated:
-            return
-
-        await self._execute_monster_turn()
-        
-        if self.pet_current_hp <= 0:
-            await self.handle_battle_lose()
-            return
-            
-        self.is_pet_turn = True
-        await self.refresh_ui()
-        
-    # handle_attack, handle_flee, handle_leave, handle_use_item 등 나머지 메서드는 이전과 동일 (생략)
+# handle_battle_win 함수를 찾아 DB 업데이트 로직을 추가합니다.
     async def handle_battle_win(self):
         self.state = "battle_over"
+        # [추가] 상태 변경 시 DB 업데이트
+        await supabase.table('dungeon_sessions').update({'state': self.state, 'current_monster_json': None}).eq('id', self.session_id).execute()
+        
         self.battle_log.append({
             "title": f"🎉 **{self.current_monster['name']}**을(를) 물리쳤다!",
             "value": "> 전투에서 승리했습니다."
         })
+        # ... (이하 기존 코드 동일) ...
         pet_exp_gain = self.current_monster['xp']
         self.total_pet_xp_gained += pet_exp_gain
         await supabase.rpc('add_xp_to_pet', {'p_user_id': self.user.id, 'p_xp_to_add': pet_exp_gain}).execute()
@@ -630,9 +530,14 @@ class DungeonGameView(ui.View):
                 })
         await self.refresh_ui()
 
+# handle_battle_lose 함수를 찾아 DB 업데이트 로직을 추가합니다.
     async def handle_battle_lose(self):
         self.state = "battle_over"
         self.pet_is_defeated = True
+        
+        # [추가] 상태 변경 시 DB 업데이트
+        await supabase.table('dungeon_sessions').update({'state': self.state, 'current_monster_json': None}).eq('id', self.session_id).execute()
+        
         self.battle_log.append({
             "title": f"☠️ **{self.pet_data_raw['nickname']}**이(가) 쓰러졌다...",
             "value": "> 전투에서 패배했습니다."
@@ -640,99 +545,24 @@ class DungeonGameView(ui.View):
         self.current_monster = None
         await self.refresh_ui()
 
+# handle_flee 함수를 찾아 DB 업데이트 로직을 추가합니다.
     async def handle_flee(self, interaction: discord.Interaction):
         self.state = "exploring"
         self.current_monster = None
+        
+        # [추가] 상태 변경 시 DB 업데이트
+        await supabase.table('dungeon_sessions').update({'state': self.state, 'current_monster_json': None}).eq('id', self.session_id).execute()
+        
         self.battle_log = ["무사히 도망쳤다..."]
         await self.refresh_ui(interaction)
 
-    async def handle_leave(self, interaction: discord.Interaction):
-        await interaction.response.send_message("던전에서 나가는 중입니다...", ephemeral=True, delete_after=5)
-        await self.cog.close_dungeon_session(self.user.id, self.rewards, self.total_pet_xp_gained, interaction.channel)
-
-    async def handle_use_item(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        inventory = await get_inventory(self.user)
-        usable_items = []
-        item_db = get_item_database()
-        for name, qty in inventory.items():
-            item_data = item_db.get(name, {})
-            effect = item_data.get('effect_type')
-            if effect == 'pet_revive' and self.pet_is_defeated:
-                usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="💊"))
-            elif effect == 'pet_heal' and not self.pet_is_defeated and self.pet_current_hp < self.final_pet_stats['hp']:
-                usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="🧪"))
-        if not usable_items:
-            msg = await interaction.followup.send("사용할 수 있는 아이템이 없습니다.", ephemeral=True)
-            self.cog.bot.loop.create_task(msg.delete(delay=5))
-            return
-        select = ui.Select(placeholder="사용할 아이템을 선택하세요...", options=usable_items)
-        async def on_item_select(select_interaction: discord.Interaction):
-            await select_interaction.response.defer()
-            item_name = select_interaction.data['values'][0]
-            item_data = get_item_database().get(item_name, {})
-            effect = item_data.get('effect_type')
-            await update_inventory(self.user.id, item_name, -1)
-            db_update_task = None
-            if effect == 'pet_revive':
-                self.pet_is_defeated = False
-                self.pet_current_hp = self.final_pet_stats['hp']
-                self.state = "exploring"
-                self.battle_log = [f"💊 '{item_name}'을(를) 사용해 펫이 완전히 회복되었다!"]
-                db_update_task = supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
-            elif effect == 'pet_heal':
-                heal_amount = item_data.get('power', 0)
-                self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + heal_amount)
-                self.battle_log = [f"🧪 '{item_name}'을(를) 사용해 체력을 {heal_amount} 회복했다!"]
-                db_update_task = supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
-                if self.state == "in_battle":
-                    # ▼▼▼ [수정] 아래 4줄을 수정합니다. ▼▼▼
-                    self.is_pet_turn = False # 아이템 사용 후 몬스터 턴으로 넘김
-                    await self.handle_monster_turn(select_interaction) # 새로 만든 함수 호출
-                    if self.pet_current_hp <= 0: # handle_monster_turn 이후 체력 다시 체크
-                        await self.handle_battle_lose()
-                        return
-                    # ▲▲▲ [수정] 완료 ▲▲▲
-            if db_update_task:
-                await db_update_task
-            await self.refresh_ui()
-            await select_interaction.delete_original_response()
-        select.callback = on_item_select
-        view = ui.View(timeout=60).add_item(select)
-        await interaction.followup.send(view=view, ephemeral=True)
-        
-    def stop(self):
-        if self.cog and self.user:
-            self.cog.active_sessions.pop(self.user.id, None)
-        super().stop()
-        
-class Dungeon(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot; self.active_sessions: Dict[int, DungeonGameView] = {}
-        self.dungeon_data: Dict = {}; self.monster_base_data: Dict = {}; self.loot_table: Dict = {}
-        self.check_expired_dungeons.start()
-        self.active_views_loaded = False
-
-    async def cog_load(self):
-        data = await load_dungeon_data_from_db()
-        self.dungeon_data = data["dungeons"]; self.monster_base_data = data["monsters"]; self.loot_table = data["loot"]
-
-    def cog_unload(self): self.check_expired_dungeons.cancel()
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        self.bot.add_view(await DungeonPanelView.create(self))
-        
-        if not self.active_views_loaded:
-            await self.reload_active_dungeon_views()
-            self.active_views_loaded = True
-
-# cogs/games/dungeon.py
-
+# reload_active_dungeon_views 함수를 찾아 state와 monster 정보를 불러오도록 수정합니다.
     async def reload_active_dungeon_views(self):
         logger.info("[Dungeon] 활성화된 던전 게임 UI를 다시 로드합니다...")
         try:
+            # [수정] state와 current_monster_json 컬럼도 함께 불러옵니다.
             res = await supabase.table('dungeon_sessions').select('*, pets(*, pet_species(*), learned_skills:pet_learned_skills(*, pet_skills(*)))').not_.is_('message_id', 'null').execute()
+            
             if not res.data:
                 logger.info("[Dungeon] 다시 로드할 활성 던전 UI가 없습니다.")
                 return
@@ -744,6 +574,10 @@ class Dungeon(commands.Cog):
                     pet_data, dungeon_tier = session_data.get('pets'), session_data['dungeon_tier']
                     end_time, session_id = datetime.fromisoformat(session_data['end_time']), session_data['id']
                     
+                    # [추가] state와 monster 정보를 세션 데이터에서 가져옵니다.
+                    current_state = session_data.get('state', 'exploring')
+                    monster_data = session_data.get('current_monster_json')
+
                     if not pet_data:
                         logger.warning(f"던전 세션(ID:{session_id})에 연결된 펫 정보가 없어 UI를 로드할 수 없습니다.")
                         continue
@@ -752,17 +586,17 @@ class Dungeon(commands.Cog):
                     if not user:
                         logger.warning(f"던전 UI 로드 중 유저(ID:{user_id})를 찾을 수 없습니다.")
                         continue
-
-                    view = DungeonGameView(self, user, pet_data, dungeon_tier, end_time, session_id)
                     
-                    # [수정] 재로드된 View 객체에 실제 메시지 정보를 찾아 할당합니다.
+                    # [수정] DungeonGameView 생성자에 state와 monster 데이터를 전달합니다.
+                    view = DungeonGameView(self, user, pet_data, dungeon_tier, end_time, session_id, current_state=current_state, monster_data=monster_data)
+                    
                     try:
                         if thread_id := session_data.get('thread_id'):
                             if thread := self.bot.get_channel(int(thread_id)):
                                 view.message = await thread.fetch_message(message_id)
                     except (discord.NotFound, discord.Forbidden):
                         logger.warning(f"던전 UI 재로드 중 메시지(ID: {message_id})를 찾을 수 없어 해당 세션을 건너뜁니다.")
-                        continue # 메시지가 없으면 View를 로드할 수 없으므로 건너뜁니다.
+                        continue
                     
                     self.bot.add_view(view, message_id=message_id)
                     self.active_sessions[user_id] = view
