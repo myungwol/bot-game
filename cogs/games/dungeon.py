@@ -397,8 +397,23 @@ class DungeonGameView(ui.View):
 
         return max(1, round(base_stat * multiplier))
 
+    # ▼▼▼ [수정] _process_turn_end_effects 메서드를 아래 내용으로 교체합니다. ▼▼▼
     def _process_turn_end_effects(self, effects: List[Dict], target_name: str, is_pet: bool):
         """턴 종료 시 지속 효과(데미지, 지속시간 감소)를 처리합니다."""
+        
+        # [수정] 효과 타입(영어)을 한글 이름으로 변환하기 위한 딕셔너리
+        effect_name_map = {
+            'BURN': '화상',
+            'ATK_BUFF': '공격력 증가',
+            'DEF_BUFF': '방어력 증가',
+            'SPD_BUFF': '스피드 증가',
+            'EVA_BUFF': '회피율 증가',
+            'ATK_DEBUFF': '공격력 감소',
+            'DEF_DEBUFF': '방어력 감소',
+            'SPD_DEBUFF': '스피드 감소',
+            'ACC_DEBUFF': '명중률 감소'
+        }
+
         effects_to_remove = []
         for effect in effects:
             # 지속 데미지 효과
@@ -414,7 +429,9 @@ class DungeonGameView(ui.View):
             effect['duration'] -= 1
             if effect['duration'] <= 0:
                 effects_to_remove.append(effect)
-                self.battle_log.append(f"💨 **{target_name}**에게 걸려있던 **{effect['type']}** 효과가 사라졌다.")
+                # [수정] effect_name_map을 사용하여 한글 이름으로 출력
+                effect_name = effect_name_map.get(effect['type'], effect['type']) # 맵에 없는 경우 원본 키 출력
+                self.battle_log.append(f"💨 **{target_name}**에게 걸려있던 **{effect_name}** 효과가 사라졌다.")
         
         for expired_effect in effects_to_remove:
             effects.remove(expired_effect)
