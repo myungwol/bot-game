@@ -19,9 +19,12 @@ from utils.database import (
     get_item_database, get_user_pet
 )
 from utils.helpers import format_embed_from_db
+# [수정] 새로 만든 전투 시스템을 import 합니다.
+from utils.combat_system import process_turn, Combatant
 
 logger = logging.getLogger(__name__)
 
+# ... (pad_korean_string, load_dungeon_data_from_db 함수는 변경 없이 그대로 유지) ...
 def pad_korean_string(text: str, total_width: int) -> str:
     current_width = 0
     for char in text:
@@ -113,7 +116,7 @@ class DungeonGameView(ui.View):
         return stats
 
     async def start(self, thread: discord.Thread):
-        embed = self.build_embed()
+        embed = await self.build_embed()
         self.message = await thread.send(embed=embed, view=self)
         try:
             await supabase.table('dungeon_sessions').update({'message_id': self.message.id}).eq('id', self.session_id).execute()
@@ -134,26 +137,20 @@ class DungeonGameView(ui.View):
         image_url = f"{self.storage_base_url}/{element}_{dungeon_info['image_suffix']}.png"
         return {"name": f"Lv.{monster_level} {dungeon_info['name'].replace('던전', '')} {base_monster['name']}", "hp": hp, "attack": attack, "defense": defense, "speed": speed, "xp": xp, "element": element, "image_url": image_url}
 
-    def build_embed(self) -> discord.Embed:
+    async def build_embed(self) -> discord.Embed:
         dungeon_info = self.cog.dungeon_data[self.dungeon_tier]
         embed = discord.Embed(title=f"탐험 중... - {dungeon_info['name']}", color=0x71368A)
         description_content = ""
+        
+        # [수정] 전투 시스템에 넘겨주기 위한 실시간 스탯 계산은 build_embed에서 하지 않고, 전투 직전에 수행합니다.
+        # 여기서는 기본 스탯만 표시합니다.
         pet_base_stats = self.final_pet_stats
-        pet_final_attack = self._get_stat_with_effects(pet_base_stats['attack'], 'ATK', self.pet_effects)
-        pet_final_defense = self._get_stat_with_effects(pet_base_stats['defense'], 'DEF', self.pet_effects)
-        pet_final_speed = self._get_stat_with_effects(pet_base_stats['speed'], 'SPD', self.pet_effects)
-        def get_stat_change_indicator(base_stat, final_stat):
-            if final_stat > base_stat: return f"🔺 (+{final_stat - base_stat})"
-            elif final_stat < base_stat: return f"🔻 ({final_stat - base_stat})"
-            return ""
-        pet_attack_str = f"{pet_final_attack} {get_stat_change_indicator(pet_base_stats['attack'], pet_final_attack)}"
-        pet_defense_str = f"{pet_final_defense} {get_stat_change_indicator(pet_base_stats['defense'], pet_final_defense)}"
-        pet_speed_str = f"{pet_final_speed} {get_stat_change_indicator(pet_base_stats['speed'], pet_final_speed)}"
         pet_stats_text = (f"❤️ **체력**: {self.pet_current_hp} / {pet_base_stats['hp']}\n"
-                          f"⚔️ **공격력**: {pet_attack_str}\n"
-                          f"🛡️ **방어력**: {pet_defense_str}\n"
-                          f"💨 **스피드**: {pet_speed_str}")
+                          f"⚔️ **공격력**: {pet_base_stats['attack']}\n"
+                          f"🛡️ **방어력**: {pet_base_stats['defense']}\n"
+                          f"💨 **스피드**: {pet_base_stats['speed']}")
         embed.add_field(name=f"🐾 {self.pet_data_raw['nickname']}", value=pet_stats_text, inline=False)
+        
         if self.pet_is_defeated:
             description_content = "☠️ 펫이 쓰러졌습니다! '아이템'을 사용해 '치료제'로 회복시키거나 던전을 나가야 합니다."
         elif self.state == "exploring":
@@ -163,22 +160,16 @@ class DungeonGameView(ui.View):
             embed.title = f"전투 중! - {self.current_monster['name']}"; embed.description = turn_indicator
             embed.set_image(url=self.current_monster['image_url'])
             monster_base_stats = self.current_monster
-            monster_final_attack = self._get_stat_with_effects(monster_base_stats['attack'], 'ATK', self.monster_effects)
-            monster_final_defense = self._get_stat_with_effects(monster_base_stats['defense'], 'DEF', self.monster_effects)
-            monster_final_speed = self._get_stat_with_effects(monster_base_stats['speed'], 'SPD', self.monster_effects)
-            monster_attack_str = f"{monster_final_attack} {get_stat_change_indicator(monster_base_stats['attack'], monster_final_attack)}"
-            monster_defense_str = f"{monster_final_defense} {get_stat_change_indicator(monster_base_stats['defense'], monster_final_defense)}"
-            monster_speed_str = f"{monster_final_speed} {get_stat_change_indicator(monster_base_stats['speed'], monster_final_speed)}"
             monster_stats_text = (f"❤️ **체력**: {self.monster_current_hp} / {monster_base_stats['hp']}\n"
-                                f"⚔️ **공격력**: {monster_attack_str}\n"
-                                f"🛡️ **방어력**: {monster_defense_str}\n"
-                                f"💨 **스피드**: {monster_speed_str}")
+                                f"⚔️ **공격력**: {monster_base_stats['attack']}\n"
+                                f"🛡️ **방어력**: {monster_base_stats['defense']}\n"
+                                f"💨 **스피드**: {monster_base_stats['speed']}")
             embed.add_field(name=f"몬스터: {self.current_monster['name']}", value=monster_stats_text, inline=False)
             if self.battle_log:
                 embed.add_field(name="⚔️ 전투 기록", value="\u200b", inline=False)
                 for log_entry in self.battle_log[-3:]:
                     if isinstance(log_entry, dict): embed.add_field(name=log_entry['title'], value=log_entry['value'], inline=False)
-                    else: embed.add_field(name="\u200b", value=log_entry, inline=False)
+                    else: embed.add_field(name="\u200b", value=str(log_entry), inline=False)
         elif self.state == "battle_over":
             embed.title = "전투 종료"
             if self.current_monster and self.current_monster.get('image_url'): embed.set_thumbnail(url=self.current_monster['image_url'])
@@ -186,7 +177,8 @@ class DungeonGameView(ui.View):
                 embed.add_field(name="⚔️ 전투 결과", value="\u200b", inline=False)
                 for log_entry in self.battle_log:
                     if isinstance(log_entry, dict): embed.add_field(name=log_entry['title'], value=log_entry['value'], inline=False)
-                    else: embed.add_field(name="\u200b", value=log_entry, inline=False)
+                    else: embed.add_field(name="\u200b", value=str(log_entry), inline=False)
+
         if self.rewards:
             rewards_str = "\n".join([f"> {item}: {qty}개" for item, qty in self.rewards.items()])
             embed.add_field(name="--- 현재까지 획득한 보상 ---", value=rewards_str, inline=False)
@@ -196,6 +188,7 @@ class DungeonGameView(ui.View):
         else: embed.description = closing_time_text.strip()
         return embed
     
+    # ... (build_components, interaction_check, dispatch_callback, refresh_ui 함수는 변경 없음) ...
     def build_components(self):
         self.clear_items(); base_id = f"dungeon_view:{self.user.id}"
         buttons_map = { "explore": ui.Button(label="탐색하기", style=discord.ButtonStyle.success, emoji="🗺️", custom_id=f"{base_id}:explore"), "use_item": ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji="👜", custom_id=f"{base_id}:use_item"), "skill": ui.Button(label="스킬", style=discord.ButtonStyle.primary, emoji="✨", custom_id=f"{base_id}:skill"), "flee": ui.Button(label="도망가기", style=discord.ButtonStyle.danger, emoji="🏃", custom_id=f"{base_id}:flee"), "leave": ui.Button(label="던전 나가기", style=discord.ButtonStyle.grey, emoji="🚪", custom_id=f"{base_id}:leave"), "explore_disabled": ui.Button(label="탐색 불가", style=discord.ButtonStyle.secondary, emoji="☠️", custom_id=f"{base_id}:explore_disabled", disabled=True)}
@@ -220,82 +213,60 @@ class DungeonGameView(ui.View):
 
     async def refresh_ui(self, interaction: Optional[discord.Interaction] = None):
         if interaction and not interaction.response.is_done(): await interaction.response.defer()
-        self.build_components(); embed = self.build_embed()
+        self.build_components()
+        embed = await self.build_embed()
         if self.message:
             try: await self.message.edit(embed=embed, view=self)
             except discord.NotFound: self.stop()
 
-    def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
-        multiplier = 1.0
-        for effect in effects:
-            if effect['type'] == f"{stat_key}_BUFF": multiplier += effect['value']
-            elif effect['type'] == f"{stat_key}_DEBUFF": multiplier -= effect['value']
-        final_stat = max(1, round(base_stat * multiplier))
-        logger.info(f"[STAT_CALC] Key: {stat_key}, Base: {base_stat}, Effects: {effects}, Multiplier: {multiplier:.2f}, Final: {final_stat}")
-        return final_stat
-        
-    def _apply_skill_effect(self, skill_data: Dict, caster_effects: List[Dict], target_effects: List[Dict], caster_name: str, target_name: str, caster_max_hp: int = 0, damage_dealt: int = 0):
-        effect_type = skill_data.get('effect_type'); value = skill_data.get('effect_value', 0); duration = skill_data.get('effect_duration', 0)
-        if not effect_type: return
-        log_value = ""
-        if 'DEBUFF' in effect_type:
-            target_effects.append({'type': effect_type, 'value': value, 'duration': duration + 1})
-            stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "ACC": "명중률"}.get(effect_type.split('_')[0], "능력"); log_value = f"> **{target_name}**의 **{stat_name}**이(가) 하락했다!"
-        elif 'BUFF' in effect_type:
-            caster_effects.append({'type': effect_type, 'value': value, 'duration': duration + 1})
-            stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "EVA": "회피율"}.get(effect_type.split('_')[0], "능력"); log_value = f"> **{caster_name}**의 **{stat_name}**이(가) 상승했다!"
-        elif effect_type == 'HEAL_PERCENT':
-            heal_amount = round(caster_max_hp * value); self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + heal_amount); log_value = f"> **{caster_name}**이(가) 체력을 **{heal_amount}** 회복했다!"
-        elif effect_type in ['DRAIN', 'LEECH']:
-            drain_amount = round(damage_dealt * 0.5); self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + drain_amount); log_value = f"> **{target_name}**에게서 체력을 **{drain_amount}** 흡수했다!"
-        elif effect_type == 'BURN':
-            target_effects.append({'type': effect_type, 'value': value, 'duration': duration + 1}); log_value = f"> **{target_name}**은(는) 화상을 입었다!"
-        elif effect_type in ['PARALYZE', 'PARALYZE_ON_HIT']:
-            target_effects.append({'type': 'PARALYZE', 'duration': duration + 1}); log_value = f"> **{target_name}**은(는) 마비되었다!"
-        elif effect_type == 'SLEEP':
-            target_effects.append({'type': 'SLEEP', 'duration': duration + 1}); log_value = f"> **{target_name}**은(는) 잠이 들었다!"
-        if log_value: self.battle_log.append({"title": f"✨ 스킬 효과: {skill_data['skill_name']}", "value": log_value})
-
-    def _process_turn_end_effects(self, effects: List[Dict], target_name: str, is_pet: bool):
-        effect_name_map = {'BURN': '화상', 'ATK_BUFF': '공격력 증가', 'DEF_BUFF': '방어력 증가', 'SPD_BUFF': '스피드 증가', 'EVA_BUFF': '회피율 증가', 'ATK_DEBUFF': '공격력 감소', 'DEF_DEBUFF': '방어력 감소', 'SPD_DEBUFF': '스피드 감소', 'ACC_DEBUFF': '명중률 감소', 'PARALYZE': '마비', 'SLEEP': '수면'}
-        effects_to_remove = []
-        for effect in effects:
-            if effect['type'] == 'BURN':
-                dot_damage = max(1, round(effect['value']))
-                if is_pet: self.pet_current_hp = max(0, self.pet_current_hp - dot_damage)
-                else: self.monster_current_hp = max(0, self.monster_current_hp - dot_damage)
-                self.battle_log.append(f"🔥 **{target_name}**은(는) 화상 데미지로 **{dot_damage}**의 피해를 입었다!")
-            effect['duration'] -= 1
-            if effect['duration'] <= 0:
-                effects_to_remove.append(effect); effect_name = effect_name_map.get(effect['type'], effect['type'])
-                self.battle_log.append(f"💨 **{target_name}**에게 걸려있던 **{effect_name}** 효과가 사라졌다.")
-        for expired_effect in effects_to_remove: effects.remove(expired_effect)
-
-    async def _execute_pet_turn(self, used_skill: Dict):
-        for effect in self.pet_effects:
-            if effect['type'] == 'SLEEP': self.battle_log.append(f"💤 **{self.pet_data_raw['nickname']}**은(는) 깊은 잠에 빠져있다..."); self._process_turn_end_effects(self.pet_effects, self.pet_data_raw['nickname'], is_pet=True); return
-            if effect['type'] == 'PARALYZE':
-                if random.random() < 0.25: self.battle_log.append(f"⚡ **{self.pet_data_raw['nickname']}**은(는) 몸이 마비되어 움직일 수 없다!"); self._process_turn_end_effects(self.pet_effects, self.pet_data_raw['nickname'], is_pet=True); return
-        skill_power = used_skill.get('power', 0)
-        if skill_power == 0: self._apply_skill_effect(used_skill, self.pet_effects, self.monster_effects, self.pet_data_raw['nickname'], self.current_monster['name'], self.final_pet_stats['hp'])
-        else:
-            final_attack = self._get_stat_with_effects(self.final_pet_stats['attack'], 'ATK', self.pet_effects); final_defense = self._get_stat_with_effects(self.current_monster.get('defense', 0), 'DEF', self.monster_effects)
-            damage = max(1, round(final_attack * (skill_power / 100)) - final_defense); self.monster_current_hp = max(0, self.monster_current_hp - damage)
-            self.battle_log.append({ "title": f"▶️ **{self.pet_data_raw['nickname']}**의 **{used_skill['skill_name']}**!", "value": f"> **{self.current_monster['name']}**에게 **{damage}**의 데미지!"})
-            if used_skill.get('effect_type'): self._apply_skill_effect(used_skill, self.pet_effects, self.monster_effects, self.pet_data_raw['nickname'], self.current_monster['name'], damage_dealt=damage)
-            if used_skill.get('effect_type') == 'RECOIL':
-                recoil_damage = max(1, round(damage * used_skill.get('effect_value', 0))); self.pet_current_hp = max(0, self.pet_current_hp - recoil_damage)
-                self.battle_log.append(f"💥 **{self.pet_data_raw['nickname']}**은(는) 반동으로 **{recoil_damage}**의 데미지를 입었다!")
-        self._process_turn_end_effects(self.pet_effects, self.pet_data_raw['nickname'], is_pet=True)
-        if self.pet_current_hp <= 0: self.pet_is_defeated = True
+    # [삭제] 기존의 전투 관련 함수들은 모두 combat_system.py로 이전되었으므로 삭제합니다.
+    # _get_stat_with_effects, _apply_skill_effect, _process_turn_end_effects, _execute_pet_turn
 
     async def _process_battle_turn(self, skill_data: Dict):
-        await self._execute_pet_turn(skill_data)
-        if self.monster_current_hp <= 0: return await self.handle_battle_win()
-        await self.refresh_ui(); await asyncio.sleep(2)
+        # 1. 펫의 턴 실행
+        pet_combatant = Combatant(
+            name=self.pet_data_raw['nickname'],
+            stats=self.final_pet_stats,
+            current_hp=self.pet_current_hp,
+            max_hp=self.final_pet_stats['hp'],
+            effects=self.pet_effects
+        )
+        monster_combatant = Combatant(
+            name=self.current_monster['name'],
+            stats=self.current_monster,
+            current_hp=self.monster_current_hp,
+            max_hp=self.current_monster['hp'],
+            effects=self.monster_effects
+        )
+        
+        updated_pet, updated_monster, pet_turn_logs = process_turn(pet_combatant, monster_combatant, skill_data)
+        
+        # 2. 펫 턴 결과 업데이트
+        self.pet_current_hp = updated_pet['current_hp']
+        self.pet_effects = updated_pet['effects']
+        self.monster_current_hp = updated_monster['current_hp']
+        self.monster_effects = updated_monster['effects']
+        self.battle_log.extend(pet_turn_logs)
+
+        if self.pet_current_hp <= 0:
+            self.pet_is_defeated = True
+
+        # 3. 몬스터 생사 확인 및 UI 업데이트
+        if self.monster_current_hp <= 0:
+            return await self.handle_battle_win()
+        
+        await self.refresh_ui()
+        await asyncio.sleep(2)
+
+        # 4. 몬스터 턴 실행
         await self._execute_monster_turn()
-        if self.pet_current_hp <= 0: return await self.handle_battle_lose()
-        self.is_pet_turn = True; await self.refresh_ui()
+
+        # 5. 펫 생사 확인 및 턴 넘기기
+        if self.pet_current_hp <= 0:
+            return await self.handle_battle_lose()
+
+        self.is_pet_turn = True
+        await self.refresh_ui()
 
     async def handle_skill_use(self, skill_data: Dict, skill_interaction: discord.Interaction):
         try:
@@ -304,20 +275,46 @@ class DungeonGameView(ui.View):
         if self.state != "in_battle" or not self.current_monster or not self.is_pet_turn: return
         try: await skill_interaction.delete_original_response()
         except (discord.NotFound, discord.HTTPException): logger.warning(f"SkillSelectView 메시지 삭제 시도 중 찾지 못함 (User: {self.user.id})")
-        self.is_pet_turn = False; self.battle_log = []
+        
+        self.is_pet_turn = False
+        self.battle_log = []
         await self.refresh_ui()
+        
+        # 비동기 작업으로 전투 턴 처리 시작
         asyncio.create_task(self._process_battle_turn(skill_data))
         
     async def _execute_monster_turn(self):
-        for effect in self.monster_effects:
-            if effect['type'] == 'SLEEP': self.battle_log.append(f"💤 **{self.current_monster['name']}**은(는) 깊은 잠에 빠져있다..."); self._process_turn_end_effects(self.monster_effects, self.current_monster['name'], is_pet=False); return
-            if effect['type'] == 'PARALYZE':
-                if random.random() < 0.25: self.battle_log.append(f"⚡ **{self.current_monster['name']}**은(는) 몸이 마비되어 움직일 수 없다!"); self._process_turn_end_effects(self.monster_effects, self.current_monster['name'], is_pet=False); return
-        final_attack = self._get_stat_with_effects(self.current_monster.get('attack', 1), 'ATK', self.monster_effects); final_defense = self._get_stat_with_effects(self.final_pet_stats['defense'], 'DEF', self.pet_effects)
-        damage = max(1, final_attack - final_defense); self.pet_current_hp = max(0, self.pet_current_hp - damage)
-        await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
-        self.battle_log.append({"title": f"◀️ **{self.current_monster['name']}**의 공격!", "value": f"> **{self.pet_data_raw['nickname']}**에게 **{damage}**의 데미지!"}); self._process_turn_end_effects(self.monster_effects, self.current_monster['name'], is_pet=False)
+        # 1. 전투 시스템에 맞는 데이터 구조 준비
+        pet_combatant = Combatant(
+            name=self.pet_data_raw['nickname'],
+            stats=self.final_pet_stats,
+            current_hp=self.pet_current_hp,
+            max_hp=self.final_pet_stats['hp'],
+            effects=self.pet_effects
+        )
+        monster_combatant = Combatant(
+            name=self.current_monster['name'],
+            stats=self.current_monster,
+            current_hp=self.monster_current_hp,
+            max_hp=self.current_monster['hp'],
+            effects=self.monster_effects
+        )
+        # 몬스터의 기본 공격을 스킬처럼 표현
+        basic_attack_skill = {"skill_name": "공격", "power": 100} 
 
+        # 2. 전투 시스템 호출
+        updated_monster, updated_pet, monster_turn_logs = process_turn(monster_combatant, pet_combatant, basic_attack_skill)
+        
+        # 3. 몬스터 턴 결과 업데이트
+        self.pet_current_hp = updated_pet['current_hp']
+        self.pet_effects = updated_pet['effects']
+        self.monster_current_hp = updated_monster['current_hp']
+        self.monster_effects = updated_monster['effects']
+        self.battle_log.extend(monster_turn_logs)
+        
+        await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
+
+    # ... (handle_explore, handle_skill_button 등 나머지 함수들은 대부분 변경 없이 그대로 유지) ...
     async def handle_explore(self, interaction: discord.Interaction):
         if self.pet_is_defeated: return await interaction.response.send_message("펫이 쓰러져서 탐색할 수 없습니다.", ephemeral=True, delete_after=5)
         self.current_monster = self.generate_monster(); self.monster_current_hp = self.current_monster['hp']; self.battle_log = [f"**{self.current_monster['name']}** 이(가) 나타났다!"]
@@ -402,6 +399,7 @@ class DungeonGameView(ui.View):
         super().stop()
 
 class Dungeon(commands.Cog):
+    # ... (Dungeon Cog 클래스의 나머지 부분은 변경 없이 그대로 유지) ...
     def __init__(self, bot: commands.Bot):
         self.bot = bot; self.active_sessions: Dict[int, DungeonGameView] = {}
         self.dungeon_data: Dict = {}; self.monster_base_data: Dict = {}; self.loot_table: Dict = {}
