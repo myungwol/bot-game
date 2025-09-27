@@ -61,7 +61,7 @@ def calculate_xp_for_pet_level(level: int) -> int:
     increment = 100
     return base_xp + (increment * level)
 
-async def delete_message_after(message: discord.InteractionMessage, delay: int):
+async def delete_message_after(message: discord.WebhookMessage, delay: int):
     await asyncio.sleep(delay)
     try:
         await message.delete()
@@ -219,17 +219,15 @@ class SkillChangeView(ui.View):
         self.add_item(confirm_button)
 
     async def on_slot_select(self, interaction: discord.Interaction):
-        # ▼▼▼ [수정] Unknown Interaction 에러를 방지하기 위해 defer()를 먼저 호출합니다. ▼▼▼
         await interaction.response.defer()
         self.selected_slot = int(interaction.data['values'][0])
         self.update_components()
         await interaction.edit_original_response(view=self)
 
     async def on_new_skill_select(self, interaction: discord.Interaction):
-        # ▼▼▼ [수정] Unknown Interaction 에러를 방지하고 플레이스홀더 로직을 처리합니다. ▼▼▼
         await interaction.response.defer()
         if interaction.data['values'][0] == "no_skills_available":
-            return # 플레이스홀더가 선택되면 아무 작업도 하지 않고 종료
+            return
 
         self.selected_new_skill_id = int(interaction.data['values'][0])
         self.update_components()
@@ -325,6 +323,8 @@ class StatAllocationView(ui.View):
         return btn
 
     async def on_stat_button_click(self, interaction: discord.Interaction):
+        # ▼▼▼ [수정] Unknown Interaction 에러를 방지하기 위해 defer 및 edit_original_response 사용 ▼▼▼
+        await interaction.response.defer()
         async with self.lock:
             _, stat, amount_str = interaction.data['custom_id'].split('_')
             amount = int(amount_str)
@@ -338,7 +338,7 @@ class StatAllocationView(ui.View):
                     self.spent_points[stat] += amount
             
             self.build_components()
-            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+            await interaction.edit_original_response(embed=self.build_embed(), view=self)
 
     async def on_confirm(self, interaction: discord.Interaction):
         async with self.lock:
@@ -493,7 +493,9 @@ class PetUIView(ui.View):
                 except (discord.Forbidden, discord.HTTPException) as e:
                     logger.warning(f"펫 스레드 이름 변경 실패: {e}")
             await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
-            await interaction.followup.send(f"펫의 이름이 '{new_name}'(으)로 변경되었습니다.", ephemeral=True, delete_after=5)
+            # ▼▼▼ [수정] delete_after를 지원하지 않는 followup.send에서 해당 인자 제거 및 별도 삭제 작업 생성 ▼▼▼
+            msg = await interaction.followup.send(f"펫의 이름이 '{new_name}'(으)로 변경되었습니다.", ephemeral=True)
+            self.cog.bot.loop.create_task(delete_message_after(msg, 5))
 
     @ui.button(label="스킬 변경", style=discord.ButtonStyle.secondary, emoji="🔧", row=1)
     async def change_skills_button(self, interaction: discord.Interaction, button: ui.Button):
