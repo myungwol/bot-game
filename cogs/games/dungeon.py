@@ -353,13 +353,18 @@ class DungeonGameView(ui.View):
     def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
         """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
         multiplier = 1.0
+        # stat_key 예시: 'attack', 'defense', 'speed'
+        # effect['type'] 예시: 'ATK_BUFF', 'DEF_DEBUFF'
+        stat_prefix = stat_key.upper() # 'attack' -> 'ATK' 가 되도록 앞 세 글자만 사용
+        if stat_prefix == 'ATT': stat_prefix = 'ATK' # attack의 경우 예외 처리
+        
         for effect in effects:
-            # ATK_BUFF, DEF_DEBUFF 등
-            if stat_key.upper() in effect['type']:
+            if effect['type'].startswith(stat_prefix):
                 if 'BUFF' in effect['type']:
                     multiplier += effect['value']
                 elif 'DEBUFF' in effect['type']:
                     multiplier -= effect['value']
+        
         return max(1, round(base_stat * multiplier))
 
     # ▼▼▼ [최종 수정] 아래 _apply_skill_effect 메서드 전체를 교체해주세요 ▼▼▼
