@@ -616,34 +616,36 @@ class PetSystem(commands.Cog):
         
         return True
 
-async def reload_active_pet_views(self):
-    logger.info("[PetSystem] 활성화된 펫 관리 UI를 다시 로드합니다...")
-    try:
-        res = await supabase.table('pets').select('*, pet_species(*)').gt('current_stage', 1).not_.is_('message_id', 'null').execute()
-        if not res.data:
-            logger.info("[PetSystem] 다시 로드할 활성 펫 UI가 없습니다.")
-            return
+    async def reload_active_pet_views(self):
+        logger.info("[PetSystem] 활성화된 펫 관리 UI를 다시 로드합니다...")
+        try:
+            res = await supabase.table('pets').select('*, pet_species(*)').gt('current_stage', 1).not_.is_('message_id', 'null').execute()
+            if not res.data:
+                logger.info("[PetSystem] 다시 로드할 활성 펫 UI가 없습니다.")
+                return
 
-        all_user_ids = [int(pet['user_id']) for pet in res.data]
-        # [수정] 여러 유저의 인벤토리를 한 번에 가져옵니다.
-        inventories = await get_inventories_for_users(all_user_ids)
-        
-        reloaded_count = 0
-        for pet_data in res.data:
-            user_id = int(pet_data['user_id'])
-            message_id = int(pet_data['message_id'])
-            # [수정] DB를 다시 조회하는 대신, 미리 가져온 데이터에서 찾습니다.
-            user_inventory = inventories.get(user_id, {})
+            all_user_ids = [int(pet['user_id']) for pet in res.data]
             
-            cooldown_active = await self._is_play_on_cooldown(pet_data['id'])
-            evo_ready = await self._is_evolution_ready(pet_data, user_inventory)
+            # [수정] 여러 유저의 인벤토리를 한 번의 DB 요청으로 미리 가져옵니다.
+            inventories = await get_inventories_for_users(all_user_ids)
             
-            view = PetUIView(self, user_id, pet_data, play_cooldown_active=cooldown_active, evolution_ready=evo_ready)
-            self.bot.add_view(view, message_id=message_id)
-            reloaded_count += 1
-        logger.info(f"[PetSystem] 총 {reloaded_count}개의 펫 관리 UI를 성공적으로 다시 로드했습니다.")
-    except Exception as e:
-        logger.error(f"활성 펫 UI 로드 중 오류 발생: {e}", exc_info=True)
+            reloaded_count = 0
+            for pet_data in res.data:
+                user_id = int(pet_data['user_id'])
+                message_id = int(pet_data['message_id'])
+                
+                # [수정] DB를 다시 조회하는 대신, 미리 가져온 데이터에서 찾습니다.
+                user_inventory = inventories.get(user_id, {})
+                
+                cooldown_active = await self._is_play_on_cooldown(pet_data['id'])
+                evo_ready = await self._is_evolution_ready(pet_data, user_inventory)
+                
+                view = PetUIView(self, user_id, pet_data, play_cooldown_active=cooldown_active, evolution_ready=evo_ready)
+                self.bot.add_view(view, message_id=message_id)
+                reloaded_count += 1
+            logger.info(f"[PetSystem] 총 {reloaded_count}개의 펫 관리 UI를 성공적으로 다시 로드했습니다.")
+        except Exception as e:
+            logger.error(f"활성 펫 UI 로드 중 오류 발생: {e}", exc_info=True)
 
     @tasks.loop(minutes=30)
     async def hunger_and_stat_decay(self):
