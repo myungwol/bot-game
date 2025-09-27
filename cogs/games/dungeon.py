@@ -330,20 +330,29 @@ class DungeonGameView(ui.View):
         if self.pet_current_hp <= 0:
             self.pet_is_defeated = True
 
-    # [수정 2-1] _get_stat_with_effects 함수를 올바른 로직으로 수정합니다.
+    # [수정] 중복 정의를 모두 제거하고, 디버깅 로그가 추가된 이 하나의 함수로 교체합니다.
     def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
         """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
         multiplier = 1.0
+        
+        # [디버깅 로그 추가] 함수가 어떤 값으로 호출되었는지 확인합니다.
+        logger.info(f"[STAT_CALC_INPUT] Key: {stat_key}, Base: {base_stat}, Effects: {effects}")
+
         # stat_key는 'ATK', 'DEF', 'SPD' 등으로 들어옵니다.
         # effect['type']은 'ATK_BUFF', 'ATK_DEBUFF' 등으로 들어옵니다.
         for effect in effects:
-            # 예시: stat_key가 'ATK'일 때, effect['type']이 'ATK_BUFF' 또는 'ATK_DEBUFF'인지 확인
-            if stat_key in effect['type']:
-                if 'BUFF' in effect['type']:
-                    multiplier += effect['value']
-                elif 'DEBUFF' in effect['type']:
-                    multiplier -= effect['value']
-        return max(1, round(base_stat * multiplier))
+            # [수정] 'in' 대신 f-string을 사용한 정확한 문자열 비교로 변경하여 오류를 방지합니다.
+            if effect['type'] == f"{stat_key}_BUFF":
+                multiplier += effect['value']
+            elif effect['type'] == f"{stat_key}_DEBUFF":
+                multiplier -= effect['value']
+        
+        final_stat = max(1, round(base_stat * multiplier))
+        
+        # [디버깅 로그 추가] 최종 계산 결과를 확인합니다.
+        logger.info(f"[STAT_CALC_OUTPUT] Multiplier: {multiplier:.2f}, Final Stat: {final_stat}")
+        
+        return final_stat
         
     def _apply_skill_effect(self, skill_data: Dict, caster_effects: List[Dict], target_effects: List[Dict], caster_name: str, target_name: str, caster_max_hp: int = 0, damage_dealt: int = 0):
         effect_type = skill_data.get('effect_type')
