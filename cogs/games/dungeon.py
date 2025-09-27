@@ -53,6 +53,51 @@ async def load_dungeon_data_from_db() -> Dict[str, Any]:
         logger.error(f"❌ 던전 데이터 DB 로드 실패: {e}", exc_info=True)
         return {"dungeons": {}, "monsters": {}, "loot": {}}
 
+class SkillSelectView(ui.View):
+    def __init__(self, main_view: 'DungeonGameView', learned_skills: List[Dict]):
+        super().__init__(timeout=60)
+        self.main_view = main_view  # DungeonGameView 인스턴스를 저장
+        self.learned_skills = learned_skills
+        self._build_components()
+
+    def _build_components(self):
+        if not self.learned_skills:
+            self.add_item(ui.Button(label="배운 스킬이 없습니다!", disabled=True))
+            return
+
+        options = [
+            discord.SelectOption(
+                label=s['pet_skills']['skill_name'],
+                value=str(s['pet_skills']['id']),
+                description=f"위력: {s['pet_skills']['power']} | 속성: {s['pet_skills']['element']}"
+            ) for s in self.learned_skills
+        ]
+
+        skill_select = ui.Select(placeholder="사용할 스킬을 선택하세요...", options=options)
+        skill_select.callback = self.on_skill_select
+        self.add_item(skill_select)
+
+    async def on_skill_select(self, interaction: discord.Interaction):
+        # 1. 스킬 선택 상호작용에 대한 응답
+        await interaction.response.defer()
+
+        # 2. 선택된 스킬 정보 찾기
+        skill_id = int(interaction.data['values'][0])
+        skill_data = next((s['pet_skills'] for s in self.learned_skills if s['pet_skills']['id'] == skill_id), None)
+        
+        # 3. 메인 View의 스킬 사용 로직 호출
+        if skill_data:
+            await self.main_view.handle_skill_use(skill_data)
+        
+        # 4. 스킬 선택창(임시 메시지) 삭제
+        try:
+            await interaction.delete_original_response()
+        except discord.NotFound:
+            pass # 이미 처리되었거나 다른 이유로 메시지가 없을 수 있음
+        
+        self.stop()
+
+# 이제 DungeonGameView 클래스가 시작됩니다.
 class DungeonGameView(ui.View):
     def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime, session_id: int):
         super().__init__(timeout=None)
@@ -416,40 +461,16 @@ class DungeonGameView(ui.View):
     async def handle_skill_button(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
+        # get_user_pet은 이제 스킬 정보를 함께 가져옵니다.
         pet_data = await get_user_pet(self.user.id)
         learned_skills = pet_data.get('learned_skills', [])
         
         if not learned_skills:
-            return await interaction.followup.send("❌ 배운 스킬이 없습니다! 기본 공격을 사용합니다.", ephemeral=True)
-            # 기본 공격 로직 추가 가능
+            return await interaction.followup.send("❌ 배운 스킬이 없습니다!", ephemeral=True)
 
-        options = [
-            discord.SelectOption(
-                label=s['pet_skills']['skill_name'],
-                value=str(s['pet_skills']['id']),
-                description=f"위력: {s['pet_skills']['power']} | 속성: {s['pet_skills']['element']}"
-            ) for s in learned_skills
-        ]
-
-        skill_select = ui.Select(placeholder="사용할 스킬을 선택하세요...", options=options)
-        
-        async def skill_select_callback(select_interaction: discord.Interaction):
-            # ▼▼▼ [핵심 수정] select_interaction에 대한 응답을 먼저 처리합니다. ▼▼▼
-            await select_interaction.response.defer()
-            
-            skill_id = int(select_interaction.data['values'][0])
-            skill_data = next((s['pet_skills'] for s in learned_skills if s['pet_skills']['id'] == skill_id), None)
-            
-            if skill_data:
-                # handle_skill_use에는 더 이상 interaction 객체를 넘기지 않습니다.
-                await self.handle_skill_use(skill_data)
-            
-            # 임시 메시지를 삭제합니다.
-            await select_interaction.delete_original_response()
-
-        skill_select.callback = skill_select_callback
-        view = ui.View(timeout=60).add_item(skill_select)
-        await interaction.followup.send("어떤 스킬을 사용하시겠습니까?", view=view, ephemeral=True)
+        # 새로 만든 SkillSelectView 클래스의 인스턴스를 생성
+        skill_selection_view = SkillSelectView(self, learned_skills)
+        await interaction.followup.send("어떤 스킬을 사용하시겠습니까?", view=skill_selection_view, ephemeral=True)
 
     # ▼▼▼ [확실한 수정] 아래 메서드 전체를 복사하여 기존 handle_monster_turn 메서드를 덮어쓰세요 ▼▼▼
     async def handle_monster_turn(self, interaction: Optional[discord.Interaction] = None):
