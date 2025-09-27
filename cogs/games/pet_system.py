@@ -67,6 +67,7 @@ async def delete_message_after(message: discord.InteractionMessage, delay: int):
     except (discord.NotFound, discord.Forbidden):
         pass
 
+# [신규] 새로운 스킬을 제안하는 전용 View
 class SkillAcquisitionView(ui.View):
     def __init__(self, cog: 'PetSystem', user_id: int, pet_data: Dict, unlocked_skill: Dict):
         super().__init__(timeout=86400) # 24시간 동안 유효
@@ -79,7 +80,6 @@ class SkillAcquisitionView(ui.View):
     async def start(self, thread: discord.TextChannel):
         embed = self.build_embed()
         self.update_components()
-        # ▼▼▼ [핵심 수정] thread.owner 대신 self.user_id를 사용하여 유저를 멘션합니다. ▼▼▼
         message_text = f"<@{self.user_id}>, 펫이 성장하여 새로운 스킬을 배울 수 있게 되었습니다!"
         await thread.send(message_text, embed=embed, view=self)
 
@@ -123,19 +123,12 @@ class SkillAcquisitionView(ui.View):
         learned_skills = self.pet_data.get('learned_skills', [])
         empty_slot = next((s for s in range(1, 5) if s not in [ls['slot_number'] for ls in learned_skills]), None)
         if empty_slot:
-            # 1. DB에 스킬을 먼저 저장합니다.
             await set_pet_skill(self.pet_data['id'], self.unlocked_skill['id'], empty_slot)
-            
-            # 2. 스킬 학습 UI 메시지를 수정합니다.
             await interaction.message.edit(content=f"✅ **{self.unlocked_skill['skill_name']}** 스킬을 배웠습니다!", embed=None, view=None)
             
-            # ▼▼▼ [핵심 수정] DB에서 최신 데이터를 다시 불러온 후 메인 UI를 업데이트합니다. ▼▼▼
-            # 3. DB에서 최신 펫 데이터를 다시 가져옵니다.
             updated_pet_data = await get_user_pet(self.user_id)
             if updated_pet_data:
-                # 4. 최신 데이터로 메인 UI를 업데이트합니다.
                 await self.cog.update_pet_ui(self.user_id, interaction.channel, pet_data_override=updated_pet_data)
-            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
         self.stop()
 
     async def on_replace_select(self, interaction: discord.Interaction):
@@ -148,11 +141,9 @@ class SkillAcquisitionView(ui.View):
         await set_pet_skill(self.pet_data['id'], self.unlocked_skill['id'], self.selected_slot_to_replace)
         await interaction.message.edit(content=f"✅ **{self.unlocked_skill['skill_name']}** 스킬로 교체했습니다!", embed=None, view=None)
         
-        # ▼▼▼ [핵심 수정] 여기에도 동일한 로직을 적용합니다. ▼▼▼
         updated_pet_data = await get_user_pet(self.user_id)
         if updated_pet_data:
             await self.cog.update_pet_ui(self.user_id, interaction.channel, pet_data_override=updated_pet_data)
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
         self.stop()
         
     async def on_pass(self, interaction: discord.Interaction):
@@ -174,7 +165,6 @@ class SkillChangeView(ui.View):
     async def start(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         
-        # 유저가 배울 수 있는 모든 스킬을 미리 로드
         learned_skill_ids = [s['skill_id'] for s in self.pet_data.get('learned_skills', [])]
         all_possible_skills = await get_skills_unlocked_at_level(self.pet_data['level'], self.pet_data['pet_species']['element'])
         self.learnable_skills = [s for s in all_possible_skills if s['id'] not in learned_skill_ids]
@@ -193,7 +183,6 @@ class SkillChangeView(ui.View):
         
         learned_skills = self.pet_data.get('learned_skills', [])
         
-        # ▼▼▼ [핵심 수정] 빈 슬롯도 선택지에 포함시킵니다. ▼▼▼
         slot_options = []
         for i in range(1, 5):
             learned_skill_in_slot = next((s for s in learned_skills if s['slot_number'] == i), None)
@@ -207,7 +196,6 @@ class SkillChangeView(ui.View):
         slot_select = ui.Select(placeholder="① 스킬을 배우거나 교체할 슬롯 선택...", options=slot_options)
         slot_select.callback = self.on_slot_select
         self.add_item(slot_select)
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
         new_skill_options = [
             discord.SelectOption(label=s['skill_name'], value=str(s['id']), description=f"위력:{s['power']}, 속성:{s['element']}")
@@ -244,7 +232,6 @@ class SkillChangeView(ui.View):
         if success:
             await interaction.edit_original_response(content="✅ 스킬을 성공적으로 배웠습니다/변경했습니다!", view=None)
             
-            # UI 업데이트를 위해 최신 데이터 다시 로드
             updated_pet_data = await get_user_pet(self.user_id)
             if updated_pet_data:
                 await self.cog.update_pet_ui(self.user_id, interaction.channel, pet_data_override=updated_pet_data)
@@ -252,6 +239,7 @@ class SkillChangeView(ui.View):
             await update_wallet(interaction.user, 1000)
             await interaction.edit_original_response(content="❌ 스킬 설정에 실패했습니다. 코인이 환불되었습니다.", view=None)
 
+# ... (StatAllocationView, PetNicknameModal, ConfirmReleaseView, PetUIView, EggSelectView, IncubatorPanelView 클래스는 이전과 동일하므로 생략하지 않고 모두 포함) ...
 class StatAllocationView(ui.View):
     def __init__(self, parent_view: 'PetUIView', message: discord.Message):
         super().__init__(timeout=180)
@@ -557,7 +545,7 @@ class IncubatorPanelView(ui.View):
             await interaction.response.send_message("❌ 이미 펫을 소유하고 있습니다. 펫은 한 마리만 키울 수 있습니다.", ephemeral=True, delete_after=5)
             return
         await interaction.response.defer(ephemeral=True, thinking=False)
-        view = EggSelectView(interaction.user, self.cog)
+        view = EggSelectView(interaction.user, self)
         await view.start(interaction)
 
 class PetSystem(commands.Cog):
@@ -941,6 +929,7 @@ class PetSystem(commands.Cog):
             except Exception as e:
                 logger.error(f"펫 레벨 설정 요청 처리 중 오류: {e}", exc_info=True)
 
+    # [수정] 레벨업 시 스킬 습득 로직 변경
     async def notify_pet_level_up(self, user_id: int, new_level: int, points_awarded: int):
         pet_data = await get_user_pet(user_id)
         if not pet_data: return
@@ -950,14 +939,9 @@ class PetSystem(commands.Cog):
 
         nickname = pet_data.get('nickname', '이름 없는 펫')
         
-        # ▼▼▼ [핵심 수정] 5레벨 단위 체크 및 랜덤 스킬 2개 추출 로직 ▼▼▼
-        # 레벨업 공지는 항상 보냅니다.
         log_channel_id = get_id("log_pet_levelup_channel_id")
         if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
-            message_text = (
-                f"🎉 {user.mention}님의 '**{nickname}**'이(가) **레벨 {new_level}**(으)로 성장했습니다! "
-                f"스탯 포인트 **{points_awarded}**개를 획득했습니다. ✨"
-            )
+            message_text = (f"🎉 {user.mention}님의 '**{nickname}**'이(가) **레벨 {new_level}**(으)로 성장했습니다! 스탯 포인트 **{points_awarded}**개를 획득했습니다. ✨")
             try: await log_channel.send(message_text)
             except Exception as e: logger.error(f"펫 레벨업 로그 전송 실패: {e}")
 
@@ -968,26 +952,22 @@ class PetSystem(commands.Cog):
         
         await self.update_pet_ui(user_id, thread)
 
-        # 5레벨 단위일 때만 스킬 학습 절차를 진행합니다.
-        if new_level % 5 == 0:
-            pet_element = pet_data.get('pet_species', {}).get('element')
-            if not pet_element: return
+        pet_element = pet_data.get('pet_species', {}).get('element')
+        if not pet_element: return
 
-            # 해당 레벨에 '정확히' 해금되는 스킬만 필터링
-            all_learnable_skills = await get_skills_unlocked_at_level(new_level, pet_element)
-            newly_unlocked_skills = [s for s in all_learnable_skills if s.get('unlock_level') == new_level]
+        all_learnable_skills = await get_skills_unlocked_at_level(new_level, pet_element)
+        newly_unlocked_skills = [s for s in all_learnable_skills if s.get('unlock_level') == new_level]
 
-            if newly_unlocked_skills:
-                # 랜덤으로 2개의 스킬을 선택 (선택지가 2개 미만이면 있는 만큼만)
-                skills_to_present = random.sample(newly_unlocked_skills, k=min(2, len(newly_unlocked_skills)))
+        if newly_unlocked_skills:
+            logger.info(f"{user.display_name}의 펫이 {new_level}레벨에 도달하여 {len(newly_unlocked_skills)}개의 스킬을 해금했습니다.")
+            for skill in newly_unlocked_skills:
+                # 각 스킬을 제안하기 직전에 최신 펫 데이터를 다시 불러옵니다. (스킬 슬롯 상태 확인)
+                fresh_pet_data = await get_user_pet(user_id)
+                if not fresh_pet_data: continue
                 
-                if skills_to_present:
-                    fresh_pet_data = await get_user_pet(user_id)
-                    if not fresh_pet_data: return
-                    
-                    selection_view = SkillSelectionView(self, user_id, fresh_pet_data, skills_to_present)
-                    await selection_view.start(thread)
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+                acquisition_view = SkillAcquisitionView(self, user_id, fresh_pet_data, skill)
+                await acquisition_view.start(thread)
+                await asyncio.sleep(2) # 여러 스킬이 해금될 경우를 대비한 스팸 방지
 
     async def check_and_process_auto_evolution(self, user_ids: set):
         for user_id in user_ids:
@@ -1020,15 +1000,12 @@ class PetSystem(commands.Cog):
         return False
 
     async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: Optional[discord.Message] = None, is_refresh: bool = False, pet_data_override: Optional[Dict] = None):
-        # ▼▼▼ [핵심 수정] pet_data_override가 있으면 DB 조회를 건너뜁니다. ▼▼▼
         pet_data = pet_data_override if pet_data_override else await get_user_pet(user_id)
-        
         if not pet_data:
             if message: await message.edit(content="펫 정보를 찾을 수 없습니다.", embed=None, view=None)
             return
         
         inventory = await get_inventory(self.bot.get_user(user_id))
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
         user = self.bot.get_user(user_id)
         embed = self.build_pet_ui_embed(user, pet_data)
         cooldown_active = await self._is_play_on_cooldown(pet_data['id'])
