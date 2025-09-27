@@ -339,18 +339,18 @@ class DungeonGameView(ui.View):
         
         log_value = ""
         
-        # [수정] 조건문을 더 명확하게 변경
-        # 버프 (자신에게 적용)
-        if 'BUFF' in effect_type:
-            caster_effects.append({'type': effect_type, 'value': value, 'duration': duration})
-            stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "EVA": "회피율"}.get(effect_type.split('_')[0], "능력")
-            log_value = f"> **{caster_name}**의 **{stat_name}**이(가) 상승했다!"
-        
+        # [수정] DEBUFF 조건을 BUFF 조건보다 먼저 확인하도록 순서를 변경하고, 로직을 명확히 합니다.
         # 디버프 (상대에게 적용)
-        elif 'DEBUFF' in effect_type:
+        if 'DEBUFF' in effect_type:
             target_effects.append({'type': effect_type, 'value': value, 'duration': duration})
             stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "ACC": "명중률"}.get(effect_type.split('_')[0], "능력")
             log_value = f"> **{target_name}**의 **{stat_name}**이(가) 하락했다!"
+        
+        # 버프 (자신에게 적용)
+        elif 'BUFF' in effect_type:
+            caster_effects.append({'type': effect_type, 'value': value, 'duration': duration})
+            stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "EVA": "회피율"}.get(effect_type.split('_')[0], "능력")
+            log_value = f"> **{caster_name}**의 **{stat_name}**이(가) 상승했다!"
         
         # HP 회복 (자신에게 적용)
         elif effect_type == 'HEAL_PERCENT':
@@ -372,19 +372,29 @@ class DungeonGameView(ui.View):
         if log_value:
             self.battle_log.append({"title": f"✨ 스킬 효과: {skill_data['skill_name']}", "value": log_value})
 
-    # [수정] _get_stat_with_effects 로직도 더 명확하게 변경합니다.
+    # ▼▼▼ [최종 수정] _get_stat_with_effects 메서드도 함께 교체해주세요 ▼▼▼
     def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
         """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
         multiplier = 1.0
         for effect in effects:
-            # 예시: effect['type'] = ATK_BUFF, stat_key = ATK
-            # effect['type'] = ATK_DEBUFF, stat_key = ATK
-            # effect['type'] = DEF_BUFF, stat_key = ATK (이 경우는 무시됨)
+            # effect['type'] 예시: 'ATK_BUFF', 'ATK_DEBUFF'
+            # stat_key 예시: 'attack'
+            # effect_type이 stat_key의 대문자 버전으로 시작하는지 확인 (예: 'ATK_BUFF'.startswith('ATTACK'))
             if effect['type'].startswith(stat_key.upper()):
                 if 'BUFF' in effect['type']:
                     multiplier += effect['value']
                 elif 'DEBUFF' in effect['type']:
                     multiplier -= effect['value']
+        
+        # base_stat이 스탯 딕셔너리의 'attack' 키로 들어올 것을 대비하여, stat_key도 대문자화
+        final_stat_key = stat_key.upper()
+        for effect in effects:
+            if effect['type'].startswith(final_stat_key):
+                if 'BUFF' in effect['type']:
+                    multiplier += effect['value']
+                elif 'DEBUFF' in effect['type']:
+                    multiplier -= effect['value']
+
         return max(1, round(base_stat * multiplier))
 
     def _process_turn_end_effects(self, effects: List[Dict], target_name: str, is_pet: bool):
