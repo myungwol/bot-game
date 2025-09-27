@@ -433,9 +433,9 @@ class DungeonGameView(ui.View):
         view = ui.View(timeout=60).add_item(skill_select)
         await interaction.followup.send("어떤 스킬을 사용하시겠습니까?", view=view, ephemeral=True)
 
-    # ▼▼▼ [수정] handle_monster_turn 메서드를 아래 내용으로 교체 ▼▼▼
-    # ▼▼▼ [수정] 이전에 추가했던 handle_monster_turn 함수 전체를 아래 코드로 교체해주세요. ▼▼▼
+    # ▼▼▼ [확실한 수정] 아래 메서드 전체를 복사하여 기존 handle_monster_turn 메서드를 덮어쓰세요 ▼▼▼
     async def handle_monster_turn(self, interaction: Optional[discord.Interaction] = None):
+        # ▲▲▲▲▲ 이 함수의 첫 줄이 이렇게 생겼는지 반드시 확인해주세요 ▲▲▲▲▲
         if self.state != "in_battle" or self.is_pet_turn or self.pet_is_defeated:
             return
 
@@ -452,7 +452,6 @@ class DungeonGameView(ui.View):
             
         # 몬스터 턴이 끝나면 플레이어 턴으로 변경하고 UI 갱신
         self.is_pet_turn = True
-        # refresh_ui에 interaction을 다시 넘기면 이중 응답 오류가 발생할 수 있으므로 여기서는 비워둡니다.
         await self.refresh_ui()
     
     async def handle_skill_use(self, skill_data: Dict):
