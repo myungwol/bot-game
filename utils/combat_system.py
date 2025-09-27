@@ -3,7 +3,7 @@
 import random
 from typing import Dict, List, Tuple, TypedDict, Optional
 
-# ... (Combatant, CombatLog 클래스, _get_stat_with_effects 함수는 변경 없음) ...
+# ... (Combatant, CombatLog 클래스는 변경 없음) ...
 class Combatant(TypedDict):
     name: str
     stats: Dict[str, int]
@@ -16,14 +16,16 @@ class CombatLog(TypedDict):
     value: str
 
 def _get_stat_with_effects(base_stat: int, stat_key: str, effects: List[Dict]) -> int:
+    """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
     multiplier = 1.0
     for effect in effects:
+        # [수정] 명중(ACC)과 회피(EVA)는 스탯이 아닌 확률 보정치이므로, 이 함수에서 제외하고
+        # process_turn에서 직접 처리하도록 합니다.
         if effect.get('type') == f"{stat_key}_BUFF":
             multiplier += effect.get('value', 0)
         elif effect.get('type') == f"{stat_key}_DEBUFF":
             multiplier -= effect.get('value', 0)
     return max(1, round(base_stat * multiplier))
-
 
 def _apply_skill_effect(
     skill: Dict, 
@@ -42,7 +44,6 @@ def _apply_skill_effect(
 
     existing_effect = next((e for e in target['effects'] if e.get('type') == effect_type), None)
     
-    # [수정] 길동무(DESTINY_BOND)는 시전자에게 효과를 부여합니다.
     if effect_type == 'DESTINY_BOND':
         caster['effects'].append({'type': 'DESTINY_BOND', 'duration': duration + 1})
     elif existing_effect:
@@ -73,17 +74,15 @@ def _apply_skill_effect(
         log_value = f"> **{target['name']}**은(는) 마비되었다!"
     elif effect_type == 'SLEEP':
         log_value = f"> **{target['name']}**은(는) 잠이 들었다!"
-    # [추가] 길동무 스킬 사용 시 로그 추가
     elif effect_type == 'DESTINY_BOND':
         log_value = f"> **{caster['name']}**은(는) 상대를 길동무로 삼았다!"
-
 
     if log_value:
         return caster, target, {"title": log_title, "value": log_value}
     return caster, target, None
 
-# ... (_process_turn_end_effects 함수는 변경 없음) ...
 def _process_turn_end_effects(combatant: Combatant) -> Tuple[Combatant, List[str]]:
+    # ... (이 함수는 변경 없이 그대로 유지) ...
     logs = []
     effects_to_remove = []
     effect_name_map = {'BURN': '화상', 'ATK_BUFF': '공격력 증가', 'DEF_BUFF': '방어력 증가', 'SPD_BUFF': '스피드 증가', 'EVA_BUFF': '회피율 증가', 'ATK_DEBUFF': '공격력 감소', 'DEF_DEBUFF': '방어력 감소', 'SPD_DEBUFF': '스피드 감소', 'ACC_DEBUFF': '명중률 감소', 'PARALYZE': '마비', 'SLEEP': '수면', 'DESTINY_BOND': '길동무'}
@@ -106,6 +105,7 @@ def _process_turn_end_effects(combatant: Combatant) -> Tuple[Combatant, List[str
             
     return combatant, logs
 
+
 def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Combatant, Combatant, List[CombatLog | str]]:
     battle_logs: List[CombatLog | str] = []
 
@@ -121,13 +121,36 @@ def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Com
             battle_logs.extend(end_of_turn_logs)
             return caster, target, battle_logs
 
+    # ▼▼▼ [핵심 수정] 명중률 계산 및 판정 로직 추가 ▼▼▼
+    # 1. 명중/회피 보정치 계산
+    accuracy_modifier = 1.0
+    for effect in caster['effects']:
+        if effect.get('type') == 'ACC_DEBUFF':
+            accuracy_modifier -= effect.get('value', 0)
+    for effect in target['effects']:
+        if effect.get('type') == 'EVA_BUFF':
+            accuracy_modifier -= effect.get('value', 0)
+
+    # 2. 최종 명중률 계산
+    # effect_chance가 NULL이거나 1이면 기본 명중률 100%
+    base_accuracy = skill.get('effect_chance') if skill.get('effect_chance') is not None else 1.0
+    final_accuracy = base_accuracy * accuracy_modifier
+
+    # 3. 명중 판정
+    # 위력이 0인 스킬(버프, 디버프 등)은 항상 명중하도록 처리
+    if skill.get('power', 0) > 0 and random.random() > final_accuracy:
+        battle_logs.append(f"💨 **{caster['name']}**의 **{skill['skill_name']}**! ...하지만 공격은 빗나갔다!")
+        caster, end_of_turn_logs = _process_turn_end_effects(caster)
+        battle_logs.extend(end_of_turn_logs)
+        return caster, target, battle_logs
+    # ▲▲▲ [수정] 완료 ▲▲▲
+
     skill_power = skill.get('power', 0)
     damage_dealt = 0
 
     if skill_power == 0:
         caster, target, effect_log = _apply_skill_effect(skill, caster, target, 0)
-        if effect_log:
-            battle_logs.append(effect_log)
+        if effect_log: battle_logs.append(effect_log)
     else:
         final_attack = _get_stat_with_effects(caster['stats']['attack'], 'ATK', caster['effects'])
         final_defense = _get_stat_with_effects(target['stats']['defense'], 'DEF', target['effects'])
@@ -148,15 +171,13 @@ def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Com
 
         if skill.get('effect_type'):
             caster, target, effect_log = _apply_skill_effect(skill, caster, target, damage_dealt)
-            if effect_log:
-                battle_logs.append(effect_log)
+            if effect_log: battle_logs.append(effect_log)
 
         if skill.get('effect_type') == 'RECOIL':
             recoil_damage = max(1, round(damage_dealt * skill.get('effect_value', 0)))
             caster['current_hp'] = max(0, caster['current_hp'] - recoil_damage)
             battle_logs.append(f"💥 **{caster['name']}**은(는) 반동으로 **{recoil_damage}**의 데미지를 입었다!")
 
-    # [추가] 길동무 효과 발동 체크
     if target['current_hp'] <= 0:
         destiny_bond_effect = next((e for e in target['effects'] if e.get('type') == 'DESTINY_BOND'), None)
         if destiny_bond_effect:
