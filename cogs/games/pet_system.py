@@ -19,7 +19,6 @@ from utils.database import (
     save_config_to_db, delete_config_from_db, get_id, get_user_pet,
     get_learnable_skills, set_pet_skill, get_wallet, update_wallet,
     get_skills_unlocked_at_level,
-    # [수정] 레벨업 시 정확한 스킬을 조회하기 위한 함수를 import 목록에 추가합니다.
     get_skills_unlocked_at_exact_level
 )
 from utils.helpers import format_embed_from_db
@@ -198,11 +197,23 @@ class SkillChangeView(ui.View):
         slot_select.callback = self.on_slot_select
         self.add_item(slot_select)
 
+        # ▼▼▼ [수정] 에러 해결을 위한 핵심 수정 부분 ▼▼▼
         new_skill_options = [
             discord.SelectOption(label=s['skill_name'], value=str(s['id']), description=f"위력:{s['power']}, 속성:{s['element']}")
             for s in self.learnable_skills[:25]
         ]
-        new_skill_select = ui.Select(placeholder="② 새로 배울 스킬을 선택하세요...", options=new_skill_options, disabled=(not self.learnable_skills))
+        
+        # 배울 수 있는 스킬이 없을 때 플레이스홀더 옵션을 추가합니다.
+        if not new_skill_options:
+            new_skill_options.append(discord.SelectOption(label="배울 수 있는 스킬이 없습니다.", value="no_skills_available"))
+        
+        new_skill_select = ui.Select(
+            placeholder="② 새로 배울 스킬을 선택하세요...", 
+            options=new_skill_options, 
+            disabled=(not self.learnable_skills)
+        )
+        # ▲▲▲ [수정] 완료 ▲▲▲
+        
         new_skill_select.callback = self.on_new_skill_select
         self.add_item(new_skill_select)
 
@@ -216,6 +227,10 @@ class SkillChangeView(ui.View):
         await interaction.response.edit_message(view=self)
 
     async def on_new_skill_select(self, interaction: discord.Interaction):
+        # [수정] 플레이스홀더 옵션이 선택되었을 경우, 아무 작업도 하지 않도록 처리합니다.
+        if interaction.data['values'][0] == "no_skills_available":
+            return await interaction.response.defer()
+            
         self.selected_new_skill_id = int(interaction.data['values'][0])
         self.update_components()
         await interaction.response.edit_message(view=self)
@@ -954,19 +969,17 @@ class PetSystem(commands.Cog):
         pet_element = pet_data.get('pet_species', {}).get('element')
         if not pet_element: return
 
-        # [수정] 비효율적인 조회 및 필터링 대신, 새 레벨에 맞는 스킬만 직접 조회하는 방식으로 변경합니다.
         newly_unlocked_skills = await get_skills_unlocked_at_exact_level(new_level, pet_element)
 
         if newly_unlocked_skills:
             logger.info(f"{user.display_name}의 펫이 {new_level}레벨에 도달하여 {len(newly_unlocked_skills)}개의 스킬을 해금했습니다.")
             for skill in newly_unlocked_skills:
-                # 각 스킬을 제안하기 직전에 최신 펫 데이터를 다시 불러옵니다. (스킬 슬롯 상태 확인)
                 fresh_pet_data = await get_user_pet(user_id)
                 if not fresh_pet_data: continue
                 
                 acquisition_view = SkillAcquisitionView(self, user_id, fresh_pet_data, skill)
                 await acquisition_view.start(thread)
-                await asyncio.sleep(2) # 여러 스킬이 해금될 경우를 대비한 스팸 방지
+                await asyncio.sleep(2)
 
     async def check_and_process_auto_evolution(self, user_ids: set):
         for user_id in user_ids:
