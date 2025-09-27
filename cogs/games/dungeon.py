@@ -17,7 +17,7 @@ from typing import Optional # Optional import 했는지 확인
 from utils.database import (
     get_inventory, update_inventory, supabase, get_id,
     save_panel_id, get_panel_id, get_embed_from_db,
-    get_item_database, get_user_pet # [수정] get_user_pet 추가
+    get_item_database, get_user_pet
 )
 from utils.helpers import format_embed_from_db
 
@@ -56,7 +56,7 @@ async def load_dungeon_data_from_db() -> Dict[str, Any]:
 class SkillSelectView(ui.View):
     def __init__(self, main_view: 'DungeonGameView', learned_skills: List[Dict]):
         super().__init__(timeout=60)
-        self.main_view = main_view  # DungeonGameView 인스턴스를 저장
+        self.main_view = main_view
         self.learned_skills = learned_skills
         self._build_components()
 
@@ -78,35 +78,29 @@ class SkillSelectView(ui.View):
         self.add_item(skill_select)
 
     async def on_skill_select(self, interaction: discord.Interaction):
-        # 1. 스킬 선택 상호작용에 대한 응답
         await interaction.response.defer()
-
-        # 2. 선택된 스킬 정보 찾기
         skill_id = int(interaction.data['values'][0])
         skill_data = next((s['pet_skills'] for s in self.learned_skills if s['pet_skills']['id'] == skill_id), None)
         
-        # 3. 메인 View의 스킬 사용 로직 호출
         if skill_data:
             await self.main_view.handle_skill_use(skill_data)
         
-        # 4. 스킬 선택창(임시 메시지) 삭제
         try:
             await interaction.delete_original_response()
         except discord.NotFound:
-            pass # 이미 처리되었거나 다른 이유로 메시지가 없을 수 있음
+            pass
         
         self.stop()
 
-# 이제 DungeonGameView 클래스가 시작됩니다.
 class DungeonGameView(ui.View):
+    # [수정 1-1] __init__ 함수에 current_state와 monster_data 파라미터를 추가하여 상태 복원을 지원합니다.
     def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime, session_id: int, current_state: str = "exploring", monster_data: Optional[Dict] = None):
         super().__init__(timeout=None)
         self.cog = cog; self.user = user; self.pet_data_raw = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
         self.session_id = session_id
         self.final_pet_stats = self._calculate_final_pet_stats()
         
-        # [수정] DB에서 불러온 state와 monster 데이터로 초기화합니다.
-        self.state = current_state
+        self.state = current_state  # DB에서 불러온 상태로 초기화
         self.message: Optional[discord.Message] = None
         self.battle_log: List[Any] = []
         self.rewards: Dict[str, int] = defaultdict(int)
@@ -120,7 +114,6 @@ class DungeonGameView(ui.View):
         self.pet_effects: List[Dict] = []
         self.monster_effects: List[Dict] = []
         
-        # [수정] DB에서 불러온 monster 데이터로 복원합니다.
         self.current_monster: Optional[Dict] = monster_data.get('data') if monster_data else None
         self.monster_current_hp: int = monster_data.get('hp', 0) if monster_data else 0
         
@@ -128,7 +121,6 @@ class DungeonGameView(ui.View):
         
         self.build_components()
 
-    # _calculate_final_pet_stats, start, generate_monster 는 변경 없음 (생략)
     def _calculate_final_pet_stats(self) -> Dict[str, int]:
         species_info = self.pet_data_raw.get('pet_species', {})
         level = self.pet_data_raw.get('level', 1)
@@ -162,21 +154,17 @@ class DungeonGameView(ui.View):
         image_url = f"{self.storage_base_url}/{element}_{dungeon_info['image_suffix']}.png"
         return {"name": f"Lv.{monster_level} {dungeon_info['name'].replace('던전', '')} {base_monster['name']}", "hp": hp, "attack": attack, "defense": defense, "speed": speed, "xp": xp, "element": element, "image_url": image_url}
 
-    # ▼▼▼ [교체] build_embed 메서드 전체를 아래 코드로 교체해주세요 ▼▼▼
     def build_embed(self) -> discord.Embed:
         dungeon_info = self.cog.dungeon_data[self.dungeon_tier]
         embed = discord.Embed(title=f"탐험 중... - {dungeon_info['name']}", color=0x71368A)
         description_content = ""
 
-        # --- 펫 스탯 표시 로직 (수정됨) ---
         pet_base_stats = self.final_pet_stats
         
-        # 현재 효과를 적용한 최종 스탯 계산
         pet_final_attack = self._get_stat_with_effects(pet_base_stats['attack'], 'ATK', self.pet_effects)
         pet_final_defense = self._get_stat_with_effects(pet_base_stats['defense'], 'DEF', self.pet_effects)
         pet_final_speed = self._get_stat_with_effects(pet_base_stats['speed'], 'SPD', self.pet_effects)
         
-        # 스탯 변동량에 따라 색상과 화살표 추가하는 함수
         def get_stat_change_indicator(base_stat, final_stat):
             if final_stat > base_stat:
                 return f"🔺 (+{final_stat - base_stat})"
@@ -205,7 +193,6 @@ class DungeonGameView(ui.View):
             embed.description = turn_indicator
             embed.set_image(url=self.current_monster['image_url'])
 
-            # --- 몬스터 스탯 표시 로직 (수정됨) ---
             monster_base_stats = self.current_monster
             monster_final_attack = self._get_stat_with_effects(monster_base_stats['attack'], 'ATK', self.monster_effects)
             monster_final_defense = self._get_stat_with_effects(monster_base_stats['defense'], 'DEF', self.monster_effects)
@@ -262,7 +249,6 @@ class DungeonGameView(ui.View):
         buttons_map = {
             "explore": ui.Button(label="탐색하기", style=discord.ButtonStyle.success, emoji="🗺️", custom_id=f"{base_id}:explore"),
             "use_item": ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji="👜", custom_id=f"{base_id}:use_item"),
-            # ▼▼▼ [수정] '공격' 버튼을 '스킬' 버튼으로 변경 ▼▼▼
             "skill": ui.Button(label="스킬", style=discord.ButtonStyle.primary, emoji="✨", custom_id=f"{base_id}:skill"),
             "flee": ui.Button(label="도망가기", style=discord.ButtonStyle.danger, emoji="🏃", custom_id=f"{base_id}:flee"),
             "leave": ui.Button(label="던전 나가기", style=discord.ButtonStyle.grey, emoji="🚪", custom_id=f"{base_id}:leave"),
@@ -276,7 +262,6 @@ class DungeonGameView(ui.View):
             self.add_item(buttons_map["explore"])
             self.add_item(buttons_map["use_item"])
         elif self.state == "in_battle":
-            # ▼▼▼ [수정] '공격' 대신 '스킬' 버튼을 추가하고, 펫의 턴일 때만 활성화 ▼▼▼
             buttons_map["skill"].disabled = not self.is_pet_turn
             self.add_item(buttons_map["skill"])
             self.add_item(buttons_map["use_item"])
@@ -288,7 +273,6 @@ class DungeonGameView(ui.View):
             if isinstance(item, ui.Button):
                 item.callback = self.dispatch_callback
 
-    # ... interaction_check 메서드는 변경 없음 ...
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user.id:
             await interaction.response.send_message("자신의 던전만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
@@ -302,7 +286,7 @@ class DungeonGameView(ui.View):
             return
         method_map = {
             "explore": self.handle_explore, 
-            "skill": self.handle_skill_button, # 'attack' -> 'skill'
+            "skill": self.handle_skill_button,
             "flee": self.handle_flee, 
             "leave": self.handle_leave, 
             "use_item": self.handle_use_item
@@ -310,7 +294,6 @@ class DungeonGameView(ui.View):
         if method := method_map.get(action): 
             await method(interaction)
 
-    # ... refresh_ui 메서드는 변경 없음 ...
     async def refresh_ui(self, interaction: Optional[discord.Interaction] = None):
         if interaction and not interaction.response.is_done(): await interaction.response.defer()
         self.build_components(); embed = self.build_embed()
@@ -321,16 +304,12 @@ class DungeonGameView(ui.View):
     async def _execute_pet_turn(self, used_skill: Dict):
         skill_power = used_skill.get('power', 0)
         
-        # 1. 비공격 기술 처리 (버프, 디버프, 힐 등)
         if skill_power == 0:
             self._apply_skill_effect(used_skill, self.pet_effects, self.monster_effects, self.pet_data_raw['nickname'], self.current_monster['name'], self.final_pet_stats['hp'])
-        # 2. 공격 기술 처리
         else:
-            # 2a. 효과를 적용한 최종 스탯 계산
             final_attack = self._get_stat_with_effects(self.final_pet_stats['attack'], 'ATK', self.pet_effects)
             final_defense = self._get_stat_with_effects(self.current_monster.get('defense', 0), 'DEF', self.monster_effects)
             
-            # 2b. 데미지 계산 및 적용
             damage = max(1, round(final_attack * (skill_power / 100)) - final_defense)
             self.monster_current_hp = max(0, self.monster_current_hp - damage)
             
@@ -339,139 +318,98 @@ class DungeonGameView(ui.View):
                 "value": f"> **{self.current_monster['name']}**에게 **{damage}**의 데미지!"
             })
             
-            # 2c. 공격 후 발생하는 부가 효과 처리 (흡혈, 반동 데미지 등)
             if used_skill.get('effect_type'):
                 self._apply_skill_effect(used_skill, self.pet_effects, self.monster_effects, self.pet_data_raw['nickname'], self.current_monster['name'], damage_dealt=damage)
             
-            # 2d. 반동 데미지 처리
             if used_skill.get('effect_type') == 'RECOIL':
                 recoil_damage = max(1, round(damage * used_skill.get('effect_value', 0)))
                 self.pet_current_hp = max(0, self.pet_current_hp - recoil_damage)
                 self.battle_log.append(f"💥 **{self.pet_data_raw['nickname']}**은(는) 반동으로 **{recoil_damage}**의 데미지를 입었다!")
 
-        # 3. 펫의 턴 종료 시 지속 효과 처리
         self._process_turn_end_effects(self.pet_effects, self.pet_data_raw['nickname'], is_pet=True)
-        if self.pet_current_hp <= 0: # 지속 데미지로 쓰러질 경우
+        if self.pet_current_hp <= 0:
             self.pet_is_defeated = True
-        
-    # ▼▼▼ [최종 수정] 아래 _apply_skill_effect 메서드 전체를 교체해주세요 ▼▼▼
-    def _apply_skill_effect(self, skill_data: Dict, caster_effects: List[Dict], target_effects: List[Dict], caster_name: str, target_name: str, caster_max_hp: int = 0, damage_dealt: int = 0):
-        """스킬의 특수 효과를 적용하고 배틀 로그를 추가합니다."""
-        effect_type = skill_data.get('effect_type')
-        if not effect_type:
-            return
 
-        value = skill_data.get('effect_value', 0)
-        duration = skill_data.get('effect_duration', 0)
+    # [수정 2-1] _get_stat_with_effects 함수를 올바른 로직으로 수정합니다.
+    def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
+        """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
+        multiplier = 1.0
+        # stat_key는 'ATK', 'DEF', 'SPD' 등으로 들어옵니다.
+        # effect['type']은 'ATK_BUFF', 'ATK_DEBUFF' 등으로 들어옵니다.
+        for effect in effects:
+            # 예시: stat_key가 'ATK'일 때, effect['type']이 'ATK_BUFF' 또는 'ATK_DEBUFF'인지 확인
+            if stat_key in effect['type']:
+                if 'BUFF' in effect['type']:
+                    multiplier += effect['value']
+                elif 'DEBUFF' in effect['type']:
+                    multiplier -= effect['value']
+        return max(1, round(base_stat * multiplier))
         
+    def _apply_skill_effect(self, skill_data: Dict, caster_effects: List[Dict], target_effects: List[Dict], caster_name: str, target_name: str, caster_max_hp: int = 0, damage_dealt: int = 0):
+        effect_type = skill_data.get('effect_type')
+        if not effect_type: return
+
+        value = skill_data.get('effect_value', 0); duration = skill_data.get('effect_duration', 0)
         log_value = ""
         
-        # [수정] DEBUFF 조건을 BUFF 조건보다 먼저 확인하도록 순서를 변경하고, 로직을 명확히 합니다.
-        # 디버프 (상대에게 적용)
         if 'DEBUFF' in effect_type:
             target_effects.append({'type': effect_type, 'value': value, 'duration': duration})
             stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "ACC": "명중률"}.get(effect_type.split('_')[0], "능력")
             log_value = f"> **{target_name}**의 **{stat_name}**이(가) 하락했다!"
         
-        # 버프 (자신에게 적용)
         elif 'BUFF' in effect_type:
             caster_effects.append({'type': effect_type, 'value': value, 'duration': duration})
             stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "EVA": "회피율"}.get(effect_type.split('_')[0], "능력")
             log_value = f"> **{caster_name}**의 **{stat_name}**이(가) 상승했다!"
         
-        # HP 회복 (자신에게 적용)
         elif effect_type == 'HEAL_PERCENT':
             heal_amount = round(caster_max_hp * value)
             self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + heal_amount)
             log_value = f"> **{caster_name}**이(가) 체력을 **{heal_amount}** 회복했다!"
             
-        # 흡혈 (자신에게 적용)
         elif effect_type in ['DRAIN', 'LEECH']:
-            # ▼▼▼ [수정] 아래 value를 직접 0.5로 설정합니다. ▼▼▼
-            # drain_amount = round(damage_dealt * value) 
-            drain_amount = round(damage_dealt * 0.5) # '영혼 흡수'는 무조건 50% 회복
-            # ▲▲▲ [수정] 완료 ▲▲▲
+            drain_amount = round(damage_dealt * 0.5)
             self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + drain_amount)
             log_value = f"> **{target_name}**에게서 체력을 **{drain_amount}** 흡수했다!"
         
-        # 지속 데미지 (상대에게 적용)
         elif effect_type == 'BURN':
             target_effects.append({'type': effect_type, 'value': value, 'duration': duration})
             log_value = f"> **{target_name}**은(는) 화상을 입었다!"
 
-        if log_value:
-            self.battle_log.append({"title": f"✨ 스킬 효과: {skill_data['skill_name']}", "value": log_value})
+        if log_value: self.battle_log.append({"title": f"✨ 스킬 효과: {skill_data['skill_name']}", "value": log_value})
 
-def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
-    """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
-    multiplier = 1.0
-    for effect in effects:
-        # [수정] stat_key('ATK')가 effect['type']('ATK_DEBUFF') 안에 포함되는지 확인합니다.
-        if stat_key in effect['type']:
-            if 'BUFF' in effect['type']:
-                multiplier += effect['value']
-            elif 'DEBUFF' in effect['type']:
-                multiplier -= effect['value']
-    return max(1, round(base_stat * multiplier))
-
-    # ▼▼▼ [수정] _process_turn_end_effects 메서드를 아래 내용으로 교체합니다. ▼▼▼
     def _process_turn_end_effects(self, effects: List[Dict], target_name: str, is_pet: bool):
-        """턴 종료 시 지속 효과(데미지, 지속시간 감소)를 처리합니다."""
-        
-        # [수정] 효과 타입(영어)을 한글 이름으로 변환하기 위한 딕셔너리
-        effect_name_map = {
-            'BURN': '화상',
-            'ATK_BUFF': '공격력 증가',
-            'DEF_BUFF': '방어력 증가',
-            'SPD_BUFF': '스피드 증가',
-            'EVA_BUFF': '회피율 증가',
-            'ATK_DEBUFF': '공격력 감소',
-            'DEF_DEBUFF': '방어력 감소',
-            'SPD_DEBUFF': '스피드 감소',
-            'ACC_DEBUFF': '명중률 감소'
-        }
-
+        effect_name_map = {'BURN': '화상', 'ATK_BUFF': '공격력 증가', 'DEF_BUFF': '방어력 증가', 'SPD_BUFF': '스피드 증가', 'EVA_BUFF': '회피율 증가', 'ATK_DEBUFF': '공격력 감소', 'DEF_DEBUFF': '방어력 감소', 'SPD_DEBUFF': '스피드 감소', 'ACC_DEBUFF': '명중률 감소'}
         effects_to_remove = []
         for effect in effects:
-            # 지속 데미지 효과
             if effect['type'] == 'BURN':
                 dot_damage = max(1, round(effect['value']))
-                if is_pet:
-                    self.pet_current_hp = max(0, self.pet_current_hp - dot_damage)
-                else:
-                    self.monster_current_hp = max(0, self.monster_current_hp - dot_damage)
+                if is_pet: self.pet_current_hp = max(0, self.pet_current_hp - dot_damage)
+                else: self.monster_current_hp = max(0, self.monster_current_hp - dot_damage)
                 self.battle_log.append(f"🔥 **{target_name}**은(는) 화상 데미지로 **{dot_damage}**의 피해를 입었다!")
 
-            # 지속시간 감소 및 만료 처리
             effect['duration'] -= 1
             if effect['duration'] <= 0:
                 effects_to_remove.append(effect)
-                # [수정] effect_name_map을 사용하여 한글 이름으로 출력
-                effect_name = effect_name_map.get(effect['type'], effect['type']) # 맵에 없는 경우 원본 키 출력
+                effect_name = effect_name_map.get(effect['type'], effect['type'])
                 self.battle_log.append(f"💨 **{target_name}**에게 걸려있던 **{effect_name}** 효과가 사라졌다.")
         
-        for expired_effect in effects_to_remove:
-            effects.remove(expired_effect)
+        for expired_effect in effects_to_remove: effects.remove(expired_effect)
     
     async def _execute_monster_turn(self):
-        # 1. 효과를 적용한 최종 스탯 계산
         final_attack = self._get_stat_with_effects(self.current_monster.get('attack', 1), 'ATK', self.monster_effects)
         final_defense = self._get_stat_with_effects(self.final_pet_stats['defense'], 'DEF', self.pet_effects)
 
-        # 2. 데미지 계산 및 적용
         damage = max(1, final_attack - final_defense)
         self.pet_current_hp = max(0, self.pet_current_hp - damage)
         
         await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
         
-        self.battle_log.append({
-            "title": f"◀️ **{self.current_monster['name']}**의 공격!",
-            "value": f"> **{self.pet_data_raw['nickname']}**에게 **{damage}**의 데미지!"
-        })
+        self.battle_log.append({ "title": f"◀️ **{self.current_monster['name']}**의 공격!", "value": f"> **{self.pet_data_raw['nickname']}**에게 **{damage}**의 데미지!"})
 
-        # 3. 몬스터의 턴 종료 시 지속 효과 처리
         self._process_turn_end_effects(self.monster_effects, self.current_monster['name'], is_pet=False)
         
+    # [수정 1-2] handle_explore 함수에 DB 업데이트 로직을 추가합니다.
     async def handle_explore(self, interaction: discord.Interaction):
         if self.pet_is_defeated: return await interaction.response.send_message("펫이 쓰러져서 탐색할 수 없습니다.", ephemeral=True, delete_after=5)
         
@@ -498,71 +436,135 @@ def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Di
         }).eq('id', self.session_id).execute()
         
         if not self.is_pet_turn:
-            await self.handle_monster_turn(interaction) 
+            await self.handle_monster_turn(interaction)
         else:
             await self.refresh_ui(interaction)
 
-# handle_battle_win 함수를 찾아 DB 업데이트 로직을 추가합니다.
+    async def handle_skill_button(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        pet_data = await get_user_pet(self.user.id)
+        learned_skills = pet_data.get('learned_skills', [])
+        
+        if not learned_skills: return await interaction.followup.send("❌ 배운 스킬이 없습니다!", ephemeral=True)
+
+        skill_selection_view = SkillSelectView(self, learned_skills)
+        await interaction.followup.send("어떤 스킬을 사용하시겠습니까?", view=skill_selection_view, ephemeral=True)
+
+    async def handle_monster_turn(self, interaction: Optional[discord.Interaction] = None):
+        if self.state != "in_battle" or self.is_pet_turn or self.pet_is_defeated: return
+
+        await self.refresh_ui(interaction); await asyncio.sleep(1.5)
+        await self._execute_monster_turn()
+        
+        if self.pet_current_hp <= 0: await self.handle_battle_lose(); return
+            
+        self.is_pet_turn = True; await self.refresh_ui()
+    
+    async def handle_skill_use(self, skill_data: Dict):
+        if self.state != "in_battle" or not self.current_monster or not self.is_pet_turn: return
+
+        self.is_pet_turn = False; self.battle_log = []
+        await self.refresh_ui()
+
+        await self._execute_pet_turn(skill_data)
+        if self.monster_current_hp <= 0: return await self.handle_battle_win()
+        
+        await self.refresh_ui(); await asyncio.sleep(1.5)
+
+        await self._execute_monster_turn()
+        if self.pet_current_hp <= 0: return await self.handle_battle_lose()
+
+        self.is_pet_turn = True; await self.refresh_ui()
+    
+    # [수정 1-3] handle_battle_win, handle_battle_lose, handle_flee 함수에 DB 업데이트 로직을 추가합니다.
     async def handle_battle_win(self):
         self.state = "battle_over"
-        # [추가] 상태 변경 시 DB 업데이트
         await supabase.table('dungeon_sessions').update({'state': self.state, 'current_monster_json': None}).eq('id', self.session_id).execute()
         
-        self.battle_log.append({
-            "title": f"🎉 **{self.current_monster['name']}**을(를) 물리쳤다!",
-            "value": "> 전투에서 승리했습니다."
-        })
-        # ... (이하 기존 코드 동일) ...
-        pet_exp_gain = self.current_monster['xp']
-        self.total_pet_xp_gained += pet_exp_gain
+        self.battle_log.append({"title": f"🎉 **{self.current_monster['name']}**을(를) 물리쳤다!", "value": "> 전투에서 승리했습니다."})
+        pet_exp_gain = self.current_monster['xp']; self.total_pet_xp_gained += pet_exp_gain
         await supabase.rpc('add_xp_to_pet', {'p_user_id': self.user.id, 'p_xp_to_add': pet_exp_gain}).execute()
-        self.battle_log.append({
-            "title": "✨ 경험치 획득",
-            "value": f"> 펫이 **{pet_exp_gain} XP**를 획득했다!"
-        })
+        self.battle_log.append({"title": "✨ 경험치 획득", "value": f"> 펫이 **{pet_exp_gain} XP**를 획득했다!"})
         for item, (chance, min_qty, max_qty) in self.cog.loot_table.get(self.dungeon_tier, {}).items():
             if random.random() < chance:
-                qty = random.randint(min_qty, max_qty)
-                self.rewards[item] += qty
-                self.battle_log.append({
-                    "title": "🎁 전리품 획득",
-                    "value": f"> **{item}** {qty}개를 획득했다!"
-                })
+                qty = random.randint(min_qty, max_qty); self.rewards[item] += qty
+                self.battle_log.append({"title": "🎁 전리품 획득", "value": f"> **{item}** {qty}개를 획득했다!"})
         await self.refresh_ui()
 
-# handle_battle_lose 함수를 찾아 DB 업데이트 로직을 추가합니다.
     async def handle_battle_lose(self):
-        self.state = "battle_over"
-        self.pet_is_defeated = True
-        
-        # [추가] 상태 변경 시 DB 업데이트
+        self.state = "battle_over"; self.pet_is_defeated = True
         await supabase.table('dungeon_sessions').update({'state': self.state, 'current_monster_json': None}).eq('id', self.session_id).execute()
-        
-        self.battle_log.append({
-            "title": f"☠️ **{self.pet_data_raw['nickname']}**이(가) 쓰러졌다...",
-            "value": "> 전투에서 패배했습니다."
-        })
-        self.current_monster = None
-        await self.refresh_ui()
+        self.battle_log.append({"title": f"☠️ **{self.pet_data_raw['nickname']}**이(가) 쓰러졌다...", "value": "> 전투에서 패배했습니다."})
+        self.current_monster = None; await self.refresh_ui()
 
-# handle_flee 함수를 찾아 DB 업데이트 로직을 추가합니다.
     async def handle_flee(self, interaction: discord.Interaction):
-        self.state = "exploring"
-        self.current_monster = None
-        
-        # [추가] 상태 변경 시 DB 업데이트
+        self.state = "exploring"; self.current_monster = None
         await supabase.table('dungeon_sessions').update({'state': self.state, 'current_monster_json': None}).eq('id', self.session_id).execute()
-        
-        self.battle_log = ["무사히 도망쳤다..."]
-        await self.refresh_ui(interaction)
+        self.battle_log = ["무사히 도망쳤다..."]; await self.refresh_ui(interaction)
 
-# reload_active_dungeon_views 함수를 찾아 state와 monster 정보를 불러오도록 수정합니다.
+    async def handle_leave(self, interaction: discord.Interaction):
+        await interaction.response.send_message("던전에서 나가는 중입니다...", ephemeral=True, delete_after=5)
+        await self.cog.close_dungeon_session(self.user.id, self.rewards, self.total_pet_xp_gained, interaction.channel)
+
+    async def handle_use_item(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        inventory = await get_inventory(self.user); usable_items = []
+        item_db = get_item_database()
+        for name, qty in inventory.items():
+            item_data = item_db.get(name, {}); effect = item_data.get('effect_type')
+            if effect == 'pet_revive' and self.pet_is_defeated: usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="💊"))
+            elif effect == 'pet_heal' and not self.pet_is_defeated and self.pet_current_hp < self.final_pet_stats['hp']: usable_items.append(discord.SelectOption(label=f"{name} ({qty}개)", value=name, emoji="🧪"))
+        if not usable_items:
+            msg = await interaction.followup.send("사용할 수 있는 아이템이 없습니다.", ephemeral=True)
+            self.cog.bot.loop.create_task(msg.delete(delay=5)); return
+        select = ui.Select(placeholder="사용할 아이템을 선택하세요...", options=usable_items)
+        async def on_item_select(select_interaction: discord.Interaction):
+            await select_interaction.response.defer(); item_name = select_interaction.data['values'][0]; item_data = get_item_database().get(item_name, {}); effect = item_data.get('effect_type')
+            await update_inventory(self.user.id, item_name, -1); db_update_task = None
+            if effect == 'pet_revive':
+                self.pet_is_defeated = False; self.pet_current_hp = self.final_pet_stats['hp']; self.state = "exploring"; self.battle_log = [f"💊 '{item_name}'을(를) 사용해 펫이 완전히 회복되었다!"]
+                db_update_task = supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
+            elif effect == 'pet_heal':
+                heal_amount = item_data.get('power', 0); self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + heal_amount)
+                self.battle_log = [f"🧪 '{item_name}'을(를) 사용해 체력을 {heal_amount} 회복했다!"]; db_update_task = supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
+                if self.state == "in_battle":
+                    self.is_pet_turn = False; await self.handle_monster_turn(select_interaction)
+                    if self.pet_current_hp <= 0: await self.handle_battle_lose(); return
+            if db_update_task: await db_update_task
+            await self.refresh_ui(); await select_interaction.delete_original_response()
+        select.callback = on_item_select
+        view = ui.View(timeout=60).add_item(select)
+        await interaction.followup.send(view=view, ephemeral=True)
+        
+    def stop(self):
+        if self.cog and self.user: self.cog.active_sessions.pop(self.user.id, None)
+        super().stop()
+        
+class Dungeon(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot; self.active_sessions: Dict[int, DungeonGameView] = {}
+        self.dungeon_data: Dict = {}; self.monster_base_data: Dict = {}; self.loot_table: Dict = {}
+        self.check_expired_dungeons.start()
+        self.active_views_loaded = False
+
+    async def cog_load(self):
+        data = await load_dungeon_data_from_db()
+        self.dungeon_data = data["dungeons"]; self.monster_base_data = data["monsters"]; self.loot_table = data["loot"]
+
+    def cog_unload(self): self.check_expired_dungeons.cancel()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        self.bot.add_view(await DungeonPanelView.create(self))
+        if not self.active_views_loaded:
+            await self.reload_active_dungeon_views()
+            self.active_views_loaded = True
+
+    # [수정 1-4] reload_active_dungeon_views 함수를 수정하여 state와 monster 정보를 불러오도록 합니다.
     async def reload_active_dungeon_views(self):
         logger.info("[Dungeon] 활성화된 던전 게임 UI를 다시 로드합니다...")
         try:
-            # [수정] state와 current_monster_json 컬럼도 함께 불러옵니다.
             res = await supabase.table('dungeon_sessions').select('*, pets(*, pet_species(*), learned_skills:pet_learned_skills(*, pet_skills(*)))').not_.is_('message_id', 'null').execute()
-            
             if not res.data:
                 logger.info("[Dungeon] 다시 로드할 활성 던전 UI가 없습니다.")
                 return
@@ -574,7 +576,6 @@ def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Di
                     pet_data, dungeon_tier = session_data.get('pets'), session_data['dungeon_tier']
                     end_time, session_id = datetime.fromisoformat(session_data['end_time']), session_data['id']
                     
-                    # [추가] state와 monster 정보를 세션 데이터에서 가져옵니다.
                     current_state = session_data.get('state', 'exploring')
                     monster_data = session_data.get('current_monster_json')
 
@@ -586,8 +587,7 @@ def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Di
                     if not user:
                         logger.warning(f"던전 UI 로드 중 유저(ID:{user_id})를 찾을 수 없습니다.")
                         continue
-                    
-                    # [수정] DungeonGameView 생성자에 state와 monster 데이터를 전달합니다.
+
                     view = DungeonGameView(self, user, pet_data, dungeon_tier, end_time, session_id, current_state=current_state, monster_data=monster_data)
                     
                     try:
@@ -628,23 +628,19 @@ def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Di
         if res and res.data and (thread := self.bot.get_channel(int(res.data['thread_id']))):
             return await interaction.followup.send(f"❌ 이미 던전에 입장해 있습니다. {thread.mention}", ephemeral=True)
         
-        pet_data = await get_user_pet(user.id) # [수정] 이 함수는 이제 스킬 정보도 함께 가져옵니다.
+        pet_data = await get_user_pet(user.id)
         if not pet_data: return await interaction.followup.send("❌ 던전에 입장하려면 펫이 필요합니다.", ephemeral=True)
         
         dungeon_name = self.dungeon_data[tier]['name']; ticket_name = f"{dungeon_name} 입장권"
         if (await get_inventory(user)).get(ticket_name, 0) < 1: return await interaction.followup.send(f"❌ '{ticket_name}'이 부족합니다.", ephemeral=True)
         
-        try:
-            thread = await interaction.channel.create_thread(name=f"🛡️｜{user.display_name}의 {dungeon_name}", type=discord.ChannelType.private_thread, auto_archive_duration=1440)
+        try: thread = await interaction.channel.create_thread(name=f"🛡️｜{user.display_name}의 {dungeon_name}", type=discord.ChannelType.private_thread, auto_archive_duration=1440)
         except Exception: return await interaction.followup.send("❌ 던전을 여는 데 실패했습니다.", ephemeral=True)
         
         await update_inventory(user.id, ticket_name, -1); await thread.add_user(user)
         end_time = datetime.now(timezone.utc) + timedelta(hours=24)
         
-        session_res = await supabase.table('dungeon_sessions').upsert({
-            "user_id": str(user.id), "thread_id": str(thread.id), "end_time": end_time.isoformat(), 
-            "pet_id": pet_data['id'], "dungeon_tier": tier, "rewards_json": "{}"
-        }, on_conflict="user_id").execute()
+        session_res = await supabase.table('dungeon_sessions').upsert({ "user_id": str(user.id), "thread_id": str(thread.id), "end_time": end_time.isoformat(), "pet_id": pet_data['id'], "dungeon_tier": tier, "rewards_json": "{}", "state": "exploring" }, on_conflict="user_id").execute()
         
         if not (session_res and session_res.data):
             logger.error(f"던전 세션 생성/업데이트 실패 (User: {user.id})")
@@ -704,99 +700,47 @@ def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Di
             
     async def skill_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
         res = await supabase.table('pet_skills').select('skill_name').ilike('skill_name', f'%{current}%').limit(25).execute()
-        if not (res and res.data):
-            return []
+        if not (res and res.data): return []
         return [app_commands.Choice(name=row['skill_name'], value=row['skill_name']) for row in res.data]
 
     @app_commands.command(name="던전테스트", description="[관리자] 던전 전투 시스템을 테스트합니다.")
-    @app_commands.describe(
-        action="실행할 작업을 선택하세요.",
-        skill_name="[스킬부여] 부여할 스킬의 이름입니다.",
-        slot="[스킬부여] 스킬을 부여할 슬롯 번호입니다.",
-        element="[몬스터소환] 소환할 몬스터의 속성입니다.",
-        level="[몬스터소환] 소환할 몬스터의 레벨입니다."
-    )
-    @app_commands.choices(action=[
-        app_commands.Choice(name="스킬 부여", value="스킬부여"),
-        app_commands.Choice(name="몬스터 소환", value="몬스터소환"),
-        app_commands.Choice(name="현재 효과 확인", value="효과확인"),
-    ])
+    @app_commands.describe(action="실행할 작업을 선택하세요.", skill_name="[스킬부여] 부여할 스킬의 이름입니다.", slot="[스킬부여] 스킬을 부여할 슬롯 번호입니다.", element="[몬스터소환] 소환할 몬스터의 속성입니다.", level="[몬스터소환] 소환할 몬스터의 레벨입니다.")
+    @app_commands.choices(action=[app_commands.Choice(name="스킬 부여", value="스킬부여"), app_commands.Choice(name="몬스터 소환", value="몬스터소환"), app_commands.Choice(name="현재 효과 확인", value="효과확인")])
     @app_commands.autocomplete(skill_name=skill_autocomplete)
-    async def dungeon_test(self, interaction: discord.Interaction, action: str, 
-                         skill_name: Optional[str] = None, 
-                         slot: Optional[app_commands.Range[int, 1, 4]] = None, 
-                         element: Optional[str] = None, 
-                         level: Optional[int] = None):
-        """던전 전투 시스템을 테스트하기 위한 관리자 명령어입니다."""
-        if not await self.bot.is_owner(interaction.user):
-            return await interaction.response.send_message("❌ 봇 소유자만 사용할 수 있는 명령어입니다.", ephemeral=True)
-
-        if interaction.user.id not in self.active_sessions:
-            return await interaction.response.send_message("❌ 먼저 던전에 입장해주세요.", ephemeral=True)
-
+    async def dungeon_test(self, interaction: discord.Interaction, action: str, skill_name: Optional[str] = None, slot: Optional[app_commands.Range[int, 1, 4]] = None, element: Optional[str] = None, level: Optional[int] = None):
+        if not await self.bot.is_owner(interaction.user): return await interaction.response.send_message("❌ 봇 소유자만 사용할 수 있는 명령어입니다.", ephemeral=True)
+        if interaction.user.id not in self.active_sessions: return await interaction.response.send_message("❌ 먼저 던전에 입장해주세요.", ephemeral=True)
         await interaction.response.defer(ephemeral=True)
-
         view = self.active_sessions[interaction.user.id]
 
         if action == "스킬부여":
-            if not skill_name or not slot:
-                return await interaction.followup.send("❌ '스킬 부여'를 선택한 경우, `skill_name`과 `slot` 옵션을 모두 입력해야 합니다.")
-
+            if not skill_name or not slot: return await interaction.followup.send("❌ '스킬 부여'를 선택한 경우, `skill_name`과 `slot` 옵션을 모두 입력해야 합니다.")
             res = await supabase.table('pet_skills').select('*').eq('skill_name', skill_name).maybe_single().execute()
-            if not (res and res.data):
-                return await interaction.followup.send(f"❌ '{skill_name}' 스킬을 찾을 수 없습니다.")
-            
-            skill_data = res.data
-            pet_id = view.pet_data_raw['id']
-
-            await supabase.table('pet_learned_skills').upsert({
-                'pet_id': pet_id, 'skill_id': skill_data['id'], 'slot_number': slot
-            }, on_conflict='pet_id, slot_number').execute()
-
+            if not (res and res.data): return await interaction.followup.send(f"❌ '{skill_name}' 스킬을 찾을 수 없습니다.")
+            skill_data = res.data; pet_id = view.pet_data_raw['id']
+            await supabase.table('pet_learned_skills').upsert({'pet_id': pet_id, 'skill_id': skill_data['id'], 'slot_number': slot}, on_conflict='pet_id, slot_number').execute()
             view.pet_data_raw['learned_skills'] = [s for s in view.pet_data_raw.get('learned_skills', []) if s['slot_number'] != slot]
             view.pet_data_raw['learned_skills'].append({'slot_number': slot, 'pet_skills': skill_data})
-            
             await interaction.followup.send(f"✅ 펫에게 **{skill_name}** 스킬을 {slot}번 슬롯에 임시로 부여했습니다.")
-
         elif action == "몬스터소환":
-            if not element or not level:
-                return await interaction.followup.send("❌ '몬스터 소환'을 선택한 경우, `element`와 `level` 옵션을 모두 입력해야 합니다.")
-
-            if element not in self.monster_base_data:
-                return await interaction.followup.send(f"❌ 유효하지 않은 속성입니다. ({', '.join(self.monster_base_data.keys())})")
-
-            # ... (몬스터 생성 로직은 동일) ...
-            base_monster = self.monster_base_data[element]
-            dungeon_info = self.dungeon_data[view.dungeon_tier]
+            if not element or not level: return await interaction.followup.send("❌ '몬스터 소환'을 선택한 경우, `element`와 `level` 옵션을 모두 입력해야 합니다.")
+            if element not in self.monster_base_data: return await interaction.followup.send(f"❌ 유효하지 않은 속성입니다. ({', '.join(self.monster_base_data.keys())})")
+            base_monster = self.monster_base_data[element]; dungeon_info = self.dungeon_data[view.dungeon_tier]
             hp_bonus = (level - 1) * 8; other_stat_bonus = (level - 1) * 5
-            hp = int(base_monster['base_hp'] * dungeon_info['hp_mult']) + hp_bonus
-            attack = int(base_monster['base_attack'] * dungeon_info['atk_mult']) + other_stat_bonus
-            defense = int(base_monster['base_defense'] * dungeon_info['def_mult']) + other_stat_bonus
-            speed = int(base_monster['base_speed'] * dungeon_info['spd_mult']) + other_stat_bonus
-            xp = max(1, int(hp * dungeon_info['xp_mult']) // 20) + (level * 2)
-            image_url = f"{view.storage_base_url}/{element}_{dungeon_info['image_suffix']}.png"
-            
+            hp = int(base_monster['base_hp'] * dungeon_info['hp_mult']) + hp_bonus; attack = int(base_monster['base_attack'] * dungeon_info['atk_mult']) + other_stat_bonus
+            defense = int(base_monster['base_defense'] * dungeon_info['def_mult']) + other_stat_bonus; speed = int(base_monster['base_speed'] * dungeon_info['spd_mult']) + other_stat_bonus
+            xp = max(1, int(hp * dungeon_info['xp_mult']) // 20) + (level * 2); image_url = f"{view.storage_base_url}/{element}_{dungeon_info['image_suffix']}.png"
             view.current_monster = {"name": f"Lv.{level} 테스트 {base_monster['name']}", "hp": hp, "attack": attack, "defense": defense, "speed": speed, "xp": xp, "element": element, "image_url": image_url}
-            view.monster_current_hp = hp
-            view.state = "in_battle"
-            view.is_pet_turn = True
-            view.battle_log = [f"테스트 몬스터 **{view.current_monster['name']}** 이(가) 나타났다!"]
-            await view.refresh_ui()
-            await interaction.followup.send(f"✅ **{view.current_monster['name']}**을(를) 강제로 소환했습니다.")
-
+            view.monster_current_hp = hp; view.state = "in_battle"; view.is_pet_turn = True; view.battle_log = [f"테스트 몬스터 **{view.current_monster['name']}** 이(가) 나타났다!"]
+            await view.refresh_ui(); await interaction.followup.send(f"✅ **{view.current_monster['name']}**을(를) 강제로 소환했습니다.")
         elif action == "효과확인":
-            if view.state != "in_battle":
-                return await interaction.followup.send("❌ 전투 중에만 사용할 수 없습니다.")
-            
+            if view.state != "in_battle": return await interaction.followup.send("❌ 전투 중에만 사용할 수 없습니다.")
             embed = discord.Embed(title="🕵️ 현재 효과 상태 (디버그)", color=0xFFD700)
             pet_effects_str = "\n".join([f"`{e}`" for e in view.pet_effects]) or "없음"
             monster_effects_str = "\n".join([f"`{e}`" for e in view.monster_effects]) or "없음"
-            embed.add_field(name="펫 효과", value=pet_effects_str, inline=False)
-            embed.add_field(name="몬스터 효과", value=monster_effects_str, inline=False)
+            embed.add_field(name="펫 효과", value=pet_effects_str, inline=False); embed.add_field(name="몬스터 효과", value=monster_effects_str, inline=False)
             await interaction.followup.send(embed=embed)
-
-        else:
-            await interaction.followup.send("❌ 알 수 없는 작업입니다.")
+        else: await interaction.followup.send("❌ 알 수 없는 작업입니다.")
 
 class DungeonPanelView(ui.View):
     def __init__(self, cog_instance: 'Dungeon'):
@@ -822,4 +766,6 @@ class DungeonPanelView(ui.View):
         await self.cog.handle_enter_dungeon(interaction, tier)
 
 async def setup(bot: commands.Bot):
+    # [수정] NameError를 방지하기 위해 클래스 정의 순서를 조정합니다.
+    # 이 파일에서는 이미 클래스 정의 순서가 올바르므로 추가적인 수정은 필요 없습니다.
     await bot.add_cog(Dungeon(bot))
