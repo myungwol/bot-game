@@ -407,6 +407,14 @@ class DungeonGameView(ui.View):
         self.current_monster = None
         await self.refresh_ui()
 
+    async def handle_battle_draw(self):
+        self.state = "battle_over"
+        self.pet_is_defeated = True
+        await supabase.table('dungeon_sessions').update({'state': self.state, 'current_monster_json': None}).eq('id', self.session_id).execute()
+        self.battle_log.append({"title": f"⚔️ 무승부", "value": "> 양쪽 모두 쓰러졌습니다."})
+        self.current_monster = None
+        await self.refresh_ui()
+    
     async def handle_flee(self, interaction: discord.Interaction):
         self.state = "exploring"; self.current_monster = None
         await supabase.table('dungeon_sessions').update({'state': self.state, 'current_monster_json': None}).eq('id', self.session_id).execute()
