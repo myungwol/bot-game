@@ -42,12 +42,21 @@ def _apply_skill_effect(
     log_value = ""
     log_title = f"✨ 스킬 효과: {skill['skill_name']}"
 
+    # [수정] 효과 적용 시, 동일한 타입의 효과가 이미 있다면 지속시간만 갱신하도록 변경
+    # 이렇게 하면 버프/디버프가 무한정 중첩되지 않습니다.
+    existing_effect = next((e for e in target['effects'] if e.get('type') == effect_type), None)
+    if existing_effect:
+        existing_effect['duration'] = duration + 1
+    else:
+        if 'DEBUFF' in effect_type or effect_type in ['BURN', 'PARALYZE', 'SLEEP', 'PARALYZE_ON_HIT']:
+            target['effects'].append({'type': effect_type.replace('_ON_HIT', ''), 'value': value, 'duration': duration + 1})
+        elif 'BUFF' in effect_type:
+            caster['effects'].append({'type': effect_type, 'value': value, 'duration': duration + 1})
+
     if 'DEBUFF' in effect_type:
-        target['effects'].append({'type': effect_type, 'value': value, 'duration': duration + 1})
         stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "ACC": "명중률"}.get(effect_type.split('_')[0], "능력")
         log_value = f"> **{target['name']}**의 **{stat_name}**이(가) 하락했다!"
     elif 'BUFF' in effect_type:
-        caster['effects'].append({'type': effect_type, 'value': value, 'duration': duration + 1})
         stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "EVA": "회피율"}.get(effect_type.split('_')[0], "능력")
         log_value = f"> **{caster['name']}**의 **{stat_name}**이(가) 상승했다!"
     elif effect_type == 'HEAL_PERCENT':
@@ -59,13 +68,10 @@ def _apply_skill_effect(
         caster['current_hp'] = min(caster['max_hp'], caster['current_hp'] + drain_amount)
         log_value = f"> **{target['name']}**에게서 체력을 **{drain_amount}** 흡수했다!"
     elif effect_type == 'BURN':
-        target['effects'].append({'type': effect_type, 'value': value, 'duration': duration + 1})
         log_value = f"> **{target['name']}**은(는) 화상을 입었다!"
     elif effect_type in ['PARALYZE', 'PARALYZE_ON_HIT']:
-        target['effects'].append({'type': 'PARALYZE', 'duration': duration + 1})
         log_value = f"> **{target['name']}**은(는) 마비되었다!"
     elif effect_type == 'SLEEP':
-        target['effects'].append({'type': 'SLEEP', 'duration': duration + 1})
         log_value = f"> **{target['name']}**은(는) 잠이 들었다!"
 
     if log_value:
@@ -79,11 +85,14 @@ def _process_turn_end_effects(combatant: Combatant) -> Tuple[Combatant, List[str
     effect_name_map = {'BURN': '화상', 'ATK_BUFF': '공격력 증가', 'DEF_BUFF': '방어력 증가', 'SPD_BUFF': '스피드 증가', 'EVA_BUFF': '회피율 증가', 'ATK_DEBUFF': '공격력 감소', 'DEF_DEBUFF': '방어력 감소', 'SPD_DEBUFF': '스피드 감소', 'ACC_DEBUFF': '명중률 감소', 'PARALYZE': '마비', 'SLEEP': '수면'}
 
     for effect in combatant['effects']:
+        # [추가] 화상 데미지 로직
         if effect.get('type') == 'BURN':
             dot_damage = max(1, round(effect.get('value', 0)))
             combatant['current_hp'] = max(0, combatant['current_hp'] - dot_damage)
             logs.append(f"🔥 **{combatant['name']}**은(는) 화상 데미지로 **{dot_damage}**의 피해를 입었다!")
         
+        # [수정] 수면 상태는 공격받으면 깨어나므로, 여기서는 턴만 감소시킵니다.
+        # 실제 행동 불가 로직은 process_turn 시작 부분에 있습니다.
         effect['duration'] -= 1
         if effect.get('duration', 0) <= 0:
             effects_to_remove.append(effect)
@@ -91,8 +100,9 @@ def _process_turn_end_effects(combatant: Combatant) -> Tuple[Combatant, List[str
             logs.append(f"💨 **{combatant['name']}**에게 걸려있던 **{effect_name}** 효과가 사라졌다.")
     
     for expired_effect in effects_to_remove:
-        combatant['effects'].remove(expired_effect)
-        
+        if expired_effect in combatant['effects']:
+            combatant['effects'].remove(expired_effect)
+            
     return combatant, logs
 
 def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Combatant, Combatant, List[CombatLog | str]]:
@@ -101,8 +111,8 @@ def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Com
     """
     battle_logs: List[CombatLog | str] = []
 
-    # 1. 턴 시작 시 상태 이상 확인 (수면, 마비 등)
-    for effect in caster['effects']:
+    # [추가] 1. 턴 시작 시 상태 이상 확인 (수면, 마비 등)
+    for effect in list(caster['effects']): # 복사본으로 순회하여 안전하게 원본 수정
         if effect.get('type') == 'SLEEP':
             battle_logs.append(f"💤 **{caster['name']}**은(는) 깊은 잠에 빠져있다...")
             caster, end_of_turn_logs = _process_turn_end_effects(caster)
@@ -133,6 +143,12 @@ def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Com
             "title": f"▶️ **{caster['name']}**의 **{skill['skill_name']}**!",
             "value": f"> **{target['name']}**에게 **{damage_dealt}**의 데미지!"
         })
+
+        # 공격 후 수면 상태는 해제됩니다.
+        sleep_effect = next((e for e in target['effects'] if e.get('type') == 'SLEEP'), None)
+        if sleep_effect:
+            target['effects'].remove(sleep_effect)
+            battle_logs.append(f"❗ **{target['name']}**은(는) 공격을 받고 잠에서 깨어났다!")
 
         # 스킬의 부가 효과 적용
         if skill.get('effect_type'):
