@@ -328,6 +328,7 @@ class DungeonGameView(ui.View):
                     multiplier -= effect['value']
         return max(1, round(base_stat * multiplier))
 
+    # ▼▼▼ [최종 수정] 아래 _apply_skill_effect 메서드 전체를 교체해주세요 ▼▼▼
     def _apply_skill_effect(self, skill_data: Dict, caster_effects: List[Dict], target_effects: List[Dict], caster_name: str, target_name: str, caster_max_hp: int = 0, damage_dealt: int = 0):
         """스킬의 특수 효과를 적용하고 배틀 로그를 추가합니다."""
         effect_type = skill_data.get('effect_type')
