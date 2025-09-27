@@ -210,9 +210,11 @@ class BuyCategoryView(ShopViewBase):
     # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def build_components(self):
         self.clear_items()
+        
+        # ▼▼▼ [수정] 버튼 라벨과 custom_id의 category_key를 수정합니다. ▼▼▼
         layout = [
-            [("아이템", "아이템"), ("입장권", "입장권"), ("장비", "장비")],
-            [("미끼", "미끼"), ("조미료", "조미료"), ("농장_씨앗", "씨앗"), ("펫 아이템", "펫 아이템"), ("알", "알")]
+            [("잡화", "아이템"), ("입장권", "입장권"), ("장비", "장비")],
+            [("미끼", "미끼"), ("조미료", "조미료"), ("씨앗", "농장_씨앗"), ("펫", "펫 아이템"), ("알", "알")]
         ]
         
         for row_index, row_items in enumerate(layout):
