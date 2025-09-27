@@ -197,13 +197,11 @@ class SkillChangeView(ui.View):
         slot_select.callback = self.on_slot_select
         self.add_item(slot_select)
 
-        # ▼▼▼ [수정] 에러 해결을 위한 핵심 수정 부분 ▼▼▼
         new_skill_options = [
             discord.SelectOption(label=s['skill_name'], value=str(s['id']), description=f"위력:{s['power']}, 속성:{s['element']}")
             for s in self.learnable_skills[:25]
         ]
         
-        # 배울 수 있는 스킬이 없을 때 플레이스홀더 옵션을 추가합니다.
         if not new_skill_options:
             new_skill_options.append(discord.SelectOption(label="배울 수 있는 스킬이 없습니다.", value="no_skills_available"))
         
@@ -212,7 +210,6 @@ class SkillChangeView(ui.View):
             options=new_skill_options, 
             disabled=(not self.learnable_skills)
         )
-        # ▲▲▲ [수정] 완료 ▲▲▲
         
         new_skill_select.callback = self.on_new_skill_select
         self.add_item(new_skill_select)
@@ -227,7 +224,6 @@ class SkillChangeView(ui.View):
         await interaction.response.edit_message(view=self)
 
     async def on_new_skill_select(self, interaction: discord.Interaction):
-        # [수정] 플레이스홀더 옵션이 선택되었을 경우, 아무 작업도 하지 않도록 처리합니다.
         if interaction.data['values'][0] == "no_skills_available":
             return await interaction.response.defer()
             
@@ -889,16 +885,25 @@ class PetSystem(commands.Cog):
             'natural_bonus_speed': natural_bonus_stats['speed']
         }).eq('id', pet_data['id']).execute()
         
+        # ▼▼▼ [핵심 수정] 부화 직후 기본 스킬을 부여합니다. ▼▼▼
+        # '들이받기' 스킬의 ID는 1입니다. 1번 슬롯에 부여합니다.
+        await set_pet_skill(pet_data['id'], 1, 1)
+        # ▲▲▲ [수정] 완료 ▲▲▲
+        
         updated_pet_data = updated_pet_data_res.data[0]
         updated_pet_data['pet_species'] = species_info
         thread = self.bot.get_channel(pet_data['thread_id'])
         if thread:
             try:
+                # 최신 펫 정보를 다시 불러와서 UI를 업데이트합니다 (방금 배운 스킬 포함)
+                final_pet_data = await get_user_pet(user_id)
+                if not final_pet_data: return
+
                 message = await thread.fetch_message(pet_data['message_id'])
-                hatched_embed = self.build_pet_ui_embed(user, updated_pet_data)
+                hatched_embed = self.build_pet_ui_embed(user, final_pet_data)
                 cooldown_active = await self._is_play_on_cooldown(user_id)
-                evo_ready = await self._is_evolution_ready(updated_pet_data, {})
-                view = PetUIView(self, user_id, updated_pet_data, play_cooldown_active=cooldown_active, evolution_ready=evo_ready)
+                evo_ready = await self._is_evolution_ready(final_pet_data, {})
+                view = PetUIView(self, user_id, final_pet_data, play_cooldown_active=cooldown_active, evolution_ready=evo_ready)
                 await message.edit(embed=hatched_embed, view=view) 
                 await thread.send(f"{user.mention} 님의 알이 부화했습니다!")
                 await thread.edit(name=f"🐾｜{species_info['species_name']}")
