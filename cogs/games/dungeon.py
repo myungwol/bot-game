@@ -355,37 +355,50 @@ class DungeonGameView(ui.View):
         return final_stat
         
     def _apply_skill_effect(self, skill_data: Dict, caster_effects: List[Dict], target_effects: List[Dict], caster_name: str, target_name: str, caster_max_hp: int = 0, damage_dealt: int = 0):
+        """스킬의 특수 효과를 적용하고 배틀 로그를 추가합니다."""
         effect_type = skill_data.get('effect_type')
-        if not effect_type: return
+        if not effect_type:
+            return
 
-        value = skill_data.get('effect_value', 0); duration = skill_data.get('effect_duration', 0)
+        value = skill_data.get('effect_value', 0)
+        duration = skill_data.get('effect_duration', 0)
+        
         log_value = ""
         
+        # 디버프 (상대에게 적용)
         if 'DEBUFF' in effect_type:
-            target_effects.append({'type': effect_type, 'value': value, 'duration': duration})
+            # [수정] 지속시간에 +1을 하여 1턴 더 길게 유지되도록 합니다.
+            target_effects.append({'type': effect_type, 'value': value, 'duration': duration + 1})
             stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "ACC": "명중률"}.get(effect_type.split('_')[0], "능력")
             log_value = f"> **{target_name}**의 **{stat_name}**이(가) 하락했다!"
         
+        # 버프 (자신에게 적용)
         elif 'BUFF' in effect_type:
-            caster_effects.append({'type': effect_type, 'value': value, 'duration': duration})
+            # [수정] 지속시간에 +1을 하여 1턴 더 길게 유지되도록 합니다.
+            caster_effects.append({'type': effect_type, 'value': value, 'duration': duration + 1})
             stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "EVA": "회피율"}.get(effect_type.split('_')[0], "능력")
             log_value = f"> **{caster_name}**의 **{stat_name}**이(가) 상승했다!"
         
+        # HP 회복 (자신에게 적용)
         elif effect_type == 'HEAL_PERCENT':
             heal_amount = round(caster_max_hp * value)
             self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + heal_amount)
             log_value = f"> **{caster_name}**이(가) 체력을 **{heal_amount}** 회복했다!"
             
+        # 흡혈 (자신에게 적용)
         elif effect_type in ['DRAIN', 'LEECH']:
             drain_amount = round(damage_dealt * 0.5)
             self.pet_current_hp = min(self.final_pet_stats['hp'], self.pet_current_hp + drain_amount)
             log_value = f"> **{target_name}**에게서 체력을 **{drain_amount}** 흡수했다!"
         
+        # 지속 데미지 (상대에게 적용)
         elif effect_type == 'BURN':
-            target_effects.append({'type': effect_type, 'value': value, 'duration': duration})
+            # [수정] 지속시간에 +1을 하여 1턴 더 길게 유지되도록 합니다.
+            target_effects.append({'type': effect_type, 'value': value, 'duration': duration + 1})
             log_value = f"> **{target_name}**은(는) 화상을 입었다!"
 
-        if log_value: self.battle_log.append({"title": f"✨ 스킬 효과: {skill_data['skill_name']}", "value": log_value})
+        if log_value:
+            self.battle_log.append({"title": f"✨ 스킬 효과: {skill_data['skill_name']}", "value": log_value})
 
     def _process_turn_end_effects(self, effects: List[Dict], target_name: str, is_pet: bool):
         effect_name_map = {'BURN': '화상', 'ATK_BUFF': '공격력 증가', 'DEF_BUFF': '방어력 증가', 'SPD_BUFF': '스피드 증가', 'EVA_BUFF': '회피율 증가', 'ATK_DEBUFF': '공격력 감소', 'DEF_DEBUFF': '방어력 감소', 'SPD_DEBUFF': '스피드 감소', 'ACC_DEBUFF': '명중률 감소'}
