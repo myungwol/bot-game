@@ -354,25 +354,19 @@ class DungeonGameView(ui.View):
     def _get_stat_with_effects(self, base_stat: int, stat_key: str, effects: List[Dict]) -> int:
         """버프/디버프 효과가 적용된 최종 스탯을 계산합니다."""
         multiplier = 1.0
-        for effect in effects:
-            # effect['type'] 예시: 'ATK_BUFF', 'ATK_DEBUFF'
-            # stat_key 예시: 'attack'
-            # effect_type이 stat_key의 대문자 버전으로 시작하는지 확인 (예: 'ATK_BUFF'.startswith('ATTACK'))
-            if effect['type'].startswith(stat_key.upper()):
-                if 'BUFF' in effect['type']:
-                    multiplier += effect['value']
-                elif 'DEBUFF' in effect['type']:
-                    multiplier -= effect['value']
         
-        # base_stat이 스탯 딕셔너리의 'attack' 키로 들어올 것을 대비하여, stat_key도 대문자화
-        final_stat_key = stat_key.upper()
+        # [수정] 중복된 루프를 제거하고, stat_key와 effect['type']을 정확히 비교하도록 로직을 변경합니다.
+        # stat_key는 'ATK', 'DEF', 'SPD' 등으로 들어옵니다.
+        # effect['type']은 'ATK_BUFF', 'ATK_DEBUFF' 등으로 들어옵니다.
         for effect in effects:
-            if effect['type'].startswith(final_stat_key):
-                if 'BUFF' in effect['type']:
-                    multiplier += effect['value']
-                elif 'DEBUFF' in effect['type']:
-                    multiplier -= effect['value']
+            # 예시: stat_key가 'ATK'일 때, effect['type']이 'ATK_BUFF'와 같은지 직접 비교
+            if effect['type'] == f"{stat_key}_BUFF":
+                multiplier += effect['value']
+            # 예시: stat_key가 'ATK'일 때, effect['type']이 'ATK_DEBUFF'와 같은지 직접 비교
+            elif effect['type'] == f"{stat_key}_DEBUFF":
+                multiplier -= effect['value']
 
+        # 최종 스탯 계산
         return max(1, round(base_stat * multiplier))
         
     # ▼▼▼ [최종 수정] 아래 _apply_skill_effect 메서드 전체를 교체해주세요 ▼▼▼
@@ -733,12 +727,12 @@ class Dungeon(commands.Cog):
             await self.reload_active_dungeon_views()
             self.active_views_loaded = True
 
+# cogs/games/dungeon.py
+
     async def reload_active_dungeon_views(self):
         logger.info("[Dungeon] 활성화된 던전 게임 UI를 다시 로드합니다...")
         try:
-            # ▼▼▼ [수정] 펫을 조회할 때 스킬 정보도 함께 가져오도록 수정 ▼▼▼
             res = await supabase.table('dungeon_sessions').select('*, pets(*, pet_species(*), learned_skills:pet_learned_skills(*, pet_skills(*)))').not_.is_('message_id', 'null').execute()
-            # ▲▲▲ [수정] 완료 ▲▲▲
             if not res.data:
                 logger.info("[Dungeon] 다시 로드할 활성 던전 UI가 없습니다.")
                 return
@@ -761,6 +755,15 @@ class Dungeon(commands.Cog):
 
                     view = DungeonGameView(self, user, pet_data, dungeon_tier, end_time, session_id)
                     
+                    # [수정] 재로드된 View 객체에 실제 메시지 정보를 찾아 할당합니다.
+                    try:
+                        if thread_id := session_data.get('thread_id'):
+                            if thread := self.bot.get_channel(int(thread_id)):
+                                view.message = await thread.fetch_message(message_id)
+                    except (discord.NotFound, discord.Forbidden):
+                        logger.warning(f"던전 UI 재로드 중 메시지(ID: {message_id})를 찾을 수 없어 해당 세션을 건너뜁니다.")
+                        continue # 메시지가 없으면 View를 로드할 수 없으므로 건너뜁니다.
+                    
                     self.bot.add_view(view, message_id=message_id)
                     self.active_sessions[user_id] = view
                     reloaded_count += 1
@@ -770,7 +773,6 @@ class Dungeon(commands.Cog):
             logger.info(f"[Dungeon] 총 {reloaded_count}개의 던전 게임 UI를 성공적으로 다시 로드했습니다.")
         except Exception as e:
             logger.error(f"활성 던전 UI 로드 중 오류 발생: {e}", exc_info=True)
-
 
     @tasks.loop(minutes=5)
     async def check_expired_dungeons(self):
