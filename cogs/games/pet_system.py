@@ -12,6 +12,7 @@ import asyncio
 import re 
 from collections import defaultdict
 from postgrest.exceptions import APIError
+from discord import app_commands
 
 from utils.database import (
     supabase, get_inventory, update_inventory, get_item_database,
@@ -1231,6 +1232,58 @@ class PetSystem(commands.Cog):
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_name, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} 패널을 #{channel.name} 채널에 성공적으로 생성했습니다.")
+
+    # dungeon.py에서 가져온 자동 완성 함수
+    async def skill_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+        res = await supabase.table('pet_skills').select('skill_name').ilike('skill_name', f'%{current}%').limit(25).execute()
+        if not (res and res.data): return []
+        return [app_commands.Choice(name=row['skill_name'], value=row['skill_name']) for row in res.data]
+
+    @app_commands.command(name="펫스킬등록", description="[관리자] 유저의 펫에게 특정 스킬을 등록/교체합니다.")
+    @app_commands.describe(
+        user="스킬을 등록할 펫의 주인입니다.",
+        skill_name="등록할 스킬의 이름입니다.",
+        slot="스킬을 등록할 슬롯 번호입니다 (1~4)."
+    )
+    @app_commands.autocomplete(skill_name=skill_autocomplete)
+    async def admin_set_pet_skill(self, interaction: discord.Interaction, user: discord.Member, skill_name: str, slot: app_commands.Range[int, 1, 4]):
+        # 봇 소유자 또는 관리자만 사용할 수 있도록 권한 체크
+        if not await self.bot.is_owner(interaction.user) and not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ 이 명령어는 관리자만 사용할 수 있습니다.", ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            # 1. 펫 정보와 스킬 정보 가져오기
+            pet_res = await supabase.table('pets').select('id').eq('user_id', user.id).maybe_single().execute()
+            skill_res = await supabase.table('pet_skills').select('id').eq('skill_name', skill_name).maybe_single().execute()
+
+            if not (pet_res and pet_res.data):
+                return await interaction.followup.send(f"❌ {user.display_name}님은 펫을 소유하고 있지 않습니다.", ephemeral=True)
+            if not (skill_res and skill_res.data):
+                return await interaction.followup.send(f"❌ '{skill_name}' 스킬을 찾을 수 없습니다. 정확한 이름을 입력해주세요.", ephemeral=True)
+                
+            pet_id = pet_res.data['id']
+            skill_id = skill_res.data['id']
+
+            # 2. 스킬 설정 (database.py의 set_pet_skill 함수 재사용)
+            success = await set_pet_skill(pet_id, skill_id, slot)
+            
+            if success:
+                # 3. 성공 메시지 및 UI 업데이트 요청
+                await interaction.followup.send(f"✅ {user.display_name}님의 펫 {slot}번 슬롯에 '{skill_name}' 스킬을 성공적으로 등록했습니다.", ephemeral=True)
+                
+                pet_data = await get_user_pet(user.id)
+                if pet_data and pet_data.get('thread_id'):
+                    if thread := self.bot.get_channel(pet_data['thread_id']):
+                        await self.update_pet_ui(user.id, thread)
+            else:
+                await interaction.followup.send("❌ 스킬을 등록하는 중 오류가 발생했습니다. (이미 배운 스킬일 수 있습니다)", ephemeral=True)
+
+        except Exception as e:
+            logger.error(f"관리자 펫 스킬 등록 중 오류: {e}", exc_info=True)
+            await interaction.followup.send("❌ 처리 중 심각한 오류가 발생했습니다. 로그를 확인해주세요.", ephemeral=True)
+    # ▲▲▲ [핵심 추가] 완료 ▲▲▲
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(PetSystem(bot))
