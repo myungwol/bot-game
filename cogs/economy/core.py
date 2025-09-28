@@ -190,6 +190,21 @@ class EconomyCore(commands.Cog):
             if 'pet_level_set' in requests_by_prefix:
                 if pet_cog := self.bot.get_cog("PetSystem"):
                     await pet_cog.process_level_set_requests(requests_by_prefix['pet_level_set'])
+
+            if 'exploration_complete' in requests_by_prefix:
+                for req in requests_by_prefix['exploration_complete']:
+                    try:
+                        user_id = int(req['config_key'].split('_')[-1])
+                        pet_res = await supabase.table('pets').select('current_exploration_id').eq('user_id', str(user_id)).single().execute()
+                        
+                        if pet_res.data and (exp_id := pet_res.data.get('current_exploration_id')):
+                            past_time = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+                            await supabase.table('pet_explorations').update({'end_time': past_time}).eq('id', exp_id).execute()
+                            logger.info(f"[Dispatcher] 유저 {user_id}의 탐사(ID: {exp_id})를 즉시 완료 처리했습니다.")
+                        else:
+                            logger.warning(f"[Dispatcher] 즉시 완료 요청된 유저 {user_id}가 탐사 중이 아닙니다.")
+                    except Exception as e:
+                        logger.error(f"펫 탐사 즉시 완료 처리 중 오류: {e}", exc_info=True)
             
             server_id_str = get_config("SERVER_ID")
             guild = self.bot.get_guild(int(server_id_str)) if server_id_str else None
