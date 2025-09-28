@@ -71,13 +71,24 @@ class SkillSelectView(ui.View):
         for s in self.learned_skills:
             skill = s['pet_skills']
             cost = skill.get('cost', 0)
-            is_disabled = self.current_energy < cost
+            power = skill.get('power', 0)
+            description = skill.get('description', '설명 없음')
             
+            is_disabled_by_energy = self.current_energy < cost
+
+            # [핵심 수정] description에 더 많은 정보를 담도록 변경
+            # 디스코드 description 최대 길이에 맞춰 설명을 자릅니다.
+            truncated_desc = (description[:50] + '...') if len(description) > 50 else description
+            
+            if is_disabled_by_energy:
+                option_description = f"기력이 부족합니다! (현재:{self.current_energy})"
+            else:
+                option_description = f"위력: {power} | {truncated_desc}"
+
             options.append(discord.SelectOption(
                 label=f"{skill['skill_name']} (코스트: {cost})",
                 value=str(skill['id']),
-                description=f"위력: {skill['power']}" if self.current_energy >= cost else f"기력이 부족합니다! ({self.current_energy}/{cost})"
-                # disabled 인자를 완전히 삭제했습니다.
+                description=option_description
             ))
 
         skill_select = ui.Select(placeholder="사용할 스킬을 선택하세요...", options=options)
