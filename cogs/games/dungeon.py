@@ -591,10 +591,13 @@ class DungeonGameView(ui.View):
         # combat_system의 함수는 ATK, DEF 등 대문자 키를 사용합니다.
         final_stat = _get_stat_with_effects(base_stat, stat_key.upper(), effects)
         
+        # [핵심] 변화량을 계산합니다.
+        change_amount = abs(final_stat - base_stat)
+        
         if final_stat > base_stat:
-            return f"**`{final_stat}`** (`{base_stat}` 🔺)"
+            return f"**`{final_stat}`** ({change_amount}) 🔺"
         elif final_stat < base_stat:
-            return f"**`{final_stat}`** (`{base_stat}` 🔻)"
+            return f"**`{final_stat}`** ({change_amount}) 🔻"
         else:
             return f"`{final_stat}`"
             
