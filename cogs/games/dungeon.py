@@ -329,29 +329,30 @@ class DungeonGameView(ui.View):
         # ▼▼▼ [핵심 수정] 이 한 줄을 추가합니다. ▼▼▼
         if 'current_energy' in updated_pet:
             self.pet_current_energy = updated_pet['current_energy']
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
         
         if self.pet_current_hp <= 0: self.pet_is_defeated = True
 
-        if self.monster_current_hp <= 0 and self.pet_is_defeated:
-             return await self.handle_battle_draw()
-        elif self.monster_current_hp <= 0:
-            return await self.handle_battle_win()
+        # [수정] 몬스터가 죽었는지 먼저 확인
+        if self.monster_current_hp <= 0:
+            if self.pet_is_defeated:
+                return await self.handle_battle_draw()
+            else:
+                return await self.handle_battle_win()
         
-        # ▼▼▼ [핵심 수정] 속도 비교 조건문을 삭제하고, 몬스터의 턴을 항상 실행하도록 변경합니다. ▼▼▼
-        await self.refresh_ui()
-        await asyncio.sleep(2)
+        # ▼▼▼ [핵심 수정] 몬스터 턴을 먼저 실행하고, UI 새로고침은 마지막에 한 번만 합니다. ▼▼▼
+        await asyncio.sleep(2) # 펫의 공격과 몬스터의 공격 사이에 잠시 텀을 줍니다.
         await self._execute_monster_turn()
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
-
+        
         if self.pet_current_hp <= 0 and self.monster_current_hp <= 0:
             return await self.handle_battle_draw()
         elif self.pet_current_hp <= 0:
             return await self.handle_battle_lose()
 
+        # 모든 턴 계산이 끝난 후
         self.is_pet_turn = True
         self.pet_current_energy = min(self.pet_max_energy, self.pet_current_energy + 10)
-        await self.refresh_ui()
+        await self.refresh_ui() # <--- 여기서 딱 한 번만 호출합니다.
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
     async def handle_skill_use(self, skill_data: Dict, skill_interaction: discord.Interaction):
         try:
