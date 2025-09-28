@@ -213,7 +213,6 @@ class PetUIView(ui.View):
         
         is_exploring = pet_data.get('status') == 'exploring'
 
-        # 버튼 custom_id 설정
         self.explore_button.custom_id = f"pet_explore:{user_id}"
         self.allocate_stats_button.custom_id = f"pet_allocate_stats:{user_id}"
         self.feed_pet_button.custom_id = f"pet_feed:{user_id}"
@@ -223,7 +222,6 @@ class PetUIView(ui.View):
         self.refresh_button.custom_id = f"pet_refresh:{user_id}"
         self.evolve_button.custom_id = f"pet_evolve:{user_id}"
 
-        # 탐사 중일 때 일부 버튼 비활성화
         self.allocate_stats_button.disabled = self.pet_data.get('stat_points', 0) <= 0 or is_exploring
         self.feed_pet_button.disabled = self.pet_data.get('hunger', 0) >= 100 or is_exploring
         self.play_with_pet_button.disabled = play_cooldown_active or is_exploring
@@ -428,17 +426,22 @@ class PetSystem(commands.Cog):
         species_info = pet_data.get('pet_species')
         if not species_info: return False
 
-        next_stage_num = pet_data['current_stage'] + 1
+        current_stage_num = pet_data.get('current_stage', 0)
+        next_stage_num = current_stage_num + 1
+        
         stage_info_json = species_info.get('stage_info', {})
+        current_stage_info = stage_info_json.get(str(current_stage_num))
         next_stage_info = stage_info_json.get(str(next_stage_num))
 
-        if not next_stage_info: return False
-        if pet_data['level'] < next_stage_info.get('level_req', 999): return False
+        if not (current_stage_info and next_stage_info): return False
+        if pet_data.get('level', 0) < current_stage_info.get('level_cap', 999): return False
         
-        if 'item' in next_stage_info and 'qty' in next_stage_info:
-            required_item = next_stage_info['item']
-            required_qty = next_stage_info['qty']
-            if inventory.get(required_item, 0) < required_qty: return False
+        required_items = next_stage_info.get('items', {})
+        if not required_items: return True
+
+        for item, qty in required_items.items():
+            if inventory.get(item, 0) < qty:
+                return False
         
         return True
 
@@ -614,7 +617,10 @@ class PetSystem(commands.Cog):
             embed.set_footer(text="시간이 되면 자동으로 부화합니다.")
         else:
             stage_info_json = species_info.get('stage_info', {})
-            stage_name = stage_info_json.get(str(current_stage), {}).get('name', '알 수 없는 단계')
+            current_stage_info = stage_info_json.get(str(current_stage), {})
+            stage_name = current_stage_info.get('name', '알 수 없는 단계')
+            level_cap = current_stage_info.get('level_cap', 100)
+            
             nickname = pet_data.get('nickname') or species_info['species_name']
             
             embed = discord.Embed(title=f"🐾 {nickname}", color=0xFFD700)
@@ -637,10 +643,7 @@ class PetSystem(commands.Cog):
             embed.add_field(name="상태", value=status_text, inline=False)
             embed.add_field(name="단계", value=f"**{stage_name}**", inline=True)
             embed.add_field(name="타입", value=f"{ELEMENT_TO_TYPE.get(species_info['element'], '알 수 없음')}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True)
-            embed.add_field(name="레벨", value=f"**Lv. {current_level}**", inline=True)
-            embed.add_field(name="속성", value=f"{species_info['element']}", inline=True)
-            embed.add_field(name="\u200b", value="\u200b", inline=True)
+            embed.add_field(name="레벨", value=f"**Lv. {current_level} / {level_cap}**", inline=True)
             embed.add_field(name="경험치", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=False)
             embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=False)
             embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=False)
@@ -663,18 +666,31 @@ class PetSystem(commands.Cog):
                 'speed': (level - 1) * species_info.get('speed_growth', 0) + pet_data.get('allocated_speed', 0)
             }
             current_stats = {
-                'hp': hatch_base_stats['hp'] + total_bonus_stats['hp'],
-                'attack': hatch_base_stats['attack'] + total_bonus_stats['attack'],
-                'defense': hatch_base_stats['defense'] + total_bonus_stats['defense'],
-                'speed': hatch_base_stats['speed'] + total_bonus_stats['speed']
+                'hp': round(hatch_base_stats['hp'] + total_bonus_stats['hp']),
+                'attack': round(hatch_base_stats['attack'] + total_bonus_stats['attack']),
+                'defense': round(hatch_base_stats['defense'] + total_bonus_stats['defense']),
+                'speed': round(hatch_base_stats['speed'] + total_bonus_stats['speed'])
             }
-            embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{hatch_base_stats['hp']}` + `{total_bonus_stats['hp']}`)", inline=True)
-            embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{hatch_base_stats['attack']}` + `{total_bonus_stats['attack']}`)", inline=True)
+            embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{round(hatch_base_stats['hp'])}` + `{round(total_bonus_stats['hp'])}`)", inline=True)
+            embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{round(hatch_base_stats['attack'])}` + `{round(total_bonus_stats['attack'])}`)", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) 
-            embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{hatch_base_stats['defense']}` + `{total_bonus_stats['defense']}`)", inline=True)
-            embed.add_field(name="👟 스피드", value=f"**{current_stats['speed']}** (`{hatch_base_stats['speed']}` + `{total_bonus_stats['speed']}`)", inline=True)
+            embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{round(hatch_base_stats['defense'])}` + `{round(total_bonus_stats['defense'])}`)", inline=True)
+            embed.add_field(name="👟 스피드", value=f"**{current_stats['speed']}** (`{round(hatch_base_stats['speed'])}` + `{round(total_bonus_stats['speed'])}`)", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) 
             
+            # 진화 재료 표시 로직
+            next_stage_num = current_stage + 1
+            next_stage_info = stage_info_json.get(str(next_stage_num))
+            if next_stage_info and pet_data.get('level', 0) >= level_cap:
+                required_items = next_stage_info.get('items', {})
+                if required_items:
+                    req_list = [f"> {item}: {qty}개" for item, qty in required_items.items()]
+                    embed.add_field(
+                        name=f"🌟 다음 단계({next_stage_info.get('name')}) 진화 재료",
+                        value="\n".join(req_list),
+                        inline=False
+                    )
+
         return embed
     
     async def process_hatching(self, pet_data: Dict):
@@ -697,17 +713,14 @@ class PetSystem(commands.Cog):
             
         updated_pet_data_res = await supabase.table('pets').update({
             'current_stage': 2, 'level': 1, 'xp': 0, 'hunger': 100, 'friendship': 0,
-            'current_hp': final_stats['hp'], 'current_attack': final_stats['attack'],
-            'current_defense': final_stats['defense'], 'current_speed': final_stats['speed'],
+            'current_hp': final_stats['hp'],
             'nickname': species_info['species_name'],
             'natural_bonus_hp': natural_bonus_stats['hp'], 
             'natural_bonus_attack': natural_bonus_stats['attack'],
             'natural_bonus_defense': natural_bonus_stats['defense'], 
             'natural_bonus_speed': natural_bonus_stats['speed']
-        }).eq('id', pet_data['id']).execute()
+        }).eq('id', pet_data['id']).select().single().execute()
         
-        updated_pet_data = updated_pet_data_res.data[0]
-        updated_pet_data['pet_species'] = species_info
         thread = self.bot.get_channel(pet_data['thread_id'])
         if thread:
             try:
@@ -716,8 +729,9 @@ class PetSystem(commands.Cog):
 
                 message = await thread.fetch_message(pet_data['message_id'])
                 hatched_embed = self.build_pet_ui_embed(user, final_pet_data)
+                inventory = await get_inventory(user)
                 cooldown_active = await self._is_play_on_cooldown(user_id)
-                evo_ready = await self._is_evolution_ready(final_pet_data, {})
+                evo_ready = await self._is_evolution_ready(final_pet_data, inventory)
                 view = PetUIView(self, user_id, final_pet_data, play_cooldown_active=cooldown_active, evolution_ready=evo_ready)
                 await message.edit(embed=hatched_embed, view=view) 
                 await thread.send(f"{user.mention} 님의 알이 부화했습니다!")
@@ -789,9 +803,10 @@ class PetSystem(commands.Cog):
     async def check_and_process_auto_evolution(self, user_ids: set):
         for user_id in user_ids:
             try:
-                res = await supabase.rpc('trigger_pet_auto_evolution', {'p_user_id': user_id}).single().execute()
-                if res.data and res.data.get('evolved'):
-                    await self.notify_pet_evolution(user_id, res.data.get('new_stage'), res.data.get('points_granted'))
+                inventory = await get_inventory(self.bot.get_user(user_id))
+                pet_data = await get_user_pet(user_id)
+                if await self._is_evolution_ready(pet_data, inventory):
+                    await self.handle_evolution(user_id, self.bot.get_channel(pet_data['thread_id']))
             except Exception as e:
                 logger.error(f"자동 진화 처리 중 오류 (유저: {user_id}): {e}", exc_info=True)
 
@@ -810,11 +825,37 @@ class PetSystem(commands.Cog):
             await self.update_pet_ui(user_id, thread)
 
     async def handle_evolution(self, user_id: int, channel: discord.TextChannel) -> bool:
-        res = await supabase.rpc('attempt_pet_evolution', {'p_user_id': user_id}).single().execute()
+        user = self.bot.get_user(user_id)
+        if not user: return False
+
+        inventory = await get_inventory(user)
+        pet_data = await get_user_pet(user_id)
+        
+        if not await self._is_evolution_ready(pet_data, inventory):
+            return False
+
+        species_info = pet_data.get('pet_species', {})
+        next_stage_num = pet_data['current_stage'] + 1
+        stage_info_json = species_info.get('stage_info', {})
+        next_stage_info = stage_info_json.get(str(next_stage_num))
+        required_items = next_stage_info.get('items', {})
+        
+        # 재료 차감
+        tasks = [update_inventory(user_id, item, -qty) for item, qty in required_items.items()]
+        await asyncio.gather(*tasks)
+
+        # 진화 처리 (DB 함수 호출)
+        res = await supabase.rpc('evolve_pet_stage', {'p_user_id': user_id}).single().execute()
+
         if res.data and res.data.get('success'):
             await self.notify_pet_evolution(user_id, res.data.get('new_stage'), res.data.get('points_granted'))
             return True
-        return False
+        else:
+            # 실패 시 재료 환불
+            logger.error(f"펫 진화 DB 함수 호출 실패 (User: {user_id}). 재료를 환불합니다.")
+            refund_tasks = [update_inventory(user_id, item, qty) for item, qty in required_items.items()]
+            await asyncio.gather(*refund_tasks)
+            return False
 
     async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: Optional[discord.Message] = None, is_refresh: bool = False, pet_data_override: Optional[Dict] = None):
         pet_data = pet_data_override if pet_data_override else await get_user_pet(user_id)
