@@ -3,12 +3,14 @@
 import random
 from typing import Dict, List, Tuple, TypedDict, Optional
 
-class Combatant(TypedDict):
+class Combatant(TypedDict, total=False): # <--- total=False로 변경하여 선택적 키를 허용
     name: str
     stats: Dict[str, int]
     current_hp: int
     max_hp: int
     effects: List[Dict]
+    current_energy: int # <--- 추가
+    max_energy: int # <--- 추가
 
 class CombatLog(TypedDict):
     title: str
