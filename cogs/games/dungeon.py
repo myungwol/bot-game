@@ -315,12 +315,15 @@ class DungeonGameView(ui.View):
         self.pet_effects.clear(); self.monster_effects.clear()
         self.pet_current_energy = self.pet_max_energy
 
+        # ▼▼▼ [핵심 수정] 전투 시작 시 무조건 플레이어 턴으로 시작하도록 변경합니다. ▼▼▼
+        self.is_pet_turn = True
+        
+        # 속도 비교 결과는 로그에만 표시합니다.
         if self.final_pet_stats['speed'] >= self.current_monster.get('speed', 0):
-            self.is_pet_turn = True
             self.battle_log.append(f"**{self.pet_data_raw['nickname']}**이(가) 민첩하게 먼저 움직인다!")
         else:
-            self.is_pet_turn = False
-            self.battle_log.append(f"**{self.current_monster['name']}**이(가) 더 빠르다! 먼저 공격할 것이다.")
+            self.battle_log.append(f"**{self.current_monster['name']}**의 기세에 눌렸지만, 먼저 행동할 기회를 잡았다!")
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
         self.state = "in_battle"
         await supabase.table('dungeon_sessions').update({
@@ -328,11 +331,9 @@ class DungeonGameView(ui.View):
             'current_monster_json': {'data': self.current_monster, 'hp': self.monster_current_hp}
         }).eq('id', self.session_id).execute()
 
-        if not self.is_pet_turn:
-            await self.refresh_ui(interaction)
-            asyncio.create_task(self.handle_monster_turn())
-        else:
-            await self.refresh_ui(interaction)
+        # ▼▼▼ [핵심 수정] 몬스터 선공 로직을 삭제하고, 무조건 UI만 새로고침합니다. ▼▼▼
+        await self.refresh_ui(interaction)
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
     async def handle_skill_button(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
