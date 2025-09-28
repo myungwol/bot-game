@@ -61,7 +61,7 @@ async def load_all_data_from_db():
         load_bot_configs_from_db(), 
         load_channel_ids_from_db(), 
         load_game_data_from_db(),
-        load_exploration_data_from_db() # 탐사 데이터 로드 추가
+        load_exploration_data_from_db()
     )
     logger.info("------ [ 모든 DB 데이터 캐시 로드 완료 ] ------")
     _initial_load_complete = True
@@ -131,7 +131,6 @@ def get_exploration_locations() -> List[Dict[str, Any]]:
 def get_exploration_loot(location_key: str, pet_level: int) -> List[Dict[str, Any]]:
     """특정 지역에서 해당 펫 레벨에 맞는 모든 보상 목록을 반환합니다."""
     all_loot_for_location = _exploration_loot_cache.get(location_key, [])
-    # min_pet_level이 정의되지 않은 아이템은 없다고 가정하고, 모든 아이템에 min_pet_level이 있다고 간주합니다.
     return [loot for loot in all_loot_for_location]
 
 
@@ -419,13 +418,13 @@ async def start_pet_exploration(pet_id: int, user_id: int, location_key: str, st
         'location_key': location_key,
         'start_time': start_time.isoformat(),
         'end_time': end_time.isoformat()
-    }).select().single().execute()
+    }).execute()
 
     if not (exploration_res and exploration_res.data):
         logger.error(f"펫 탐사 기록 생성 실패 (Pet ID: {pet_id})")
         return None
     
-    new_exploration = exploration_res.data
+    new_exploration = exploration_res.data[0]
     
     # 2. pets 테이블의 상태를 'exploring'으로 업데이트
     await supabase.table('pets').update({
