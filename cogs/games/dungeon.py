@@ -389,7 +389,7 @@ class DungeonGameView(ui.View):
         pet_combatant = Combatant(
             name=self.pet_data_raw['nickname'], stats=self.final_pet_stats,
             current_hp=self.pet_current_hp, max_hp=self.final_pet_stats['hp'], effects=self.pet_effects,
-            current_energy=self.pet_current_energy, max_energy=self.pet_max_energy # <--- 추가
+            current_energy=self.pet_current_energy, max_energy=self.pet_max_energy
         )
         monster_combatant = Combatant(
             name=self.current_monster['name'], stats=self.current_monster,
@@ -397,16 +397,20 @@ class DungeonGameView(ui.View):
         )
         basic_attack_skill = {"skill_name": "공격", "power": 100, "cost": 0} 
 
+        # ▼▼▼ [핵심 수정] 이제 process_turn 함수가 모든 턴 종료 처리를 담당합니다. ▼▼▼
         updated_monster, updated_pet, monster_turn_logs = process_turn(monster_combatant, pet_combatant, basic_attack_skill)
         
-        self.pet_current_hp = updated_pet['current_hp']; self.pet_effects = updated_pet['effects']
-        self.monster_current_hp = updated_monster['current_hp']; self.monster_effects = updated_monster['effects']
+        self.pet_current_hp = updated_pet['current_hp']
+        self.pet_effects = updated_pet['effects']
+        # self.monster_current_hp = updated_monster['current_hp'] # 몬스터 정보는 caster이므로 여기서 바꿀 필요 없음
+        self.monster_effects = updated_monster['effects']
         self.battle_log.extend(monster_turn_logs)
 
-        if updated_monster['current_hp'] <= 0: self.monster_current_hp = 0
+        # if updated_monster['current_hp'] <= 0: self.monster_current_hp = 0 # 이 로직들은 process_turn에서 이미 처리됨
         if self.pet_current_hp <= 0: self.pet_is_defeated = True
         
         await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
     
     async def handle_explore(self, interaction: discord.Interaction):
         if self.pet_is_defeated: return await interaction.response.send_message("펫이 쓰러져서 탐색할 수 없습니다.", ephemeral=True, delete_after=5)
