@@ -19,7 +19,7 @@ from utils.database import (
     get_item_database, get_user_pet
 )
 from utils.helpers import format_embed_from_db
-from utils.combat_system import process_turn, Combatant
+from utils.combat_system import process_turn, Combatant, _get_stat_with_effects
 
 logger = logging.getLogger(__name__)
 
@@ -184,46 +184,55 @@ class DungeonGameView(ui.View):
         embed = discord.Embed(title=f"탐험 중... - {dungeon_info['name']}", color=0x71368A)
         description_content = ""
         
+        # ▼▼▼ [핵심 수정] 펫 스탯 표시 부분 수정 ▼▼▼
         pet_base_stats = self.final_pet_stats
+        attack_str = self._format_stat_display('attack', pet_base_stats['attack'], self.pet_effects)
+        defense_str = self._format_stat_display('defense', pet_base_stats['defense'], self.pet_effects)
+        speed_str = self._format_stat_display('speed', pet_base_stats['speed'], self.pet_effects)
+        
         pet_stats_text = (f"❤️ **체력**: {self.pet_current_hp} / {pet_base_stats['hp']}\n"
                           f"⚡ **기력**: {self.pet_current_energy} / {self.pet_max_energy}\n"
-                          f"⚔️ **공격력**: {pet_base_stats['attack']}\n"
-                          f"🛡️ **방어력**: {pet_base_stats['defense']}\n"
-                          f"💨 **스피드**: {pet_base_stats['speed']}")
+                          f"⚔️ **공격력**: {attack_str}\n"
+                          f"🛡️ **방어력**: {defense_str}\n"
+                          f"💨 **스피드**: {speed_str}")
         embed.add_field(name=f"🐾 {self.pet_data_raw['nickname']}", value=pet_stats_text, inline=False)
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
         
         if self.pet_is_defeated:
             description_content = "☠️ 펫이 쓰러졌습니다! '아이템'을 사용해 '치료제'로 회복시키거나 던전을 나가야 합니다."
         elif self.state == "exploring":
             description_content = "깊은 곳으로 나아가 몬스터를 찾아보자."
-        # ▼▼▼ [핵심 추가] 이 부분을 추가합니다. ▼▼▼
         elif self.state == "encounter" and self.current_monster:
             embed.title = f"몬스터 조우! - {self.current_monster['name']}"
             embed.set_image(url=self.current_monster['image_url'])
-            
-            # 속도 비교 결과에 따른 메시지
             if self.is_pet_turn:
                 description_content = f"**{self.pet_data_raw['nickname']}**이(가) 민첩하게 먼저 움직일 수 있습니다!\n어떻게 하시겠습니까?"
             else:
                 description_content = f"**{self.current_monster['name']}**이(가) 더 빠릅니다! 전투를 시작하면 선공을 당하게 됩니다!\n어떻게 하시겠습니까?"
-            
             monster_base_stats = self.current_monster
             monster_stats_text = (f"❤️ **체력**: {self.monster_current_hp} / {monster_base_stats['hp']}\n"
-                                f"⚔️ **공격력**: {monster_base_stats['attack']}\n"
-                                f"🛡️ **방어력**: {monster_base_stats['defense']}\n"
-                                f"💨 **스피드**: {monster_base_stats['speed']}")
+                                f"⚔️ **공격력**: `{monster_base_stats['attack']}`\n"
+                                f"🛡️ **방어력**: `{monster_base_stats['defense']}`\n"
+                                f"💨 **스피드**: `{monster_base_stats['speed']}`")
             embed.add_field(name=f"몬스터: {self.current_monster['name']}", value=monster_stats_text, inline=False)
-        # ▲▲▲ [핵심 추가] 완료 ▲▲▲
         elif self.state == "in_battle" and self.current_monster:
             turn_indicator = ">>> **💥 당신의 턴입니다! 💥**" if self.is_pet_turn else "⏳ 상대의 턴을 기다리는 중..."
             embed.title = f"전투 중! - {self.current_monster['name']}"; embed.description = turn_indicator
             embed.set_image(url=self.current_monster['image_url'])
+            
+            # ▼▼▼ [핵심 수정] 몬스터 스탯 표시 부분 수정 ▼▼▼
             monster_base_stats = self.current_monster
+            m_attack_str = self._format_stat_display('attack', monster_base_stats['attack'], self.monster_effects)
+            m_defense_str = self._format_stat_display('defense', monster_base_stats['defense'], self.monster_effects)
+            m_speed_str = self._format_stat_display('speed', monster_base_stats['speed'], self.monster_effects)
+
             monster_stats_text = (f"❤️ **체력**: {self.monster_current_hp} / {monster_base_stats['hp']}\n"
-                                f"⚔️ **공격력**: {monster_base_stats['attack']}\n"
-                                f"🛡️ **방어력**: {monster_base_stats['defense']}\n"
-                                f"💨 **스피드**: {monster_base_stats['speed']}")
+                                f"⚔️ **공격력**: {m_attack_str}\n"
+                                f"🛡️ **방어력**: {m_defense_str}\n"
+                                f"💨 **스피드**: {m_speed_str}")
             embed.add_field(name=f"몬스터: {self.current_monster['name']}", value=monster_stats_text, inline=False)
+            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+
             if self.battle_log:
                 embed.add_field(name="⚔️ 전투 기록", value="\u200b", inline=False)
                 for log_entry in self.battle_log[-3:]:
@@ -576,7 +585,19 @@ class DungeonGameView(ui.View):
             logger.error(f"던전 진행 중 유저(ID:{self.user.id})의 펫 정보를 찾을 수 없습니다.")
             # 여기서 던전을 강제 종료하는 로직을 추가할 수도 있습니다.
             pass
-
+            
+    def _format_stat_display(self, stat_key: str, base_stat: int, effects: list) -> str:
+        """버프/디버프를 적용하여 스탯 표시 문자열을 만듭니다."""
+        # combat_system의 함수는 ATK, DEF 등 대문자 키를 사용합니다.
+        final_stat = _get_stat_with_effects(base_stat, stat_key.upper(), effects)
+        
+        if final_stat > base_stat:
+            return f"**`{final_stat}`** (`{base_stat}` 🟢)"
+        elif final_stat < base_stat:
+            return f"**`{final_stat}`** (`{base_stat}` 🔴)"
+        else:
+            return f"`{final_stat}`"
+            
 class Dungeon(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot; self.active_sessions: Dict[int, DungeonGameView] = {}
