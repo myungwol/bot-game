@@ -8,6 +8,7 @@ import random
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List, Any
 import asyncio
+from collections import defaultdict
 
 from utils.database import (
     supabase, get_user_pet, get_exploration_locations, get_exploration_loot,
@@ -28,7 +29,6 @@ class ClaimRewardView(ui.View):
     async def claim_reward_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         
-        # 메시지 ID를 통해 탐사 정보를 찾도록 로직 변경
         res = await supabase.table('pet_explorations').select('id').eq('completion_message_id', str(interaction.message.id)).maybe_single().execute()
         
         if not (res and res.data):
@@ -101,7 +101,9 @@ class Exploration(commands.Cog):
             await interaction.followup.send("❌ 탐사를 시작하는 데 실패했습니다. 다시 시도해주세요.", ephemeral=True)
             return
 
-        pet_thread = self.bot.get_channel(pet['thread_id'])
+        pet_thread_id = pet.get('thread_id')
+        pet_thread = self.bot.get_channel(pet_thread_id) if pet_thread_id else None
+
         if pet_thread:
             embed = discord.Embed(
                 title="🧭 탐사 시작",
@@ -112,7 +114,8 @@ class Exploration(commands.Cog):
             await pet_thread.send(embed=embed)
 
         if pet_cog := self.bot.get_cog("PetSystem"):
-            await pet_cog.update_pet_ui(user.id, pet_thread)
+            if pet_thread:
+                await pet_cog.update_pet_ui(user.id, pet_thread)
         await interaction.followup.send("✅ 펫을 탐사 보냈습니다. 펫 채널을 확인해주세요!", ephemeral=True)
 
     @tasks.loop(minutes=1)
@@ -156,7 +159,7 @@ class Exploration(commands.Cog):
         
         pet_level = exploration_data.get('pets', {}).get('level', 1)
         location = exploration_data.get('exploration_locations', {})
-        
+
         xp_reward = random.randint(location.get('base_xp_min', 0), location.get('base_xp_max', 0))
         coin_reward = random.randint(location.get('base_coin_min', 0), location.get('base_coin_max', 0))
         
@@ -197,7 +200,9 @@ class Exploration(commands.Cog):
             pass
 
         if pet_cog := self.bot.get_cog("PetSystem"):
-            await pet_cog.update_pet_ui(interaction.user.id, interaction.channel)
+            pet_thread_id = exploration_data.get('pets', {}).get('thread_id')
+            if pet_thread_id and (pet_thread := self.bot.get_channel(pet_thread_id)):
+                await pet_cog.update_pet_ui(interaction.user.id, pet_thread)
 
         for res in results:
             if isinstance(res, dict) and 'data' in res and res.data:
