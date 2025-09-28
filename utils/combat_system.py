@@ -46,29 +46,28 @@ def _apply_skill_effect(
             duration = random.randint(2, 4)
         
         if effect_type == 'SELF_SLEEP':
-            caster['effects'].append({'type': 'SLEEP', 'duration': duration + 1})
+            # ▼▼▼ [핵심 수정] 모든 'duration + 1' 에서 '+ 1'을 제거합니다. ▼▼▼
+            caster['effects'].append({'type': 'SLEEP', 'duration': duration})
             log_value = f"> **{caster['name']}**은(는) 스킬의 반동으로 깊은 잠에 빠졌다!"
-        # ▼▼▼ [핵심 수정] RECHARGE, ROOTED_REGEN 효과 처리 ▼▼▼
         elif effect_type == 'RECHARGE':
-            caster['effects'].append({'type': 'RECHARGING', 'duration': duration + 1})
-            # 이 효과는 즉시 발동되므로 별도 로그는 process_turn에서 처리
+            caster['effects'].append({'type': 'RECHARGING', 'duration': duration})
         elif effect_type == 'ROOTED_REGEN':
-            caster['effects'].append({'type': 'ROOTED_REGEN', 'value': value, 'duration': 999}) # 무한 지속
-            caster['effects'].append({'type': 'DEF_DEBUFF', 'value': 0.2, 'duration': 999}) # 방어 20% 감소 페널티
+            caster['effects'].append({'type': 'ROOTED_REGEN', 'value': value, 'duration': 999})
+            caster['effects'].append({'type': 'DEF_DEBUFF', 'value': 0.2, 'duration': 999})
             log_value = f"> **{caster['name']}**이(가) 땅에 뿌리를 내렸다! 매 턴 체력을 회복하지만 방어력이 감소한다."
-        # ▲▲▲ [수정] 완료 ▲▲▲
         else:
             existing_effect = next((e for e in target['effects'] if e.get('type') == effect_type), None)
             
             if effect_type == 'DESTINY_BOND':
-                caster['effects'].append({'type': 'DESTINY_BOND', 'duration': duration + 1})
+                caster['effects'].append({'type': 'DESTINY_BOND', 'duration': duration})
             elif existing_effect:
-                existing_effect['duration'] = duration + 1
+                existing_effect['duration'] = duration
             else:
                 if 'DEBUFF' in effect_type or effect_type in ['BURN', 'PARALYZE', 'SLEEP', 'PARALYZE_ON_HIT', 'TRAP_DOT']:
-                    target['effects'].append({'type': effect_type.replace('_ON_HIT', ''), 'value': value, 'duration': duration + 1})
+                    target['effects'].append({'type': effect_type.replace('_ON_HIT', ''), 'value': value, 'duration': duration})
                 elif 'BUFF' in effect_type:
-                    caster['effects'].append({'type': effect_type, 'value': value, 'duration': duration + 1})
+                    caster['effects'].append({'type': effect_type, 'value': value, 'duration': duration})
+            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
             if 'DEBUFF' in effect_type:
                 stat_name = {"ATK": "공격력", "DEF": "방어력", "SPD": "스피드", "ACC": "명중률"}.get(effect_type.split('_')[0], "능력")
