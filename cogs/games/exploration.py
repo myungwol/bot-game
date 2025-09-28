@@ -21,9 +21,8 @@ from utils.helpers import format_embed_from_db
 logger = logging.getLogger(__name__)
 
 class ClaimRewardView(ui.View):
-    # 이 View는 동적으로 생성되므로, timeout을 설정할 수 있습니다. (예: 하루)
     def __init__(self, cog_instance: 'Exploration', exploration_id: int):
-        super().__init__(timeout=86400) # 24시간 후 비활성화
+        super().__init__(timeout=86400)
         self.cog = cog_instance
         self.exploration_id = exploration_id
 
@@ -34,8 +33,10 @@ class ClaimRewardView(ui.View):
         await self.cog.handle_claim_reward(interaction, self.exploration_id)
         # 보상 수령 후 View 비활성화
         self.stop()
-        button.disabled = True
-        await interaction.message.edit(view=self)
+        # ▼▼▼ [핵심 수정] 이 부분을 삭제합니다. 메시지는 handle_claim_reward에서 직접 삭제됩니다. ▼▼▼
+        # button.disabled = True
+        # await interaction.message.edit(view=self)
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
 
 class PetExplorationPanelView(ui.View):
@@ -220,7 +221,6 @@ class Exploration(commands.Cog):
 
     async def register_persistent_views(self):
         self.bot.add_view(PetExplorationPanelView(self))
-        # self.bot.add_view(ClaimRewardView(self))  <--- 이 줄을 삭제/주석 처리해야 합니다.
         logger.info("✅ 펫 탐사 시스템의 영구 View가 성공적으로 등록되었습니다.")
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_pet_exploration"):
