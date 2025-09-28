@@ -211,20 +211,25 @@ class PetUIView(ui.View):
         self.user_id = user_id
         self.pet_data = pet_data
         
+        is_exploring = pet_data.get('status') == 'exploring'
+
+        # 버튼 custom_id 설정
+        self.explore_button.custom_id = f"pet_explore:{user_id}"
+        self.allocate_stats_button.custom_id = f"pet_allocate_stats:{user_id}"
         self.feed_pet_button.custom_id = f"pet_feed:{user_id}"
         self.play_with_pet_button.custom_id = f"pet_play:{user_id}"
         self.rename_pet_button.custom_id = f"pet_rename:{user_id}"
         self.release_pet_button.custom_id = f"pet_release:{user_id}"
         self.refresh_button.custom_id = f"pet_refresh:{user_id}"
-        self.allocate_stats_button.custom_id = f"pet_allocate_stats:{user_id}"
         self.evolve_button.custom_id = f"pet_evolve:{user_id}"
 
-        if self.pet_data.get('hunger', 0) >= 100:
-            self.feed_pet_button.disabled = True
-        
-        self.play_with_pet_button.disabled = play_cooldown_active
-        self.allocate_stats_button.disabled = self.pet_data.get('stat_points', 0) <= 0
-        self.evolve_button.disabled = not evolution_ready
+        # 탐사 중일 때 일부 버튼 비활성화
+        self.allocate_stats_button.disabled = self.pet_data.get('stat_points', 0) <= 0 or is_exploring
+        self.feed_pet_button.disabled = self.pet_data.get('hunger', 0) >= 100 or is_exploring
+        self.play_with_pet_button.disabled = play_cooldown_active or is_exploring
+        self.evolve_button.disabled = not evolution_ready or is_exploring
+        self.rename_pet_button.disabled = is_exploring
+        self.release_pet_button.disabled = is_exploring
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         try:
@@ -237,6 +242,14 @@ class PetUIView(ui.View):
         except (IndexError, ValueError):
             await interaction.response.send_message("❌ 잘못된 상호작용입니다.", ephemeral=True, delete_after=5)
             return False
+
+    @ui.button(label="탐사 보내기", style=discord.ButtonStyle.primary, emoji="🧭", row=0)
+    async def explore_button(self, interaction: discord.Interaction, button: ui.Button):
+        panel_channel_id = get_id("exploration_panel_channel_id")
+        if panel_channel_id:
+            await interaction.response.send_message(f"펫 탐사는 <#{panel_channel_id}> 채널에서 진행할 수 있습니다.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ 탐사 채널이 설정되지 않았습니다. 관리자에게 문의해주세요.", ephemeral=True)
 
     @ui.button(label="스탯 분배", style=discord.ButtonStyle.success, emoji="✨", row=0)
     async def allocate_stats_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -615,6 +628,13 @@ class PetSystem(commands.Cog):
             hunger = pet_data.get('hunger', 0); hunger_bar = create_bar(hunger, 100, full_char='🟧', empty_char='⬛')
             friendship = pet_data.get('friendship', 0); friendship_bar = create_bar(friendship, 100, full_char='❤️', empty_char='🖤')
 
+            pet_status = pet_data.get('status', 'idle')
+            status_text = "휴식 중 💤"
+            if pet_status == 'exploring':
+                end_time = datetime.fromisoformat(pet_data['exploration_end_time'])
+                status_text = f"탐사 중... (완료: {discord.utils.format_dt(end_time, 'R')})"
+
+            embed.add_field(name="상태", value=status_text, inline=False)
             embed.add_field(name="단계", value=f"**{stage_name}**", inline=True)
             embed.add_field(name="타입", value=f"{ELEMENT_TO_TYPE.get(species_info['element'], '알 수 없음')}", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True)
