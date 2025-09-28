@@ -586,15 +586,15 @@ class DungeonGameView(ui.View):
             # 여기서 던전을 강제 종료하는 로직을 추가할 수도 있습니다.
             pass
             
-    def _format_stat_display(self, stat_key: str, base_stat: int, effects: list) -> str:
+def _format_stat_display(self, stat_key: str, base_stat: int, effects: list) -> str:
         """버프/디버프를 적용하여 스탯 표시 문자열을 만듭니다."""
         # combat_system의 함수는 ATK, DEF 등 대문자 키를 사용합니다.
         final_stat = _get_stat_with_effects(base_stat, stat_key.upper(), effects)
         
         if final_stat > base_stat:
-            return f"**`{final_stat}`** (`{base_stat}` 🟢)"
+            return f"**`{final_stat}`** (`{base_stat}` 🔺)"
         elif final_stat < base_stat:
-            return f"**`{final_stat}`** (`{base_stat}` 🔴)"
+            return f"**`{final_stat}`** (`{base_stat}` 🔻)"
         else:
             return f"`{final_stat}`"
             
