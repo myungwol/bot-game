@@ -69,6 +69,142 @@ async def delete_message_after(message: discord.WebhookMessage, delay: int):
     except (discord.NotFound, discord.Forbidden):
         pass
 
+class ConfirmReplaceView(ui.View):
+    """스킬 교체 여부를 확인하는 간단한 View"""
+    def __init__(self, user_id: int):
+        super().__init__(timeout=180)
+        self.user_id = user_id
+        self.value = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("본인만 결정할 수 있습니다.", ephemeral=True, delete_after=5)
+            return False
+        return True
+
+    @ui.button(label="예, 교체합니다", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: ui.Button):
+        self.value = True
+        self.stop()
+        await interaction.response.defer()
+
+    @ui.button(label="아니요", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: ui.Button):
+        self.value = False
+        self.stop()
+        await interaction.response.defer()
+
+class NewSkillLearnView(ui.View):
+    """새로운 드롭다운 기반 스킬 학습 UI"""
+    def __init__(self, cog: 'PetSystem', user_id: int, pet_data: Dict, unlocked_skills: List[Dict]):
+        super().__init__(timeout=86400) # 하루 동안 유효
+        self.cog = cog
+        self.user_id = user_id
+        self.pet_data = pet_data
+        self.unlocked_skills = unlocked_skills
+        self.selected_skill_id: Optional[int] = None
+        self.selected_slot: Optional[int] = None
+
+    async def start(self, thread: discord.TextChannel):
+        self.update_components()
+        embed = self.build_embed()
+        message_text = f"<@{self.user_id}>, 펫이 성장하여 새로운 스킬을 배울 수 있게 되었습니다!"
+        await thread.send(message_text, embed=embed, view=self)
+
+    def build_embed(self) -> discord.Embed:
+        embed = discord.Embed(title="🎓 새로운 스킬 습득", color=0x00FF00)
+        embed.description = "아래 메뉴에서 배울 스킬과 등록할 슬롯을 선택해주세요."
+        
+        if self.selected_skill_id:
+            skill = next((s for s in self.unlocked_skills if s['id'] == self.selected_skill_id), None)
+            if skill:
+                embed.add_field(name="선택한 스킬", value=f"**{skill['skill_name']}**\n> {skill['description']}", inline=False)
+
+        if self.selected_slot:
+            learned_skills = self.pet_data.get('learned_skills', [])
+            skill_in_slot = next((s for s in learned_skills if s['slot_number'] == self.selected_slot), None)
+            slot_desc = f"**{skill_in_slot['pet_skills']['skill_name']}** (교체 예정)" if skill_in_slot else "비어있음"
+            embed.add_field(name="선택한 슬롯", value=f"**{self.selected_slot}번 슬롯**\n> 현재 스킬: {slot_desc}", inline=False)
+        return embed
+
+    def update_components(self):
+        self.clear_items()
+        
+        # 1. 배울 스킬 선택 드롭다운
+        skill_options = [discord.SelectOption(label=s['skill_name'], value=str(s['id']), description=f"위력: {s['power']}") for s in self.unlocked_skills]
+        skill_select = ui.Select(placeholder="① 배울 스킬을 선택하세요...", options=skill_options)
+        skill_select.callback = self.on_skill_select
+        self.add_item(skill_select)
+
+        # 2. 등록할 슬롯 선택 드롭다운
+        learned_skills = self.pet_data.get('learned_skills', [])
+        slot_options = []
+        for i in range(1, 5):
+            skill_in_slot = next((s for s in learned_skills if s['slot_number'] == i), None)
+            label = f"{i}번 슬롯" + (f" (현재: {skill_in_slot['pet_skills']['skill_name']})" if skill_in_slot else " (비어있음)")
+            slot_options.append(discord.SelectOption(label=label, value=str(i)))
+        
+        slot_select = ui.Select(placeholder="② 등록할 슬롯을 선택하세요...", options=slot_options, disabled=(self.selected_skill_id is None))
+        slot_select.callback = self.on_slot_select
+        self.add_item(slot_select)
+
+        # 3. 확정 및 취소 버튼
+        confirm_button = ui.Button(label="결정", style=discord.ButtonStyle.success, disabled=(self.selected_skill_id is None or self.selected_slot is None))
+        confirm_button.callback = self.on_confirm
+        self.add_item(confirm_button)
+        
+        cancel_button = ui.Button(label="취소", style=discord.ButtonStyle.grey)
+        cancel_button.callback = self.on_cancel
+        self.add_item(cancel_button)
+
+    async def update_view(self, interaction: discord.Interaction):
+        self.update_components()
+        embed = self.build_embed()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def on_skill_select(self, interaction: discord.Interaction):
+        self.selected_skill_id = int(interaction.data['values'][0])
+        await self.update_view(interaction)
+
+    async def on_slot_select(self, interaction: discord.Interaction):
+        self.selected_slot = int(interaction.data['values'][0])
+        await self.update_view(interaction)
+
+    async def on_cancel(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(content="스킬 배우기를 취소했습니다.", view=None, embed=None)
+        self.stop()
+
+    async def on_confirm(self, interaction: discord.Interaction):
+        learned_skills = self.pet_data.get('learned_skills', [])
+        skill_in_slot = next((s for s in learned_skills if s['slot_number'] == self.selected_slot), None)
+        new_skill_name = next(s['skill_name'] for s in self.unlocked_skills if s['id'] == self.selected_skill_id)
+
+        if skill_in_slot:
+            # 스킬 교체 확인 절차
+            confirm_view = ConfirmReplaceView(self.user_id)
+            await interaction.response.send_message(
+                f"**{self.selected_slot}번 슬롯**에 있는 '**{skill_in_slot['pet_skills']['skill_name']}**' 스킬을"
+                f" '**{new_skill_name}**'(으)로 교체하시겠습니까?",
+                view=confirm_view, ephemeral=True
+            )
+            await confirm_view.wait()
+            if confirm_view.value is not True:
+                await interaction.edit_original_response(content="교체를 취소했습니다.", view=None)
+                return
+            # 확인 후 원래 메시지 삭제
+            await interaction.delete_original_response()
+        else:
+            await interaction.response.defer()
+
+        # 스킬 설정 실행
+        await set_pet_skill(self.pet_data['id'], self.selected_skill_id, self.selected_slot)
+        await interaction.message.edit(content=f"✅ **{new_skill_name}** 스킬을 {self.selected_slot}번 슬롯에 등록했습니다!", embed=None, view=None)
+        
+        updated_pet_data = await get_user_pet(self.user_id)
+        if updated_pet_data:
+            await self.cog.update_pet_ui(self.user_id, interaction.channel, pet_data_override=updated_pet_data)
+        self.stop()
+
 # ... (SkillAcquisitionView, SkillChangeView, StatAllocationView, PetNicknameModal, ConfirmReleaseView, PetUIView, EggSelectView, IncubatorPanelView 클래스는 변경 없이 그대로 유지) ...
 class SkillAcquisitionView(ui.View):
     def __init__(self, cog: 'PetSystem', user_id: int, pet_data: Dict, unlocked_skill: Dict):
@@ -990,15 +1126,17 @@ class PetSystem(commands.Cog):
 
         newly_unlocked_skills = await get_skills_unlocked_at_exact_level(new_level, pet_element)
 
+        # ▼▼▼ [핵심 수정] 이 부분을 수정합니다. ▼▼▼
         if newly_unlocked_skills:
             logger.info(f"{user.display_name}의 펫이 {new_level}레벨에 도달하여 {len(newly_unlocked_skills)}개의 스킬을 해금했습니다.")
-            for skill in newly_unlocked_skills:
-                fresh_pet_data = await get_user_pet(user_id)
-                if not fresh_pet_data: continue
-                
-                acquisition_view = SkillAcquisitionView(self, user_id, fresh_pet_data, skill)
-                await acquisition_view.start(thread)
-                await asyncio.sleep(2)
+            
+            # 여러 스킬이 해금될 경우를 대비해, 한 번에 하나의 View만 띄웁니다.
+            fresh_pet_data = await get_user_pet(user_id)
+            if not fresh_pet_data: return
+            
+            learn_view = NewSkillLearnView(self, user_id, fresh_pet_data, newly_unlocked_skills)
+            await learn_view.start(thread)
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
     async def check_and_process_auto_evolution(self, user_ids: set):
         for user_id in user_ids:
