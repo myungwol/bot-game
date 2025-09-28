@@ -138,6 +138,17 @@ def _process_turn_end_effects(combatant: Combatant) -> Tuple[Combatant, List[str
 def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Combatant, Combatant, List[CombatLog | str]]:
     battle_logs: List[CombatLog | str] = []
 
+    # ▼▼▼ [핵심 수정 1] 펫의 턴일 경우에만 코스트를 소모하도록 명시적으로 추가합니다. ▼▼▼
+    # caster의 이름에 'Lv.'가 포함되어 있지 않으면 펫으로 간주합니다.
+    is_pet_turn = 'Lv.' not in caster['name']
+    if is_pet_turn:
+        cost = skill.get('cost', 0)
+        # 펫 객체는 'current_energy'와 'max_energy' 키를 가지고 있다고 가정합니다.
+        # 이 키가 없다면 dungeon.py에서 Combatant 객체를 만들 때 추가해야 합니다.
+        if 'current_energy' in caster:
+             caster['current_energy'] -= cost
+    # ▲▲▲ [핵심 수정 1] 완료 ▲▲▲
+
     for effect in list(caster['effects']):
         # ▼▼▼ [핵심 수정] RECHARGING(재충전) 상태이상 체크 추가 ▼▼▼
         if effect.get('type') == 'RECHARGING':
@@ -187,8 +198,9 @@ def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Com
         final_attack = _get_stat_with_effects(caster['stats']['attack'], 'ATK', caster['effects'])
         final_defense = _get_stat_with_effects(target['stats']['defense'], 'DEF', target['effects'])
         
-        base_damage = max(1, final_attack - final_defense)
-        damage_dealt = round(base_damage * (1 + (skill_power / 100)))
+        # [핵심 수정 2] 데미지 공식을 다시 한번 확인하고 적용합니다.
+        raw_damage = (final_attack * (1 + (skill_power / 100))) - final_defense
+        damage_dealt = max(1, round(raw_damage))
         
         target['current_hp'] = max(0, target['current_hp'] - damage_dealt)
         
@@ -215,7 +227,13 @@ def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Com
             battle_logs.append(f"🔗 **{target['name']}**의 길동무 효과가 발동하여 **{caster['name']}**도 함께 쓰러졌다!")
             target['effects'].remove(destiny_bond_effect)
 
-    caster, end_of_turn_logs = _process_turn_end_effects(caster)
-    battle_logs.extend(end_of_turn_logs)
+    caster, end_of_turn_logs_caster = _process_turn_end_effects(caster)
+    battle_logs.extend(end_of_turn_logs_caster)
+    
+    # 몬스터의 턴이 끝났을 때 타겟(펫)의 턴 종료 효과도 처리해줘야 합니다.
+    # 펫의 턴이 끝났을 때는 이 함수를 빠져나간 후 몬스터 턴에서 처리되므로 중복되지 않습니다.
+    if not is_pet_turn:
+        target, end_of_turn_logs_target = _process_turn_end_effects(target)
+        battle_logs.extend(end_of_turn_logs_target)
     
     return caster, target, battle_logs
