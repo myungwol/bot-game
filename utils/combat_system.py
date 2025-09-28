@@ -52,21 +52,21 @@ def _apply_skill_effect(
         elif effect_type == 'RECHARGE':
             caster['effects'].append({'type': 'RECHARGING', 'duration': duration})
         elif effect_type == 'ROOTED_REGEN':
-            caster['effects'].append({'type': 'ROOTED_REGEN', 'value': value, 'duration': 999})
-            caster['effects'].append({'type': 'DEF_DEBUFF', 'value': 0.2, 'duration': 999})
-            log_value = f"> **{caster['name']}**이(가) 땅에 뿌리를 내렸다! 매 턴 체력을 회복하지만 방어력이 감소한다."
+            caster['effects'].append({'type': 'ROOTED_REGEN', 'value': value, 'duration': duration}) # 지속 시간 적용
+            caster['effects'].append({'type': 'DEF_DEBUFF', 'value': 0.2, 'duration': duration}) # 지속 시간 적용
+            log_value = f"> **{caster['name']}**이(가) 땅에 뿌리를 내렸다! {duration}턴 동안 체력을 회복하지만 방어력이 감소한다."
         else:
             existing_effect = next((e for e in target['effects'] if e.get('type') == effect_type), None)
             
             if effect_type == 'DESTINY_BOND':
-                caster['effects'].append({'type': 'DESTINY_BOND', 'duration': duration})
+                caster['effects'].append({'type': 'DESTINY_BOND', 'duration': duration + 1})
             elif existing_effect:
-                existing_effect['duration'] = duration
+                existing_effect['duration'] = duration + 1
             else:
                 if 'DEBUFF' in effect_type or effect_type in ['BURN', 'PARALYZE', 'SLEEP', 'PARALYZE_ON_HIT', 'TRAP_DOT']:
-                    target['effects'].append({'type': effect_type.replace('_ON_HIT', ''), 'value': value, 'duration': duration})
+                    target['effects'].append({'type': effect_type.replace('_ON_HIT', ''), 'value': value, 'duration': duration + 1})
                 elif 'BUFF' in effect_type:
-                    caster['effects'].append({'type': effect_type, 'value': value, 'duration': duration})
+                    caster['effects'].append({'type': effect_type, 'value': value, 'duration': duration + 1})
             # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
             if 'DEBUFF' in effect_type:
@@ -116,10 +116,8 @@ def _process_turn_end_effects(combatant: Combatant) -> Tuple[Combatant, List[str
             logs.append(f"🌱 **{combatant['name']}**은(는) 뿌리로부터 **{heal_amount}**의 체력을 회복했다!")
         # ▲▲▲ [수정] 완료 ▲▲▲
         
-        # 뿌리내리기 같은 영구 효과는 턴이 감소하지 않도록 예외 처리
-        if effect.get('duration', 0) < 999:
             effect['duration'] -= 1
-            
+
         if effect.get('duration', 0) <= 0:
             effects_to_remove.append(effect)
             effect_name = effect_name_map.get(effect.get('type', '효과'), effect.get('type'))
@@ -127,7 +125,9 @@ def _process_turn_end_effects(combatant: Combatant) -> Tuple[Combatant, List[str
     
     for expired_effect in effects_to_remove:
         if expired_effect in combatant['effects']:
-            # [수정] 뿌리내리기는 방어력 감소 효과도 함께 제거
+            # 뿌리내리기는 방어력 감소 효과와 함께 적용되므로, 이제는 자동으로 함께 만료됩니다.
+            # 별도의 제거 로직이 필요 없습니다.
+            combatant['effects'].remove(expired_effect)
             if expired_effect.get('type') == 'ROOTED_REGEN':
                 def_debuff = next((e for e in combatant['effects'] if e.get('type') == 'DEF_DEBUFF' and e.get('duration') == 999), None)
                 if def_debuff:
