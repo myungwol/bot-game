@@ -282,12 +282,9 @@ class DungeonGameView(ui.View):
     async def _process_battle_turn(self, skill_data: Dict):
         if self.is_pet_turn:
             self.pet_current_energy = min(self.pet_max_energy, self.pet_current_energy + 10)
-            is_struggle = skill_data.get('is_struggle', False)
-            if not is_struggle:
-                cost = skill_data.get('cost', 0)
-                self.pet_current_energy -= cost
+
         
-        pet_combatant = Combatant(
+        pet_combatant = Combatant(...)
             name=self.pet_data_raw['nickname'], stats=self.final_pet_stats,
             current_hp=self.pet_current_hp, max_hp=self.final_pet_stats['hp'], effects=self.pet_effects
         )
