@@ -240,33 +240,6 @@ async def get_user_abilities(user_id: int) -> List[str]:
     return abilities
     
 @supabase_retry_handler()
-async def get_skills_unlocked_at_level(level: int, element: str) -> List[Dict]:
-    """
-    특정 레벨 '이하'에서 해금되는 모든 스킬의 전체 데이터 목록을 반환합니다.
-    해당 펫의 속성 스킬과 모든 펫이 배울 수 있는 '노말' 속성 스킬을 모두 확인합니다.
-    """
-    try:
-        res = await supabase.table('pet_skills').select('*') \
-            .lte('unlock_level', level) \
-            .filter('element', 'in', f'({element},노말)') \
-            .execute()
-        
-        return res.data if res and res.data else []
-    except Exception as e:
-        logger.error(f"{level}레벨, '{element}'속성 스킬 조회 중 오류: {e}", exc_info=True)
-        return []
-
-# [추가] 특정 레벨에 정확히 해금되는 스킬을 가져오는 함수
-@supabase_retry_handler()
-async def get_skills_unlocked_at_exact_level(level: int, pet_element: str) -> List[Dict[str, Any]]:
-    """특정 레벨에 정확히 도달했을 때 해금되는 스킬 목록을 가져옵니다."""
-    response = await supabase.table('pet_skills').select('*') \
-        .eq('unlock_level', level) \
-        .in_('element', ['노말', pet_element]) \
-        .execute()
-    return response.data if response and response.data else []
-
-@supabase_retry_handler()
 async def get_cooldown(subject_id_int: int, cooldown_key: str) -> float:
     subject_id_str = str(subject_id_int)
     response = await supabase.table('cooldowns').select('last_cooldown_timestamp').eq('subject_id', subject_id_str).eq('cooldown_key', cooldown_key).maybe_single().execute()
@@ -282,42 +255,8 @@ async def set_cooldown(subject_id_int: int, cooldown_key: str):
     await supabase.table('cooldowns').upsert({"subject_id": subject_id_str, "cooldown_key": cooldown_key, "last_cooldown_timestamp": iso_timestamp}).execute()
 
 @supabase_retry_handler()
-async def get_pet_learned_skills(pet_id: int) -> List[Dict[str, Any]]:
-    """펫이 배운 스킬 목록을 모든 정보와 함께 가져옵니다."""
-    response = await supabase.table('pet_learned_skills').select('slot_number, pet_skills(*)').eq('pet_id', pet_id).order('slot_number').execute()
-    return response.data if response and response.data else []
-
-@supabase_retry_handler()
-async def get_learnable_skills(pet_id: int, pet_element: str, learned_skill_ids: List[int]) -> List[Dict[str, Any]]:
-    """펫이 현재 배울 수 있는 스킬 목록을 가져옵니다."""
-    query = supabase.table('pet_skills').select('*')
-    query = query.in_('element', ['노말', pet_element])
-    if learned_skill_ids:
-        query = query.not_.in_('id', learned_skill_ids)
-    
-    response = await query.order('element').order('power').execute()
-    return response.data if response and response.data else []
-    
-@supabase_retry_handler()
-async def set_pet_skill(pet_id: int, skill_id: int, slot: int) -> bool:
-    """펫의 스킬을 특정 슬롯에 배우거나 교체합니다."""
-    try:
-        await supabase.table('pet_learned_skills').upsert({
-            'pet_id': pet_id,
-            'skill_id': skill_id,
-            'slot_number': slot
-        }, on_conflict='pet_id, slot_number').execute()
-        return True
-    except APIError as e:
-        if '23505' in str(e.code) and 'pet_learned_skills_pet_id_skill_id_key' in str(e.message):
-            logger.warning(f"펫(ID:{pet_id})이 이미 배운 스킬(ID:{skill_id})을 다른 슬롯에 배우려고 시도했습니다.")
-            return False
-        logger.error(f"펫 스킬 설정 중 DB 오류: {e}", exc_info=True)
-        return False
-
-@supabase_retry_handler()
 async def get_user_pet(user_id: int) -> Optional[Dict]:
-    res = await supabase.table('pets').select('*, pet_species(*), learned_skills:pet_learned_skills(*, pet_skills(*))').eq('user_id', user_id).gt('current_stage', 1).maybe_single().execute()
+    res = await supabase.table('pets').select('*, pet_species(*)').eq('user_id', user_id).gt('current_stage', 1).maybe_single().execute()
     return res.data if res and res.data else None
 
 @supabase_retry_handler()
