@@ -14,7 +14,8 @@ from utils.database import (
     get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
     save_config_to_db, get_all_user_stats, log_activity, get_cooldown, set_cooldown,
     get_user_gear, load_all_data_from_db, ensure_user_gear_exists,
-    load_bot_configs_from_db, delete_config_from_db, get_item_database, get_fishing_loot
+    load_bot_configs_from_db, delete_config_from_db, get_item_database, get_fishing_loot,
+    get_user_pet  # <--- 이 줄이 추가되었습니다.
 )
 from utils.helpers import format_embed_from_db
 
@@ -137,21 +138,18 @@ class EconomyCore(commands.Cog):
                     user_ids = {int(req['config_key'].split('_')[-1]) for req in requests_by_prefix['kitchen_ui_update']}
                     await cooking_cog.process_ui_update_requests(user_ids)
 
-            # ▼▼▼ [핵심 추가] 펫 UI 업데이트 요청 처리 로직 ▼▼▼
             if 'pet_ui_update' in requests_by_prefix:
                 if pet_cog := self.bot.get_cog("PetSystem"):
-                    # 현재 PetSystem.py에는 process_ui_update_requests가 없으므로, 직접 개별 처리합니다.
-                    # 이 방식은 여러 요청이 동시에 와도 안전합니다.
                     for req in requests_by_prefix['pet_ui_update']:
                         try:
                             user_id = int(req['config_key'].split('_')[-1])
                             pet_data = await get_user_pet(user_id)
                             if pet_data and (thread_id := pet_data.get('thread_id')):
                                 if thread := self.bot.get_channel(thread_id):
-                                    await pet_cog.update_pet_ui(user_id, thread)
+                                    # ▼▼▼ [핵심 수정] is_refresh=True 옵션을 추가하여 항상 UI를 새로 생성하도록 강제합니다. ▼▼▼
+                                    await pet_cog.update_pet_ui(user_id, thread, message=None, is_refresh=True)
                         except Exception as e:
                             logger.error(f"개별 펫 UI 업데이트 요청 처리 중 오류: {e}", exc_info=True)
-            # ▲▲▲ [핵심 추가] 완료 ▲▲▲
             
             if 'panel_regenerate' in requests_by_prefix:
                 if panel_cog := self.bot.get_cog("PanelUpdater"):
@@ -190,7 +188,7 @@ class EconomyCore(commands.Cog):
             if 'pet_level_set' in requests_by_prefix:
                 if pet_cog := self.bot.get_cog("PetSystem"):
                     await pet_cog.process_level_set_requests(requests_by_prefix['pet_level_set'])
-
+            
             if 'exploration_complete' in requests_by_prefix:
                 for req in requests_by_prefix['exploration_complete']:
                     try:
