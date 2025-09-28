@@ -260,9 +260,14 @@ class DungeonGameView(ui.View):
         elif self.monster_current_hp <= 0:
             return await self.handle_battle_win()
         
-        await self.refresh_ui(); await asyncio.sleep(2)
-        await self._execute_monster_turn()
-        
+        # ▼▼▼ [핵심 수정] 속도에 따라 몬스터 턴을 진행할지 결정합니다. ▼▼▼
+        # 몬스터가 펫보다 빠를 경우에만 몬스터가 이어서 턴을 가집니다.
+        if self.current_monster.get('speed', 0) > self.final_pet_stats['speed']:
+            await self.refresh_ui()
+            await asyncio.sleep(2)
+            await self._execute_monster_turn()
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+
         if self.pet_current_hp <= 0 and self.monster_current_hp <= 0:
             return await self.handle_battle_draw()
         elif self.pet_current_hp <= 0:
