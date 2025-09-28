@@ -648,20 +648,35 @@ class PetUIView(ui.View):
         )
         await confirm_view.wait()
         if confirm_view.value is True:
-            # ▼▼▼ [핵심 수정] 아래 코드를 추가합니다. ▼▼▼
             try:
-                # 1. 이 펫과 관련된 모든 던전 세션을 먼저 삭제합니다.
-                await supabase.table('dungeon_sessions').delete().eq('pet_id', self.pet_data['id']).execute()
+                # ▼▼▼ [핵심 수정] 펫 놓아주기 시 던전 세션을 정상적으로 종료하는 로직 추가 ▼▼▼
                 
-                # 2. 던전 세션이 정리되었으므로 이제 펫을 안전하게 삭제할 수 있습니다.
+                # 1. 이 펫이 참여 중인 던전 세션이 있는지 확인합니다.
+                session_res = await supabase.table('dungeon_sessions').select('thread_id').eq('pet_id', self.pet_data['id']).maybe_single().execute()
+                
+                if session_res and session_res.data:
+                    thread_id = int(session_res.data['thread_id'])
+                    dungeon_cog = self.cog.bot.get_cog("Dungeon")
+                    thread = self.cog.bot.get_channel(thread_id)
+                    
+                    if dungeon_cog and thread:
+                        logger.info(f"펫(ID:{self.pet_data['id']})을 놓아주기 전에 활성 던전(스레드:{thread_id})을 먼저 종료합니다.")
+                        # Dungeon 코그의 세션 종료 함수를 호출하여 스레드까지 깔끔하게 삭제합니다.
+                        # 보상은 포기하는 것으로 처리합니다.
+                        await dungeon_cog.close_dungeon_session(self.user_id, rewards={}, total_xp=0, thread=thread)
+                        await asyncio.sleep(1) # 스레드 삭제가 처리될 시간을 줍니다.
+
+                # 2. 이제 펫을 안전하게 삭제할 수 있습니다.
                 await supabase.table('pets').delete().eq('user_id', self.user_id).execute()
 
+                # 펫 전용 스레드(알 채널)도 삭제합니다.
                 await interaction.edit_original_response(content="펫을 자연으로 돌려보냈습니다...", view=None)
                 await interaction.channel.send(f"{interaction.user.mention}님이 펫을 자연의 품으로 돌려보냈습니다.")
                 await asyncio.sleep(10)
                 try:
                     await interaction.channel.delete()
                 except (discord.NotFound, discord.Forbidden): pass
+                # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
             except APIError as e:
                 logger.error(f"펫 놓아주기 처리 중 DB 오류 발생: {e}", exc_info=True)
