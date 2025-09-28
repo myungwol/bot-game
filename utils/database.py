@@ -289,7 +289,7 @@ async def set_cooldown(subject_id_int: int, cooldown_key: str):
 
 @supabase_retry_handler()
 async def get_user_pet(user_id: int) -> Optional[Dict]:
-    res = await supabase.table('pets').select('*, pet_species(*)').eq('user_id', user_id).gt('current_stage', 1).maybe_single().execute()
+    res = await supabase.table('pets').select('*, pet_species(*)').eq('user_id', str(user_id)).gt('current_stage', 1).maybe_single().execute()
     return res.data if res and res.data else None
 
 @supabase_retry_handler()
@@ -449,9 +449,24 @@ async def update_exploration_message_id(exploration_id: int, message_id: int):
 
 @supabase_retry_handler()
 async def get_exploration_by_id(exploration_id: int) -> Optional[Dict]:
-    """특정 ID의 탐사 정보를 가져옵니다."""
-    response = await supabase.table('pet_explorations').select('*, pets(level), exploration_locations(*)').eq('id', exploration_id).maybe_single().execute()
-    return response.data if response and response.data else None
+    """특정 ID의 탐사 정보를 가져옵니다. (수정된 버전)"""
+    # 1. 기본 탐사 정보 조회
+    exp_res = await supabase.table('pet_explorations').select('*').eq('id', exploration_id).maybe_single().execute()
+    if not (exp_res and exp_res.data):
+        return None
+    exploration_data = exp_res.data
+
+    # 2. 관련 펫 및 지역 정보 별도 조회
+    pet_task = supabase.table('pets').select('level').eq('id', exploration_data['pet_id']).maybe_single().execute()
+    loc_task = supabase.table('exploration_locations').select('*').eq('location_key', exploration_data['location_key']).maybe_single().execute()
+    
+    pet_res, loc_res = await asyncio.gather(pet_task, loc_task)
+    
+    # 3. 결과 조합
+    exploration_data['pets'] = pet_res.data if pet_res and pet_res.data else {}
+    exploration_data['exploration_locations'] = loc_res.data if loc_res and loc_res.data else {}
+    
+    return exploration_data
 
 @supabase_retry_handler()
 async def claim_and_end_exploration(exploration_id: int, pet_id: int) -> bool:
