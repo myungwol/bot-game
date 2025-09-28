@@ -36,7 +36,6 @@ class PetExplorationPanelView(ui.View):
     def __init__(self, cog_instance: 'Exploration'):
         super().__init__(timeout=None)
         self.cog = cog_instance
-        # 컴포넌트 추가를 별도 메서드로 분리
         self.add_exploration_buttons()
 
     def add_exploration_buttons(self):
@@ -85,20 +84,10 @@ class Exploration(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.exploration_completer.start()
-        self.persistent_views_added = False # View가 등록되었는지 확인하는 플래그
 
     def cog_unload(self):
         self.exploration_completer.cancel()
     
-    @commands.Cog.listener()
-    async def on_ready(self):
-        # 데이터 로드가 완료된 후 on_ready에서 View를 등록
-        if not self.persistent_views_added:
-            self.bot.add_view(PetExplorationPanelView(self))
-            self.bot.add_view(ClaimRewardView(self)) # ClaimRewardView는 custom_id가 없으므로 영구 등록하면 안됨 -> 수정
-            logger.info("✅ 펫 탐사 시스템의 영구 View가 성공적으로 등록되었습니다.")
-            self.persistent_views_added = True
-
     async def start_exploration(self, interaction: discord.Interaction, user: discord.Member, location: Dict[str, Any]):
         pet = await get_user_pet(user.id)
         if not pet: return
@@ -229,9 +218,11 @@ class Exploration(commands.Cog):
                             res.data[0].get('points_awarded')
                         )
                     break
-    
-    # 이 Cog에는 더 이상 register_persistent_views가 필요 없습니다.
-    # on_ready 리스너가 그 역할을 대신합니다.
+
+    async def register_persistent_views(self):
+        # 데이터 로드가 완료된 후에 호출되므로, 여기서 View를 생성하고 등록합니다.
+        self.bot.add_view(PetExplorationPanelView(self))
+        # ClaimRewardView는 동적이므로 여기서 등록하지 않습니다.
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_pet_exploration"):
         panel_name = panel_key.replace("panel_", "")
