@@ -631,6 +631,7 @@ class PetSystem(commands.Cog):
                 end_time = datetime.fromisoformat(pet_data['exploration_end_time'])
                 status_text = f"탐사 중... (완료: {discord.utils.format_dt(end_time, 'R')})"
 
+            embed.add_field(name="상태", value=status_text, inline=False)
             embed.add_field(name="단계", value=f"**{stage_name}**", inline=True)
             embed.add_field(name="타입", value=f"{ELEMENT_TO_TYPE.get(species_info['element'], '알 수 없음')}", inline=True)
             embed.add_field(name="레벨", value=f"**Lv. {current_level} / {level_cap}**", inline=True)
@@ -667,7 +668,6 @@ class PetSystem(commands.Cog):
             embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{round(hatch_base_stats['defense'])}` + `{round(total_bonus_stats['defense'])}`)", inline=True)
             embed.add_field(name="👟 스피드", value=f"**{current_stats['speed']}** (`{round(hatch_base_stats['speed'])}` + `{round(total_bonus_stats['speed'])}`)", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) 
-            embed.add_field(name="상태", value=status_text, inline=False)
             
             next_stage_num = current_stage + 1
             next_stage_info = stage_info_json.get(str(next_stage_num))
@@ -850,7 +850,9 @@ class PetSystem(commands.Cog):
     async def update_pet_ui(self, user_id: int, channel: discord.TextChannel, message: Optional[discord.Message] = None, is_refresh: bool = False, pet_data_override: Optional[Dict] = None):
         pet_data = pet_data_override if pet_data_override else await get_user_pet(user_id)
         if not pet_data:
-            if message: await message.edit(content="펫 정보를 찾을 수 없습니다.", embed=None, view=None)
+            if message:
+                try: await message.edit(content="펫 정보를 찾을 수 없습니다.", embed=None, view=None)
+                except discord.NotFound: pass
             return
         
         user = self.bot.get_user(user_id)
@@ -862,18 +864,23 @@ class PetSystem(commands.Cog):
         evo_ready = await self._is_evolution_ready(pet_data, inventory)
         view = PetUIView(self, user_id, pet_data, play_cooldown_active=cooldown_active, evolution_ready=evo_ready)
         
-        if not message and not is_refresh:
-            if pet_data.get('message_id'):
-                try: message = await channel.fetch_message(pet_data['message_id'])
+        message_to_edit = message
+        if not message_to_edit:
+            if message_id := pet_data.get('message_id'):
+                try: message_to_edit = await channel.fetch_message(message_id)
                 except (discord.NotFound, discord.Forbidden): pass
         
-        if is_refresh and message:
-            try: await message.delete()
+        if is_refresh and message_to_edit:
+            try: await message_to_edit.delete()
             except (discord.NotFound, discord.Forbidden): pass
+            message_to_edit = None # 삭제되었으므로 None으로 설정
+        
+        if message_to_edit:
+            await message_to_edit.edit(embed=embed, view=view)
+        else:
+            # 메시지가 없거나, 찾을 수 없거나, 새로고침 요청인 경우 새로 생성
             new_message = await channel.send(embed=embed, view=view)
             await supabase.table('pets').update({'message_id': new_message.id}).eq('user_id', user_id).execute()
-        elif message:
-            await message.edit(embed=embed, view=view)
             
     async def register_persistent_views(self):
         self.bot.add_view(IncubatorPanelView(self))
