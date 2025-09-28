@@ -57,7 +57,8 @@ class MyBot(commands.Bot):
             "DailyCheck", "Quests", "Farm",
             "WorldSystem", "EconomyCore", "LevelSystem",
             "Mining", "Blacksmith", "Trade", "Cooking",
-            "FriendInvite", "PetSystem"
+            "FriendInvite", "PetSystem",
+            "Exploration"  # <--- 이 줄이 추가되었습니다.
         ]
          
         registered_views_count = 0
