@@ -116,13 +116,11 @@ class EconomyCore(commands.Cog):
 
             requests_by_prefix = defaultdict(list)
             for req in requests:
-                # --- [로깅 추가 1] ---
                 logger.info(f"[Dispatcher-Debug] 감지된 요청 키: {req['config_key']}")
                 prefix_parts = req['config_key'].split('_request')
                 if len(prefix_parts) > 1:
                     prefix = prefix_parts[0]
                     requests_by_prefix[prefix].append(req)
-                    # --- [로깅 추가 2] ---
                     logger.info(f"[Dispatcher-Debug] '{req['config_key']}' -> 접두사 '{prefix}'로 분류됨.")
 
             if 'level_tier_update' in requests_by_prefix or 'job_advancement' in requests_by_prefix:
@@ -138,6 +136,22 @@ class EconomyCore(commands.Cog):
                 if cooking_cog := self.bot.get_cog("Cooking"):
                     user_ids = {int(req['config_key'].split('_')[-1]) for req in requests_by_prefix['kitchen_ui_update']}
                     await cooking_cog.process_ui_update_requests(user_ids)
+
+            # ▼▼▼ [핵심 추가] 펫 UI 업데이트 요청 처리 로직 ▼▼▼
+            if 'pet_ui_update' in requests_by_prefix:
+                if pet_cog := self.bot.get_cog("PetSystem"):
+                    # 현재 PetSystem.py에는 process_ui_update_requests가 없으므로, 직접 개별 처리합니다.
+                    # 이 방식은 여러 요청이 동시에 와도 안전합니다.
+                    for req in requests_by_prefix['pet_ui_update']:
+                        try:
+                            user_id = int(req['config_key'].split('_')[-1])
+                            pet_data = await get_user_pet(user_id)
+                            if pet_data and (thread_id := pet_data.get('thread_id')):
+                                if thread := self.bot.get_channel(thread_id):
+                                    await pet_cog.update_pet_ui(user_id, thread)
+                        except Exception as e:
+                            logger.error(f"개별 펫 UI 업데이트 요청 처리 중 오류: {e}", exc_info=True)
+            # ▲▲▲ [핵심 추가] 완료 ▲▲▲
             
             if 'panel_regenerate' in requests_by_prefix:
                 if panel_cog := self.bot.get_cog("PanelUpdater"):
@@ -163,7 +177,6 @@ class EconomyCore(commands.Cog):
                     await pet_cog.process_levelup_requests(requests_by_prefix['pet_levelup'])
 
             if 'pet_admin_levelup' in requests_by_prefix:
-                # --- [로깅 추가 3] ---
                 logger.info(f"[Dispatcher-Debug] 'pet_admin_levelup' 접두사 감지! PetSystem으로 전달합니다.")
                 if pet_cog := self.bot.get_cog("PetSystem"):
                     admin_requests = requests_by_prefix['pet_admin_levelup']
@@ -174,11 +187,9 @@ class EconomyCore(commands.Cog):
                     user_ids = {int(req['config_key'].split('_')[-1]) for req in requests_by_prefix['pet_evolution_check']}
                     await pet_cog.check_and_process_auto_evolution(user_ids)
             
-            # ▼▼▼▼▼ 여기에 아래 코드를 추가하세요 ▼▼▼▼▼
             if 'pet_level_set' in requests_by_prefix:
                 if pet_cog := self.bot.get_cog("PetSystem"):
                     await pet_cog.process_level_set_requests(requests_by_prefix['pet_level_set'])
-            # ▲▲▲▲▲ 여기까지 추가 ▲▲▲▲▲
             
             server_id_str = get_config("SERVER_ID")
             guild = self.bot.get_guild(int(server_id_str)) if server_id_str else None
