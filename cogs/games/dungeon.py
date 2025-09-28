@@ -92,7 +92,6 @@ class SkillSelectView(ui.View):
         self.stop()
 
 class DungeonGameView(ui.View):
-    # ... (DungeonGameView 클래스는 변경 없음) ...
     def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime, session_id: int, current_state: str = "exploring", monster_data: Optional[Dict] = None):
         super().__init__(timeout=None)
         self.cog = cog; self.user = user; self.pet_data_raw = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
@@ -167,6 +166,24 @@ class DungeonGameView(ui.View):
             description_content = "☠️ 펫이 쓰러졌습니다! '아이템'을 사용해 '치료제'로 회복시키거나 던전을 나가야 합니다."
         elif self.state == "exploring":
             description_content = "깊은 곳으로 나아가 몬스터를 찾아보자."
+        # ▼▼▼ [핵심 추가] 이 부분을 추가합니다. ▼▼▼
+        elif self.state == "encounter" and self.current_monster:
+            embed.title = f"몬스터 조우! - {self.current_monster['name']}"
+            embed.set_image(url=self.current_monster['image_url'])
+            
+            # 속도 비교 결과에 따른 메시지
+            if self.is_pet_turn:
+                description_content = f"**{self.pet_data_raw['nickname']}**이(가) 민첩하게 먼저 움직일 수 있습니다!\n어떻게 하시겠습니까?"
+            else:
+                description_content = f"**{self.current_monster['name']}**이(가) 더 빠릅니다! 전투를 시작하면 선공을 당하게 됩니다!\n어떻게 하시겠습니까?"
+            
+            monster_base_stats = self.current_monster
+            monster_stats_text = (f"❤️ **체력**: {self.monster_current_hp} / {monster_base_stats['hp']}\n"
+                                f"⚔️ **공격력**: {monster_base_stats['attack']}\n"
+                                f"🛡️ **방어력**: {monster_base_stats['defense']}\n"
+                                f"💨 **스피드**: {monster_base_stats['speed']}")
+            embed.add_field(name=f"몬스터: {self.current_monster['name']}", value=monster_stats_text, inline=False)
+        # ▲▲▲ [핵심 추가] 완료 ▲▲▲
         elif self.state == "in_battle" and self.current_monster:
             turn_indicator = ">>> **💥 당신의 턴입니다! 💥**" if self.is_pet_turn else "⏳ 상대의 턴을 기다리는 중..."
             embed.title = f"전투 중! - {self.current_monster['name']}"; embed.description = turn_indicator
@@ -203,9 +220,23 @@ class DungeonGameView(ui.View):
     def build_components(self):
         self.clear_items(); base_id = f"dungeon_view:{self.user.id}"
         buttons_map = { "explore": ui.Button(label="탐색하기", style=discord.ButtonStyle.success, emoji="🗺️", custom_id=f"{base_id}:explore"), "use_item": ui.Button(label="아이템", style=discord.ButtonStyle.secondary, emoji="👜", custom_id=f"{base_id}:use_item"), "skill": ui.Button(label="스킬", style=discord.ButtonStyle.primary, emoji="✨", custom_id=f"{base_id}:skill"), "flee": ui.Button(label="도망가기", style=discord.ButtonStyle.danger, emoji="🏃", custom_id=f"{base_id}:flee"), "leave": ui.Button(label="던전 나가기", style=discord.ButtonStyle.grey, emoji="🚪", custom_id=f"{base_id}:leave"), "explore_disabled": ui.Button(label="탐색 불가", style=discord.ButtonStyle.secondary, emoji="☠️", custom_id=f"{base_id}:explore_disabled", disabled=True)}
-        if self.pet_is_defeated: self.add_item(buttons_map["explore_disabled"]); self.add_item(buttons_map["use_item"])
-        elif self.state in ["exploring", "battle_over"]: self.add_item(buttons_map["explore"]); self.add_item(buttons_map["use_item"])
-        elif self.state == "in_battle": buttons_map["skill"].disabled = not self.is_pet_turn; self.add_item(buttons_map["skill"]); self.add_item(buttons_map["use_item"]); self.add_item(buttons_map["flee"])
+        if self.pet_is_defeated:
+            self.add_item(buttons_map["explore_disabled"])
+            self.add_item(buttons_map["use_item"])
+        elif self.state in ["exploring", "battle_over"]:
+            self.add_item(buttons_map["explore"])
+            self.add_item(buttons_map["use_item"])
+        # ▼▼▼ [핵심 추가] 이 부분을 추가합니다. ▼▼▼
+        elif self.state == "encounter":
+            start_battle_button = ui.Button(label="전투 시작", style=discord.ButtonStyle.danger, emoji="⚔️", custom_id=f"{base_id}:start_battle")
+            self.add_item(start_battle_button)
+            self.add_item(buttons_map["flee"]) # 기존 도망가기 버튼 재사용
+        # ▲▲▲ [핵심 추가] 완료 ▲▲▲
+        elif self.state == "in_battle":
+            buttons_map["skill"].disabled = not self.is_pet_turn
+            self.add_item(buttons_map["skill"])
+            self.add_item(buttons_map["use_item"])
+            self.add_item(buttons_map["flee"])
         self.add_item(buttons_map["leave"])
         for item in self.children:
             if isinstance(item, ui.Button): item.callback = self.dispatch_callback
@@ -219,7 +250,14 @@ class DungeonGameView(ui.View):
     async def dispatch_callback(self, interaction: discord.Interaction):
         try: action = interaction.data['custom_id'].split(':')[-1]
         except (KeyError, IndexError): return
-        method_map = { "explore": self.handle_explore, "skill": self.handle_skill_button, "flee": self.handle_flee, "leave": self.handle_leave, "use_item": self.handle_use_item}
+        method_map = { 
+            "explore": self.handle_explore, 
+            "start_battle": self.handle_start_battle, # <--- 이 줄을 추가
+            "skill": self.handle_skill_button, 
+            "flee": self.handle_flee, 
+            "leave": self.handle_leave, 
+            "use_item": self.handle_use_item
+        }
         if method := method_map.get(action): await method(interaction)
 
     async def refresh_ui(self, interaction: Optional[discord.Interaction] = None):
@@ -316,27 +354,22 @@ class DungeonGameView(ui.View):
         
         self.current_monster = self.generate_monster()
         self.monster_current_hp = self.current_monster['hp']
-        self.battle_log = [f"**{self.current_monster['name']}** 이(가) 나타났다!"]
+        self.battle_log = [] # 전투 시작 전이므로 로그 초기화
         self.pet_effects.clear(); self.monster_effects.clear()
         self.pet_current_energy = self.pet_max_energy
 
-        # ▼▼▼ [핵심 수정] 전투 시작 시 무조건 플레이어 턴으로 시작하도록 변경합니다. ▼▼▼
-        self.is_pet_turn = True
-        
-        # 속도 비교 결과는 로그에만 표시합니다.
+        # ▼▼▼ [핵심 수정] 상태를 'encounter'로 변경하고, 선공권만 결정합니다. ▼▼▼
         if self.final_pet_stats['speed'] >= self.current_monster.get('speed', 0):
-            self.battle_log.append(f"**{self.pet_data_raw['nickname']}**이(가) 민첩하게 먼저 움직인다!")
+            self.is_pet_turn = True
         else:
-            self.battle_log.append(f"**{self.current_monster['name']}**의 기세에 눌렸지만, 먼저 행동할 기회를 잡았다!")
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+            self.is_pet_turn = False
 
-        self.state = "in_battle"
+        self.state = "encounter" # 상태를 '조우'로 변경
         await supabase.table('dungeon_sessions').update({
             'state': self.state, 
             'current_monster_json': {'data': self.current_monster, 'hp': self.monster_current_hp}
         }).eq('id', self.session_id).execute()
 
-        # ▼▼▼ [핵심 수정] 몬스터 선공 로직을 삭제하고, 무조건 UI만 새로고침합니다. ▼▼▼
         await self.refresh_ui(interaction)
         # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
@@ -446,6 +479,26 @@ class DungeonGameView(ui.View):
     def stop(self):
         if self.cog and self.user: self.cog.active_sessions.pop(self.user.id, None)
         super().stop()
+
+    # ▼▼▼ [핵심 추가] 이 메서드 전체를 추가합니다. ▼▼▼
+    async def handle_start_battle(self, interaction: discord.Interaction):
+        if self.state != "encounter":
+            return await interaction.response.defer() # 이미 전투가 시작되었으면 무시
+
+        self.state = "in_battle"
+        await supabase.table('dungeon_sessions').update({'state': self.state}).eq('id', self.session_id).execute()
+
+        self.battle_log.append(f"**{self.current_monster['name']}** 와(과)의 전투를 시작했다!")
+        
+        if self.is_pet_turn:
+            self.battle_log.append(f"**{self.pet_data_raw['nickname']}**이(가) 민첩하게 먼저 움직인다!")
+            await self.refresh_ui(interaction)
+        else:
+            self.battle_log.append(f"**{self.current_monster['name']}**이(가) 더 빠르다! 먼저 공격해온다!")
+            await self.refresh_ui(interaction)
+            # 몬스터가 선공일 경우에만 몬스터 턴을 바로 시작
+            asyncio.create_task(self.handle_monster_turn())
+    # ▲▲▲ [핵심 추가] 완료 ▲▲▲
 
 class Dungeon(commands.Cog):
     def __init__(self, bot: commands.Bot):
