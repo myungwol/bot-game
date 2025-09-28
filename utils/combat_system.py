@@ -240,14 +240,8 @@ def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Com
             battle_logs.append(f"🔗 **{target['name']}**의 길동무 효과가 발동하여 **{caster['name']}**도 함께 쓰러졌다!")
             target['effects'].remove(destiny_bond_effect)
 
-    # ▼▼▼ [핵심 수정] 이 부분을 아래와 같이 변경합니다. ▼▼▼
-    # 시전자의 턴이 끝났으므로, 시전자와 대상 모두의 턴 종료 효과를 처리합니다.
-    # 이렇게 하면 선공/후공에 관계없이 공평하게 턴이 차감됩니다.
-    caster, end_of_turn_logs_caster = _process_turn_end_effects(caster)
-    battle_logs.extend(end_of_turn_logs_caster)
-    
-    target, end_of_turn_logs_target = _process_turn_end_effects(target)
-    battle_logs.extend(end_of_turn_logs_target)
+    caster, end_of_turn_logs = _process_turn_end_effects(caster)
+    battle_logs.extend(end_of_turn_logs)
     # ▲▲▲ [핵심 수정] 완료 ▲▲▲
     
     return caster, target, battle_logs
