@@ -186,9 +186,9 @@ class DungeonGameView(ui.View):
         
         # ▼▼▼ [핵심 수정] 펫 스탯 표시 부분 수정 ▼▼▼
         pet_base_stats = self.final_pet_stats
-        attack_str = self._format_stat_display('attack', pet_base_stats['attack'], self.pet_effects)
-        defense_str = self._format_stat_display('defense', pet_base_stats['defense'], self.pet_effects)
-        speed_str = self._format_stat_display('speed', pet_base_stats['speed'], self.pet_effects)
+        attack_str = self._format_stat_display('ATK', pet_base_stats['attack'], self.pet_effects)
+        defense_str = self._format_stat_display('DEF', pet_base_stats['defense'], self.pet_effects)
+        speed_str = self._format_stat_display('SPD', pet_base_stats['speed'], self.pet_effects)
         
         pet_stats_text = (f"❤️ **체력**: {self.pet_current_hp} / {pet_base_stats['hp']}\n"
                           f"⚡ **기력**: {self.pet_current_energy} / {self.pet_max_energy}\n"
@@ -222,9 +222,9 @@ class DungeonGameView(ui.View):
             
             # ▼▼▼ [핵심 수정] 몬스터 스탯 표시 부분 수정 ▼▼▼
             monster_base_stats = self.current_monster
-            m_attack_str = self._format_stat_display('attack', monster_base_stats['attack'], self.monster_effects)
-            m_defense_str = self._format_stat_display('defense', monster_base_stats['defense'], self.monster_effects)
-            m_speed_str = self._format_stat_display('speed', monster_base_stats['speed'], self.monster_effects)
+            m_attack_str = self._format_stat_display('ATK', monster_base_stats['attack'], self.monster_effects)
+            m_defense_str = self._format_stat_display('DEF', monster_base_stats['defense'], self.monster_effects)
+            m_speed_str = self._format_stat_display('SPD', monster_base_stats['speed'], self.monster_effects)
 
             monster_stats_text = (f"❤️ **체력**: {self.monster_current_hp} / {monster_base_stats['hp']}\n"
                                 f"⚔️ **공격력**: {m_attack_str}\n"
@@ -586,12 +586,11 @@ class DungeonGameView(ui.View):
             # 여기서 던전을 강제 종료하는 로직을 추가할 수도 있습니다.
             pass
             
-    def _format_stat_display(self, stat_key: str, base_stat: int, effects: list) -> str:
+    def _format_stat_display(self, stat_key_abbr: str, base_stat: int, effects: list) -> str:
         """버프/디버프를 적용하여 스탯 표시 문자열을 만듭니다."""
-        # combat_system의 함수는 ATK, DEF 등 대문자 키를 사용합니다.
-        final_stat = _get_stat_with_effects(base_stat, stat_key.upper(), effects)
+        # 이제 'ATK', 'DEF' 등 정확한 약어 키를 직접 받습니다.
+        final_stat = _get_stat_with_effects(base_stat, stat_key_abbr, effects)
         
-        # [핵심] 변화량을 계산합니다.
         change_amount = abs(final_stat - base_stat)
         
         if final_stat > base_stat:
