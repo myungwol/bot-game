@@ -502,7 +502,7 @@ class PetUIView(ui.View):
         change_view = SkillChangeView(self)
         await change_view.start(interaction)
 
-@ui.button(label="놓아주기", style=discord.ButtonStyle.danger, emoji="👋", row=1)
+    @ui.button(label="놓아주기", style=discord.ButtonStyle.danger, emoji="👋", row=1)
     async def release_pet_button(self, interaction: discord.Interaction, button: ui.Button):
         confirm_view = ConfirmReleaseView(self.user_id)
         msg = await interaction.response.send_message(
