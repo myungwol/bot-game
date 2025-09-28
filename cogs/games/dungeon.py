@@ -385,7 +385,7 @@ class DungeonGameView(ui.View):
         await self.refresh_ui()
         asyncio.create_task(self._process_battle_turn(skill_data))
         
-async def _execute_monster_turn(self):
+    async def _execute_monster_turn(self):
         pet_combatant = Combatant(
             name=self.pet_data_raw['nickname'], stats=self.final_pet_stats,
             current_hp=self.pet_current_hp, max_hp=self.final_pet_stats['hp'], effects=self.pet_effects,
