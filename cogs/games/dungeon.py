@@ -484,7 +484,7 @@ async def _execute_monster_turn(self):
                 self.battle_log.append({"title": "🎁 전리품 획득", "value": f"> **{item}** {qty}개를 획득했다!"})
         await self.refresh_ui()
 
-async def handle_battle_lose(self):
+    async def handle_battle_lose(self):
         self.state = "battle_over"; self.pet_is_defeated = True
         # ▼▼▼ [핵심 추가] 전투 종료 시점에 HP를 한번만 저장합니다. ▼▼▼
         await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
