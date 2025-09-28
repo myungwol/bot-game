@@ -502,7 +502,7 @@ class PetUIView(ui.View):
         change_view = SkillChangeView(self)
         await change_view.start(interaction)
 
-    @ui.button(label="놓아주기", style=discord.ButtonStyle.danger, emoji="👋", row=1)
+@ui.button(label="놓아주기", style=discord.ButtonStyle.danger, emoji="👋", row=1)
     async def release_pet_button(self, interaction: discord.Interaction, button: ui.Button):
         confirm_view = ConfirmReleaseView(self.user_id)
         msg = await interaction.response.send_message(
@@ -512,13 +512,25 @@ class PetUIView(ui.View):
         )
         await confirm_view.wait()
         if confirm_view.value is True:
-            await supabase.table('pets').delete().eq('user_id', self.user_id).execute()
-            await interaction.edit_original_response(content="펫을 자연으로 돌려보냈습니다...", view=None)
-            await interaction.channel.send(f"{interaction.user.mention}님이 펫을 자연의 품으로 돌려보냈습니다.")
-            await asyncio.sleep(10)
+            # ▼▼▼ [핵심 수정] 아래 코드를 추가합니다. ▼▼▼
             try:
-                await interaction.channel.delete()
-            except (discord.NotFound, discord.Forbidden): pass
+                # 1. 이 펫과 관련된 모든 던전 세션을 먼저 삭제합니다.
+                await supabase.table('dungeon_sessions').delete().eq('pet_id', self.pet_data['id']).execute()
+                
+                # 2. 던전 세션이 정리되었으므로 이제 펫을 안전하게 삭제할 수 있습니다.
+                await supabase.table('pets').delete().eq('user_id', self.user_id).execute()
+
+                await interaction.edit_original_response(content="펫을 자연으로 돌려보냈습니다...", view=None)
+                await interaction.channel.send(f"{interaction.user.mention}님이 펫을 자연의 품으로 돌려보냈습니다.")
+                await asyncio.sleep(10)
+                try:
+                    await interaction.channel.delete()
+                except (discord.NotFound, discord.Forbidden): pass
+
+            except APIError as e:
+                logger.error(f"펫 놓아주기 처리 중 DB 오류 발생: {e}", exc_info=True)
+                await interaction.edit_original_response(content="❌ 펫을 놓아주는 중 오류가 발생했습니다. 관리자에게 문의해주세요.", view=None)
+            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
         else:
             await interaction.edit_original_response(content="펫 놓아주기를 취소했습니다.", view=None)
 
