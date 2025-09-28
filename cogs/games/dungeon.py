@@ -385,7 +385,7 @@ class DungeonGameView(ui.View):
         await self.refresh_ui()
         asyncio.create_task(self._process_battle_turn(skill_data))
         
-    async def _execute_monster_turn(self):
+async def _execute_monster_turn(self):
         pet_combatant = Combatant(
             name=self.pet_data_raw['nickname'], stats=self.final_pet_stats,
             current_hp=self.pet_current_hp, max_hp=self.final_pet_stats['hp'], effects=self.pet_effects,
@@ -397,16 +397,15 @@ class DungeonGameView(ui.View):
         )
         basic_attack_skill = {"skill_name": "공격", "power": 100, "cost": 0} 
 
-        # ▼▼▼ [핵심 수정] 이제 process_turn 함수가 모든 턴 종료 처리를 담당합니다. ▼▼▼
         updated_monster, updated_pet, monster_turn_logs = process_turn(monster_combatant, pet_combatant, basic_attack_skill)
         
+        # [핵심] process_turn의 결과를 self 변수에 반영
         self.pet_current_hp = updated_pet['current_hp']
         self.pet_effects = updated_pet['effects']
-        # self.monster_current_hp = updated_monster['current_hp'] # 몬스터 정보는 caster이므로 여기서 바꿀 필요 없음
+        self.monster_current_hp = updated_monster['current_hp']
         self.monster_effects = updated_monster['effects']
         self.battle_log.extend(monster_turn_logs)
 
-        # if updated_monster['current_hp'] <= 0: self.monster_current_hp = 0 # 이 로직들은 process_turn에서 이미 처리됨
         if self.pet_current_hp <= 0: self.pet_is_defeated = True
         
         await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
@@ -485,8 +484,11 @@ class DungeonGameView(ui.View):
                 self.battle_log.append({"title": "🎁 전리품 획득", "value": f"> **{item}** {qty}개를 획득했다!"})
         await self.refresh_ui()
 
-    async def handle_battle_lose(self):
+async def handle_battle_lose(self):
         self.state = "battle_over"; self.pet_is_defeated = True
+        # ▼▼▼ [핵심 추가] 전투 종료 시점에 HP를 한번만 저장합니다. ▼▼▼
+        await supabase.table('pets').update({'current_hp': self.pet_current_hp}).eq('id', self.pet_data_raw['id']).execute()
+        # ▲▲▲ [핵심 추가] 완료 ▲▲▲
         await supabase.table('dungeon_sessions').update({'state': self.state, 'current_monster_json': None}).eq('id', self.session_id).execute()
         self.battle_log.append({"title": f"☠️ **{self.pet_data_raw['nickname']}**이(가) 쓰러졌다...", "value": "> 전투에서 패배했습니다."})
         self.current_monster = None
