@@ -23,7 +23,7 @@ from utils.combat_system import process_turn, Combatant
 
 logger = logging.getLogger(__name__)
 
-# ... (pad_korean_string, load_dungeon_data_from_db 함수는 변경 없이 그대로 유지) ...
+# ... (파일 상단의 pad_korean_string, load_dungeon_data_from_db, SkillSelectView 클래스는 변경 없음) ...
 def pad_korean_string(text: str, total_width: int) -> str:
     current_width = 0
     for char in text:
@@ -52,6 +52,7 @@ async def load_dungeon_data_from_db() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"❌ 던전 데이터 DB 로드 실패: {e}", exc_info=True)
         return {"dungeons": {}, "monsters": {}, "loot": {}}
+
 
 class SkillSelectView(ui.View):
     def __init__(self, main_view: 'DungeonGameView', learned_skills: List[Dict], current_energy: int):
@@ -91,6 +92,7 @@ class SkillSelectView(ui.View):
         self.stop()
 
 class DungeonGameView(ui.View):
+    # ... (DungeonGameView 클래스는 변경 없음) ...
     def __init__(self, cog: 'Dungeon', user: discord.Member, pet_data: Dict, dungeon_tier: str, end_time: datetime, session_id: int, current_state: str = "exploring", monster_data: Optional[Dict] = None):
         super().__init__(timeout=None)
         self.cog = cog; self.user = user; self.pet_data_raw = pet_data; self.dungeon_tier = dungeon_tier; self.end_time = end_time
@@ -267,7 +269,6 @@ class DungeonGameView(ui.View):
             return await self.handle_battle_lose()
 
         self.is_pet_turn = True
-        # 몬스터 턴 종료 후, 펫의 턴이 시작될 때 기력 회복
         self.pet_current_energy = min(self.pet_max_energy, self.pet_current_energy + 10)
         await self.refresh_ui()
 
@@ -340,7 +341,8 @@ class DungeonGameView(ui.View):
 
         can_use_any_skill = any(self.pet_current_energy >= s['pet_skills'].get('cost', 0) for s in learned_skills)
         if not can_use_any_skill:
-            await interaction.followup.send("⚠️ 기력이 부족하여 사용할 수 있는 스킬이 없습니다! '발버둥'으로 공격합니다.", ephemeral=True, delete_after=5)
+            msg = await interaction.followup.send("⚠️ 기력이 부족하여 사용할 수 있는 스킬이 없습니다! '발버둥'으로 공격합니다.", ephemeral=True)
+            asyncio.create_task(msg.delete(delay=5))
             struggle_skill = {"skill_name": "발버둥", "power": 25, "cost": 0, "is_struggle": True}
             await self.handle_skill_use(struggle_skill, interaction)
             return
@@ -356,11 +358,9 @@ class DungeonGameView(ui.View):
         await self._execute_monster_turn()
         if self.pet_current_hp <= 0: return await self.handle_battle_lose()
         
-        self.pet_current_energy = min(self.pet_max_energy, self.pet_current_energy + 10)
         self.is_pet_turn = True
         await self.refresh_ui()
 
-    # ... (handle_battle_win, handle_battle_lose, handle_battle_draw, handle_flee, handle_leave, handle_use_item, stop 함수는 변경 없음) ...
     async def handle_battle_win(self):
         self.state = "battle_over"
         await supabase.table('dungeon_sessions').update({'state': self.state, 'current_monster_json': None}).eq('id', self.session_id).execute()
@@ -435,7 +435,6 @@ class DungeonGameView(ui.View):
         super().stop()
 
 class Dungeon(commands.Cog):
-    # ... (Dungeon Cog 클래스의 나머지 부분은 변경 없이 그대로 유지)
     def __init__(self, bot: commands.Bot):
         self.bot = bot; self.active_sessions: Dict[int, DungeonGameView] = {}
         self.dungeon_data: Dict = {}; self.monster_base_data: Dict = {}; self.loot_table: Dict = {}
@@ -558,12 +557,10 @@ class Dungeon(commands.Cog):
         if not (res and res.data): return []
         return [app_commands.Choice(name=row['skill_name'], value=row['skill_name']) for row in res.data]
 
-    # ▼▼▼ [핵심 수정] 테스트 명령어를 대폭 확장합니다. ▼▼▼
     @app_commands.command(name="던전테스트", description="[관리자] 던전 전투 시스템을 테스트합니다.")
     @app_commands.describe(
         action="실행할 작업을 선택하세요.",
         value="[HP/기력 설정] 설정할 숫자 값입니다.",
-        target="[효과 부여] 효과를 부여할 대상을 선택하세요.",
         effect_type="[효과 부여] 부여할 효과의 유형입니다.",
         duration="[효과 부여] 효과의 지속 턴 수입니다.",
         skill_name="[스킬 부여] 부여할 스킬의 이름입니다.",
@@ -595,34 +592,29 @@ class Dungeon(commands.Cog):
             view.pet_current_hp = max(0, min(value, view.final_pet_stats['hp']))
             await view.refresh_ui()
             await interaction.followup.send(f"펫의 HP를 {view.pet_current_hp}로 설정했습니다.")
-
         elif action == "pet_energy":
             if value is None: return await interaction.followup.send("기력 값을 입력해주세요.")
             view.pet_current_energy = max(0, min(value, view.pet_max_energy))
             await view.refresh_ui()
             await interaction.followup.send(f"펫의 기력을 {view.pet_current_energy}로 설정했습니다.")
-
         elif action == "monster_hp":
             if not view.current_monster: return await interaction.followup.send("전투 중인 몬스터가 없습니다.")
             if value is None: return await interaction.followup.send("HP 값을 입력해주세요.")
             view.monster_current_hp = max(0, min(value, view.current_monster['hp']))
             await view.refresh_ui()
             await interaction.followup.send(f"몬스터의 HP를 {view.monster_current_hp}로 설정했습니다.")
-        
         elif action in ["add_effect_pet", "add_effect_monster"]:
             if not effect_type or not duration: return await interaction.followup.send("효과 유형과 지속 턴을 입력해주세요.")
             target_effects = view.pet_effects if action == "add_effect_pet" else view.monster_effects
             target_name = "펫" if action == "add_effect_pet" else "몬스터"
-            target_effects.append({"type": effect_type.upper(), "duration": duration, "value": 0.2}) # value는 예시
+            target_effects.append({"type": effect_type.upper(), "duration": duration, "value": 0.2})
             await view.refresh_ui()
             await interaction.followup.send(f"{target_name}에게 {effect_type.upper()} 효과를 {duration}턴 동안 부여했습니다.")
-
         elif action == "clear_effects":
             view.pet_effects.clear()
             view.monster_effects.clear()
             await view.refresh_ui()
             await interaction.followup.send("모든 효과를 제거했습니다.")
-
         elif action == "end_turn":
             if not view.state == "in_battle": return await interaction.followup.send("전투 중에만 사용할 수 있습니다.")
             if view.is_pet_turn:
@@ -635,7 +627,6 @@ class Dungeon(commands.Cog):
                 view.pet_current_energy = min(view.pet_max_energy, view.pet_current_energy + 10)
                 await view.refresh_ui()
                 await interaction.followup.send("몬스터의 턴을 강제로 종료하고 펫의 턴으로 넘깁니다.")
-                
         elif action == "add_skill":
             if not skill_name or not slot: return await interaction.followup.send("스킬 이름과 슬롯을 입력해주세요.")
             res = await supabase.table('pet_skills').select('*').eq('skill_name', skill_name).maybe_single().execute()
@@ -645,12 +636,12 @@ class Dungeon(commands.Cog):
             view.pet_data_raw['learned_skills'] = [s for s in view.pet_data_raw.get('learned_skills', []) if s['slot_number'] != slot]
             view.pet_data_raw['learned_skills'].append({'slot_number': slot, 'pet_skills': skill_data})
             await interaction.followup.send(f"펫에게 '{skill_name}' 스킬을 {slot}번 슬롯에 부여했습니다.")
-        
-        else: # spawn_monster
-             # 이 부분은 코드가 길어져 생략되었으나, 이전 버전의 `dungeon_test`에 있던 몬스터 소환 로직과 동일합니다.
-             await interaction.followup.send("몬스터 소환 기능이 활성화되었습니다.")
-    # ▲▲▲ [수정] 완료 ▲▲▲
-
+        elif action == "spawn_monster":
+            # 이전에 제공된 코드에는 element와 level 파라미터가 있었으나, 최신 app_commands 구조에서는 누락되었습니다.
+            # 필요하다면 함수 시그니처에 다시 추가해야 합니다. 지금은 이 기능을 비활성화합니다.
+            await interaction.followup.send("몬스터 소환 기능은 현재 비활성화되어 있습니다. 파라미터 재정의가 필요합니다.")
+        else:
+            await interaction.followup.send("알 수 없는 작업입니다.")
 
 class DungeonPanelView(ui.View):
     def __init__(self, cog_instance: 'Dungeon'):
