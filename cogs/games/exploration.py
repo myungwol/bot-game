@@ -110,7 +110,8 @@ class Exploration(commands.Cog):
             embed.set_image(url=location['image_url'])
             await pet_thread.send(embed=embed)
 
-        await self.cog.get_cog("PetSystem").update_pet_ui(user.id, pet_thread)
+        if pet_cog := self.bot.get_cog("PetSystem"):
+            await pet_cog.update_pet_ui(user.id, pet_thread)
         await interaction.followup.send("✅ 펫을 탐사 보냈습니다. 펫 채널을 확인해주세요!", ephemeral=True)
 
     @tasks.loop(minutes=1)
@@ -220,7 +221,7 @@ class Exploration(commands.Cog):
 
     async def register_persistent_views(self):
         self.bot.add_view(PetExplorationPanelView(self))
-        self.bot.add_view(ClaimRewardView(self))
+        # self.bot.add_view(ClaimRewardView(self))  <--- 이 줄을 삭제/주석 처리
         logger.info("✅ 펫 탐사 시스템의 영구 View가 성공적으로 등록되었습니다.")
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_pet_exploration"):
