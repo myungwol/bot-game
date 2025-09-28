@@ -44,11 +44,9 @@ intents.message_content = True
 intents.voice_states = True
 BOT_VERSION = "v2.3-game-stable-ko" # 게임 봇 안정화 버전 (한국어)
 
-# ▼▼▼ [복구] MyBot 클래스를 원래대로 되돌립니다. ▼▼▼
 class MyBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # 쿨다운 관련 속성을 제거합니다.
         
     async def setup_hook(self):
         await self.load_all_extensions()
@@ -59,8 +57,7 @@ class MyBot(commands.Bot):
             "DailyCheck", "Quests", "Farm",
             "WorldSystem", "EconomyCore", "LevelSystem",
             "Mining", "Blacksmith", "Trade", "Cooking",
-            "FriendInvite", "PetSystem",
-            "Dungeon"  # <--- 이 줄을 추가하세요
+            "FriendInvite", "PetSystem"
         ]
          
         registered_views_count = 0
@@ -89,12 +86,10 @@ class MyBot(commands.Bot):
             if '__init__' in path:
                 continue
             
-            # ▼▼▼ [수정] AdminBridge.py 파일은 로드하지 않도록 예외 처리 ▼▼▼
             extension_path = path.replace('.py', '').replace(os.path.sep, '.')
             if 'AdminBridge' in extension_path:
                 logger.info(f"ℹ️ AdminBridge Cog 로드를 건너뜁니다 (EconomyCore로 통합됨).")
                 continue
-            # ▲▲▲ [수정] 완료 ▲▲▲
 
             try:
                 await self.load_extension(extension_path)
