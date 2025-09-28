@@ -238,7 +238,7 @@ async def get_user_abilities(user_id: int) -> List[str]:
     abilities = response.data if response and hasattr(response, 'data') and response.data else []
     _user_abilities_cache[user_id] = (abilities, now)
     return abilities
-    
+
 @supabase_retry_handler()
 async def get_cooldown(subject_id_int: int, cooldown_key: str) -> float:
     subject_id_str = str(subject_id_int)
@@ -256,7 +256,7 @@ async def set_cooldown(subject_id_int: int, cooldown_key: str):
 
 @supabase_retry_handler()
 async def get_user_pet(user_id: int) -> Optional[Dict]:
-    res = await supabase.table('pets').select('*, pet_species(*)').eq('user_id', user_id).gt('current_stage', 1).maybe_single().execute()
+    res = await supabase.table('pets').select('*, pet_species(*)').eq('user_id', str(user_id)).gt('current_stage', 1).maybe_single().execute()
     return res.data if res and res.data else None
 
 @supabase_retry_handler()
@@ -373,3 +373,78 @@ async def get_inventories_for_users(user_ids: List[int]) -> Dict[int, Dict[str, 
             inventories[int(item['user_id'])][item['item_name']] = item['quantity']
     
     return dict(inventories)
+
+# --- [ 신규 추가 ] 펫 탐사 시스템 관련 함수들 ---
+
+@supabase_retry_handler()
+async def get_all_exploration_locations() -> List[Dict[str, Any]]:
+    """모든 탐사 지역 정보를 DB에서 가져옵니다."""
+    response = await supabase.table('exploration_locations').select('*').order('required_pet_level').execute()
+    return response.data if response and response.data else []
+
+@supabase_retry_handler()
+async def get_exploration_loot_for_location(location_key: str, pet_level: int) -> List[Dict[str, Any]]:
+    """특정 지역과 펫 레벨에 맞는 보상 목록을 가져옵니다."""
+    response = await supabase.table('exploration_loot').select('*').eq('location_key', location_key).lte('min_pet_level', pet_level).execute()
+    return response.data if response and response.data else []
+
+@supabase_retry_handler()
+async def start_pet_exploration(pet_id: int, user_id: int, location: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """펫 탐사를 시작하고, pets 테이블과 pet_explorations 테이블을 업데이트합니다."""
+    now = datetime.now(timezone.utc)
+    end_time = now + timedelta(hours=location['duration_hours'])
+
+    # 1. pet_explorations에 새로운 기록 생성
+    exploration_res = await supabase.table('pet_explorations').insert({
+        'pet_id': pet_id,
+        'user_id': str(user_id),
+        'location_key': location['location_key'],
+        'start_time': now.isoformat(),
+        'end_time': end_time.isoformat()
+    }).select().single().execute()
+
+    if not (exploration_res and exploration_res.data):
+        logger.error(f"펫 탐사 기록 생성 실패 (Pet ID: {pet_id})")
+        return None
+    
+    new_exploration = exploration_res.data
+    
+    # 2. pets 테이블 상태 업데이트
+    await supabase.table('pets').update({
+        'status': 'exploring',
+        'exploration_end_time': end_time.isoformat(),
+        'current_exploration_id': new_exploration['id']
+    }).eq('id', pet_id).execute()
+
+    return new_exploration
+
+@supabase_retry_handler()
+async def get_explorations_to_notify() -> List[Dict[str, Any]]:
+    """완료되었지만 아직 알림이 가지 않은 탐사 목록을 가져옵니다."""
+    now = datetime.now(timezone.utc).isoformat()
+    response = await supabase.table('pet_explorations').select('*').lte('end_time', now).is_('completion_message_id', None).execute()
+    return response.data if response and response.data else []
+
+@supabase_retry_handler()
+async def mark_exploration_notified(exploration_id: int, message_id: int):
+    """탐사 완료 알림 메시지 ID를 DB에 기록합니다."""
+    await supabase.table('pet_explorations').update({'completion_message_id': str(message_id)}).eq('id', exploration_id).execute()
+
+@supabase_retry_handler()
+async def get_exploration_by_id(exploration_id: int) -> Optional[Dict[str, Any]]:
+    """ID로 특정 탐사 정보를 가져옵니다."""
+    response = await supabase.table('pet_explorations').select('*, exploration_locations(*)').eq('id', exploration_id).maybe_single().execute()
+    return response.data if response and response.data else None
+
+@supabase_retry_handler()
+async def finalize_exploration(exploration_id: int, pet_id: int):
+    """보상 수령 후 펫의 상태를 되돌리고 탐사 기록을 삭제합니다."""
+    # 1. 펫 상태를 idle로 되돌리기
+    await supabase.table('pets').update({
+        'status': 'idle',
+        'exploration_end_time': None,
+        'current_exploration_id': None
+    }).eq('id', pet_id).execute()
+
+    # 2. 완료된 탐사 기록 삭제
+    await supabase.table('pet_explorations').delete().eq('id', exploration_id).execute()
