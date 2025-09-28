@@ -100,32 +100,30 @@ class Exploration(commands.Cog):
         if not new_exploration:
             await interaction.followup.send("❌ 탐사를 시작하는 데 실패했습니다. 다시 시도해주세요.", ephemeral=True)
             return
-
-        pet_thread_id = pet.get('thread_id')
-        pet_thread = self.bot.get_channel(pet_thread_id) if pet_thread_id else None
-
-        if pet_thread:
-            # ▼▼▼ [핵심 수정] description 포맷팅을 더 안전하게 변경하고, 이미지 URL이 없을 경우를 대비합니다. ▼▼▼
-            description_text = (
-                f"{user.mention}님의 펫이 **{location['name']}**(으)로 탐사를 떠났습니다.\n\n"
-                f"> 완료 예정: {discord.utils.format_dt(end_time, 'R')}"
-            )
-            embed = discord.Embed(
-                title="🧭 탐사 시작",
-                description=description_text,
-                color=0x5865F2
-            )
-            if image_url := location.get('image_url'):
-                embed.set_image(url=image_url)
-
-            # ▼▼▼ [핵심 수정] 일반 메시지로 전송하도록 변경 ▼▼▼
-            await pet_thread.send(embed=embed)
         
-        if (pet_cog := self.bot.get_cog("PetSystem")) and pet_thread:
-            # 탐사 시작 후 펫 UI를 업데이트하여 '탐사 중' 상태를 즉시 반영합니다.
-            await pet_cog.update_pet_ui(user.id, pet_thread)
-            
-        await interaction.followup.send("✅ 펫을 탐사 보냈습니다. 펫 채널을 확인해주세요!", ephemeral=True)
+        # ▼▼▼ [핵심 수정] 펫 채널 대신 상호작용이 일어난 채널에 임시 메시지로 응답합니다. ▼▼▼
+        description_text = (
+            f"펫이 **{location['name']}**(으)로 탐사를 떠났습니다.\n\n"
+            f"> 완료 예정: {discord.utils.format_dt(end_time, 'R')}"
+        )
+        embed = discord.Embed(
+            title="🧭 탐사 시작",
+            description=description_text,
+            color=0x5865F2
+        )
+        if image_url := location.get('image_url'):
+            embed.set_image(url=image_url)
+        
+        # ephemeral=True로 임시 메시지를 보냅니다.
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        
+        # 펫의 UI는 여전히 펫 스레드 채널에서 업데이트합니다.
+        if (pet_cog := self.bot.get_cog("PetSystem")):
+            pet_thread_id = pet.get('thread_id')
+            if pet_thread_id and (pet_thread := self.bot.get_channel(pet_thread_id)):
+                await pet_cog.update_pet_ui(user.id, pet_thread)
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+
 
     @tasks.loop(minutes=1)
     async def exploration_completer(self):
