@@ -287,7 +287,7 @@ class DungeonGameView(ui.View):
         pet_combatant = Combatant(
             name=self.pet_data_raw['nickname'], stats=self.final_pet_stats,
             current_hp=self.pet_current_hp, max_hp=self.final_pet_stats['hp'], effects=self.pet_effects,
-            current_energy=self.pet_current_energy, max_energy=self.pet_max_energy # <--- 추가
+            current_energy=self.pet_current_energy, max_energy=self.pet_max_energy
         )
         monster_combatant = Combatant(
             name=self.current_monster['name'], stats=self.current_monster,
@@ -296,10 +296,17 @@ class DungeonGameView(ui.View):
         
         updated_pet, updated_monster, pet_turn_logs = process_turn(pet_combatant, monster_combatant, skill_data)
         
-        self.pet_current_hp = updated_pet['current_hp']; self.pet_effects = updated_pet['effects']
-        self.monster_current_hp = updated_monster['current_hp']; self.monster_effects = updated_monster['effects']
+        self.pet_current_hp = updated_pet['current_hp']
+        self.pet_effects = updated_pet['effects']
+        self.monster_current_hp = updated_monster['current_hp']
+        self.monster_effects = updated_monster['effects']
         self.battle_log.extend(pet_turn_logs)
-
+        
+        # ▼▼▼ [핵심 수정] 이 한 줄을 추가합니다. ▼▼▼
+        if 'current_energy' in updated_pet:
+            self.pet_current_energy = updated_pet['current_energy']
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+        
         if self.pet_current_hp <= 0: self.pet_is_defeated = True
 
         if self.monster_current_hp <= 0 and self.pet_is_defeated:
