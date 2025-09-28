@@ -284,9 +284,10 @@ class DungeonGameView(ui.View):
             self.pet_current_energy = min(self.pet_max_energy, self.pet_current_energy + 10)
 
         
-        pet_combatant = Combatant(...)
+        pet_combatant = Combatant(
             name=self.pet_data_raw['nickname'], stats=self.final_pet_stats,
-            current_hp=self.pet_current_hp, max_hp=self.final_pet_stats['hp'], effects=self.pet_effects
+            current_hp=self.pet_current_hp, max_hp=self.final_pet_stats['hp'], effects=self.pet_effects,
+            current_energy=self.pet_current_energy, max_energy=self.pet_max_energy # <--- 추가
         )
         monster_combatant = Combatant(
             name=self.current_monster['name'], stats=self.current_monster,
@@ -336,7 +337,8 @@ class DungeonGameView(ui.View):
     async def _execute_monster_turn(self):
         pet_combatant = Combatant(
             name=self.pet_data_raw['nickname'], stats=self.final_pet_stats,
-            current_hp=self.pet_current_hp, max_hp=self.final_pet_stats['hp'], effects=self.pet_effects
+            current_hp=self.pet_current_hp, max_hp=self.final_pet_stats['hp'], effects=self.pet_effects,
+            current_energy=self.pet_current_energy, max_energy=self.pet_max_energy # <--- 추가
         )
         monster_combatant = Combatant(
             name=self.current_monster['name'], stats=self.current_monster,
