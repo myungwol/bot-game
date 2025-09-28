@@ -235,7 +235,7 @@ class Exploration(commands.Cog):
                     except (discord.NotFound, discord.Forbidden): pass
         
         embed = discord.Embed(
-            title="🐾 펫 탐사",
+            title="🏕️ 펫 탐사",
             description="펫을 보내 보상을 얻어오세요!\n\n> 각 지역은 펫의 레벨 제한이 있으며, 레벨이 높을수록 더 좋은 보상을 얻을 수 있는 지역에 도전할 수 있습니다.",
             color=0x7289DA
         )
