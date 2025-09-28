@@ -21,22 +21,22 @@ from utils.helpers import format_embed_from_db
 logger = logging.getLogger(__name__)
 
 class ClaimRewardView(ui.View):
-    def __init__(self, cog_instance: 'Exploration'):
-        super().__init__(timeout=None)
+    # 이 View는 동적으로 생성되므로, timeout을 설정할 수 있습니다. (예: 하루)
+    def __init__(self, cog_instance: 'Exploration', exploration_id: int):
+        super().__init__(timeout=86400) # 24시간 후 비활성화
         self.cog = cog_instance
+        self.exploration_id = exploration_id
 
-    @ui.button(label="보상 수령", style=discord.ButtonStyle.success, emoji="🎁", custom_id="claim_exploration_reward_button")
+    @ui.button(label="보상 수령", style=discord.ButtonStyle.success, emoji="🎁")
     async def claim_reward_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
-        
-        res = await supabase.table('pet_explorations').select('id').eq('completion_message_id', str(interaction.message.id)).maybe_single().execute()
-        
-        if not (res and res.data):
-            return await interaction.followup.send("❌ 만료되었거나 잘못된 탐사 정보입니다.", ephemeral=True)
-        
-        exploration_id = res.data['id']
-        
-        await self.cog.handle_claim_reward(interaction, exploration_id)
+        # 이제 custom_id 대신 View 인스턴스에 저장된 exploration_id를 사용합니다.
+        await self.cog.handle_claim_reward(interaction, self.exploration_id)
+        # 보상 수령 후 View 비활성화
+        self.stop()
+        button.disabled = True
+        await interaction.message.edit(view=self)
+
 
 class PetExplorationPanelView(ui.View):
     def __init__(self, cog_instance: 'Exploration'):
@@ -101,7 +101,6 @@ class Exploration(commands.Cog):
             await interaction.followup.send("❌ 탐사를 시작하는 데 실패했습니다. 다시 시도해주세요.", ephemeral=True)
             return
         
-        # ▼▼▼ [핵심 수정] 펫 채널 대신 상호작용이 일어난 채널에 임시 메시지로 응답합니다. ▼▼▼
         description_text = (
             f"펫이 **{location['name']}**(으)로 탐사를 떠났습니다.\n\n"
             f"> 완료 예정: {discord.utils.format_dt(end_time, 'R')}"
@@ -114,16 +113,12 @@ class Exploration(commands.Cog):
         if image_url := location.get('image_url'):
             embed.set_image(url=image_url)
         
-        # ephemeral=True로 임시 메시지를 보냅니다.
         await interaction.followup.send(embed=embed, ephemeral=True)
         
-        # 펫의 UI는 여전히 펫 스레드 채널에서 업데이트합니다.
         if (pet_cog := self.bot.get_cog("PetSystem")):
             pet_thread_id = pet.get('thread_id')
             if pet_thread_id and (pet_thread := self.bot.get_channel(pet_thread_id)):
                 await pet_cog.update_pet_ui(user.id, pet_thread)
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
-
 
     @tasks.loop(minutes=1)
     async def exploration_completer(self):
@@ -145,7 +140,7 @@ class Exploration(commands.Cog):
                 if not thread or not user:
                     continue
                 
-                view = ClaimRewardView(self)
+                view = ClaimRewardView(self, exp['id'])
 
                 message = await thread.send(
                     content=f"{user.mention}, 펫이 탐사를 마치고 돌아왔습니다! 아래 버튼을 눌러 보상을 확인하세요.",
@@ -225,7 +220,7 @@ class Exploration(commands.Cog):
 
     async def register_persistent_views(self):
         self.bot.add_view(PetExplorationPanelView(self))
-        self.bot.add_view(ClaimRewardView(self))
+        # self.bot.add_view(ClaimRewardView(self))  <--- 이 줄을 삭제/주석 처리해야 합니다.
         logger.info("✅ 펫 탐사 시스템의 영구 View가 성공적으로 등록되었습니다.")
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_pet_exploration"):
