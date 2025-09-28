@@ -631,7 +631,6 @@ class PetSystem(commands.Cog):
                 end_time = datetime.fromisoformat(pet_data['exploration_end_time'])
                 status_text = f"탐사 중... (완료: {discord.utils.format_dt(end_time, 'R')})"
 
-            embed.add_field(name="상태", value=status_text, inline=False)
             embed.add_field(name="단계", value=f"**{stage_name}**", inline=True)
             embed.add_field(name="타입", value=f"{ELEMENT_TO_TYPE.get(species_info['element'], '알 수 없음')}", inline=True)
             embed.add_field(name="레벨", value=f"**Lv. {current_level} / {level_cap}**", inline=True)
@@ -668,6 +667,7 @@ class PetSystem(commands.Cog):
             embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{round(hatch_base_stats['defense'])}` + `{round(total_bonus_stats['defense'])}`)", inline=True)
             embed.add_field(name="👟 스피드", value=f"**{current_stats['speed']}** (`{round(hatch_base_stats['speed'])}` + `{round(total_bonus_stats['speed'])}`)", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) 
+            embed.add_field(name="상태", value=status_text, inline=False)
             
             next_stage_num = current_stage + 1
             next_stage_info = stage_info_json.get(str(next_stage_num))
