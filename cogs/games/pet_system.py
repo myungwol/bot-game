@@ -213,7 +213,6 @@ class PetUIView(ui.View):
         
         is_exploring = pet_data.get('status') == 'exploring'
 
-        self.explore_button.custom_id = f"pet_explore:{user_id}"
         self.allocate_stats_button.custom_id = f"pet_allocate_stats:{user_id}"
         self.feed_pet_button.custom_id = f"pet_feed:{user_id}"
         self.play_with_pet_button.custom_id = f"pet_play:{user_id}"
@@ -240,14 +239,6 @@ class PetUIView(ui.View):
         except (IndexError, ValueError):
             await interaction.response.send_message("❌ 잘못된 상호작용입니다.", ephemeral=True, delete_after=5)
             return False
-
-    @ui.button(label="탐사 보내기", style=discord.ButtonStyle.primary, emoji="🧭", row=0)
-    async def explore_button(self, interaction: discord.Interaction, button: ui.Button):
-        panel_channel_id = get_id("exploration_panel_channel_id")
-        if panel_channel_id:
-            await interaction.response.send_message(f"펫 탐사는 <#{panel_channel_id}> 채널에서 진행할 수 있습니다.", ephemeral=True)
-        else:
-            await interaction.response.send_message("❌ 탐사 채널이 설정되지 않았습니다. 관리자에게 문의해주세요.", ephemeral=True)
 
     @ui.button(label="스탯 분배", style=discord.ButtonStyle.success, emoji="✨", row=0)
     async def allocate_stats_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -678,7 +669,6 @@ class PetSystem(commands.Cog):
             embed.add_field(name="👟 스피드", value=f"**{current_stats['speed']}** (`{round(hatch_base_stats['speed'])}` + `{round(total_bonus_stats['speed'])}`)", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) 
             
-            # 진화 재료 표시 로직
             next_stage_num = current_stage + 1
             next_stage_info = stage_info_json.get(str(next_stage_num))
             if next_stage_info and pet_data.get('level', 0) >= level_cap:
@@ -711,7 +701,7 @@ class PetSystem(commands.Cog):
             final_stats[stat_to_increase] += 1
             natural_bonus_stats[stat_to_increase] += 1
             
-        updated_pet_data_res = await supabase.table('pets').update({
+        await supabase.table('pets').update({
             'current_stage': 2, 'level': 1, 'xp': 0, 'hunger': 100, 'friendship': 0,
             'current_hp': final_stats['hp'],
             'nickname': species_info['species_name'],
@@ -719,7 +709,7 @@ class PetSystem(commands.Cog):
             'natural_bonus_attack': natural_bonus_stats['attack'],
             'natural_bonus_defense': natural_bonus_stats['defense'], 
             'natural_bonus_speed': natural_bonus_stats['speed']
-        }).eq('id', pet_data['id']).select().single().execute()
+        }).eq('id', pet_data['id']).execute()
         
         thread = self.bot.get_channel(pet_data['thread_id'])
         if thread:
@@ -803,10 +793,13 @@ class PetSystem(commands.Cog):
     async def check_and_process_auto_evolution(self, user_ids: set):
         for user_id in user_ids:
             try:
-                inventory = await get_inventory(self.bot.get_user(user_id))
+                user = self.bot.get_user(user_id)
+                if not user: continue
+                inventory = await get_inventory(user)
                 pet_data = await get_user_pet(user_id)
-                if await self._is_evolution_ready(pet_data, inventory):
-                    await self.handle_evolution(user_id, self.bot.get_channel(pet_data['thread_id']))
+                if pet_data and await self._is_evolution_ready(pet_data, inventory):
+                    if thread := self.bot.get_channel(pet_data['thread_id']):
+                        await self.handle_evolution(user_id, thread)
             except Exception as e:
                 logger.error(f"자동 진화 처리 중 오류 (유저: {user_id}): {e}", exc_info=True)
 
@@ -840,18 +833,15 @@ class PetSystem(commands.Cog):
         next_stage_info = stage_info_json.get(str(next_stage_num))
         required_items = next_stage_info.get('items', {})
         
-        # 재료 차감
         tasks = [update_inventory(user_id, item, -qty) for item, qty in required_items.items()]
         await asyncio.gather(*tasks)
 
-        # 진화 처리 (DB 함수 호출)
         res = await supabase.rpc('evolve_pet_stage', {'p_user_id': user_id}).single().execute()
 
         if res.data and res.data.get('success'):
             await self.notify_pet_evolution(user_id, res.data.get('new_stage'), res.data.get('points_granted'))
             return True
         else:
-            # 실패 시 재료 환불
             logger.error(f"펫 진화 DB 함수 호출 실패 (User: {user_id}). 재료를 환불합니다.")
             refund_tasks = [update_inventory(user_id, item, qty) for item, qty in required_items.items()]
             await asyncio.gather(*refund_tasks)
@@ -863,8 +853,10 @@ class PetSystem(commands.Cog):
             if message: await message.edit(content="펫 정보를 찾을 수 없습니다.", embed=None, view=None)
             return
         
-        inventory = await get_inventory(self.bot.get_user(user_id))
         user = self.bot.get_user(user_id)
+        if not user: return
+
+        inventory = await get_inventory(user)
         embed = self.build_pet_ui_embed(user, pet_data)
         cooldown_active = await self._is_play_on_cooldown(pet_data['id'])
         evo_ready = await self._is_evolution_ready(pet_data, inventory)
