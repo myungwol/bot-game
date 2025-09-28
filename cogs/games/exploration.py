@@ -113,9 +113,8 @@ class Exploration(commands.Cog):
             embed.set_image(url=location['image_url'])
             await pet_thread.send(embed=embed)
 
-        if pet_cog := self.bot.get_cog("PetSystem"):
-            if pet_thread:
-                await pet_cog.update_pet_ui(user.id, pet_thread)
+        if (pet_cog := self.bot.get_cog("PetSystem")) and pet_thread:
+            await pet_cog.update_pet_ui(user.id, pet_thread)
         await interaction.followup.send("✅ 펫을 탐사 보냈습니다. 펫 채널을 확인해주세요!", ephemeral=True)
 
     @tasks.loop(minutes=1)
@@ -159,7 +158,7 @@ class Exploration(commands.Cog):
         
         pet_level = exploration_data.get('pets', {}).get('level', 1)
         location = exploration_data.get('exploration_locations', {})
-
+        
         xp_reward = random.randint(location.get('base_xp_min', 0), location.get('base_xp_max', 0))
         coin_reward = random.randint(location.get('base_coin_min', 0), location.get('base_coin_max', 0))
         
@@ -199,15 +198,20 @@ class Exploration(commands.Cog):
         except (discord.NotFound, discord.Forbidden):
             pass
 
-        if pet_cog := self.bot.get_cog("PetSystem"):
-            pet_thread_id = exploration_data.get('pets', {}).get('thread_id')
-            if pet_thread_id and (pet_thread := self.bot.get_channel(pet_thread_id)):
-                await pet_cog.update_pet_ui(interaction.user.id, pet_thread)
+        # ▼▼▼ [핵심 수정] 펫 UI 업데이트 로직 수정 ▼▼▼
+        if (pet_cog := self.bot.get_cog("PetSystem")):
+            pet_data = await get_user_pet(interaction.user.id)
+            if pet_data and (thread_id := pet_data.get("thread_id")):
+                if thread := self.bot.get_channel(thread_id):
+                    # update_pet_ui는 message 객체를 필요로 할 수 있으므로 None으로 전달
+                    await pet_cog.update_pet_ui(interaction.user.id, thread, message=None, is_refresh=True)
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+
 
         for res in results:
             if isinstance(res, dict) and 'data' in res and res.data:
                 if isinstance(res.data, list) and res.data[0].get('leveled_up'):
-                    if pet_cog:
+                    if (pet_cog := self.bot.get_cog("PetSystem")):
                         await pet_cog.notify_pet_level_up(
                             interaction.user.id,
                             res.data[0].get('new_level'),
