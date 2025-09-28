@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 class ClaimRewardView(ui.View):
     def __init__(self, cog_instance: 'Exploration'):
-        super().__init__(timeout=None) # 보상 수령은 만료되면 안됨
+        super().__init__(timeout=None)
         self.cog = cog_instance
 
     @ui.button(label="보상 수령", style=discord.ButtonStyle.success, emoji="🎁")
@@ -42,7 +42,6 @@ class PetExplorationPanelView(ui.View):
         self.cog = cog_instance
         locations = get_exploration_locations()
 
-        # 버튼을 2열로 배치
         row = 0
         for i, loc in enumerate(locations):
             if i % 3 == 0 and i != 0:
@@ -135,7 +134,6 @@ class Exploration(commands.Cog):
                     continue
                 
                 view = ClaimRewardView(self)
-                # 버튼 custom_id에 exploration_id 포함
                 view.children[0].custom_id = f"claim_exploration:{exp['id']}"
 
                 message = await thread.send(
@@ -159,7 +157,6 @@ class Exploration(commands.Cog):
         location = exploration_data.get('exploration_locations', {})
         duration = exploration_data['duration_hours']
 
-        # 보상 계산
         xp_reward = random.randint(location.get('base_xp_min', 0), location.get('base_xp_max', 0))
         coin_reward = random.randint(location.get('base_coin_min', 0), location.get('base_coin_max', 0))
         
@@ -170,7 +167,6 @@ class Exploration(commands.Cog):
                 qty = random.randint(item['min_qty'], item['max_qty'])
                 item_rewards[item['item_name']] += qty
         
-        # DB 업데이트
         db_tasks = []
         if coin_reward > 0: db_tasks.append(update_wallet(interaction.user, coin_reward))
         if xp_reward > 0: 
@@ -182,10 +178,8 @@ class Exploration(commands.Cog):
         
         results = await asyncio.gather(*db_tasks, return_exceptions=True)
 
-        # 탐사 종료 및 기록 삭제
         await claim_and_end_exploration(exploration_id, exploration_data['pet_id'])
 
-        # 결과 메시지 생성
         reward_lines = [
             f"✨ **경험치**: `{xp_reward:,}` XP",
             f"🪙 **코인**: `{coin_reward:,}` 코인"
@@ -197,17 +191,14 @@ class Exploration(commands.Cog):
 
         await interaction.followup.send(f"🎉 **탐사 보상**\n\n" + "\n".join(reward_lines), ephemeral=True)
         
-        # 보상 수령 버튼이 있던 메시지 삭제
         try:
             await interaction.message.delete()
         except (discord.NotFound, discord.Forbidden):
             pass
 
-        # 펫 UI 업데이트
         if pet_cog := self.bot.get_cog("PetSystem"):
             await pet_cog.update_pet_ui(interaction.user.id, interaction.channel)
 
-        # 펫 레벨업 처리
         for res in results:
             if isinstance(res, dict) and 'data' in res and res.data:
                 if isinstance(res.data, list) and res.data[0].get('leveled_up'):
@@ -221,7 +212,7 @@ class Exploration(commands.Cog):
 
     async def register_persistent_views(self):
         self.bot.add_view(PetExplorationPanelView(self))
-        # self.bot.add_view(ClaimRewardView(self))  <--- 이 줄을 삭제/주석 처리
+        self.bot.add_view(ClaimRewardView(self))
         logger.info("✅ 펫 탐사 시스템의 영구 View가 성공적으로 등록되었습니다.")
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_pet_exploration"):
@@ -234,11 +225,12 @@ class Exploration(commands.Cog):
                         await old_message.delete()
                     except (discord.NotFound, discord.Forbidden): pass
         
-        embed = discord.Embed(
-            title="🏕️ 펫 탐사",
-            description="펫을 보내 보상을 얻어오세요!\n\n> 각 지역은 펫의 레벨 제한이 있으며, 레벨이 높을수록 더 좋은 보상을 얻을 수 있는 지역에 도전할 수 있습니다.",
-            color=0x7289DA
-        )
+        embed_data = await get_embed_from_db(panel_key)
+        if not embed_data:
+            logger.error(f"DB에서 '{panel_key}' 임베드 템플릿을 찾을 수 없습니다.")
+            return
+
+        embed = discord.Embed.from_dict(embed_data)
         view = PetExplorationPanelView(self)
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_name, new_message.id, channel.id)
