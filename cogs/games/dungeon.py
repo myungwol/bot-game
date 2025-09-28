@@ -357,6 +357,16 @@ class DungeonGameView(ui.View):
         try:
             if not skill_interaction.response.is_done(): await skill_interaction.response.defer()
         except discord.NotFound: logger.warning(f"handle_skill_use 진입 시 interaction(ID:{skill_interaction.id})을 찾을 수 없습니다."); return
+
+        # ▼▼▼ [핵심 수정] 스킬 사용 직전, 서버에서 기력을 다시 한번 검증합니다. ▼▼▼
+        cost = skill_data.get('cost', 0)
+        if self.pet_current_energy < cost:
+            msg = await skill_interaction.followup.send("❌ 기력이 부족하여 해당 스킬을 사용할 수 없습니다!", ephemeral=True)
+            self.cog.bot.loop.create_task(delete_message_after(msg, 5))
+            # 스킬 선택창(ephemeral)은 그대로 두고, 함수 실행을 여기서 중단합니다.
+            return
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+
         if self.state != "in_battle" or not self.current_monster or not self.is_pet_turn: return
         try: await skill_interaction.delete_original_response()
         except (discord.NotFound, discord.HTTPException): logger.warning(f"SkillSelectView 메시지 삭제 시도 중 찾지 못함 (User: {self.user.id})")
