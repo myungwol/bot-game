@@ -208,8 +208,14 @@ class Exploration(commands.Cog):
         except (discord.NotFound, discord.Forbidden):
             pass
 
-        # ▼▼▼ [핵심 수정] 펫 UI 업데이트를 DB 요청으로 변경 ▼▼▼
-        await save_config_to_db(f"pet_ui_update_request_{interaction.user.id}", time.time())
+        # ▼▼▼ [핵심 수정] DB 요청 방식 대신 PetSystem Cog를 직접 호출하여 UI를 즉시 업데이트합니다. ▼▼▼
+        pet_cog = self.bot.get_cog("PetSystem")
+        if pet_cog:
+            # is_refresh=False (기본값)로 설정하여 메시지를 수정하도록 합니다.
+            # message=None으로 전달하면 update_pet_ui 함수가 DB에서 메시지 ID를 찾아 자동으로 처리합니다.
+            await pet_cog.update_pet_ui(interaction.user.id, interaction.channel, message=None)
+        else:
+            logger.error("[Exploration] PetSystem Cog를 찾을 수 없어 UI를 업데이트할 수 없습니다.")
         # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
 
