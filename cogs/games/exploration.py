@@ -24,15 +24,17 @@ class ClaimRewardView(ui.View):
         super().__init__(timeout=None)
         self.cog = cog_instance
 
-    @ui.button(label="보상 수령", style=discord.ButtonStyle.success, emoji="🎁")
+    @ui.button(label="보상 수령", style=discord.ButtonStyle.success, emoji="🎁", custom_id="claim_exploration_reward_button")
     async def claim_reward_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         
-        custom_id_parts = interaction.message.components[0].children[0].custom_id.split(':')
-        if len(custom_id_parts) != 2:
-            return await interaction.followup.send("❌ 잘못된 보상 버튼입니다.", ephemeral=True)
+        # 메시지 ID를 통해 탐사 정보를 찾도록 로직 변경
+        res = await supabase.table('pet_explorations').select('id').eq('completion_message_id', str(interaction.message.id)).maybe_single().execute()
         
-        exploration_id = int(custom_id_parts[1])
+        if not (res and res.data):
+            return await interaction.followup.send("❌ 만료되었거나 잘못된 탐사 정보입니다.", ephemeral=True)
+        
+        exploration_id = res.data['id']
         
         await self.cog.handle_claim_reward(interaction, exploration_id)
 
@@ -134,7 +136,6 @@ class Exploration(commands.Cog):
                     continue
                 
                 view = ClaimRewardView(self)
-                view.children[0].custom_id = f"claim_exploration:{exp['id']}"
 
                 message = await thread.send(
                     content=f"{user.mention}, 펫이 탐사를 마치고 돌아왔습니다! 아래 버튼을 눌러 보상을 확인하세요.",
@@ -155,8 +156,7 @@ class Exploration(commands.Cog):
         
         pet_level = exploration_data.get('pets', {}).get('level', 1)
         location = exploration_data.get('exploration_locations', {})
-        duration = exploration_data['duration_hours']
-
+        
         xp_reward = random.randint(location.get('base_xp_min', 0), location.get('base_xp_max', 0))
         coin_reward = random.randint(location.get('base_coin_min', 0), location.get('base_coin_max', 0))
         
