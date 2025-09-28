@@ -334,7 +334,7 @@ class DungeonGameView(ui.View):
         else:
             await self.refresh_ui(interaction)
 
-async def handle_skill_button(self, interaction: discord.Interaction):
+    async def handle_skill_button(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         learned_skills = self.pet_data_raw.get('learned_skills', [])
 
