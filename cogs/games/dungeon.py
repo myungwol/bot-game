@@ -23,6 +23,14 @@ from utils.combat_system import process_turn, Combatant
 
 logger = logging.getLogger(__name__)
 
+async def delete_message_after(message: discord.WebhookMessage, delay: int):
+    """메시지를 보낸 후 지정된 시간 뒤에 삭제하는 헬퍼 함수"""
+    await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except (discord.NotFound, discord.Forbidden):
+        pass
+
 # ... (파일 상단의 pad_korean_string, load_dungeon_data_from_db, SkillSelectView 클래스는 변경 없음) ...
 def pad_korean_string(text: str, total_width: int) -> str:
     current_width = 0
@@ -63,33 +71,44 @@ class SkillSelectView(ui.View):
         self._build_components()
 
     def _build_components(self):
-        if not self.learned_skills:
-            self.add_item(ui.Button(label="배운 스킬이 없습니다!", disabled=True))
-            return
+        self.clear_items()
         
+        if not self.learned_skills:
+            # 배운 스킬이 아예 없을 경우
+            pass_turn_button = ui.Button(label="아무것도 하지 않기 (턴 넘기기)", style=discord.ButtonStyle.secondary, emoji="⏳")
+            pass_turn_button.callback = self.on_pass_turn
+            self.add_item(pass_turn_button)
+            return
+
         options = []
+        can_use_any_skill = False
         for s in self.learned_skills:
             skill = s['pet_skills']
             cost = skill.get('cost', 0)
             power = skill.get('power', 0)
             description = skill.get('description', '설명 없음')
             
-            is_disabled_by_energy = self.current_energy < cost
+            # 사용할 수 있는 스킬이 하나라도 있는지 확인
+            if self.current_energy >= cost:
+                can_use_any_skill = True
 
-            # [핵심 수정] description에 더 많은 정보를 담도록 변경
             # 디스코드 description 최대 길이에 맞춰 설명을 자릅니다.
             truncated_desc = (description[:50] + '...') if len(description) > 50 else description
             
-            if is_disabled_by_energy:
-                option_description = f"기력이 부족합니다! (현재:{self.current_energy})"
-            else:
-                option_description = f"위력: {power} | {truncated_desc}"
+            option_description = f"위력: {power} | {truncated_desc}"
 
             options.append(discord.SelectOption(
                 label=f"{skill['skill_name']} (코스트: {cost})",
                 value=str(skill['id']),
                 description=option_description
             ))
+
+        # 사용할 수 있는 스킬이 하나도 없는 경우 (기력이 부족한 경우)
+        if not can_use_any_skill:
+            pass_turn_button = ui.Button(label="아무것도 하지 않기 (턴 넘기기)", style=discord.ButtonStyle.secondary, emoji="⏳")
+            pass_turn_button.callback = self.on_pass_turn
+            self.add_item(pass_turn_button)
+            return
 
         skill_select = ui.Select(placeholder="사용할 스킬을 선택하세요...", options=options)
         skill_select.callback = self.on_skill_select
@@ -399,14 +418,14 @@ class DungeonGameView(ui.View):
 
         can_use_any_skill = any(self.pet_current_energy >= s['pet_skills'].get('cost', 0) for s in learned_skills)
         if not can_use_any_skill:
-            # ▼▼▼ [핵심 수정] 이 블록 전체를 아래 코드로 교체합니다. ▼▼▼
             msg = await interaction.followup.send("⚠️ 기력이 부족하여 사용할 수 있는 스킬이 없습니다! '발버둥'으로 공격합니다.", ephemeral=True)
-            self.cog.bot.loop.create_task(delete_message_after(msg, 5))
+            # ▼▼▼ [핵심 수정] self.cog.bot.loop를 사용하지 않고 직접 호출 ▼▼▼
+            asyncio.create_task(delete_message_after(msg, 5))
+            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
             
-            # handle_skill_use를 호출하는 대신, 필요한 로직을 직접 실행합니다.
             self.is_pet_turn = False
             self.battle_log = []
-            await self.refresh_ui() # UI를 먼저 '상대 턴'으로 바꿉니다.
+            await self.refresh_ui()
             
             struggle_skill = {"skill_name": "발버둥", "power": 25, "cost": 0, "is_struggle": True}
             asyncio.create_task(self._process_battle_turn(struggle_skill))
