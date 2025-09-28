@@ -9,12 +9,14 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List, Any
 import asyncio
 from collections import defaultdict
+import time
 
 from utils.database import (
     supabase, get_user_pet, get_exploration_locations, get_exploration_loot,
     start_pet_exploration, get_completed_explorations, update_exploration_message_id,
     get_exploration_by_id, claim_and_end_exploration, update_inventory,
-    update_wallet, get_id, get_config, save_panel_id, get_panel_id, get_embed_from_db
+    update_wallet, get_id, get_config, save_panel_id, get_panel_id, get_embed_from_db,
+    save_config_to_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -88,6 +90,10 @@ class Exploration(commands.Cog):
     def cog_unload(self):
         self.exploration_completer.cancel()
     
+    @commands.Cog.listener()
+    async def on_ready(self):
+        pass
+
     async def start_exploration(self, interaction: discord.Interaction, user: discord.Member, location: Dict[str, Any]):
         pet = await get_user_pet(user.id)
         if not pet: return
@@ -202,11 +208,10 @@ class Exploration(commands.Cog):
         except (discord.NotFound, discord.Forbidden):
             pass
 
-        if (pet_cog := self.bot.get_cog("PetSystem")):
-            pet_data = await get_user_pet(interaction.user.id)
-            if pet_data and (thread_id := pet_data.get("thread_id")):
-                if thread := self.bot.get_channel(thread_id):
-                    await pet_cog.update_pet_ui(interaction.user.id, thread, message=None, is_refresh=True)
+        # ▼▼▼ [핵심 수정] 펫 UI 업데이트를 DB 요청으로 변경 ▼▼▼
+        await save_config_to_db(f"pet_ui_update_request_{interaction.user.id}", time.time())
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+
 
         for res in results:
             if isinstance(res, dict) and 'data' in res and res.data:
@@ -220,9 +225,7 @@ class Exploration(commands.Cog):
                     break
 
     async def register_persistent_views(self):
-        # 데이터 로드가 완료된 후에 호출되므로, 여기서 View를 생성하고 등록합니다.
         self.bot.add_view(PetExplorationPanelView(self))
-        # ClaimRewardView는 동적이므로 여기서 등록하지 않습니다.
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_pet_exploration"):
         panel_name = panel_key.replace("panel_", "")
