@@ -336,8 +336,8 @@ class DungeonGameView(ui.View):
 
     async def handle_skill_button(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        pet_data = await get_user_pet(self.user.id)
-        learned_skills = pet_data.get('learned_skills', [])
+        # pet_data = await get_user_pet(self.user.id) # <--- 이 줄을 삭제합니다.
+        learned_skills = self.pet_data_raw.get('learned_skills', []) # <--- self.pet_data_raw를 사용하도록 변경합니다.
 
         can_use_any_skill = any(self.pet_current_energy >= s['pet_skills'].get('cost', 0) for s in learned_skills)
         if not can_use_any_skill:
