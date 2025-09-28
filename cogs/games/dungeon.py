@@ -76,8 +76,8 @@ class SkillSelectView(ui.View):
             options.append(discord.SelectOption(
                 label=f"{skill['skill_name']} (코스트: {cost})",
                 value=str(skill['id']),
-                description=f"위력: {skill['power']}" if not is_disabled else f"기력이 부족합니다! ({self.current_energy}/{cost})",
-                disabled=is_disabled
+                description=f"위력: {skill['power']}" if self.current_energy >= cost else f"기력이 부족합니다! ({self.current_energy}/{cost})"
+                # disabled 인자를 완전히 삭제했습니다.
             ))
 
         skill_select = ui.Select(placeholder="사용할 스킬을 선택하세요...", options=options)
