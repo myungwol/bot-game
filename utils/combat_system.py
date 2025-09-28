@@ -200,8 +200,20 @@ def process_turn(caster: Combatant, target: Combatant, skill: Dict) -> Tuple[Com
         final_attack = _get_stat_with_effects(caster['stats']['attack'], 'ATK', caster['effects'])
         final_defense = _get_stat_with_effects(target['stats']['defense'], 'DEF', target['effects'])
         
-        # [핵심 수정 2] 데미지 공식을 다시 한번 확인하고 적용합니다.
-        raw_damage = (final_attack * (1 + (skill_power / 100))) - final_defense
+        # ▼▼▼ [핵심 수정] 공격 주체에 따라 데미지 공식을 다르게 적용합니다. ▼▼▼
+        is_pet_turn = 'Lv.' not in caster['name']
+
+        if is_pet_turn:
+            # 펫이 공격할 때 (스킬 사용)
+            raw_damage = (final_attack * (1 + (skill_power / 100))) - final_defense
+        else:
+            # 몬스터가 공격할 때 (기본 공격)
+            raw_damage = final_attack - final_defense
+            
+        damage_dealt = max(1, round(raw_damage))
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+        
+        target['current_hp'] = max(0, target['current_hp'] - damage_dealt)
         damage_dealt = max(1, round(raw_damage))
         
         target['current_hp'] = max(0, target['current_hp'] - damage_dealt)
