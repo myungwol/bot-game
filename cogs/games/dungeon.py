@@ -334,18 +334,25 @@ class DungeonGameView(ui.View):
         else:
             await self.refresh_ui(interaction)
 
-    async def handle_skill_button(self, interaction: discord.Interaction):
+async def handle_skill_button(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        # pet_data = await get_user_pet(self.user.id) # <--- 이 줄을 삭제합니다.
-        learned_skills = self.pet_data_raw.get('learned_skills', []) # <--- self.pet_data_raw를 사용하도록 변경합니다.
+        learned_skills = self.pet_data_raw.get('learned_skills', [])
 
         can_use_any_skill = any(self.pet_current_energy >= s['pet_skills'].get('cost', 0) for s in learned_skills)
         if not can_use_any_skill:
+            # ▼▼▼ [핵심 수정] 이 블록 전체를 아래 코드로 교체합니다. ▼▼▼
             msg = await interaction.followup.send("⚠️ 기력이 부족하여 사용할 수 있는 스킬이 없습니다! '발버둥'으로 공격합니다.", ephemeral=True)
-            asyncio.create_task(msg.delete(delay=5))
+            self.cog.bot.loop.create_task(delete_message_after(msg, 5))
+            
+            # handle_skill_use를 호출하는 대신, 필요한 로직을 직접 실행합니다.
+            self.is_pet_turn = False
+            self.battle_log = []
+            await self.refresh_ui() # UI를 먼저 '상대 턴'으로 바꿉니다.
+            
             struggle_skill = {"skill_name": "발버둥", "power": 25, "cost": 0, "is_struggle": True}
-            await self.handle_skill_use(struggle_skill, interaction)
+            asyncio.create_task(self._process_battle_turn(struggle_skill))
             return
+            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
         if not learned_skills: return await interaction.followup.send("❌ 배운 스킬이 없습니다!", ephemeral=True)
         
