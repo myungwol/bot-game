@@ -18,10 +18,8 @@ from utils.database import (
     supabase, get_inventory, update_inventory, get_item_database,
     save_panel_id, get_panel_id, get_embed_from_db, set_cooldown, get_cooldown,
     save_config_to_db, delete_config_from_db, get_id, get_user_pet,
-    get_learnable_skills, set_pet_skill, get_wallet, update_wallet,
-    get_skills_unlocked_at_level,
-    get_skills_unlocked_at_exact_level,
-    get_inventories_for_users # 방금 추가한 함수 import
+    get_wallet, update_wallet,
+    get_inventories_for_users
 )
 from utils.helpers import format_embed_from_db
 
@@ -69,328 +67,6 @@ async def delete_message_after(message: discord.WebhookMessage, delay: int):
         await message.delete()
     except (discord.NotFound, discord.Forbidden):
         pass
-
-class ConfirmReplaceView(ui.View):
-    """스킬 교체 여부를 확인하는 간단한 View"""
-    def __init__(self, user_id: int):
-        super().__init__(timeout=180)
-        self.user_id = user_id
-        self.value = None
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("본인만 결정할 수 있습니다.", ephemeral=True, delete_after=5)
-            return False
-        return True
-
-    @ui.button(label="예, 교체합니다", style=discord.ButtonStyle.danger)
-    async def confirm(self, interaction: discord.Interaction, button: ui.Button):
-        self.value = True
-        self.stop()
-        await interaction.response.defer()
-
-    @ui.button(label="아니요", style=discord.ButtonStyle.secondary)
-    async def cancel(self, interaction: discord.Interaction, button: ui.Button):
-        self.value = False
-        self.stop()
-        await interaction.response.defer()
-
-class NewSkillLearnView(ui.View):
-    """새로운 드롭다운 기반 스킬 학습 UI"""
-    def __init__(self, cog: 'PetSystem', user_id: int, pet_data: Dict, unlocked_skills: List[Dict]):
-        super().__init__(timeout=86400) # 하루 동안 유효
-        self.cog = cog
-        self.user_id = user_id
-        self.pet_data = pet_data
-        self.unlocked_skills = unlocked_skills
-        self.selected_skill_id: Optional[int] = None
-        self.selected_slot: Optional[int] = None
-
-    async def start(self, thread: discord.TextChannel):
-        self.update_components()
-        embed = self.build_embed()
-        message_text = f"<@{self.user_id}>, 펫이 성장하여 새로운 스킬을 배울 수 있게 되었습니다!"
-        await thread.send(message_text, embed=embed, view=self)
-
-    def build_embed(self) -> discord.Embed:
-        embed = discord.Embed(title="🎓 새로운 스킬 습득", color=0x00FF00)
-        embed.description = "아래 메뉴에서 배울 스킬과 등록할 슬롯을 선택해주세요."
-        
-        if self.selected_skill_id:
-            skill = next((s for s in self.unlocked_skills if s['id'] == self.selected_skill_id), None)
-            if skill:
-                embed.add_field(name="선택한 스킬", value=f"**{skill['skill_name']}**\n> {skill['description']}", inline=False)
-
-        if self.selected_slot:
-            learned_skills = self.pet_data.get('learned_skills', [])
-            skill_in_slot = next((s for s in learned_skills if s['slot_number'] == self.selected_slot), None)
-            slot_desc = f"**{skill_in_slot['pet_skills']['skill_name']}** (교체 예정)" if skill_in_slot else "비어있음"
-            embed.add_field(name="선택한 슬롯", value=f"**{self.selected_slot}번 슬롯**\n> 현재 스킬: {slot_desc}", inline=False)
-        return embed
-
-    def update_components(self):
-        self.clear_items()
-        
-        # 1. 배울 스킬 선택 드롭다운
-        skill_options = [discord.SelectOption(label=s['skill_name'], value=str(s['id']), description=f"위력: {s['power']}") for s in self.unlocked_skills]
-        skill_select = ui.Select(placeholder="① 배울 스킬을 선택하세요...", options=skill_options)
-        skill_select.callback = self.on_skill_select
-        self.add_item(skill_select)
-
-        # 2. 등록할 슬롯 선택 드롭다운
-        learned_skills = self.pet_data.get('learned_skills', [])
-        slot_options = []
-        for i in range(1, 5):
-            skill_in_slot = next((s for s in learned_skills if s['slot_number'] == i), None)
-            label = f"{i}번 슬롯" + (f" (현재: {skill_in_slot['pet_skills']['skill_name']})" if skill_in_slot else " (비어있음)")
-            slot_options.append(discord.SelectOption(label=label, value=str(i)))
-        
-        slot_select = ui.Select(placeholder="② 등록할 슬롯을 선택하세요...", options=slot_options, disabled=(self.selected_skill_id is None))
-        slot_select.callback = self.on_slot_select
-        self.add_item(slot_select)
-
-        # 3. 확정 및 취소 버튼
-        confirm_button = ui.Button(label="결정", style=discord.ButtonStyle.success, disabled=(self.selected_skill_id is None or self.selected_slot is None))
-        confirm_button.callback = self.on_confirm
-        self.add_item(confirm_button)
-        
-        cancel_button = ui.Button(label="취소", style=discord.ButtonStyle.grey)
-        cancel_button.callback = self.on_cancel
-        self.add_item(cancel_button)
-
-    async def update_view(self, interaction: discord.Interaction):
-        self.update_components()
-        embed = self.build_embed()
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    async def on_skill_select(self, interaction: discord.Interaction):
-        self.selected_skill_id = int(interaction.data['values'][0])
-        await self.update_view(interaction)
-
-    async def on_slot_select(self, interaction: discord.Interaction):
-        self.selected_slot = int(interaction.data['values'][0])
-        await self.update_view(interaction)
-
-    async def on_cancel(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(content="스킬 배우기를 취소했습니다.", view=None, embed=None)
-        self.stop()
-
-    async def on_confirm(self, interaction: discord.Interaction):
-        learned_skills = self.pet_data.get('learned_skills', [])
-        skill_in_slot = next((s for s in learned_skills if s['slot_number'] == self.selected_slot), None)
-        new_skill_name = next(s['skill_name'] for s in self.unlocked_skills if s['id'] == self.selected_skill_id)
-
-        if skill_in_slot:
-            # 스킬 교체 확인 절차
-            confirm_view = ConfirmReplaceView(self.user_id)
-            await interaction.response.send_message(
-                f"**{self.selected_slot}번 슬롯**에 있는 '**{skill_in_slot['pet_skills']['skill_name']}**' 스킬을"
-                f" '**{new_skill_name}**'(으)로 교체하시겠습니까?",
-                view=confirm_view, ephemeral=True
-            )
-            await confirm_view.wait()
-            if confirm_view.value is not True:
-                await interaction.edit_original_response(content="교체를 취소했습니다.", view=None)
-                return
-            # 확인 후 원래 메시지 삭제
-            await interaction.delete_original_response()
-        else:
-            await interaction.response.defer()
-
-        # 스킬 설정 실행
-        await set_pet_skill(self.pet_data['id'], self.selected_skill_id, self.selected_slot)
-        await interaction.message.edit(content=f"✅ **{new_skill_name}** 스킬을 {self.selected_slot}번 슬롯에 등록했습니다!", embed=None, view=None)
-        
-        updated_pet_data = await get_user_pet(self.user_id)
-        if updated_pet_data:
-            await self.cog.update_pet_ui(self.user_id, interaction.channel, pet_data_override=updated_pet_data)
-        self.stop()
-
-# ... (SkillAcquisitionView, SkillChangeView, StatAllocationView, PetNicknameModal, ConfirmReleaseView, PetUIView, EggSelectView, IncubatorPanelView 클래스는 변경 없이 그대로 유지) ...
-class SkillAcquisitionView(ui.View):
-    def __init__(self, cog: 'PetSystem', user_id: int, pet_data: Dict, unlocked_skill: Dict):
-        super().__init__(timeout=86400)
-        self.cog = cog
-        self.user_id = user_id
-        self.pet_data = pet_data
-        self.unlocked_skill = unlocked_skill
-        self.selected_slot_to_replace: Optional[int] = None
-
-    async def start(self, thread: discord.TextChannel):
-        embed = self.build_embed()
-        self.update_components()
-        message_text = f"<@{self.user_id}>, 펫이 성장하여 새로운 스킬을 배울 수 있게 되었습니다!"
-        await thread.send(message_text, embed=embed, view=self)
-
-    def build_embed(self) -> discord.Embed:
-        embed = discord.Embed(
-            title=f"🎓 새로운 스킬 습득 가능: {self.unlocked_skill['skill_name']}",
-            description=f"> {self.unlocked_skill['description']}",
-            color=0x00FF00
-        )
-        embed.add_field(name="속성", value=self.unlocked_skill['element'], inline=True)
-        embed.add_field(name="위력", value=str(self.unlocked_skill['power']), inline=True)
-        return embed
-        
-    def update_components(self):
-        self.clear_items()
-        learned_skills = self.pet_data.get('learned_skills', [])
-        
-        if len(learned_skills) < 4:
-            learn_button = ui.Button(label="새로운 스킬 배우기", style=discord.ButtonStyle.success, emoji="✅")
-            learn_button.callback = self.on_learn
-            self.add_item(learn_button)
-        else:
-            replace_options = [
-                discord.SelectOption(label=f"{s['slot_number']}번 슬롯: {s['pet_skills']['skill_name']}", value=str(s['slot_number']))
-                for s in learned_skills
-            ]
-            replace_select = ui.Select(placeholder="교체할 스킬을 선택하세요...", options=replace_options)
-            replace_select.callback = self.on_replace_select
-            self.add_item(replace_select)
-            
-            confirm_replace_button = ui.Button(label="이 스킬로 교체하기", style=discord.ButtonStyle.primary, emoji="🔄", disabled=(self.selected_slot_to_replace is None))
-            confirm_replace_button.callback = self.on_confirm_replace
-            self.add_item(confirm_replace_button)
-
-        pass_button = ui.Button(label="배우지 않기", style=discord.ButtonStyle.grey, emoji="❌")
-        pass_button.callback = self.on_pass
-        self.add_item(pass_button)
-
-    async def on_learn(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        learned_skills = self.pet_data.get('learned_skills', [])
-        empty_slot = next((s for s in range(1, 5) if s not in [ls['slot_number'] for ls in learned_skills]), None)
-        if empty_slot:
-            await set_pet_skill(self.pet_data['id'], self.unlocked_skill['id'], empty_slot)
-            await interaction.message.edit(content=f"✅ **{self.unlocked_skill['skill_name']}** 스킬을 배웠습니다!", embed=None, view=None)
-            
-            updated_pet_data = await get_user_pet(self.user_id)
-            if updated_pet_data:
-                await self.cog.update_pet_ui(self.user_id, interaction.channel, pet_data_override=updated_pet_data)
-        self.stop()
-
-    async def on_replace_select(self, interaction: discord.Interaction):
-        self.selected_slot_to_replace = int(interaction.data['values'][0])
-        self.update_components()
-        await interaction.response.edit_message(view=self)
-
-    async def on_confirm_replace(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        await set_pet_skill(self.pet_data['id'], self.unlocked_skill['id'], self.selected_slot_to_replace)
-        await interaction.message.edit(content=f"✅ **{self.unlocked_skill['skill_name']}** 스킬로 교체했습니다!", embed=None, view=None)
-        
-        updated_pet_data = await get_user_pet(self.user_id)
-        if updated_pet_data:
-            await self.cog.update_pet_ui(self.user_id, interaction.channel, pet_data_override=updated_pet_data)
-        self.stop()
-        
-    async def on_pass(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        await interaction.message.edit(content="스킬을 배우지 않고 넘어갔습니다.", embed=None, view=None)
-        self.stop()
-
-class SkillChangeView(ui.View):
-    def __init__(self, parent_view: 'PetUIView'):
-        super().__init__(timeout=180)
-        self.parent_view = parent_view
-        self.cog = parent_view.cog
-        self.user_id = parent_view.user_id
-        self.pet_data = parent_view.pet_data
-        self.learnable_skills: List[Dict] = []
-        self.selected_slot: Optional[int] = None
-        self.selected_new_skill_id: Optional[int] = None
-        
-    async def start(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        learned_skill_ids = [s['skill_id'] for s in self.pet_data.get('learned_skills', [])]
-        all_possible_skills = await get_skills_unlocked_at_level(self.pet_data['level'], self.pet_data['pet_species']['element'])
-        self.learnable_skills = [s for s in all_possible_skills if s['id'] not in learned_skill_ids]
-
-        self.update_components()
-        embed = self.build_embed()
-        await interaction.followup.send(embed=embed, view=self, ephemeral=True)
-
-    def build_embed(self) -> discord.Embed:
-        embed = discord.Embed(title="🔧 스킬 관리", color=0xFFA500)
-        embed.description = "스킬을 배우거나 교체할 슬롯과 새로 배울 스킬을 선택해주세요.\n**비용: `1,000` 코인**"
-        return embed
-
-    def update_components(self):
-        self.clear_items()
-        
-        learned_skills = self.pet_data.get('learned_skills', [])
-        
-        slot_options = []
-        for i in range(1, 5):
-            learned_skill_in_slot = next((s for s in learned_skills if s['slot_number'] == i), None)
-            label = f"{i}번 슬롯"
-            if learned_skill_in_slot:
-                label += f" (현재: {learned_skill_in_slot['pet_skills']['skill_name']})"
-            else:
-                label += " (비어있음)"
-            slot_options.append(discord.SelectOption(label=label, value=str(i)))
-
-        slot_select = ui.Select(placeholder="① 스킬을 배우거나 교체할 슬롯 선택...", options=slot_options)
-        slot_select.callback = self.on_slot_select
-        self.add_item(slot_select)
-
-        new_skill_options = [
-            discord.SelectOption(label=s['skill_name'], value=str(s['id']), description=f"위력:{s['power']}, 속성:{s['element']}")
-            for s in self.learnable_skills[:25]
-        ]
-        
-        if not new_skill_options:
-            new_skill_options.append(discord.SelectOption(label="배울 수 있는 스킬이 없습니다.", value="no_skills_available"))
-        
-        new_skill_select = ui.Select(
-            placeholder="② 새로 배울 스킬을 선택하세요...", 
-            options=new_skill_options, 
-            disabled=(not self.learnable_skills)
-        )
-        
-        new_skill_select.callback = self.on_new_skill_select
-        self.add_item(new_skill_select)
-
-        confirm_button = ui.Button(label="확정 (1,000 코인)", style=discord.ButtonStyle.success, disabled=(self.selected_slot is None or self.selected_new_skill_id is None))
-        confirm_button.callback = self.on_confirm
-        self.add_item(confirm_button)
-
-    async def on_slot_select(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        self.selected_slot = int(interaction.data['values'][0])
-        self.update_components()
-        await interaction.edit_original_response(view=self)
-
-    async def on_new_skill_select(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        if interaction.data['values'][0] == "no_skills_available":
-            return
-
-        self.selected_new_skill_id = int(interaction.data['values'][0])
-        self.update_components()
-        await interaction.edit_original_response(view=self)
-
-    async def on_confirm(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        
-        wallet = await get_wallet(self.user_id)
-        if wallet.get('balance', 0) < 1000:
-            return await interaction.edit_original_response(content="❌ 코인이 부족합니다.", view=None)
-
-        await update_wallet(interaction.user, -1000)
-        success = await set_pet_skill(self.pet_data['id'], self.selected_new_skill_id, self.selected_slot)
-        
-        if success:
-            await interaction.edit_original_response(content="✅ 스킬을 성공적으로 배웠습니다/변경했습니다!", view=None)
-            
-            updated_pet_data = await get_user_pet(self.user_id)
-            if updated_pet_data:
-                await self.cog.update_pet_ui(self.user_id, interaction.channel, pet_data_override=updated_pet_data)
-        else:
-            await update_wallet(interaction.user, 1000)
-            await interaction.edit_original_response(content="❌ 스킬 설정에 실패했습니다. 코인이 환불되었습니다.", view=None)
 
 class StatAllocationView(ui.View):
     def __init__(self, parent_view: 'PetUIView', message: discord.Message):
@@ -538,7 +214,6 @@ class PetUIView(ui.View):
         self.feed_pet_button.custom_id = f"pet_feed:{user_id}"
         self.play_with_pet_button.custom_id = f"pet_play:{user_id}"
         self.rename_pet_button.custom_id = f"pet_rename:{user_id}"
-        self.change_skills_button.custom_id = f"pet_change_skills:{user_id}"
         self.release_pet_button.custom_id = f"pet_release:{user_id}"
         self.refresh_button.custom_id = f"pet_refresh:{user_id}"
         self.allocate_stats_button.custom_id = f"pet_allocate_stats:{user_id}"
@@ -634,11 +309,6 @@ class PetUIView(ui.View):
             msg = await interaction.followup.send(f"펫의 이름이 '{new_name}'(으)로 변경되었습니다.", ephemeral=True)
             self.cog.bot.loop.create_task(delete_message_after(msg, 5))
 
-    @ui.button(label="스킬 변경", style=discord.ButtonStyle.secondary, emoji="🔧", row=1)
-    async def change_skills_button(self, interaction: discord.Interaction, button: ui.Button):
-        change_view = SkillChangeView(self)
-        await change_view.start(interaction)
-
     @ui.button(label="놓아주기", style=discord.ButtonStyle.danger, emoji="👋", row=1)
     async def release_pet_button(self, interaction: discord.Interaction, button: ui.Button):
         confirm_view = ConfirmReleaseView(self.user_id)
@@ -650,39 +320,16 @@ class PetUIView(ui.View):
         await confirm_view.wait()
         if confirm_view.value is True:
             try:
-                # ▼▼▼ [핵심 수정] 펫 놓아주기 시 던전 세션을 정상적으로 종료하는 로직 추가 ▼▼▼
-                
-                # 1. 이 펫이 참여 중인 던전 세션이 있는지 확인합니다.
-                session_res = await supabase.table('dungeon_sessions').select('thread_id').eq('pet_id', self.pet_data['id']).maybe_single().execute()
-                
-                if session_res and session_res.data:
-                    thread_id = int(session_res.data['thread_id'])
-                    dungeon_cog = self.cog.bot.get_cog("Dungeon")
-                    thread = self.cog.bot.get_channel(thread_id)
-                    
-                    if dungeon_cog and thread:
-                        logger.info(f"펫(ID:{self.pet_data['id']})을 놓아주기 전에 활성 던전(스레드:{thread_id})을 먼저 종료합니다.")
-                        # Dungeon 코그의 세션 종료 함수를 호출하여 스레드까지 깔끔하게 삭제합니다.
-                        # 보상은 포기하는 것으로 처리합니다.
-                        await dungeon_cog.close_dungeon_session(self.user_id, rewards={}, total_xp=0, thread=thread)
-                        await asyncio.sleep(1) # 스레드 삭제가 처리될 시간을 줍니다.
-
-                # 2. 이제 펫을 안전하게 삭제할 수 있습니다.
                 await supabase.table('pets').delete().eq('user_id', self.user_id).execute()
-
-                # 펫 전용 스레드(알 채널)도 삭제합니다.
                 await interaction.edit_original_response(content="펫을 자연으로 돌려보냈습니다...", view=None)
                 await interaction.channel.send(f"{interaction.user.mention}님이 펫을 자연의 품으로 돌려보냈습니다.")
                 await asyncio.sleep(10)
                 try:
                     await interaction.channel.delete()
                 except (discord.NotFound, discord.Forbidden): pass
-                # ▲▲▲ [핵심 수정] 완료 ▲▲▲
-
             except APIError as e:
                 logger.error(f"펫 놓아주기 처리 중 DB 오류 발생: {e}", exc_info=True)
                 await interaction.edit_original_response(content="❌ 펫을 놓아주는 중 오류가 발생했습니다. 관리자에게 문의해주세요.", view=None)
-            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
         else:
             await interaction.edit_original_response(content="펫 놓아주기를 취소했습니다.", view=None)
 
@@ -730,24 +377,19 @@ class IncubatorPanelView(ui.View):
         await view.start(interaction)
 
 class PetSystem(commands.Cog):
-    # ▼▼▼ [수정] __init__ 과 cog_load/unload 를 수정하여 에러를 해결합니다. ▼▼▼
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_views_loaded = False
-        # __init__ 에서는 태스크를 시작하지 않습니다.
 
     async def cog_load(self):
-        # Cog가 로드될 때 태스크를 시작합니다.
         self.hatch_checker.start()
         self.hunger_and_stat_decay.start()
         self.auto_refresh_pet_uis.start()
 
     def cog_unload(self):
-        # Cog가 언로드될 때 태스크를 취소합니다.
         self.hatch_checker.cancel()
         self.hunger_and_stat_decay.cancel()
         self.auto_refresh_pet_uis.cancel()
-    # ▲▲▲ [수정] 완료 ▲▲▲
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -1013,17 +655,6 @@ class PetSystem(commands.Cog):
             embed.add_field(name="👟 스피드", value=f"**{current_stats['speed']}** (`{hatch_base_stats['speed']}` + `{total_bonus_stats['speed']}`)", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) 
             
-            learned_skills = sorted(pet_data.get('learned_skills', []), key=lambda s: s['slot_number'])
-            skill_texts = []
-            if not learned_skills:
-                skill_texts.append("・ 아직 배운 스킬이 없습니다.")
-            else:
-                for skill_info in learned_skills:
-                    skill = skill_info.get('pet_skills', {})
-                    skill_texts.append(f"・ **{skill.get('skill_name', '알수없음')}** (속성: {skill.get('element')}, 위력: {skill.get('power')})")
-            
-            embed.add_field(name="🐾 배운 스킬", value="\n".join(skill_texts), inline=False)
-            
         return embed
     
     async def process_hatching(self, pet_data: Dict):
@@ -1054,8 +685,6 @@ class PetSystem(commands.Cog):
             'natural_bonus_defense': natural_bonus_stats['defense'], 
             'natural_bonus_speed': natural_bonus_stats['speed']
         }).eq('id', pet_data['id']).execute()
-        
-        await set_pet_skill(pet_data['id'], 1, 1)
         
         updated_pet_data = updated_pet_data_res.data[0]
         updated_pet_data['pet_species'] = species_info
@@ -1137,23 +766,6 @@ class PetSystem(commands.Cog):
         
         await self.update_pet_ui(user_id, thread)
 
-        pet_element = pet_data.get('pet_species', {}).get('element')
-        if not pet_element: return
-
-        newly_unlocked_skills = await get_skills_unlocked_at_exact_level(new_level, pet_element)
-
-        # ▼▼▼ [핵심 수정] 이 부분을 수정합니다. ▼▼▼
-        if newly_unlocked_skills:
-            logger.info(f"{user.display_name}의 펫이 {new_level}레벨에 도달하여 {len(newly_unlocked_skills)}개의 스킬을 해금했습니다.")
-            
-            # 여러 스킬이 해금될 경우를 대비해, 한 번에 하나의 View만 띄웁니다.
-            fresh_pet_data = await get_user_pet(user_id)
-            if not fresh_pet_data: return
-            
-            learn_view = NewSkillLearnView(self, user_id, fresh_pet_data, newly_unlocked_skills)
-            await learn_view.start(thread)
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
-
     async def check_and_process_auto_evolution(self, user_ids: set):
         for user_id in user_ids:
             try:
@@ -1232,58 +844,6 @@ class PetSystem(commands.Cog):
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_name, new_message.id, channel.id)
         logger.info(f"✅ {panel_key} 패널을 #{channel.name} 채널에 성공적으로 생성했습니다.")
-
-    # dungeon.py에서 가져온 자동 완성 함수
-    async def skill_autocomplete(self, interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
-        res = await supabase.table('pet_skills').select('skill_name').ilike('skill_name', f'%{current}%').limit(25).execute()
-        if not (res and res.data): return []
-        return [app_commands.Choice(name=row['skill_name'], value=row['skill_name']) for row in res.data]
-
-    @app_commands.command(name="펫스킬등록", description="[관리자] 유저의 펫에게 특정 스킬을 등록/교체합니다.")
-    @app_commands.describe(
-        user="스킬을 등록할 펫의 주인입니다.",
-        skill_name="등록할 스킬의 이름입니다.",
-        slot="스킬을 등록할 슬롯 번호입니다 (1~4)."
-    )
-    @app_commands.autocomplete(skill_name=skill_autocomplete)
-    async def admin_set_pet_skill(self, interaction: discord.Interaction, user: discord.Member, skill_name: str, slot: app_commands.Range[int, 1, 4]):
-        # 봇 소유자 또는 관리자만 사용할 수 있도록 권한 체크
-        if not await self.bot.is_owner(interaction.user) and not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ 이 명령어는 관리자만 사용할 수 있습니다.", ephemeral=True)
-
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            # 1. 펫 정보와 스킬 정보 가져오기
-            pet_res = await supabase.table('pets').select('id').eq('user_id', user.id).maybe_single().execute()
-            skill_res = await supabase.table('pet_skills').select('id').eq('skill_name', skill_name).maybe_single().execute()
-
-            if not (pet_res and pet_res.data):
-                return await interaction.followup.send(f"❌ {user.display_name}님은 펫을 소유하고 있지 않습니다.", ephemeral=True)
-            if not (skill_res and skill_res.data):
-                return await interaction.followup.send(f"❌ '{skill_name}' 스킬을 찾을 수 없습니다. 정확한 이름을 입력해주세요.", ephemeral=True)
-                
-            pet_id = pet_res.data['id']
-            skill_id = skill_res.data['id']
-
-            # 2. 스킬 설정 (database.py의 set_pet_skill 함수 재사용)
-            success = await set_pet_skill(pet_id, skill_id, slot)
-            
-            if success:
-                # 3. 성공 메시지 및 UI 업데이트 요청
-                await interaction.followup.send(f"✅ {user.display_name}님의 펫 {slot}번 슬롯에 '{skill_name}' 스킬을 성공적으로 등록했습니다.", ephemeral=True)
-                
-                pet_data = await get_user_pet(user.id)
-                if pet_data and pet_data.get('thread_id'):
-                    if thread := self.bot.get_channel(pet_data['thread_id']):
-                        await self.update_pet_ui(user.id, thread)
-            else:
-                await interaction.followup.send("❌ 스킬을 등록하는 중 오류가 발생했습니다. (이미 배운 스킬일 수 있습니다)", ephemeral=True)
-
-        except Exception as e:
-            logger.error(f"관리자 펫 스킬 등록 중 오류: {e}", exc_info=True)
-            await interaction.followup.send("❌ 처리 중 심각한 오류가 발생했습니다. 로그를 확인해주세요.", ephemeral=True)
-    # ▲▲▲ [핵심 추가] 완료 ▲▲▲
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(PetSystem(bot))
