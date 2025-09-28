@@ -135,7 +135,7 @@ class DungeonGameView(ui.View):
             base = species_info.get(f'base_{key}', 0) + (level - 1) * species_info.get(f'{key}_growth', 0)
             natural_bonus = self.pet_data_raw.get(f"natural_bonus_{key}", 0)
             allocated = self.pet_data_raw.get(f"allocated_{key}", 0)
-            stats[key] = round(base) + natural_bonus + allocated
+            stats[key] = round(base) + (natural_bonus or 0) + (allocated or 0) # <--- None일 경우를 대비
         return stats
 
     async def start(self, thread: discord.Thread):
@@ -273,6 +273,11 @@ class DungeonGameView(ui.View):
 
     async def refresh_ui(self, interaction: Optional[discord.Interaction] = None):
         if interaction and not interaction.response.is_done(): await interaction.response.defer()
+        
+        # ▼▼▼ [핵심 수정] 펫 정보 갱신 코드 추가 ▼▼▼
+        await self._update_pet_data()
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+
         self.build_components()
         embed = await self.build_embed()
         if self.message:
@@ -498,7 +503,11 @@ class DungeonGameView(ui.View):
     # ▼▼▼ [핵심 추가] 이 메서드 전체를 추가합니다. ▼▼▼
     async def handle_start_battle(self, interaction: discord.Interaction):
         if self.state != "encounter":
-            return await interaction.response.defer() # 이미 전투가 시작되었으면 무시
+            return await interaction.response.defer()
+
+        # ▼▼▼ [핵심 수정] 펫 정보 갱신 코드 추가 ▼▼▼
+        await self._update_pet_data()
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
         self.state = "in_battle"
         await supabase.table('dungeon_sessions').update({'state': self.state}).eq('id', self.session_id).execute()
@@ -514,6 +523,29 @@ class DungeonGameView(ui.View):
             # 몬스터가 선공일 경우에만 몬스터 턴을 바로 시작
             asyncio.create_task(self.handle_monster_turn())
     # ▲▲▲ [핵심 추가] 완료 ▲▲▲
+
+    async def _update_pet_data(self):
+        """데이터베이스에서 최신 펫 정보를 가져와 View의 상태를 갱신합니다."""
+        latest_pet_data = await get_user_pet(self.user.id)
+        if latest_pet_data:
+            # 기존 HP 비율을 유지하면서 최대 HP를 갱신합니다.
+            old_max_hp = self.final_pet_stats.get('hp', self.pet_current_hp)
+            if old_max_hp == 0: old_max_hp = 1 # 0으로 나누기 방지
+            
+            hp_ratio = self.pet_current_hp / old_max_hp
+            
+            # 새로운 데이터로 교체
+            self.pet_data_raw = latest_pet_data
+            self.final_pet_stats = self._calculate_final_pet_stats()
+            
+            # 비율에 맞춰 현재 HP 조정
+            new_max_hp = self.final_pet_stats.get('hp', 1)
+            self.pet_current_hp = max(1, round(new_max_hp * hp_ratio))
+        else:
+            # 펫 정보를 찾을 수 없는 예외적인 경우
+            logger.error(f"던전 진행 중 유저(ID:{self.user.id})의 펫 정보를 찾을 수 없습니다.")
+            # 여기서 던전을 강제 종료하는 로직을 추가할 수도 있습니다.
+            pass
 
 class Dungeon(commands.Cog):
     def __init__(self, bot: commands.Bot):
