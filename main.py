@@ -49,9 +49,34 @@ class MyBot(commands.Bot):
         super().__init__(*args, **kwargs)
         
     async def setup_hook(self):
-        # 이 함수는 이제 Cog 로드만 담당합니다.
+        # 1. 모든 Cog를 로드합니다.
         await self.load_all_extensions()
-        logger.info("✅ 모든 Cog가 로드되었습니다. 영구 View는 각 Cog의 on_ready 리스너에서 등록됩니다.")
+        
+        # 2. Cog 로드 후, 데이터베이스에서 모든 데이터를 캐시로 불러옵니다.
+        await load_all_data_from_db()
+        logger.info("✅ 데이터베이스 로드가 완료되었습니다. 영구 View 등록을 시작합니다.")
+
+        # 3. 데이터 로드가 완료된 후에 영구 View를 등록합니다.
+        cogs_with_persistent_views = [
+            "UserProfile", "Fishing", "Commerce", "Atm",
+            "DiceGame", "SlotMachine", "RPSGame",
+            "Quests", "Farm", "Mining", "Blacksmith", 
+            "Trade", "Cooking", "FriendInvite", "PetSystem",
+            "Exploration"
+        ]
+         
+        registered_views_count = 0
+        for cog_name in cogs_with_persistent_views:
+            cog = self.get_cog(cog_name)
+            if cog and hasattr(cog, 'register_persistent_views'):
+                try:
+                    await cog.register_persistent_views()
+                    registered_views_count += 1
+                    logger.info(f"✅ '{cog_name}' Cog의 영구 View가 등록되었습니다.")
+                except Exception as e:
+                    logger.error(f"❌ '{cog_name}' Cog의 영구 View 등록 중 오류 발생: {e}", exc_info=True)
+        logger.info(f"✅ 총 {registered_views_count}개의 Cog에서 영구 View를 성공적으로 등록했습니다.")
+
 
     async def load_all_extensions(self):
         logger.info("------ [ Cog 로드 시작 ] ------")
@@ -91,8 +116,7 @@ async def on_ready():
     logger.info(f"✅ 현재 UTC 시간: {datetime.now(timezone.utc)}")
     logger.info("==================================================")
     
-    # 가장 먼저 모든 데이터를 로드합니다.
-    await load_all_data_from_db()
+    # on_ready에서는 데이터 로드나 View 등록을 하지 않습니다. setup_hook에서 모두 처리됩니다.
     
     logger.info("------ [ 모든 Cog 설정 새로고침 시작 ] ------")
     refreshed_cogs_count = 0
