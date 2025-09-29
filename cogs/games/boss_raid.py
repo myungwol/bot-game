@@ -104,13 +104,17 @@ class BossRaid(commands.Cog):
             active_weekly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'weekly').maybe_single().execute()
             if not (active_weekly_raid_res and active_weekly_raid_res.data):
                 logger.info("[BossRaid] 새로운 주간 보스를 생성합니다.")
+                # ▼▼▼ [핵심 수정] .execute()를 추가합니다. ▼▼▼
                 await self.create_new_raid('weekly', force=True)
+                # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
         if now_kst.day == 1 and now_kst.hour == 0:
             active_monthly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'monthly').maybe_single().execute()
             if not (active_monthly_raid_res and active_monthly_raid_res.data):
                 logger.info("[BossRaid] 새로운 월간 보스를 생성합니다.")
+                # ▼▼▼ [핵심 수정] .execute()를 추가합니다. ▼▼▼
                 await self.create_new_raid('monthly', force=True)
+                # ▲▲▲ [핵심 수정] 완료 ▲▲▲
     
     @boss_reset_loop.before_loop
     async def before_boss_reset_loop(self):
@@ -285,7 +289,7 @@ class BossRaid(commands.Cog):
         await self.update_all_boss_panels()
 
     async def run_combat_simulation(self, interaction: discord.Interaction, user: discord.Member, pet: Dict, raid_id: int, boss_type: str):
-        # ... (이전과 동일)
+        """실시간 턴제 전투를 시뮬레이션하고 UI를 업데이트합니다."""
         combat_message = None
         try:
             raid_res = await supabase.table('boss_raids').select('*, bosses(*)').eq('id', raid_id).single().execute()
@@ -351,21 +355,35 @@ class BossRaid(commands.Cog):
                         await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
                         if boss_hp <= 0: break
             combat_logs.append("---")
-            if boss_hp <= 0: combat_logs.append(f"🎉 **{boss['name']}**을(를) 쓰러뜨렸습니다!")
-            else: combat_logs.append(f"☠️ **{pet['nickname']}**이(가) 쓰러졌습니다.")
+            if boss_hp <= 0:
+                combat_logs.append(f"🎉 **{boss['name']}**을(를) 쓰러뜨렸습니다!")
+            else:
+                combat_logs.append(f"☠️ **{pet['nickname']}**이(가) 쓰러졌습니다.")
             combat_logs.append(f"✅ 전투 종료! 총 `{total_damage_dealt:,}`의 피해를 입혔습니다.")
             await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
+
             final_boss_hp = max(0, raid_data['current_hp'] - total_damage_dealt)
             new_log_entry = f"`[{datetime.now(KST).strftime('%H:%M')}]` ⚔️ **{user.display_name}** 님이 `{total_damage_dealt:,}`의 피해를 입혔습니다. (남은 HP: `{final_boss_hp:,}`)"
             recent_logs = raid_data.get('recent_logs', [])
             recent_logs.insert(0, new_log_entry)
             await supabase.table('boss_raids').update({'current_hp': final_boss_hp, 'recent_logs': recent_logs[:10]}).eq('id', raid_id).execute()
-            await supabase.rpc('upsert_boss_participant', {'p_raid_id': raid_id, 'p_user_id': user.id, 'p_pet_id': pet['id'], 'p_damage_to_add': total_damage_dealt})
+
+            # ▼▼▼ [핵심 수정] .execute()를 추가합니다. ▼▼▼
+            await supabase.rpc('upsert_boss_participant', {
+                'p_raid_id': raid_id,
+                'p_user_id': user.id,
+                'p_pet_id': pet['id'],
+                'p_damage_to_add': total_damage_dealt
+            }).execute()
+            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+            
             if final_boss_hp <= 0 and raid_data['status'] == 'active':
                  await self.handle_boss_defeat(interaction.channel, raid_id)
+
         except Exception as e:
             logger.error(f"보스 전투 시뮬레이션 중 오류: {e}", exc_info=True)
-            if combat_message: await combat_message.edit(content="전투 중 오류가 발생했습니다.", embed=None, view=None)
+            if combat_message:
+                await combat_message.edit(content="전투 중 오류가 발생했습니다.", embed=None, view=None)
         finally:
             if combat_message:
                 await asyncio.sleep(10)
