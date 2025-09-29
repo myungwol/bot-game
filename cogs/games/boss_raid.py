@@ -253,13 +253,17 @@ class BossRaid(commands.Cog):
             raid_data = raid_res.data
             boss = raid_data['bosses']
 
+            # 펫의 모든 스탯을 가져옵니다.
             pet_hp = pet.get('current_hp', 100)
             pet_attack = pet.get('current_attack', 10)
             pet_defense = pet.get('current_defense', 10)
+            pet_speed = pet.get('current_speed', 10)
             
             boss_hp = raid_data['current_hp']
             boss_attack = boss['attack']
             boss_defense = boss['defense']
+            # 보스 스피드는 DB에 없으므로 임의로 설정하거나, DB에 추가해야 합니다. 여기서는 임의로 설정합니다.
+            boss_speed = int(boss_attack * 0.5) # 예시: 공격력의 50%를 스피드로 설정
             
             combat_logs = [f"**{user.display_name}**님이 **{pet['nickname']}**와(과) 함께 전투를 시작합니다!"]
             total_damage_dealt = 0
@@ -270,28 +274,78 @@ class BossRaid(commands.Cog):
             combat_message = await interaction.channel.send(embed=embed, view=view)
 
             # 3. 턴제 전투 루프
-            while pet_hp > 0 and boss_hp > 0:
-                await asyncio.sleep(2)
+            turn_count = 0
+            while pet_hp > 0 and boss_hp > 0 and turn_count < 50: # 무한 루프 방지를 위해 최대 턴 수 제한
+                turn_count += 1
+                await asyncio.sleep(2.5)
 
-                # 펫의 턴
-                pet_damage = max(1, pet_attack - boss_defense)
-                boss_hp -= pet_damage
-                total_damage_dealt += pet_damage
-                combat_logs.append(f"🔥 **{pet['nickname']}**이(가) `{pet_damage}`의 피해를 입혔습니다!")
-                await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
-                
-                if boss_hp <= 0:
-                    break
-                
-                await asyncio.sleep(2)
-                
-                # 보스의 턴
-                boss_damage = max(1, boss_attack - pet_defense)
-                pet_hp -= boss_damage
-                combat_logs.append(f"💧 **{boss['name']}**이(가) `{boss_damage}`의 피해를 입혔습니다.")
-                await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
+                # 선제공격 결정 (스피드 기반)
+                pet_first = pet_speed > boss_speed
 
-            # 4. 전투 종료 처리
+                # 턴 진행
+                if pet_first:
+                    # 펫의 턴
+                    if pet_hp > 0:
+                        # 피해량 계산 (방어력에 따른 피해 감소 적용)
+                        damage_reduction = boss_defense / (boss_defense + 200) # 방어력이 높을수록 1에 가까워짐
+                        base_damage = pet_attack * random.uniform(0.9, 1.1)
+                        pet_damage = max(1, int(base_damage * (1 - damage_reduction)))
+                        
+                        boss_hp -= pet_damage
+                        total_damage_dealt += pet_damage
+                        combat_logs.append(f"🔥 **{pet['nickname']}**이(가) `{pet_damage}`의 피해를 입혔습니다!")
+                        await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
+                        if boss_hp <= 0: break
+                    
+                    # 보스의 턴
+                    if boss_hp > 0:
+                        damage_reduction = pet_defense / (pet_defense + 200)
+                        base_damage = boss_attack * random.uniform(0.9, 1.1)
+                        boss_damage = max(1, int(base_damage * (1 - damage_reduction)))
+
+                        # 스피드 기반 회피 로직
+                        speed_diff = pet_speed - boss_speed
+                        dodge_chance = min(0.3, max(0, speed_diff / 100)) # 스피드 차이가 100일때 회피율 30% (최대)
+                        if random.random() < dodge_chance:
+                            combat_logs.append(f"💨 **{pet['nickname']}**이(가) 보스의 공격을 회피했습니다!")
+                        else:
+                            pet_hp -= boss_damage
+                            combat_logs.append(f"💧 **{boss['name']}**이(가) `{boss_damage}`의 피해를 입혔습니다.")
+                        
+                        await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
+                        if pet_hp <= 0: break
+                
+                else: # 보스 선제 공격
+                    # 보스의 턴
+                    if boss_hp > 0:
+                        damage_reduction = pet_defense / (pet_defense + 200)
+                        base_damage = boss_attack * random.uniform(0.9, 1.1)
+                        boss_damage = max(1, int(base_damage * (1 - damage_reduction)))
+
+                        speed_diff = pet_speed - boss_speed
+                        dodge_chance = min(0.3, max(0, speed_diff / 100))
+                        if random.random() < dodge_chance:
+                            combat_logs.append(f"💨 **{pet['nickname']}**이(가) 보스의 공격을 회피했습니다!")
+                        else:
+                            pet_hp -= boss_damage
+                            combat_logs.append(f"💧 **{boss['name']}**이(가) `{boss_damage}`의 피해를 입혔습니다.")
+
+                        await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
+                        if pet_hp <= 0: break
+
+                    # 펫의 턴
+                    if pet_hp > 0:
+                        damage_reduction = boss_defense / (boss_defense + 200)
+                        base_damage = pet_attack * random.uniform(0.9, 1.1)
+                        pet_damage = max(1, int(base_damage * (1 - damage_reduction)))
+                        
+                        boss_hp -= pet_damage
+                        total_damage_dealt += pet_damage
+                        combat_logs.append(f"🔥 **{pet['nickname']}**이(가) `{pet_damage}`의 피해를 입혔습니다!")
+                        await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
+                        if boss_hp <= 0: break
+
+            # 4. 전투 종료 처리 (이하 로직은 기존과 동일)
             combat_logs.append("---")
             if boss_hp <= 0:
                 combat_logs.append(f"🎉 **{boss['name']}**을(를) 쓰러뜨렸습니다!")
@@ -304,17 +358,15 @@ class BossRaid(commands.Cog):
             # 5. DB 업데이트
             final_boss_hp = max(0, raid_data['current_hp'] - total_damage_dealt)
             
-            # 최신 전투 기록 생성 및 DB 업데이트
             new_log_entry = f"`[{datetime.now(KST).strftime('%H:%M')}]` ⚔️ **{user.display_name}** 님이 `{total_damage_dealt:,}`의 피해를 입혔습니다. (남은 HP: `{final_boss_hp:,}`)"
             recent_logs = raid_data.get('recent_logs', [])
             recent_logs.insert(0, new_log_entry)
             
             await supabase.table('boss_raids').update({
                 'current_hp': final_boss_hp,
-                'recent_logs': recent_logs[:10] # 최신 10개만 저장
+                'recent_logs': recent_logs[:10]
             }).eq('id', raid_id).execute()
 
-            # 참가자 정보 업데이트 (없으면 생성)
             await supabase.rpc('upsert_boss_participant', {
                 'p_raid_id': raid_id,
                 'p_user_id': user.id,
@@ -322,8 +374,7 @@ class BossRaid(commands.Cog):
                 'p_damage_to_add': total_damage_dealt
             })
             
-            # 보스 처치 시 로직
-            if final_boss_hp <= 0:
+            if final_boss_hp <= 0 and raid_data['status'] == 'active':
                  await self.handle_boss_defeat(interaction.channel, raid_id)
 
         except Exception as e:
@@ -331,7 +382,6 @@ class BossRaid(commands.Cog):
             if combat_message:
                 await combat_message.edit(content="전투 중 오류가 발생했습니다.", embed=None, view=None)
         finally:
-            # 6. 마무리
             if combat_message:
                 await asyncio.sleep(10)
                 try:
@@ -344,14 +394,30 @@ class BossRaid(commands.Cog):
         embed = discord.Embed(title=f"⚔️ {boss['name']}와(과)의 전투", color=0xC27C0E)
         embed.set_author(name=f"{user.display_name}님의 도전", icon_url=user.display_avatar.url if user.display_avatar else None)
         
+        # 펫 정보 필드 - 모든 스탯 표시
+        pet_stats_text = (
+            f"❤️ **HP:** `{max(0, pet_hp)} / {pet['current_hp']}`\n"
+            f"⚔️ **공격력:** `{pet['current_attack']}`\n"
+            f"🛡️ **방어력:** `{pet['current_defense']}`\n"
+            f"💨 **스피드:** `{pet['current_speed']}`"
+        )
         embed.add_field(
             name=f"내 펫: {pet['nickname']} (Lv.{pet['level']})",
-            value=f"❤️ 체력: `{max(0, pet_hp)} / {pet['current_hp']}`",
+            value=pet_stats_text,
             inline=True
+        )
+        
+        # 보스 정보 필드 - 모든 스탯 표시
+        boss_speed = int(boss['attack'] * 0.5) # 예시 스피드
+        boss_stats_text = (
+            f"❤️ **HP:** `{max(0, boss_hp):,} / {boss['max_hp']:,}`\n"
+            f"⚔️ **공격력:** `{boss['attack']}`\n"
+            f"🛡️ **방어력:** `{boss['defense']}`\n"
+            f"💨 **스피드:** `{boss_speed}`"
         )
         embed.add_field(
             name=f"보스: {boss['name']}",
-            value=f"❤️ 체력: `{max(0, boss_hp):,} / {boss['max_hp']:,}`",
+            value=boss_stats_text,
             inline=True
         )
         
