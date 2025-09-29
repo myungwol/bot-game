@@ -88,6 +88,12 @@ class ItemUsageView(ui.View):
 
             # 2-1. 획득한 재화를 DB에 실제로 반영합니다.
             db_tasks = []
+
+            # ▼▼▼▼▼ 핵심 추가 ▼▼▼▼▼
+            # 사용한 보물 상자 아이템을 인벤토리에서 1개 차감합니다.
+            db_tasks.append(update_inventory(self.user.id, item_name, -1))
+            # ▲▲▲▲▲ 핵심 추가 ▲▲▲▲▲
+
             if coins > 0:
                 db_tasks.append(update_wallet(self.user, coins))
             if xp > 0:
