@@ -536,8 +536,197 @@ class BossRaid(commands.Cog):
         await self.distribute_rewards(channel, raid_id, boss_name)
 
     async def handle_ranking(self, interaction: discord.Interaction, boss_type: str):
-        await interaction.response.send_message(f"[{boss_type}] 랭킹 보기 기능은 현재 개발 중입니다.", ephemeral=True)
+        """'현재 랭킹' 버튼 클릭을 처리하는 로직"""
+        raid_res = await supabase.table('boss_raids').select('id, bosses(name)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
+        if not raid_res.data:
+            await interaction.response.send_message("❌ 현재 조회할 수 있는 랭킹 정보가 없습니다.", ephemeral=True)
+            return
+        
+        raid_id = raid_res.data['id']
+        ranking_view = RankingView(self, raid_id, interaction.user.id)
+        await ranking_view.start(interaction)
 
+    async def handle_boss_defeat(self, channel: discord.TextChannel, raid_id: int):
+        """보스 처치 시 공지 및 보상 지급 로직"""
+        
+        # 1. 레이드 상태를 'defeated'로 변경 (중복 처리 방지)
+        raid_update_res = await supabase.table('boss_raids').update({
+            'status': 'defeated',
+            'defeat_time': datetime.now(timezone.utc).isoformat()
+        }).eq('id', raid_id).eq('status', 'active').select('*, bosses(*)').single().execute()
+        
+        if not raid_update_res.data:
+            logger.warning(f"Raid ID {raid_id}는 이미 처치되었거나 활성 상태가 아닙니다. 보상 지급을 건너뜁니다.")
+            return
+
+        raid_data = raid_update_res.data
+        boss_name = raid_data['bosses']['name']
+        
+        # 2. 보스 채널에 처치 공지 (24시간 후 삭제)
+        defeat_embed = discord.Embed(
+            title=f"🎉 {boss_name} 처치 성공!",
+            description="용감한 모험가들의 활약으로 보스를 물리쳤습니다!\n\n참가자들에게 곧 보상이 지급되며, 최종 랭킹이 공지될 예정입니다...",
+            color=0x2ECC71
+        )
+        await channel.send(embed=defeat_embed, delete_after=86400)
+        
+        # 3. 보상 지급 로직 호출
+        await self.distribute_rewards(channel, raid_id, boss_name)
+
+    async def distribute_rewards(self, channel: discord.TextChannel, raid_id: int, boss_name: str):
+        """보상 지급 및 최종 랭킹을 공지합니다."""
+        try:
+            # 1. 모든 참가자 정보를 피해량 순으로 가져옵니다.
+            part_res = await supabase.table('boss_participants').select('user_id, total_damage_dealt, pets(nickname)', count='exact').eq('raid_id', raid_id).order('total_damage_dealt', desc=True).execute()
+
+            if not part_res.data:
+                logger.info(f"Raid ID {raid_id}에 참가자가 없어 보상 지급을 건너뜁니다.")
+                return
+
+            participants = part_res.data
+            total_participants = part_res.count or 0
+            
+            # 2. 보상 아이템 결정
+            # (향후 DB에서 가져오도록 수정 가능)
+            base_reward_item = "주간 보스 보물 상자" if "주간" in boss_name else "월간 보스 보물 상자"
+            rare_reward_items = ["각성의 코어", "초월의 핵"]
+            
+            top_50_percent_count = (total_participants + 1) // 2
+
+            # 3. 보상 지급 DB 작업 준비
+            db_tasks = []
+            reward_summary = {} # 유저별 보상 요약
+
+            for i, participant in enumerate(participants):
+                user_id = participant['user_id']
+                reward_summary[user_id] = [base_reward_item]
+                
+                # 기본 보상 지급
+                db_tasks.append(update_inventory(user_id, base_reward_item, 1))
+
+                # 상위 50% 랭커 추가 보상 (5% 확률)
+                if i < top_50_percent_count:
+                    if random.random() < 0.05:
+                        rare_reward = random.choice(rare_reward_items)
+                        db_tasks.append(update_inventory(user_id, rare_reward, 1))
+                        reward_summary[user_id].append(rare_reward)
+            
+            # 4. DB 작업 실행
+            await asyncio.gather(*db_tasks)
+            logger.info(f"Raid ID {raid_id}의 보상 지급 DB 작업 {len(db_tasks)}개를 완료했습니다.")
+            
+            # 5. 최종 랭킹 및 보상 공지
+            log_channel_id = get_id(COMBAT_LOG_CHANNEL_KEY)
+            if not log_channel_id or not (log_channel := self.bot.get_channel(log_channel_id)):
+                log_channel = channel # 로그 채널이 없으면 보스 채널에 공지
+
+            final_embed = discord.Embed(title=f"🏆 {boss_name} 최종 랭킹 및 보상", color=0x5865F2)
+            
+            rank_list = []
+            for i, data in enumerate(participants[:10]): # 상위 10명만 표시
+                rank = i + 1
+                member = self.bot.get_guild(channel.guild.id).get_member(data['user_id'])
+                user_name = member.display_name if member else f"ID:{data['user_id']}"
+                damage = data['total_damage_dealt']
+                rewards = ", ".join(reward_summary.get(data['user_id'], []))
+                
+                line = f"`{rank}위.` **{user_name}** - `{damage:,}` DMG\n> 🎁 보상: {rewards}"
+                rank_list.append(line)
+
+            final_embed.description = "\n".join(rank_list)
+            final_embed.set_footer(text=f"총 {total_participants}명의 참가자에게 보상이 지급되었습니다.")
+            
+            await log_channel.send(embed=final_embed)
+
+        except Exception as e:
+            logger.error(f"보상 지급 중 오류 발생 (Raid ID: {raid_id}): {e}", exc_info=True)
+            await channel.send("보상을 지급하는 중 오류가 발생했습니다. 관리자에게 문의해주세요.")
+
+# cogs/games/boss_raid.py 파일 하단, setup 함수 위에 추가
+
+class RankingView(ui.View):
+    """
+    보스 랭킹을 보여주고 페이지를 넘길 수 있는 View입니다.
+    """
+    def __init__(self, cog_instance: 'BossRaid', raid_id: int, user_id: int):
+        super().__init__(timeout=180)
+        self.cog = cog_instance
+        self.raid_id = raid_id
+        self.user_id = user_id # 이 View를 연 사람의 ID
+        self.current_page = 0
+        self.users_per_page = 10
+        self.total_pages = 1
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # View를 연 사람만 버튼을 누를 수 있도록 합니다.
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("랭킹을 조회한 본인만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
+            return False
+        return True
+
+    async def start(self, interaction: discord.Interaction):
+        """View를 시작하고 첫 페이지를 전송합니다."""
+        embed = await self.build_ranking_embed()
+        self.update_buttons()
+        await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+
+    async def update_view(self, interaction: discord.Interaction):
+        """버튼 클릭 시 View와 임베드를 업데이트합니다."""
+        embed = await self.build_ranking_embed()
+        self.update_buttons()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    def update_buttons(self):
+        # '이전'과 '다음' 버튼의 활성화/비활성화 상태를 업데이트합니다.
+        prev_button = discord.utils.get(self.children, custom_id="prev_page")
+        next_button = discord.utils.get(self.children, custom_id="next_page")
+        if prev_button:
+            prev_button.disabled = self.current_page == 0
+        if next_button:
+            next_button.disabled = self.current_page >= self.total_pages - 1
+
+    async def build_ranking_embed(self) -> discord.Embed:
+        """현재 페이지에 맞는 랭킹 임베드를 생성합니다."""
+        offset = self.current_page * self.users_per_page
+        
+        # 참가자 수와 해당 페이지의 랭킹 데이터를 동시에 가져옵니다.
+        count_res = await supabase.table('boss_participants').select('id', count='exact').eq('raid_id', self.raid_id).execute()
+        total_participants = count_res.count or 0
+        self.total_pages = max(1, (total_participants + self.users_per_page - 1) // self.users_per_page)
+
+        rank_res = await supabase.table('boss_participants').select('user_id, pet_id, total_damage_dealt, pets(nickname)').eq('raid_id', self.raid_id).order('total_damage_dealt', desc=True).range(offset, offset + self.users_per_page - 1).execute()
+        
+        embed = discord.Embed(title="🏆 피해량 랭킹", color=0xFFD700)
+        
+        if not rank_res.data:
+            embed.description = "아직 랭킹 정보가 없습니다."
+        else:
+            rank_list = []
+            for i, data in enumerate(rank_res.data):
+                rank = offset + i + 1
+                member = self.cog.bot.get_guild(self.user_id).get_member(data['user_id']) # user_id는 int여야 함
+                user_name = member.display_name if member else f"ID:{data['user_id']}"
+                pet_name = data['pets']['nickname'] if data.get('pets') else "알 수 없는 펫"
+                damage = data['total_damage_dealt']
+                
+                line = f"`{rank}위.` **{user_name}** - `{pet_name}`: `{damage:,}`"
+                if rank <= math.ceil(total_participants * 0.5):
+                    line += " 🌟" # 상위 50% 랭커 표시
+                rank_list.append(line)
+            embed.description = "\n".join(rank_list)
+
+        embed.set_footer(text=f"페이지 {self.current_page + 1} / {self.total_pages} (🌟: 상위 50% 보상 대상)")
+        return embed
+
+    @ui.button(label="◀ 이전", style=discord.ButtonStyle.secondary, custom_id="prev_page")
+    async def prev_page(self, interaction: discord.Interaction, button: ui.Button):
+        self.current_page -= 1
+        await self.update_view(interaction)
+
+    @ui.button(label="▶ 다음", style=discord.ButtonStyle.secondary, custom_id="next_page")
+    async def next_page(self, interaction: discord.Interaction, button: ui.Button):
+        self.current_page += 1
+        await self.update_view(interaction)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(BossRaid(bot))
