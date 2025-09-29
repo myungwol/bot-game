@@ -52,8 +52,6 @@ class ItemUsageView(ui.View):
         except discord.Forbidden: logger.error(f"경고 역할 업데이트 실패: {member.display_name}님의 역할을 변경할 권한이 없습니다.")
         except Exception as e: logger.error(f"경고 역할 업데이트 중 오류: {e}", exc_info=True)
         
-    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
-    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def on_item_select(self, interaction: discord.Interaction):
         selected_item_key = interaction.data["values"][0]
         usable_items_config = get_config("USABLE_ITEMS", {})
@@ -72,10 +70,11 @@ class ItemUsageView(ui.View):
 
         item_type = item_info.get("type")
 
+        # --- 보물 상자 열기 로직 강화 ---
         if item_type == "open_chest":
             await interaction.response.defer()
             
-            # 1. 이제 DB 함수가 복구 로직까지 포함하여 모든 것을 처리합니다.
+            # 1. 수정된 open_boss_chest 함수를 호출합니다.
             chest_contents = await open_boss_chest(self.user.id, item_name)
             
             if not chest_contents:
@@ -87,6 +86,24 @@ class ItemUsageView(ui.View):
             xp = chest_contents.get("xp", 0)
             items = chest_contents.get("items", {})
 
+            # 2-1. 획득한 재화를 DB에 실제로 반영합니다.
+            db_tasks = []
+            if coins > 0:
+                db_tasks.append(update_wallet(self.user, coins))
+            if xp > 0:
+                # 펫 경험치 추가 RPC 호출
+                db_tasks.append(supabase.rpc('add_xp_to_pet', {'p_user_id': self.user.id, 'p_xp_to_add': xp}).execute())
+            for item, qty in items.items():
+                db_tasks.append(update_inventory(self.user.id, item, qty))
+            
+            # DB 작업 실행
+            results = await asyncio.gather(*db_tasks, return_exceptions=True)
+            for res in results:
+                if isinstance(res, Exception):
+                    logger.error(f"보물상자 보상 지급 중 DB 오류 발생: {res}", exc_info=True)
+                    # 여기서 사용자에게 오류 메시지를 보내는 것을 고려할 수 있습니다.
+                    
+            # 2-2. 결과 임베드를 생성합니다.
             reward_lines = []
             if coins > 0: reward_lines.append(f"🪙 **코인**: `{coins:,}`")
             if xp > 0: reward_lines.append(f"✨ **펫 경험치**: `{xp:,}`")
@@ -102,12 +119,12 @@ class ItemUsageView(ui.View):
             )
             await interaction.followup.send(embed=result_embed, ephemeral=True)
             
-            # 3. 펫 레벨업/진화 확인 요청을 DB에 보냅니다 (EconomyCore가 처리)
-            #    이 방식은 봇이 재시작되어도 요청이 유실되지 않아 더 안정적입니다.
+            # 3. 펫 레벨업/진화 확인 요청을 DB에 보냅니다.
             if xp > 0:
                 await save_config_to_db(f"pet_levelup_request_{self.user.id}", {"xp_added": xp, "timestamp": time.time()})
                 await save_config_to_db(f"pet_evolution_check_request_{self.user.id}", time.time())
             
+            # 4. 프로필 UI를 새로고침하여 상자가 사라진 것을 반영합니다.
             return await self.on_back(interaction, reload_data=True)
         if item_type == "consume_with_reason":
             if selected_item_key == "role_item_event_priority":
