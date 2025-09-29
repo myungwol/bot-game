@@ -443,15 +443,15 @@ async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
 @supabase_retry_handler()
 async def add_xp_to_pet_db(user_id: int, xp_to_add: int) -> Optional[List[Dict]]:
     """
-    펫에게 경험치를 추가하는 DB 함수를 안전하게 호출합니다.
-    user_id를 문자열로 변환하여 함수 오버로딩 모호성을 해결합니다.
+    [수정됨] 펫에게 경험치를 추가하는 DB 함수를 안전하게 호출합니다.
+    정확한 함수 이름('add_xp_to_user_and_pet')을 사용하고, user_id를 문자열로 전달합니다.
     """
     if xp_to_add <= 0:
         return None
     try:
-        # 함수 시그니처를 명시하여 DB가 정확한 함수를 찾도록 강제합니다.
-        res = await supabase.rpc('add_xp_to_pet(p_user_id, p_xp_to_add)', {
-            'p_user_id': str(user_id),
+        # 오류 로그의 힌트에 따라 정확한 함수 이름으로 변경합니다.
+        res = await supabase.rpc('add_xp_to_user_and_pet', {
+            'p_user_id': str(user_id), 
             'p_xp_to_add': xp_to_add
         }).execute()
         return res.data if res and hasattr(res, 'data') else None
