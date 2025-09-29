@@ -3,12 +3,12 @@ import os
 import asyncio
 import logging
 import time
+import json
+import discord
 from functools import wraps
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Callable, Any, List, Optional
 from collections import defaultdict
-
-import discord
 from supabase import create_client, AsyncClient
 from postgrest.exceptions import APIError
 
@@ -340,6 +340,30 @@ async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
         logger.error(f"전체 유저 통계 VIEW 조회 중 오류가 발생했습니다: {e}")
         return {}
 
+# --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+@supabase_retry_handler()
+async def log_chest_reward(user_id: int, chest_type: str, contents: Dict[str, Any]):
+    """
+    유저가 획득한 보물 상자의 내용물을 DB에 기록합니다.
+    """
+    await supabase.table('user_chests').insert({
+        "user_id": user_id,
+        "chest_type": chest_type,
+        "contents": contents
+    }).execute()
+
+@supabase_retry_handler()
+async def open_boss_chest(user_id: int, chest_type: str) -> Optional[Dict[str, Any]]:
+    """
+    DB 함수를 호출하여 상자를 열고 내용물을 가져옵니다.
+    """
+    res = await supabase.rpc('open_boss_chest', {
+        'p_user_id': user_id,
+        'p_chest_type': chest_type
+    }).execute()
+    return res.data if res and res.data else None
+# --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+
 @supabase_retry_handler()
 async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
     response = await supabase.table('farms').select('*, farm_plots(*)').eq('user_id', str(user_id)).maybe_single().execute()
@@ -485,3 +509,4 @@ async def claim_and_end_exploration(exploration_id: int, pet_id: int) -> bool:
     except Exception as e:
         logger.error(f"탐사 보상 수령 처리(ID: {exploration_id}) 중 DB 오류: {e}", exc_info=True)
         return False
+
