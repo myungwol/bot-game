@@ -99,7 +99,6 @@ class BossRaid(commands.Cog):
     async def boss_reset_loop(self):
         now_kst = datetime.now(KST)
 
-        # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
         if now_kst.weekday() == 0 and now_kst.hour == 0:
             active_weekly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'weekly').limit(1).execute()
             if not (active_weekly_raid_res and active_weekly_raid_res.data):
@@ -111,7 +110,6 @@ class BossRaid(commands.Cog):
             if not (active_monthly_raid_res and active_monthly_raid_res.data):
                 logger.info("[BossRaid] 새로운 월간 보스를 생성합니다.")
                 await self.create_new_raid('monthly', force=True)
-        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
     
     @boss_reset_loop.before_loop
     async def before_boss_reset_loop(self):
@@ -257,10 +255,8 @@ class BossRaid(commands.Cog):
             await interaction.response.send_message("❌ 다른 유저가 전투 중입니다. 잠시 후 다시 시도해주세요.", ephemeral=True, delete_after=5)
             return
 
-        # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
         raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', boss_type).limit(1).execute()
         if not (raid_res and raid_res.data):
-        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
             await interaction.response.send_message("❌ 현재 도전할 수 있는 보스가 없습니다.", ephemeral=True)
             return
         
@@ -410,16 +406,32 @@ class BossRaid(commands.Cog):
         embed.add_field(name="--- 전투 기록 ---", value=log_text, inline=False)
         return embed
 
+    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def handle_boss_defeat(self, channel: discord.TextChannel, raid_id: int):
-        raid_update_res = await supabase.table('boss_raids').update({'status': 'defeated', 'defeat_time': datetime.now(timezone.utc).isoformat()}).eq('id', raid_id).eq('status', 'active').select('*, bosses(*)').single().execute()
-        if not raid_update_res.data:
+        # 1. 먼저 보스 정보를 업데이트하고, 그 결과를 가져옵니다.
+        update_res = await supabase.table('boss_raids').update({
+            'status': 'defeated',
+            'defeat_time': datetime.now(timezone.utc).isoformat()
+        }).eq('id', raid_id).eq('status', 'active').execute()
+        
+        # 업데이트가 성공했는지 (즉, 1개의 행이 변경되었는지) 확인합니다.
+        if not (update_res and update_res.data):
             logger.warning(f"Raid ID {raid_id}는 이미 처치되었거나 활성 상태가 아닙니다. 보상 지급을 건너뜁니다.")
             return
-        raid_data = raid_update_res.data
+
+        # 2. 업데이트가 성공했다면, 이제 전체 정보를 조회합니다.
+        select_res = await supabase.table('boss_raids').select('*, bosses(*)').eq('id', raid_id).single().execute()
+        
+        if not select_res.data:
+            logger.error(f"보스 처치 후 Raid ID {raid_id} 정보를 다시 조회하는 데 실패했습니다.")
+            return
+            
+        raid_data = select_res.data
         boss_name = raid_data['bosses']['name']
         defeat_embed = discord.Embed(title=f"🎉 {boss_name} 처치 성공!", description="용감한 모험가들의 활약으로 보스를 물리쳤습니다!\n\n참가자들에게 곧 보상이 지급되며, 최종 랭킹이 공지될 예정입니다...", color=0x2ECC71)
         await channel.send(embed=defeat_embed, delete_after=86400)
         await self.distribute_rewards(channel, raid_id, boss_name)
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     async def distribute_rewards(self, channel: discord.TextChannel, raid_id: int, boss_name: str):
         try:
