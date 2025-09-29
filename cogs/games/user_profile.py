@@ -15,7 +15,7 @@ from utils.database import (
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
     get_item_database, get_config, get_string, BARE_HANDS,
     supabase, get_farm_data, expand_farm_db, update_inventory, save_config_to_db,
-    open_boss_chest, update_wallet
+    open_boss_chest, update_wallet, add_xp_to_pet_db # <--- add_xp_to_pet_db 임포트 추가
 )
 import time # time 모듈 import 추가
 from utils.helpers import format_embed_from_db
@@ -91,7 +91,8 @@ class ItemUsageView(ui.View):
             if coins > 0:
                 db_tasks.append(update_wallet(self.user, coins))
             if xp > 0:
-                db_tasks.append(supabase.rpc('add_xp_to_pet', {'p_user_id': str(self.user.id), 'p_xp_to_add': xp}).execute())
+                # 새로 만든 헬퍼 함수를 사용하여 안전하게 펫 경험치 추가
+                db_tasks.append(add_xp_to_pet_db(self.user.id, xp))
             for item, qty in items.items():
                 db_tasks.append(update_inventory(self.user.id, item, qty))
             
