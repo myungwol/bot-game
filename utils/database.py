@@ -357,15 +357,18 @@ async def open_boss_chest(user_id: int, chest_type: str) -> Optional[Dict[str, A
     """
     DB 함수를 호출하여 상자를 열고 내용물을 가져옵니다.
     """
-    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
-    # 원인: 파이썬에서 보낸 매개변수 이름(p_user_id)과 DB 함수가 받는 이름(p_user_id_bigint)이 달랐습니다.
-    # 해결: 파이썬에서 보내는 매개변수 이름을 DB 함수와 일치시킵니다.
-    res = await supabase.rpc('open_boss_chest', {
-        'p_user_id_bigint': user_id,
-        'p_chest_type': chest_type
-    }).execute()
-    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
-    return res.data if res and res.data else None
+    try:
+        # 원인: DB 함수가 이제 user_id를 text 타입으로 받습니다.
+        # 해결: user_id를 str()으로 감싸 문자열로 변환하여 전달합니다.
+        res = await supabase.rpc('open_boss_chest', {
+            'p_user_id_text': str(user_id),
+            'p_chest_type': chest_type
+        }).execute()
+        return res.data if res and res.data else None
+    except Exception as e:
+        # 요청하신 대로, 오류 발생 시 더 자세한 로그를 남깁니다.
+        logger.error(f"open_boss_chest 함수 실행 중 오류 발생! user_id: {user_id}, chest_type: {chest_type}", exc_info=True)
+        return None
 
 @supabase_retry_handler()
 async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
