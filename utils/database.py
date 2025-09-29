@@ -352,23 +352,43 @@ async def log_chest_reward(user_id: int, chest_type: str, contents: Dict[str, An
         "contents": contents
     }).execute()
 
+
 # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
 @supabase_retry_handler()
 async def open_boss_chest(user_id: int, chest_type: str) -> Optional[Dict[str, Any]]:
     """
-    DB 함수를 호출하여 상자를 열고 내용물을 가져옵니다.
+    [수정됨] DB 함수 대신 Python에서 직접 상자를 열고 내용물을 처리합니다.
+    1. 유저가 해당 타입의 상자를 가지고 있는지 확인합니다.
+    2. 상자가 있다면, 내용물을 가져오고 DB에서 해당 상자 기록을 삭제합니다. (트랜잭션 효과)
+    3. 내용물을 반환합니다.
     """
     try:
-        # 데이터베이스 함수 힌트에 따라, p_user_id_text 파라미터에 문자열 타입으로 user_id를 전달합니다.
-        res = await supabase.rpc('open_boss_chest', {
-            'p_user_id_text': str(user_id),
-            'p_chest_type': chest_type
-        }).execute()
-        return res.data if res and res.data else None
+        # 1. 유저가 열 수 있는 해당 타입의 상자가 있는지 확인하고 가져옵니다.
+        chest_res = await supabase.table('user_chests').select('*').eq('user_id', user_id).eq('chest_type', chest_type).limit(1).maybe_single().execute()
+
+        if not (chest_res and chest_res.data):
+            logger.warning(f"상자 열기 시도: 유저(ID:{user_id})가 '{chest_type}'을(를) 가지고 있지 않습니다.")
+            return None
+
+        chest_to_open = chest_res.data
+        chest_id = chest_to_open['id']
+        contents = chest_to_open.get('contents')
+        
+        # 2. 내용물을 가져온 후, DB에서 해당 상자 기록을 삭제합니다.
+        await supabase.table('user_chests').delete().eq('id', chest_id).execute()
+        
+        logger.info(f"상자 열기 성공: 유저(ID:{user_id})가 chest_id:{chest_id} ('{chest_type}')를 열었습니다. 내용물: {contents}")
+
+        # 3. 내용물 반환
+        return contents
+
     except Exception as e:
+        # 오류 발생 시 어떤 상자를 열려고 했는지 명확히 로깅합니다.
         logger.error(f"open_boss_chest 함수 실행 중 오류 발생! user_id: {user_id}, chest_type: {chest_type}", exc_info=True)
+        # 실패 시에는 상자가 삭제되지 않으므로, 유저는 아이템을 잃지 않습니다.
         return None
 # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+
 
 @supabase_retry_handler()
 async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
