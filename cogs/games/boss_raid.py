@@ -67,9 +67,6 @@ class BossPanelView(ui.View):
         self.add_item(ranking_button)
 
     async def on_challenge_click(self, interaction: discord.Interaction):
-        # --- ▼▼▼▼▼ 핵심 수정 시작 (버튼 즉시 비활성화) ▼▼▼▼▼ ---
-        # 원인: handle_challenge가 실행되는 동안 유저가 버튼을 다시 누를 수 있었습니다.
-        # 해결: 버튼 콜백에서 즉시 view를 비활성화하고 메시지를 수정한 뒤, 실제 로직을 호출합니다.
         for item in self.children:
             item.disabled = True
         
@@ -78,7 +75,6 @@ class BossPanelView(ui.View):
             challenge_button.label = "🔴 전투 준비 중..."
 
         await interaction.response.edit_message(view=self)
-        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
         await self.cog.handle_challenge(interaction, self.boss_type)
 
     async def on_ranking_click(self, interaction: discord.Interaction):
@@ -168,7 +164,6 @@ class BossRaid(commands.Cog):
             await self.regenerate_panel(boss_type=boss_type)
             await asyncio.sleep(1)
 
-    # --- ▼▼▼▼▼ 핵심 수정 시작 (패널 업데이트 순서 변경) ▼▼▼▼▼ ---
     async def regenerate_panel(self, boss_type: str, channel: Optional[discord.TextChannel] = None):
         if boss_type == 'weekly':
             channel_key = WEEKLY_BOSS_CHANNEL_KEY
@@ -198,18 +193,22 @@ class BossRaid(commands.Cog):
                 logs_message = await channel.fetch_message(logs_message_id)
                 await logs_message.edit(embed=logs_embed)
             else:
-                raise discord.NotFound
+                raise discord.NotFound # ID가 없으면 새로 생성하기 위해 예외 발생
         except discord.NotFound:
-            if info_msg_id := get_id(info_msg_key):
-                try: await (await channel.fetch_message(info_msg_id)).delete()
-                except (discord.NotFound, discord.Forbidden): pass
+            try:
+                # 이전에 있던 패널 메시지를 모두 정리
+                if info_message_id := get_id(info_msg_key):
+                    old_info_msg = await channel.fetch_message(info_message_id)
+                    await old_info_msg.delete()
+            except (discord.NotFound, discord.Forbidden):
+                pass
             
             new_logs_message = await channel.send(embed=logs_embed)
             await save_id_to_db(logs_msg_key, new_logs_message.id)
         except (discord.Forbidden, discord.HTTPException) as e:
             logger.error(f"[{boss_type.upper()}] 전투 기록 패널 메시지 수정/생성 실패: {e}")
 
-        # 2. 정보 패널을 삭제 후 재생성합니다. (채널 하단에 위치)
+        # 2. 정보 패널 삭제 후 재생성 (이 메시지가 항상 최신이 됩니다)
         info_embed = self.build_boss_info_embed(raid_data, boss_type)
         view = BossPanelView(self, boss_type, is_combat_locked, is_defeated, raid_data)
         info_message_id = get_id(info_msg_key)
@@ -225,8 +224,7 @@ class BossRaid(commands.Cog):
             await save_id_to_db(info_msg_key, new_info_message.id)
         except (discord.Forbidden, discord.HTTPException) as e:
             logger.error(f"[{boss_type.upper()}] 정보 패널 메시지 생성 실패: {e}")
-    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
-    
+
     def build_boss_info_embed(self, raid_data: Optional[Dict[str, Any]], boss_type: str) -> discord.Embed:
         if not raid_data:
             return discord.Embed(
@@ -267,14 +265,14 @@ class BossRaid(commands.Cog):
         embed.description = log_text
         return embed
     
+    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def handle_challenge(self, interaction: discord.Interaction, boss_type: str):
-        # --- ▼▼▼▼▼ 핵심 수정 시작 (defer 위치 변경) ▼▼▼▼▼ ---
-        # 원인: 버튼 비활성화 응답보다 늦게 defer가 호출되면 오류가 발생합니다.
-        # 해결: 상호작용의 첫 응답은 항상 defer가 되도록 로직의 가장 위로 올립니다.
-        await interaction.response.defer(ephemeral=True)
-        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+        # 원인: 이 함수에서 defer()가 중복 호출되었습니다.
+        # 해결: defer()를 제거합니다. 첫 응답은 on_challenge_click에서 edit_message()로 이미 처리되었습니다.
+        
         user = interaction.user
         if self.combat_lock.locked():
+            # defer()가 없으므로 followup.send를 사용합니다.
             await interaction.followup.send("❌ 다른 유저가 전투 중입니다. 잠시 후 다시 시도해주세요.", ephemeral=True, delete_after=5)
             return
 
@@ -307,6 +305,7 @@ class BossRaid(commands.Cog):
             finally:
                 self.active_combats.pop(boss_type, None)
         await self.update_all_boss_panels()
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     async def run_combat_simulation(self, interaction: discord.Interaction, user: discord.Member, pet: Dict, raid_id: int, boss_type: str):
         """실시간 턴제 전투를 시뮬레이션하고 UI를 업데이트합니다."""
