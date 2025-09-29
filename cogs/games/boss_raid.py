@@ -66,7 +66,36 @@ class BossPanelView(ui.View):
         ranking_button.callback = self.on_ranking_click
         self.add_item(ranking_button)
 
+    # --- ▼▼▼▼▼ 핵심 수정 시작 (버튼 클릭 로직 변경) ▼▼▼▼▼ ---
     async def on_challenge_click(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        user = interaction.user
+
+        # 1. 모든 조건을 여기서 먼저 확인합니다.
+        if self.cog.combat_lock.locked():
+            await interaction.followup.send("❌ 다른 유저가 전투 중입니다. 잠시 후 다시 시도해주세요.", ephemeral=True, delete_after=5)
+            return
+
+        raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', self.boss_type).limit(1).execute()
+        if not (raid_res and raid_res.data):
+            await interaction.followup.send("❌ 현재 도전할 수 있는 보스가 없습니다.", ephemeral=True)
+            return
+        
+        raid_id = raid_res.data[0]['id']
+        pet = await get_user_pet(user.id)
+        if not pet:
+            await interaction.followup.send("❌ 전투에 참여할 펫이 없습니다.", ephemeral=True)
+            return
+        
+        start_time_utc = get_week_start_utc() if self.boss_type == 'weekly' else get_month_start_utc()
+        part_res = await supabase.table('boss_participants').select('last_fought_at').eq('raid_id', raid_id).eq('user_id', user.id).maybe_single().execute()
+        if part_res and part_res.data and part_res.data.get('last_fought_at'):
+            last_fought_dt = datetime.fromisoformat(part_res.data['last_fought_at'].replace('Z', '+00:00'))
+            if last_fought_dt >= start_time_utc:
+                 await interaction.followup.send(f"❌ 이번 {('주' if self.boss_type == 'weekly' else '달')}에는 이미 보스에게 도전했습니다.", ephemeral=True)
+                 return
+
+        # 2. 모든 조건을 통과했을 때만, 공용 패널의 버튼을 비활성화합니다.
         for item in self.children:
             item.disabled = True
         
@@ -74,8 +103,11 @@ class BossPanelView(ui.View):
         if challenge_button:
             challenge_button.label = "🔴 전투 준비 중..."
 
-        await interaction.response.edit_message(view=self)
+        await interaction.message.edit(view=self)
+        
+        # 3. 실제 전투 로직을 호출합니다.
         await self.cog.handle_challenge(interaction, self.boss_type)
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     async def on_ranking_click(self, interaction: discord.Interaction):
         await self.cog.handle_ranking(interaction, self.boss_type)
@@ -164,7 +196,6 @@ class BossRaid(commands.Cog):
             await self.regenerate_panel(boss_type=boss_type)
             await asyncio.sleep(1)
 
-    # --- ▼▼▼▼▼ 핵심 수정 시작 (패널 업데이트 방식 변경) ▼▼▼▼▼ ---
     async def regenerate_panel(self, boss_type: str, channel: Optional[discord.TextChannel] = None):
         if boss_type == 'weekly':
             channel_key = WEEKLY_BOSS_CHANNEL_KEY
@@ -215,9 +246,8 @@ class BossRaid(commands.Cog):
             new_info_message = await channel.send(embed=info_embed, view=view)
             await save_id_to_db(info_msg_key, new_info_message.id)
         except (discord.Forbidden, discord.HTTPException) as e:
-            logger.error(f"[{boss_type.upper()}] 정보 패널 메시지 수정/생성 실패: {e}")
-    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
-    
+            logger.error(f"[{boss_type.upper()}] 정보 패널 메시지 생성 실패: {e}")
+
     def build_boss_info_embed(self, raid_data: Optional[Dict[str, Any]], boss_type: str) -> discord.Embed:
         if not raid_data:
             return discord.Embed(
@@ -258,34 +288,18 @@ class BossRaid(commands.Cog):
         embed.description = log_text
         return embed
     
+    # --- ▼▼▼▼▼ 핵심 수정 시작 (불필요한 코드 제거) ▼▼▼▼▼ ---
     async def handle_challenge(self, interaction: discord.Interaction, boss_type: str):
+        # on_challenge_click에서 모든 유효성 검사가 끝나고, 버튼이 비활성화된 후 호출됩니다.
         user = interaction.user
         
-        if self.combat_lock.locked():
-            # edit_message로 응답했으므로 followup을 사용해야 합니다.
-            await interaction.followup.send("❌ 다른 유저가 전투 중입니다. 잠시 후 다시 시도해주세요.", ephemeral=True, delete_after=5)
-            return
-
-        raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', boss_type).limit(1).execute()
-        if not (raid_res and raid_res.data):
-            await interaction.followup.send("❌ 현재 도전할 수 있는 보스가 없습니다.", ephemeral=True)
-            return
-        
+        # 유효성 검사가 이미 끝났으므로, 레이드 ID와 펫 정보만 다시 가져옵니다.
+        raid_res = await supabase.table('boss_raids').select('id').eq('status', 'active').eq('bosses.type', boss_type).limit(1).execute()
         raid_id = raid_res.data[0]['id']
         pet = await get_user_pet(user.id)
-        if not pet:
-            await interaction.followup.send("❌ 전투에 참여할 펫이 없습니다.", ephemeral=True)
-            return
-        
-        start_time_utc = get_week_start_utc() if boss_type == 'weekly' else get_month_start_utc()
-        part_res = await supabase.table('boss_participants').select('last_fought_at').eq('raid_id', raid_id).eq('user_id', user.id).maybe_single().execute()
-        if part_res and part_res.data and part_res.data.get('last_fought_at'):
-            last_fought_dt = datetime.fromisoformat(part_res.data['last_fought_at'].replace('Z', '+00:00'))
-            if last_fought_dt >= start_time_utc:
-                 await interaction.followup.send(f"❌ 이번 {('주' if boss_type == 'weekly' else '달')}에는 이미 보스에게 도전했습니다.", ephemeral=True)
-                 return
         
         async with self.combat_lock:
+            # ephemeral=False로 설정하여 다른 사람에게도 보이도록 할 수 있으나, 전투 시작 메시지는 보통 본인에게만 알리는 것이 좋습니다.
             await interaction.followup.send("✅ 전투를 준비합니다... 잠시만 기다려주세요.", ephemeral=True)
             await self.update_all_boss_panels()
             combat_task = asyncio.create_task(self.run_combat_simulation(interaction, user, pet, raid_id, boss_type))
@@ -295,6 +309,7 @@ class BossRaid(commands.Cog):
             finally:
                 self.active_combats.pop(boss_type, None)
         await self.update_all_boss_panels()
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     async def run_combat_simulation(self, interaction: discord.Interaction, user: discord.Member, pet: Dict, raid_id: int, boss_type: str):
         """실시간 턴제 전투를 시뮬레이션하고 UI를 업데이트합니다."""
