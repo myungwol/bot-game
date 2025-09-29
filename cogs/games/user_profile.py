@@ -10,15 +10,14 @@ from typing import Optional, Dict, List, Any
 from datetime import datetime, timezone, timedelta
 from utils.helpers import coerce_item_emoji
 
-# --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
 from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
     get_item_database, get_config, get_string, BARE_HANDS,
     supabase, get_farm_data, expand_farm_db, update_inventory, save_config_to_db,
-    open_boss_chest, update_wallet  # update_wallet을 import 목록에 추가합니다.
+    open_boss_chest, update_wallet
 )
-# --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+import time # time 모듈 import 추가
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
@@ -54,6 +53,7 @@ class ItemUsageView(ui.View):
         except Exception as e: logger.error(f"경고 역할 업데이트 중 오류: {e}", exc_info=True)
         
     # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def on_item_select(self, interaction: discord.Interaction):
         selected_item_key = interaction.data["values"][0]
         usable_items_config = get_config("USABLE_ITEMS", {})
@@ -72,11 +72,10 @@ class ItemUsageView(ui.View):
 
         item_type = item_info.get("type")
 
-        # [수정] 'open_chest' 타입 처리 로직을 DB 함수 호출 방식으로 변경
         if item_type == "open_chest":
             await interaction.response.defer()
             
-            # 1. 이제 DB 함수가 모든 것을 처리하고 결과만 반환합니다.
+            # 1. 이제 DB 함수가 복구 로직까지 포함하여 모든 것을 처리합니다.
             chest_contents = await open_boss_chest(self.user.id, item_name)
             
             if not chest_contents:
@@ -103,7 +102,8 @@ class ItemUsageView(ui.View):
             )
             await interaction.followup.send(embed=result_embed, ephemeral=True)
             
-            # 펫 레벨업/진화 확인 요청을 DB에 보냅니다 (EconomyCore가 처리)
+            # 3. 펫 레벨업/진화 확인 요청을 DB에 보냅니다 (EconomyCore가 처리)
+            #    이 방식은 봇이 재시작되어도 요청이 유실되지 않아 더 안정적입니다.
             if xp > 0:
                 await save_config_to_db(f"pet_levelup_request_{self.user.id}", {"xp_added": xp, "timestamp": time.time()})
                 await save_config_to_db(f"pet_evolution_check_request_{self.user.id}", time.time())
