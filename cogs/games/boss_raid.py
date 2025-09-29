@@ -96,14 +96,12 @@ class BossRaid(commands.Cog):
         now_kst = datetime.now(KST)
 
         if now_kst.weekday() == 0 and now_kst.hour == 0:
-            # ▼▼▼ [핵심 수정] 쿼리 구문 수정 ▼▼▼
             active_weekly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'weekly').maybe_single().execute()
             if not (active_weekly_raid_res and active_weekly_raid_res.data):
                 logger.info("[BossRaid] 새로운 주간 보스를 생성합니다.")
                 await self.create_new_raid('weekly', force=True)
 
         if now_kst.day == 1 and now_kst.hour == 0:
-            # ▼▼▼ [핵심 수정] 쿼리 구문 수정 ▼▼▼
             active_monthly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'monthly').maybe_single().execute()
             if not (active_monthly_raid_res and active_monthly_raid_res.data):
                 logger.info("[BossRaid] 새로운 월간 보스를 생성합니다.")
@@ -154,7 +152,6 @@ class BossRaid(commands.Cog):
             channel_id = get_id(channel_key)
             if not channel_id or not (channel := self.bot.get_channel(channel_id)): return
 
-        # ▼▼▼ [핵심 수정] 쿼리 구문 수정 ▼▼▼
         raid_res = await supabase.table('boss_raids').select('*, bosses!inner(*)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
         raid_data = raid_res.data if raid_res and hasattr(raid_res, 'data') else None
         
@@ -192,7 +189,6 @@ class BossRaid(commands.Cog):
             logger.error(f"[{boss_type.upper()}] 패널 메시지를 수정/생성/고정하는 데 실패했습니다: {e}")
             
     def build_boss_panel_embed(self, raid_data: Dict[str, Any]) -> discord.Embed:
-        # ... (이 함수는 이전 수정으로 이미 안정적이므로 변경 없음) ...
         boss_info = raid_data.get('bosses')
         if not boss_info:
             logger.error(f"레이드 데이터(ID: {raid_data.get('id')})에 연결된 보스 정보(bosses)가 없습니다.")
@@ -217,7 +213,6 @@ class BossRaid(commands.Cog):
             await interaction.response.send_message("❌ 다른 유저가 전투 중입니다. 잠시 후 다시 시도해주세요.", ephemeral=True, delete_after=5)
             return
 
-        # ▼▼▼ [핵심 수정] 쿼리 구문 수정 ▼▼▼
         raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
         if not (raid_res and raid_res.data):
             await interaction.response.send_message("❌ 현재 도전할 수 있는 보스가 없습니다.", ephemeral=True)
@@ -328,23 +323,14 @@ class BossRaid(commands.Cog):
             recent_logs.insert(0, new_log_entry)
             await supabase.table('boss_raids').update({'current_hp': final_boss_hp, 'recent_logs': recent_logs[:10]}).eq('id', raid_id).execute()
 
-            # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
-            # 원인: 존재하지 않는 'upsert_boss_participant' RPC 함수를 호출하고 있었습니다.
-            # 해결: 참가자의 기존 피해량을 먼저 조회(SELECT)하고, 새로운 피해량을 더한 뒤
-            #       결과를 테이블에 업데이트/삽입(UPSERT)하는 로직으로 변경했습니다.
-            #       이 방식은 데이터베이스 함수 없이 동일한 기능을 수행합니다.
-
-            # 1. 이 참가자의 기존 피해량을 가져옵니다.
             part_res = await supabase.table('boss_participants').select('total_damage_dealt').eq('raid_id', raid_id).eq('user_id', user.id).maybe_single().execute()
             
             existing_damage = 0
             if part_res and part_res.data:
                 existing_damage = part_res.data.get('total_damage_dealt', 0)
             
-            # 2. 새로운 총 피해량을 계산합니다.
             new_total_damage = existing_damage + total_damage_dealt
             
-            # 3. 계산된 값으로 테이블을 업데이트하거나 새로 삽입합니다.
             await supabase.table('boss_participants').upsert({
                 'raid_id': raid_id,
                 'user_id': user.id,
@@ -352,7 +338,6 @@ class BossRaid(commands.Cog):
                 'total_damage_dealt': new_total_damage,
                 'last_fought_at': datetime.now(timezone.utc).isoformat()
             }).execute()
-            # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
             
             if final_boss_hp <= 0 and raid_data['status'] == 'active':
                  await self.handle_boss_defeat(interaction.channel, raid_id)
@@ -368,7 +353,6 @@ class BossRaid(commands.Cog):
                 except discord.NotFound: pass
 
     def build_combat_embed(self, user: discord.Member, pet: Dict, boss: Dict, pet_hp: int, boss_hp: int, logs: List[str]) -> discord.Embed:
-        # ... (이전과 동일)
         embed = discord.Embed(title=f"⚔️ {boss['name']}와(과)의 전투", color=0xC27C0E)
         embed.set_author(name=f"{user.display_name}님의 도전", icon_url=user.display_avatar.url if user.display_avatar else None)
         pet_stats_text = (f"❤️ **HP:** `{max(0, pet_hp)} / {pet['current_hp']}`\n" f"⚔️ **공격력:** `{pet['current_attack']}`\n" f"🛡️ **방어력:** `{pet['current_defense']}`\n" f"💨 **스피드:** `{pet['current_speed']}`")
@@ -381,7 +365,6 @@ class BossRaid(commands.Cog):
         return embed
 
     async def handle_boss_defeat(self, channel: discord.TextChannel, raid_id: int):
-        # ... (이전과 동일)
         raid_update_res = await supabase.table('boss_raids').update({'status': 'defeated', 'defeat_time': datetime.now(timezone.utc).isoformat()}).eq('id', raid_id).eq('status', 'active').select('*, bosses(*)').single().execute()
         if not raid_update_res.data:
             logger.warning(f"Raid ID {raid_id}는 이미 처치되었거나 활성 상태가 아닙니다. 보상 지급을 건너뜁니다.")
@@ -393,7 +376,6 @@ class BossRaid(commands.Cog):
         await self.distribute_rewards(channel, raid_id, boss_name)
 
     async def distribute_rewards(self, channel: discord.TextChannel, raid_id: int, boss_name: str):
-        # ... (이전과 동일)
         try:
             part_res = await supabase.table('boss_participants').select('user_id, total_damage_dealt, pets(nickname)', count='exact').eq('raid_id', raid_id).order('total_damage_dealt', desc=True).execute()
             if not part_res.data:
@@ -436,7 +418,6 @@ class BossRaid(commands.Cog):
             await channel.send("보상을 지급하는 중 오류가 발생했습니다. 관리자에게 문의해주세요.")
 
     async def handle_ranking(self, interaction: discord.Interaction, boss_type: str):
-        # ▼▼▼ [핵심 수정] 쿼리 구문 수정 ▼▼▼
         raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type, name)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
         if not (raid_res and raid_res.data):
             await interaction.response.send_message("❌ 현재 조회할 수 있는 랭킹 정보가 없습니다.", ephemeral=True)
@@ -447,7 +428,6 @@ class BossRaid(commands.Cog):
         await ranking_view.start(interaction)
 
 class RankingView(ui.View):
-    # ... (이전과 동일)
     def __init__(self, cog_instance: 'BossRaid', raid_id: int, user_id: int):
         super().__init__(timeout=180)
         self.cog = cog_instance
@@ -474,6 +454,7 @@ class RankingView(ui.View):
         next_button = discord.utils.get(self.children, custom_id="next_page")
         if prev_button: prev_button.disabled = self.current_page == 0
         if next_button: next_button.disabled = self.current_page >= self.total_pages - 1
+    
     async def build_ranking_embed(self) -> discord.Embed:
         offset = self.current_page * self.users_per_page
         count_res = await supabase.table('boss_participants').select('id', count='exact').eq('raid_id', self.raid_id).execute()
@@ -481,25 +462,37 @@ class RankingView(ui.View):
         self.total_pages = max(1, (total_participants + self.users_per_page - 1) // self.users_per_page)
         rank_res = await supabase.table('boss_participants').select('user_id, pet_id, total_damage_dealt, pets(nickname)').eq('raid_id', self.raid_id).order('total_damage_dealt', desc=True).range(offset, offset + self.users_per_page - 1).execute()
         embed = discord.Embed(title="🏆 피해량 랭킹", color=0xFFD700)
+        
         if not rank_res.data:
             embed.description = "아직 랭킹 정보가 없습니다."
         else:
             rank_list = []
-            guild_id = self.cog.bot.get_cog("AdminBridge").guild.id if self.cog.bot.get_cog("AdminBridge") and hasattr(self.cog.bot.get_cog("AdminBridge"), 'guild') else self.user_id # fallback
-            guild = self.cog.bot.get_guild(guild_id)
+            # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+            # 원인: guild 객체를 잘못된 방법으로 가져오고 있었습니다.
+            # 해결: self.user는 이 View를 연 discord.Member 객체이므로, self.user.guild를 통해
+            #       명령어가 사용된 서버(guild) 객체를 직접, 안정적으로 가져옵니다.
+            guild = self.user.guild
+            
             for i, data in enumerate(rank_res.data):
                 rank = offset + i + 1
-                member = guild.get_member(data['user_id']) if guild else None
-                user_name = member.display_name if member else f"ID:{data['user_id']}"
+                user_id_int = data['user_id']
+                member = guild.get_member(user_id_int) if guild else None
+                # 해결: member.display_name 대신 member.mention을 사용하여 유저를 멘션합니다.
+                user_display = member.mention if member else f"ID:{user_id_int}"
                 pet_name = data['pets']['nickname'] if data.get('pets') else "알 수 없는 펫"
                 damage = data['total_damage_dealt']
-                line = f"`{rank}위.` **{user_name}** - `{pet_name}`: `{damage:,}`"
+                
+                line = f"`{rank}위.` {user_display} - `{pet_name}`: `{damage:,}`"
+                # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+
                 if rank <= math.ceil(total_participants * 0.5):
                     line += " 🌟"
                 rank_list.append(line)
             embed.description = "\n".join(rank_list)
+            
         embed.set_footer(text=f"페이지 {self.current_page + 1} / {self.total_pages} (🌟: 상위 50% 보상 대상)")
         return embed
+
     @ui.button(label="◀ 이전", style=discord.ButtonStyle.secondary, custom_id="prev_page")
     async def prev_page(self, interaction: discord.Interaction, button: ui.Button):
         self.current_page -= 1
