@@ -354,38 +354,42 @@ class TradeView(ui.View):
         await interaction.followup.send("거래 취소를 요청했습니다.", ephemeral=True)
         await self._end_trade(cancelled_by=interaction.user)
     async def process_trade(self, interaction: discord.Interaction):
-        # ... (이전과 동일, 변경 없음)
         self.build_components()
         for item in self.children: item.disabled = True
         await self.message.edit(content="**거래 확정! 처리 중...**", view=self, embed=await self.build_embed())
         user1, user2, offer1, offer2 = self.initiator, self.partner, self.offers[self.initiator.id], self.offers[self.partner.id]
+        
+        # ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼
         try:
-            user1_wallet, user1_inv = await asyncio.gather(get_wallet(user1.id), get_inventory(user1))
-            user2_wallet, user2_inv = await asyncio.gather(get_wallet(user2.id), get_inventory(user2))
-            if user1_wallet.get('balance', 0) < offer1['coins']: return await self.fail_trade(f"{user1.mention}님의 코인이 부족합니다.")
-            if user2_wallet.get('balance', 0) < offer2['coins']: return await self.fail_trade(f"{user2.mention}님의 코인이 부족합니다.")
-            for item, qty in offer1['items'].items():
-                if user1_inv.get(item, 0) < qty: return await self.fail_trade(f"{user1.mention}님의 '{item}' 재고가 부족합니다.")
-            for item, qty in offer2['items'].items():
-                if user2_inv.get(item, 0) < qty: return await self.fail_trade(f"{user2.mention}님의 '{item}' 재고가 부족합니다.")
-            
+            # 1. 수수료 계산
             commission_rate = 0.05
             commission = math.ceil((offer1['coins'] + offer2['coins']) * commission_rate)
-            tasks = []
-            user1_coin_change = offer2['coins'] - offer1['coins']
-            user2_coin_change = offer1['coins'] - offer2['coins']
-            if user1_coin_change != 0: tasks.append(update_wallet(user1, int(user1_coin_change)))
-            if user2_coin_change != 0: tasks.append(update_wallet(user2, int(user2_coin_change)))
-            if commission > 0:
-                half_commission = math.ceil(commission / 2)
-                tasks.append(update_wallet(user1, -half_commission))
-                tasks.append(update_wallet(user2, -half_commission))
-            for item, qty in offer1['items'].items(): tasks.extend([update_inventory(user1.id, item, -qty), update_inventory(user2.id, item, qty)])
-            for item, qty in offer2['items'].items(): tasks.extend([update_inventory(user2.id, item, -qty), update_inventory(user1.id, item, qty)])
-            if tasks: await asyncio.gather(*tasks)
+
+            # 2. DB 함수에 전달할 파라미터 준비
+            params = {
+                'p_user1_id': user1.id,
+                'p_user2_id': user2.id,
+                'p_user1_offer_items': json.dumps(offer1['items']),
+                'p_user2_offer_items': json.dumps(offer2['items']),
+                'p_user1_offer_coins': offer1['coins'],
+                'p_user2_offer_coins': offer2['coins'],
+                'p_commission_fee': commission
+            }
+            
+            # 3. 단일 RPC 함수 호출
+            response = await supabase.rpc('execute_trade', params).execute()
+            
+            # 4. 결과 확인
+            result_message = response.data
+            if result_message != '거래 성공':
+                # DB 함수가 실패 메시지를 반환하면, 해당 메시지를 표시하고 거래 실패 처리
+                return await self.fail_trade(result_message)
+
         except Exception as e:
-            logger.error(f"거래 처리 중 예외 발생: {e}", exc_info=True)
+            logger.error(f"거래 처리 RPC 호출 중 예외 발생: {e}", exc_info=True)
             return await self.fail_trade("알 수 없는 오류가 발생했습니다.")
+        # ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲
+
         if self.message:
             log_channel_id = get_id("trade_panel_channel_id")
             if log_channel_id and (log_channel := self.cog.bot.get_channel(log_channel_id)):
