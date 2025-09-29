@@ -99,17 +99,19 @@ class BossRaid(commands.Cog):
     async def boss_reset_loop(self):
         now_kst = datetime.now(KST)
 
+        # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
         if now_kst.weekday() == 0 and now_kst.hour == 0:
-            active_weekly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'weekly').maybe_single().execute()
+            active_weekly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'weekly').limit(1).execute()
             if not (active_weekly_raid_res and active_weekly_raid_res.data):
                 logger.info("[BossRaid] 새로운 주간 보스를 생성합니다.")
                 await self.create_new_raid('weekly', force=True)
 
         if now_kst.day == 1 and now_kst.hour == 0:
-            active_monthly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'monthly').maybe_single().execute()
+            active_monthly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'monthly').limit(1).execute()
             if not (active_monthly_raid_res and active_monthly_raid_res.data):
                 logger.info("[BossRaid] 새로운 월간 보스를 생성합니다.")
                 await self.create_new_raid('monthly', force=True)
+        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
     
     @boss_reset_loop.before_loop
     async def before_boss_reset_loop(self):
@@ -163,8 +165,8 @@ class BossRaid(commands.Cog):
             if not channel_id or not (channel := self.bot.get_channel(channel_id)):
                 return
 
-        raid_res = await supabase.table('boss_raids').select('*, bosses!inner(*)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
-        raid_data = raid_res.data if raid_res and hasattr(raid_res, 'data') else None
+        raid_res = await supabase.table('boss_raids').select('*, bosses!inner(*)').eq('status', 'active').eq('bosses.type', boss_type).limit(1).execute()
+        raid_data = raid_res.data[0] if raid_res and hasattr(raid_res, 'data') and raid_res.data else None
         
         # 1. 전투 기록 패널 생성 또는 업데이트 (이 메시지는 고정됩니다)
         logs_embed = self.build_combat_logs_embed(raid_data, boss_type)
@@ -223,20 +225,16 @@ class BossRaid(commands.Cog):
 
         hp_bar = create_bar(raid_data['current_hp'], boss_info['max_hp'])
         hp_text = f"`{raid_data['current_hp']:,} / {boss_info['max_hp']:,}`\n{hp_bar}"
-        # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
-        # 속성을 제거하고 공격력과 방어력을 줄바꿈하여 표시합니다.
         stats_text = (
-            f"**⚔️ 공격력:** `{boss_info['attack']:,}`\n"
-            f"**🛡️ 방어력:** `{boss_info['defense']:,}`\n"
-            f"**👟 스피드:** `1`"
+            f"**공격력:** `{boss_info['attack']:,}`\n"
+            f"**방어력:** `{boss_info['defense']:,}`"
         )
-        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
         
         embed = discord.Embed(title=f"👑 {boss_info['name']} 현황", color=0xE74C3C)
         if boss_info.get('image_url'):
             embed.set_thumbnail(url=boss_info['image_url'])
         
-        embed.add_field(name="--- 보스 정보 ---", value=f"{stats_text}\n**❤️ 체력:**\n{hp_text}", inline=False)
+        embed.add_field(name="--- 보스 정보 ---", value=f"{stats_text}\n\n**체력:**\n{hp_text}", inline=False)
         embed.set_footer(text="패널은 2분마다 자동으로 업데이트됩니다.")
         return embed
 
@@ -259,12 +257,14 @@ class BossRaid(commands.Cog):
             await interaction.response.send_message("❌ 다른 유저가 전투 중입니다. 잠시 후 다시 시도해주세요.", ephemeral=True, delete_after=5)
             return
 
-        raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
+        # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+        raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', boss_type).limit(1).execute()
         if not (raid_res and raid_res.data):
+        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
             await interaction.response.send_message("❌ 현재 도전할 수 있는 보스가 없습니다.", ephemeral=True)
             return
         
-        raid_id = raid_res.data['id']
+        raid_id = raid_res.data[0]['id']
         pet = await get_user_pet(user.id)
         if not pet:
             await interaction.response.send_message("❌ 전투에 참여할 펫이 없습니다.", ephemeral=True)
@@ -298,11 +298,7 @@ class BossRaid(commands.Cog):
             boss = raid_data['bosses']
             pet_hp, pet_attack, pet_defense, pet_speed = pet.get('current_hp', 100), pet.get('current_attack', 10), pet.get('current_defense', 10), pet.get('current_speed', 10)
             boss_hp, boss_attack, boss_defense = raid_data['current_hp'], boss['attack'], boss['defense']
-            # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
-            # 원인: 보스 속도가 공격력에 비례하여 동적으로 계산되었습니다.
-            # 해결: 보스 속도를 1로 고정합니다.
             boss_speed = 1
-            # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
             combat_logs = [f"**{user.display_name}**님이 **{pet['nickname']}**와(과) 함께 전투를 시작합니다!"]
             total_damage_dealt = 0
             view = BossCombatView()
@@ -407,11 +403,7 @@ class BossRaid(commands.Cog):
         embed.set_author(name=f"{user.display_name}님의 도전", icon_url=user.display_avatar.url if user.display_avatar else None)
         pet_stats_text = (f"❤️ **HP:** `{max(0, pet_hp)} / {pet['current_hp']}`\n" f"⚔️ **공격력:** `{pet['current_attack']}`\n" f"🛡️ **방어력:** `{pet['current_defense']}`\n" f"💨 **스피드:** `{pet['current_speed']}`")
         embed.add_field(name=f"내 펫: {pet['nickname']} (Lv.{pet['level']})", value=pet_stats_text, inline=True)
-        # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
-        # 원인: 보스 속도가 공격력에 비례하여 동적으로 계산되었습니다.
-        # 해결: 보스 속도를 1로 고정합니다. (UI 표시 부분)
         boss_speed = 1
-        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
         boss_stats_text = (f"❤️ **HP:** `{max(0, boss_hp):,} / {boss['max_hp']:,}`\n" f"⚔️ **공격력:** `{boss['attack']}`\n" f"🛡️ **방어력:** `{boss['defense']}`\n" f"💨 **스피드:** `{boss_speed}`")
         embed.add_field(name=f"보스: {boss['name']}", value=boss_stats_text, inline=True)
         log_text = "\n".join(f"> {line}" for line in logs[-10:])
@@ -472,12 +464,14 @@ class BossRaid(commands.Cog):
             await channel.send("보상을 지급하는 중 오류가 발생했습니다. 관리자에게 문의해주세요.")
 
     async def handle_ranking(self, interaction: discord.Interaction, boss_type: str):
-        raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type, name)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
+        # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+        raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type, name)').eq('status', 'active').eq('bosses.type', boss_type).limit(1).execute()
         if not (raid_res and raid_res.data):
+        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
             await interaction.response.send_message("❌ 현재 조회할 수 있는 랭킹 정보가 없습니다.", ephemeral=True)
             return
         
-        raid_id = raid_res.data['id']
+        raid_id = raid_res.data[0]['id']
         ranking_view = RankingView(self, raid_id, interaction.user)
         await ranking_view.start(interaction)
 
