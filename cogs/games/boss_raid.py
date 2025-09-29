@@ -465,48 +465,71 @@ class BossRaid(commands.Cog):
 
     async def distribute_rewards(self, channel: discord.TextChannel, raid_id: int, boss_name: str):
         try:
-            part_res = await supabase.table('boss_participants').select('user_id, total_damage_dealt, pets(nickname)', count='exact').eq('raid_id', raid_id).order('total_damage_dealt', desc=True).execute()
-            if not part_res.data:
+            part_res = await supabase.table('boss_participants').select('user_id, total_damage_dealt').eq('raid_id', raid_id).order('total_damage_dealt', desc=True).execute()
+            if not (part_res and part_res.data):
                 logger.info(f"Raid ID {raid_id}에 참가자가 없어 보상 지급을 건너뜁니다.")
                 return
+
             participants = part_res.data
-            total_participants = part_res.count or 0
-            base_reward_item = "주간 보스 보물 상자" if "주간" in boss_name else "월간 보스 보물 상자"
+            total_participants = len(participants)
+            
+            boss_type = 'weekly' if "주간" in boss_name else 'monthly'
+            reward_tiers = get_config("BOSS_REWARD_TIERS", {}).get(boss_type, [])
+            if not reward_tiers:
+                logger.error(f"'{boss_type}' 보스의 보상 티어 정보를 찾을 수 없습니다.")
+                return
+
+            base_chest_item = "주간 보스 보물 상자" if boss_type == 'weekly' else "월간 보스 보물 상자"
             rare_reward_items = ["각성의 코어", "초월의 핵"]
-            top_50_percent_count = (total_participants + 1) // 2
+            
             db_tasks = []
-            reward_summary = {}
+            reward_summary_for_log = {}
+
             for i, participant in enumerate(participants):
                 user_id = participant['user_id']
-                reward_summary[user_id] = [base_reward_item]
-                db_tasks.append(update_inventory(user_id, base_reward_item, 1))
-                if i < top_50_percent_count and random.random() < 0.05:
-                    rare_reward = random.choice(rare_reward_items)
-                    db_tasks.append(update_inventory(user_id, rare_reward, 1))
-                    reward_summary[user_id].append(rare_reward)
-            await asyncio.gather(*db_tasks)
-            logger.info(f"Raid ID {raid_id}의 보상 지급 DB 작업 {len(db_tasks)}개를 완료했습니다.")
+                rank = i + 1
+                percentile = rank / total_participants
+                
+                # 유저의 등급에 맞는 보상 티어를 찾습니다.
+                user_tier = next((tier for tier in reward_tiers if percentile <= tier['percentile']), reward_tiers[-1])
+                
+                # 티어에 따라 보상 내용물을 결정합니다.
+                coins = random.randint(*user_tier['coins'])
+                xp = random.randint(*user_tier['xp'])
+                
+                rolled_items = {}
+                if random.random() < user_tier['rare_item_chance']:
+                    rare_item = random.choice(rare_reward_items)
+                    rolled_items[rare_item] = 1
+                
+                # 상자 내용물을 JSON으로 구성합니다.
+                chest_contents = {
+                    "coins": coins,
+                    "xp": xp,
+                    "items": rolled_items
+                }
+                
+                # 1. 유저에게 보물 상자 아이템을 지급합니다.
+                db_tasks.append(update_inventory(user_id, base_chest_item, 1))
+                # 2. 이 상자의 내용물을 DB에 기록합니다.
+                db_tasks.append(log_chest_reward(user_id, base_chest_item, chest_contents))
+                
+                # 최종 랭킹 메시지에 표시할 정보를 저장합니다.
+                reward_summary_for_log[user_id] = base_chest_item
 
-            # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
-            # 원인: 최종 랭킹 메시지를 공용 로그 채널에만 보내도록 고정되어 있었습니다.
-            # 해결: 보스 이름에 '주간' 또는 '월간'이 포함되어 있는지 확인하여,
-            #       각 보스 타입에 맞는 채널을 우선적으로 사용하도록 변경합니다.
-            #       만약 해당 채널이 설정되지 않았다면, 예비로 현재 채널(channel)을 사용합니다.
-            
+            # 모든 DB 작업을 한 번에 처리합니다.
+            await asyncio.gather(*db_tasks)
+            logger.info(f"Raid ID {raid_id}의 보상 지급(보물 상자) DB 작업 {len(db_tasks)}개를 완료했습니다.")
+
             target_channel = None
-            if "주간" in boss_name:
+            if boss_type == 'weekly':
                 channel_id = get_id(WEEKLY_BOSS_CHANNEL_KEY)
-                if channel_id:
-                    target_channel = self.bot.get_channel(channel_id)
-            elif "월간" in boss_name:
+                if channel_id: target_channel = self.bot.get_channel(channel_id)
+            else: # monthly
                 channel_id = get_id(MONTHLY_BOSS_CHANNEL_KEY)
-                if channel_id:
-                    target_channel = self.bot.get_channel(channel_id)
+                if channel_id: target_channel = self.bot.get_channel(channel_id)
             
-            # target_channel을 찾지 못했다면, 원래 로직처럼 현재 채널을 사용합니다.
-            if not target_channel:
-                target_channel = channel
-            # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+            if not target_channel: target_channel = channel
             
             final_embed = discord.Embed(title=f"🏆 {boss_name} 최종 랭킹 및 보상", color=0x5865F2)
             rank_list = []
@@ -515,18 +538,19 @@ class BossRaid(commands.Cog):
                 member = self.bot.get_guild(channel.guild.id).get_member(data['user_id'])
                 user_name = member.display_name if member else f"ID:{data['user_id']}"
                 damage = data['total_damage_dealt']
-                rewards = ", ".join(reward_summary.get(data['user_id'], []))
+                # 이제 보상은 항상 보물 상자입니다.
+                rewards = reward_summary_for_log.get(data['user_id'], "알 수 없음")
                 line = f"`{rank}위.` **{user_name}** - `{damage:,}` DMG\n> 🎁 보상: {rewards}"
                 rank_list.append(line)
             final_embed.description = "\n".join(rank_list)
             final_embed.set_footer(text=f"총 {total_participants}명의 참가자에게 보상이 지급되었습니다.")
             
-            # 최종적으로 결정된 target_channel에 메시지를 보냅니다.
             await target_channel.send(embed=final_embed)
 
         except Exception as e:
             logger.error(f"보상 지급 중 오류 발생 (Raid ID: {raid_id}): {e}", exc_info=True)
             await channel.send("보상을 지급하는 중 오류가 발생했습니다. 관리자에게 문의해주세요.")
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     async def handle_ranking(self, interaction: discord.Interaction, boss_type: str):
         raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type, name)').eq('bosses.type', boss_type).order('start_time', desc=True).limit(1).execute()
