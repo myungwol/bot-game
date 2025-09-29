@@ -15,7 +15,8 @@ from utils.database import (
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
     get_item_database, get_config, get_string, BARE_HANDS,
     supabase, get_farm_data, expand_farm_db, update_inventory, save_config_to_db,
-    open_boss_chest, update_wallet, add_xp_to_pet_db # <--- add_xp_to_pet_db 임포트 추가
+    open_boss_chest, update_wallet, add_xp_to_pet_db,
+    clear_user_ability_cache # 💡 clear_user_ability_cache 임포트 추가
 )
 import time # time 모듈 import 추가
 from utils.helpers import format_embed_from_db
@@ -148,10 +149,23 @@ class ItemUsageView(ui.View):
         elif item_type == "job_reset":
             await interaction.response.defer()
             try:
-                await supabase.rpc('reset_user_job_and_abilities', {'p_user_id': self.user.id}).execute(); await update_inventory(self.user.id, item_name, -1); await self.log_item_usage(item_info, f"'{item_name}'을(를) 사용하여 직업을 초기화했습니다.")
-                if handler_cog := self.parent_view.cog.bot.get_cog("JobAndTierHandler"): await handler_cog.trigger_advancement_check(self.user); self.parent_view.status_message = f"✅ 직업이 초기화되었습니다. 곧 전직 안내 스레드가 생성됩니다."
-                else: self.parent_view.status_message = f"✅ 직업이 초기화되었지만, 전직 시스템을 찾을 수 없습니다."
-            except Exception as e: logger.error(f"직업 초기화 처리 중 오류: {e}", exc_info=True); self.parent_view.status_message = "❌ 직업 초기화 중 오류가 발생했습니다."
+                await supabase.rpc('reset_user_job_and_abilities', {'p_user_id': self.user.id}).execute()
+                await update_inventory(self.user.id, item_name, -1)
+                await self.log_item_usage(item_info, f"'{item_name}'을(를) 사용하여 직업을 초기화했습니다.")
+                
+                # ▼▼▼▼▼ 핵심 추가 ▼▼▼▼▼
+                # 직업이 초기화되었으므로, 이전 능력 캐시를 삭제합니다.
+                clear_user_ability_cache(self.user.id)
+                # ▲▲▲▲▲ 핵심 추가 ▲▲▲▲▲
+                
+                if handler_cog := self.parent_view.cog.bot.get_cog("JobAndTierHandler"):
+                    await handler_cog.trigger_advancement_check(self.user)
+                    self.parent_view.status_message = f"✅ 직업이 초기화되었습니다. 곧 전직 안내 스레드가 생성됩니다."
+                else:
+                    self.parent_view.status_message = f"✅ 직업이 초기화되었지만, 전직 시스템을 찾을 수 없습니다."
+            except Exception as e:
+                logger.error(f"직업 초기화 처리 중 오류: {e}", exc_info=True)
+                self.parent_view.status_message = "❌ 직업 초기화 중 오류가 발생했습니다."
             return await self.on_back(interaction, reload_data=True)
         await interaction.response.defer()
         try:
