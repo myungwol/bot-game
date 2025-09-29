@@ -267,12 +267,11 @@ class BossRaid(commands.Cog):
     
     # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def handle_challenge(self, interaction: discord.Interaction, boss_type: str):
-        # 원인: 이 함수에서 defer()가 중복 호출되었습니다.
-        # 해결: defer()를 제거합니다. 첫 응답은 on_challenge_click에서 edit_message()로 이미 처리되었습니다.
-        
         user = interaction.user
+        
+        # on_challenge_click에서 이미 defer() 대신 edit_message()로 응답했으므로,
+        # 여기서는 followup.send()를 사용해야 합니다.
         if self.combat_lock.locked():
-            # defer()가 없으므로 followup.send를 사용합니다.
             await interaction.followup.send("❌ 다른 유저가 전투 중입니다. 잠시 후 다시 시도해주세요.", ephemeral=True, delete_after=5)
             return
 
@@ -296,7 +295,9 @@ class BossRaid(commands.Cog):
                  return
         
         async with self.combat_lock:
-            await interaction.followup.send("✅ 전투를 준비합니다... 잠시만 기다려주세요.", ephemeral=True, delete_after=3)
+            # 원인: followup.send()는 delete_after를 지원하지 않습니다.
+            # 해결: delete_after 인자를 제거합니다. 임시 메시지이므로 괜찮습니다.
+            await interaction.followup.send("✅ 전투를 준비합니다... 잠시만 기다려주세요.", ephemeral=True)
             await self.update_all_boss_panels()
             combat_task = asyncio.create_task(self.run_combat_simulation(interaction, user, pet, raid_id, boss_type))
             self.active_combats[boss_type] = combat_task
