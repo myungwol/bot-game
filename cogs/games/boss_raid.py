@@ -243,7 +243,6 @@ class BossRaid(commands.Cog):
 
         except Exception as e:
             logger.error(f"[{boss_type.upper()}] 신규 레이드 생성 중 오류 발생: {e}", exc_info=True)
-적용 방법
                 return
             
             # 3. 해당 보스 채널에 공지 메시지를 보냅니다.
