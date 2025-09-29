@@ -41,7 +41,8 @@ def get_month_start_utc() -> datetime:
 
 
 class BossPanelView(ui.View):
-    def __init__(self, cog_instance: 'BossRaid', boss_type: str, is_combat_locked: bool, is_defeated: bool):
+    # --- ▼▼▼▼▼ 핵심 수정 시작 (랭킹 버튼 활성화) ▼▼▼▼▼ ---
+    def __init__(self, cog_instance: 'BossRaid', boss_type: str, is_combat_locked: bool, is_defeated: bool, raid_data: Optional[Dict[str, Any]]):
         super().__init__(timeout=None)
         self.cog = cog_instance
         self.boss_type = boss_type
@@ -59,12 +60,15 @@ class BossPanelView(ui.View):
         challenge_button.callback = self.on_challenge_click
         self.add_item(challenge_button)
 
+        # 원인: is_defeated 플래그가 랭킹 버튼을 비활성화시켰습니다.
+        # 해결: is_defeated와 상관없이, raid_data가 존재하기만 하면(보스가 한번이라도 소환됐으면) 랭킹 버튼을 활성화합니다.
         ranking_button = ui.Button(
             label="🏆 현재 랭킹", style=discord.ButtonStyle.secondary,
-            custom_id=f"boss_ranking:{self.boss_type}", disabled=is_defeated
+            custom_id=f"boss_ranking:{self.boss_type}", disabled=(raid_data is None)
         )
         ranking_button.callback = self.on_ranking_click
         self.add_item(ranking_button)
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     async def on_challenge_click(self, interaction: discord.Interaction):
         await self.cog.handle_challenge(interaction, self.boss_type)
@@ -134,6 +138,14 @@ class BossRaid(commands.Cog):
             channel_key = WEEKLY_BOSS_CHANNEL_KEY if boss_type == 'weekly' else MONTHLY_BOSS_CHANNEL_KEY
             channel_id = get_id(channel_key)
             if channel_id and (channel := self.bot.get_channel(channel_id)):
+                # 보스 소환 시, 이전 패널 메시지를 모두 정리합니다.
+                if info_msg_id := get_id(WEEKLY_BOSS_INFO_MSG_KEY if boss_type == 'weekly' else MONTHLY_BOSS_INFO_MSG_KEY):
+                    try: await (await channel.fetch_message(info_msg_id)).delete()
+                    except (discord.NotFound, discord.Forbidden): pass
+                if logs_msg_id := get_id(WEEKLY_BOSS_LOGS_MSG_KEY if boss_type == 'weekly' else MONTHLY_BOSS_LOGS_MSG_KEY):
+                    try: await (await channel.fetch_message(logs_msg_id)).delete()
+                    except (discord.NotFound, discord.Forbidden): pass
+
                 embed = discord.Embed(title=f"‼️ 새로운 {boss_template['name']}이(가) 나타났습니다!", description="마을의 평화를 위해 힘을 합쳐 보스를 물리치세요!", color=0xF1C40F)
                 if boss_template.get('image_url'): embed.set_thumbnail(url=boss_template['image_url'])
                 await channel.send(embed=embed, delete_after=86400)
@@ -148,6 +160,7 @@ class BossRaid(commands.Cog):
             await self.regenerate_panel(boss_type=boss_type)
             await asyncio.sleep(1)
 
+    # --- ▼▼▼▼▼ 핵심 수정 시작 (패널 업데이트 방식 변경) ▼▼▼▼▼ ---
     async def regenerate_panel(self, boss_type: str, channel: Optional[discord.TextChannel] = None):
         if boss_type == 'weekly':
             channel_key = WEEKLY_BOSS_CHANNEL_KEY
@@ -163,10 +176,39 @@ class BossRaid(commands.Cog):
             if not channel_id or not (channel := self.bot.get_channel(channel_id)):
                 return
 
-        raid_res = await supabase.table('boss_raids').select('*, bosses!inner(*)').eq('status', 'active').eq('bosses.type', boss_type).limit(1).execute()
+        # 원인: is_defeated 플래그가 랭킹 버튼을 비활성화시켰습니다.
+        # 해결: 보스 데이터를 먼저 가져와 is_defeated 플래그를 생성하고,
+        #       랭킹 버튼이 raid_data의 존재 여부만으로 활성화되도록 view 생성자에 전달합니다.
+        raid_res = await supabase.table('boss_raids').select('*, bosses!inner(*)').eq('bosses.type', boss_type).order('start_time', desc=True).limit(1).execute()
         raid_data = raid_res.data[0] if raid_res and hasattr(raid_res, 'data') and raid_res.data else None
         
-        # 1. 전투 기록 패널 생성 또는 업데이트 (이 메시지는 고정됩니다)
+        is_combat_locked = self.combat_lock.locked()
+        is_defeated = not (raid_data and raid_data.get('status') == 'active')
+
+        # 1. 정보 패널(버튼 포함) 생성 또는 업데이트 (수정 방식)
+        info_embed = self.build_boss_info_embed(raid_data, boss_type)
+        view = BossPanelView(self, boss_type, is_combat_locked, is_defeated, raid_data)
+        
+        info_message_id = get_id(info_msg_key)
+        try:
+            if info_message_id:
+                info_message = await channel.fetch_message(info_message_id)
+                await info_message.edit(embed=info_embed, view=view)
+            else:
+                raise discord.NotFound # ID가 없으면 새로 생성
+
+        except discord.NotFound:
+            # 이전 로그 메시지가 있다면 정리
+            if logs_msg_id := get_id(logs_msg_key):
+                try: await (await channel.fetch_message(logs_msg_id)).delete()
+                except (discord.NotFound, discord.Forbidden): pass
+            
+            new_info_message = await channel.send(embed=info_embed, view=view)
+            await save_id_to_db(info_msg_key, new_info_message.id)
+        except (discord.Forbidden, discord.HTTPException) as e:
+            logger.error(f"[{boss_type.upper()}] 정보 패널 메시지 수정/생성 실패: {e}")
+
+        # 2. 전투 기록 패널 생성 또는 업데이트 (수정 방식)
         logs_embed = self.build_combat_logs_embed(raid_data, boss_type)
         logs_message_id = get_id(logs_msg_key)
         try:
@@ -174,40 +216,13 @@ class BossRaid(commands.Cog):
                 logs_message = await channel.fetch_message(logs_message_id)
                 await logs_message.edit(embed=logs_embed)
             else:
-                raise discord.NotFound # ID가 없으면 새로 생성하기 위해 예외 발생
+                raise discord.NotFound
         except discord.NotFound:
-            try:
-                # 이전에 있던 패널 메시지를 모두 정리
-                if info_message_id := get_id(info_msg_key):
-                    old_info_msg = await channel.fetch_message(info_message_id)
-                    await old_info_msg.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
-            
             new_logs_message = await channel.send(embed=logs_embed)
             await save_id_to_db(logs_msg_key, new_logs_message.id)
         except (discord.Forbidden, discord.HTTPException) as e:
             logger.error(f"[{boss_type.upper()}] 전투 기록 패널 메시지 수정/생성 실패: {e}")
-
-        # 2. 정보 패널 삭제 후 재생성 (이 메시지가 항상 최신이 됩니다)
-        is_combat_locked = self.combat_lock.locked()
-        is_defeated = not (raid_data and raid_data.get('status') == 'active')
-        info_embed = self.build_boss_info_embed(raid_data, boss_type)
-        view = BossPanelView(self, boss_type, is_combat_locked, is_defeated)
-
-        info_message_id = get_id(info_msg_key)
-        try:
-            if info_message_id:
-                info_message = await channel.fetch_message(info_message_id)
-                await info_message.delete()
-        except (discord.NotFound, discord.Forbidden):
-            pass 
-        
-        try:
-            new_info_message = await channel.send(embed=info_embed, view=view)
-            await save_id_to_db(info_msg_key, new_info_message.id)
-        except (discord.Forbidden, discord.HTTPException) as e:
-            logger.error(f"[{boss_type.upper()}] 정보 패널 메시지 생성 실패: {e}")
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     def build_boss_info_embed(self, raid_data: Optional[Dict[str, Any]], boss_type: str) -> discord.Embed:
         if not raid_data:
@@ -307,23 +322,19 @@ class BossRaid(commands.Cog):
                 pet_first = pet_speed > boss_speed
                 if pet_first:
                     if pet_hp > 0:
-                        # --- ▼▼▼▼▼ 핵심 수정 시작 (펫 -> 보스 데미지) ▼▼▼▼▼ ---
                         defense_reduction_constant = 5000
                         defense_factor = boss_defense / (boss_defense + defense_reduction_constant)
                         base_damage = pet_attack * random.uniform(0.9, 1.1)
                         pet_damage = max(1, int(base_damage * (1 - defense_factor)))
-                        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
                         boss_hp -= pet_damage
                         total_damage_dealt += pet_damage
                         combat_logs.append(f"🔥 **{pet['nickname']}**이(가) `{pet_damage}`의 피해를 입혔습니다!")
                         await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
                         if boss_hp <= 0: break
                     if boss_hp > 0:
-                        # --- ▼▼▼▼▼ 핵심 수정 시작 (보스 -> 펫 데미지) ▼▼▼▼▼ ---
                         damage_scaling_factor = 100
                         raw_damage = boss_attack - pet_defense
                         boss_damage = max(1, int(raw_damage / damage_scaling_factor * random.uniform(0.9, 1.1)))
-                        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
                         speed_diff = pet_speed - boss_speed
                         dodge_chance = min(0.3, max(0, speed_diff / 100))
                         if random.random() < dodge_chance:
@@ -335,11 +346,9 @@ class BossRaid(commands.Cog):
                         if pet_hp <= 0: break
                 else:
                     if boss_hp > 0:
-                        # --- ▼▼▼▼▼ 핵심 수정 시작 (보스 -> 펫 데미지) ▼▼▼▼▼ ---
                         damage_scaling_factor = 100
                         raw_damage = boss_attack - pet_defense
                         boss_damage = max(1, int(raw_damage / damage_scaling_factor * random.uniform(0.9, 1.1)))
-                        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
                         speed_diff = pet_speed - boss_speed
                         dodge_chance = min(0.3, max(0, speed_diff / 100))
                         if random.random() < dodge_chance:
@@ -350,12 +359,10 @@ class BossRaid(commands.Cog):
                         await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
                         if pet_hp <= 0: break
                     if pet_hp > 0:
-                        # --- ▼▼▼▼▼ 핵심 수정 시작 (펫 -> 보스 데미지) ▼▼▼▼▼ ---
                         defense_reduction_constant = 5000
                         defense_factor = boss_defense / (boss_defense + defense_reduction_constant)
                         base_damage = pet_attack * random.uniform(0.9, 1.1)
                         pet_damage = max(1, int(base_damage * (1 - defense_factor)))
-                        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
                         boss_hp -= pet_damage
                         total_damage_dealt += pet_damage
                         combat_logs.append(f"🔥 **{pet['nickname']}**이(가) `{pet_damage}`의 피해를 입혔습니다!")
@@ -484,8 +491,12 @@ class BossRaid(commands.Cog):
             await channel.send("보상을 지급하는 중 오류가 발생했습니다. 관리자에게 문의해주세요.")
 
     async def handle_ranking(self, interaction: discord.Interaction, boss_type: str):
-        raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type, name)').eq('status', 'active').eq('bosses.type', boss_type).limit(1).execute()
+        # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+        # 원인: 이전에 .maybe_single()에서 .limit(1)로 바꿨지만, defeated 상태의 보스도 가져와야 합니다.
+        # 해결: status 필터링을 제거하고, start_time으로 정렬하여 가장 최근 레이드를 가져옵니다.
+        raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type, name)').eq('bosses.type', boss_type).order('start_time', desc=True).limit(1).execute()
         if not (raid_res and raid_res.data):
+        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
             await interaction.response.send_message("❌ 현재 조회할 수 있는 랭킹 정보가 없습니다.", ephemeral=True)
             return
         
