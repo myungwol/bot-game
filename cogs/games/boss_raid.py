@@ -236,7 +236,7 @@ class BossRaid(commands.Cog):
         if boss_info.get('image_url'):
             embed.set_thumbnail(url=boss_info['image_url'])
         
-        embed.add_field(name="--- 보스 정보 ---", value=f"{stats_text}\n\n**❤️ 체력:**\n{hp_text}", inline=False)
+        embed.add_field(name="--- 보스 정보 ---", value=f"{stats_text}\n**❤️ 체력:**\n{hp_text}", inline=False)
         embed.set_footer(text="패널은 2분마다 자동으로 업데이트됩니다.")
         return embed
 
