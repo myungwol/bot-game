@@ -307,18 +307,23 @@ class BossRaid(commands.Cog):
                 pet_first = pet_speed > boss_speed
                 if pet_first:
                     if pet_hp > 0:
-                        damage_reduction = boss_defense / (boss_defense + 200)
+                        # --- ▼▼▼▼▼ 핵심 수정 시작 (펫 -> 보스 데미지) ▼▼▼▼▼ ---
+                        defense_reduction_constant = 5000
+                        defense_factor = boss_defense / (boss_defense + defense_reduction_constant)
                         base_damage = pet_attack * random.uniform(0.9, 1.1)
-                        pet_damage = max(1, int(base_damage * (1 - damage_reduction)))
+                        pet_damage = max(1, int(base_damage * (1 - defense_factor)))
+                        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
                         boss_hp -= pet_damage
                         total_damage_dealt += pet_damage
                         combat_logs.append(f"🔥 **{pet['nickname']}**이(가) `{pet_damage}`의 피해를 입혔습니다!")
                         await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
                         if boss_hp <= 0: break
                     if boss_hp > 0:
-                        damage_reduction = pet_defense / (pet_defense + 200)
-                        base_damage = boss_attack * random.uniform(0.9, 1.1)
-                        boss_damage = max(1, int(base_damage * (1 - damage_reduction)))
+                        # --- ▼▼▼▼▼ 핵심 수정 시작 (보스 -> 펫 데미지) ▼▼▼▼▼ ---
+                        damage_scaling_factor = 100
+                        raw_damage = boss_attack - pet_defense
+                        boss_damage = max(1, int(raw_damage / damage_scaling_factor * random.uniform(0.9, 1.1)))
+                        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
                         speed_diff = pet_speed - boss_speed
                         dodge_chance = min(0.3, max(0, speed_diff / 100))
                         if random.random() < dodge_chance:
@@ -330,9 +335,11 @@ class BossRaid(commands.Cog):
                         if pet_hp <= 0: break
                 else:
                     if boss_hp > 0:
-                        damage_reduction = pet_defense / (pet_defense + 200)
-                        base_damage = boss_attack * random.uniform(0.9, 1.1)
-                        boss_damage = max(1, int(base_damage * (1 - damage_reduction)))
+                        # --- ▼▼▼▼▼ 핵심 수정 시작 (보스 -> 펫 데미지) ▼▼▼▼▼ ---
+                        damage_scaling_factor = 100
+                        raw_damage = boss_attack - pet_defense
+                        boss_damage = max(1, int(raw_damage / damage_scaling_factor * random.uniform(0.9, 1.1)))
+                        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
                         speed_diff = pet_speed - boss_speed
                         dodge_chance = min(0.3, max(0, speed_diff / 100))
                         if random.random() < dodge_chance:
@@ -343,9 +350,12 @@ class BossRaid(commands.Cog):
                         await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
                         if pet_hp <= 0: break
                     if pet_hp > 0:
-                        damage_reduction = boss_defense / (boss_defense + 200)
+                        # --- ▼▼▼▼▼ 핵심 수정 시작 (펫 -> 보스 데미지) ▼▼▼▼▼ ---
+                        defense_reduction_constant = 5000
+                        defense_factor = boss_defense / (boss_defense + defense_reduction_constant)
                         base_damage = pet_attack * random.uniform(0.9, 1.1)
-                        pet_damage = max(1, int(base_damage * (1 - damage_reduction)))
+                        pet_damage = max(1, int(base_damage * (1 - defense_factor)))
+                        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
                         boss_hp -= pet_damage
                         total_damage_dealt += pet_damage
                         combat_logs.append(f"🔥 **{pet['nickname']}**이(가) `{pet_damage}`의 피해를 입혔습니다!")
@@ -406,9 +416,8 @@ class BossRaid(commands.Cog):
         embed.add_field(name="--- 전투 기록 ---", value=log_text, inline=False)
         return embed
 
-    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def handle_boss_defeat(self, channel: discord.TextChannel, raid_id: int):
-        # 1. 먼저 보스 정보를 업데이트하고, 그 결과를 가져옵니다.
+        # 1. 먼저 보스 정보를 업데이트합니다.
         update_res = await supabase.table('boss_raids').update({
             'status': 'defeated',
             'defeat_time': datetime.now(timezone.utc).isoformat()
@@ -431,7 +440,6 @@ class BossRaid(commands.Cog):
         defeat_embed = discord.Embed(title=f"🎉 {boss_name} 처치 성공!", description="용감한 모험가들의 활약으로 보스를 물리쳤습니다!\n\n참가자들에게 곧 보상이 지급되며, 최종 랭킹이 공지될 예정입니다...", color=0x2ECC71)
         await channel.send(embed=defeat_embed, delete_after=86400)
         await self.distribute_rewards(channel, raid_id, boss_name)
-    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     async def distribute_rewards(self, channel: discord.TextChannel, raid_id: int, boss_name: str):
         try:
@@ -476,10 +484,8 @@ class BossRaid(commands.Cog):
             await channel.send("보상을 지급하는 중 오류가 발생했습니다. 관리자에게 문의해주세요.")
 
     async def handle_ranking(self, interaction: discord.Interaction, boss_type: str):
-        # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
         raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type, name)').eq('status', 'active').eq('bosses.type', boss_type).limit(1).execute()
         if not (raid_res and raid_res.data):
-        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
             await interaction.response.send_message("❌ 현재 조회할 수 있는 랭킹 정보가 없습니다.", ephemeral=True)
             return
         
