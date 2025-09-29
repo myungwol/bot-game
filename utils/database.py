@@ -443,18 +443,19 @@ async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
 @supabase_retry_handler()
 async def add_xp_to_pet_db(user_id: int, xp_to_add: int) -> Optional[List[Dict]]:
     """
-    [수정됨] 펫에게 경험치를 추가하는 DB 함수를 안전하게 호출합니다.
-    정확한 함수 이름('add_xp_to_user_and_pet')을 사용하고, user_id를 문자열로 전달합니다.
+    [최종 수정] 펫에게 경험치를 추가하는 DB 함수를 안전하게 호출합니다.
+    정리된 DB 함수에 맞춰 user_id를 정수(int) 타입으로 전달합니다.
     """
     if xp_to_add <= 0:
         return None
     try:
-        # 오류 로그의 힌트에 따라 정확한 함수 이름으로 변경합니다.
-        res = await supabase.rpc('add_xp_to_user_and_pet', {
-            'p_user_id': str(user_id), 
+        # DB 함수가 이제 bigint를 받으므로, user_id를 int 타입 그대로 전달합니다.
+        res = await supabase.rpc('add_xp_to_pet', {
+            'p_user_id': user_id, 
             'p_xp_to_add': xp_to_add
         }).execute()
-        return res.data if res and hasattr(res, 'data') else None
+        # RPC 결과는 단일 JSON 객체이므로, list가 아닌 dict를 반환하도록 처리
+        return [res.data] if res and hasattr(res, 'data') and res.data else None
     except APIError as e:
         logger.error(f"add_xp_to_pet_db RPC 실행 중 오류 (User: {user_id}): {e}", exc_info=True)
         return None
