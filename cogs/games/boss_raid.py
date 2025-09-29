@@ -217,6 +217,10 @@ class BossRaid(commands.Cog):
             await asyncio.sleep(1) # API 제한 방지를 위한 짧은 딜레이
 
     async def regenerate_panel(self, boss_type: str, channel: Optional[discord.TextChannel] = None):
+        """
+        특정 타입의 보스 패널을 (재)생성하거나 업데이트합니다.
+        이 함수는 Cog의 핵심적인 UI 관리 역할을 합니다.
+        """
         logger.info(f"[{boss_type.upper()}] 패널 재생성 시작...")
         
         channel_key = WEEKLY_BOSS_CHANNEL_KEY if boss_type == 'weekly' else MONTHLY_BOSS_CHANNEL_KEY
@@ -228,40 +232,56 @@ class BossRaid(commands.Cog):
                 logger.warning(f"[{boss_type.upper()}] 보스 채널이 설정되지 않았거나 찾을 수 없습니다.")
                 return
 
+        # ▼▼▼ [핵심 수정] 쿼리 결과를 raid_res 변수에 저장 ▼▼▼
         raid_res = await supabase.table('boss_raids').select('*, bosses(*)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
         
+        # ▼▼▼ [핵심 수정] raid_res가 None이 아닌지, 그리고 .data 속성이 유효한지 먼저 확인합니다. ▼▼▼
+        raid_data = raid_res.data if raid_res and hasattr(raid_res, 'data') else None
+
         is_combat_locked = self.combat_lock.locked()
-        is_defeated = not (raid_res.data and raid_res.data['status'] == 'active')
+        # raid_data가 유효하고, 그 안의 status가 'active'인지를 확인합니다.
+        is_defeated = not (raid_data and raid_data.get('status') == 'active')
 
         view = BossPanelView(self, boss_type, is_combat_locked, is_defeated)
         
-        if raid_res.data:
-            embed = self.build_boss_panel_embed(raid_res.data)
+        if raid_data:
+            # 보스가 활성화된 경우
+            embed = self.build_boss_panel_embed(raid_data)
         else:
+            # 보스가 없는 경우 (리셋 대기 중)
             embed = discord.Embed(
-                title=f"👑 다음 {boss_type} 보스를 기다리는 중...",
+                title=f"👑 다음 {('주간' if boss_type == 'weekly' else '월간')} 보스를 기다리는 중...",
                 description="새로운 보스가 곧 나타납니다!\n리셋 시간: " + ("매주 월요일 00시" if boss_type == 'weekly' else "매월 1일 00시"),
                 color=0x34495E
             )
+            for item in view.children:
+                item.disabled = True
 
         message_id = get_id(msg_key)
         try:
             if message_id:
                 message = await channel.fetch_message(message_id)
                 await message.edit(embed=embed, view=view)
+                logger.info(f"[{boss_type.upper()}] 패널 메시지(ID: {message_id})를 성공적으로 수정했습니다.")
             else:
                 await channel.purge(limit=100)
                 new_message = await channel.send(embed=embed, view=view)
-                await supabase.table('channel_configs').upsert({'channel_key': msg_key, 'channel_id': str(new_message.id)}).execute()
+                # [수정] channel_configs 테이블에 직접 접근하는 대신 save_id_to_db 헬퍼 함수 사용
+                from utils.database import save_id_to_db
+                await save_id_to_db(msg_key, new_message.id)
                 await new_message.pin()
+                logger.info(f"[{boss_type.upper()}] 새로운 패널 메시지(ID: {new_message.id})를 생성하고 고정했습니다.")
         except discord.NotFound:
+            logger.warning(f"[{boss_type.upper()}] 패널 메시지(ID: {message_id})를 찾을 수 없어 새로 생성합니다.")
             await channel.purge(limit=100)
             new_message = await channel.send(embed=embed, view=view)
-            await supabase.table('channel_configs').upsert({'channel_key': msg_key, 'channel_id': str(new_message.id)}).execute()
+            # [수정] channel_configs 테이블에 직접 접근하는 대신 save_id_to_db 헬퍼 함수 사용
+            from utils.database import save_id_to_db
+            await save_id_to_db(msg_key, new_message.id)
             await new_message.pin()
         except (discord.Forbidden, discord.HTTPException) as e:
             logger.error(f"[{boss_type.upper()}] 패널 메시지를 수정/생성/고정하는 데 실패했습니다: {e}")
-
+            
     def build_boss_panel_embed(self, raid_data: Dict[str, Any]) -> discord.Embed:
         boss_info = raid_data['bosses']
         
