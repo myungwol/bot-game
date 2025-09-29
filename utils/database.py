@@ -443,7 +443,7 @@ async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
 @supabase_retry_handler()
 async def add_xp_to_pet_db(user_id: int, xp_to_add: int) -> Optional[List[Dict]]:
     """
-    [최종 수정] 펫에게 경험치를 추가하는 DB 함수를 안전하게 호출합니다.
+    [최종] 펫에게 경험치를 추가하는 DB 함수를 안전하게 호출합니다.
     정리된 DB 함수에 맞춰 user_id를 정수(int) 타입으로 전달합니다.
     """
     if xp_to_add <= 0:
