@@ -164,6 +164,7 @@ class BossRaid(commands.Cog):
             await self.regenerate_panel(boss_type=boss_type)
             await asyncio.sleep(1)
 
+    # --- ▼▼▼▼▼ 핵심 수정 시작 (패널 업데이트 방식 변경) ▼▼▼▼▼ ---
     async def regenerate_panel(self, boss_type: str, channel: Optional[discord.TextChannel] = None):
         if boss_type == 'weekly':
             channel_key = WEEKLY_BOSS_CHANNEL_KEY
@@ -185,7 +186,7 @@ class BossRaid(commands.Cog):
         is_combat_locked = self.combat_lock.locked()
         is_defeated = not (raid_data and raid_data.get('status') == 'active')
         
-        # 1. 전투 기록 패널을 먼저 업데이트/생성합니다. (채널 상단에 위치)
+        # 1. 전투 기록 패널을 먼저 업데이트/생성합니다.
         logs_embed = self.build_combat_logs_embed(raid_data, boss_type)
         logs_message_id = get_id(logs_msg_key)
         try:
@@ -193,38 +194,30 @@ class BossRaid(commands.Cog):
                 logs_message = await channel.fetch_message(logs_message_id)
                 await logs_message.edit(embed=logs_embed)
             else:
-                raise discord.NotFound # ID가 없으면 새로 생성하기 위해 예외 발생
+                raise discord.NotFound
         except discord.NotFound:
-            try:
-                # 이전에 있던 패널 메시지를 모두 정리
-                if info_message_id := get_id(info_msg_key):
-                    old_info_msg = await channel.fetch_message(info_message_id)
-                    await old_info_msg.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
-            
             new_logs_message = await channel.send(embed=logs_embed)
             await save_id_to_db(logs_msg_key, new_logs_message.id)
         except (discord.Forbidden, discord.HTTPException) as e:
             logger.error(f"[{boss_type.upper()}] 전투 기록 패널 메시지 수정/생성 실패: {e}")
 
-        # 2. 정보 패널 삭제 후 재생성 (이 메시지가 항상 최신이 됩니다)
+        # 2. 정보 패널을 업데이트/생성합니다.
         info_embed = self.build_boss_info_embed(raid_data, boss_type)
         view = BossPanelView(self, boss_type, is_combat_locked, is_defeated, raid_data)
         info_message_id = get_id(info_msg_key)
         try:
             if info_message_id:
                 info_message = await channel.fetch_message(info_message_id)
-                await info_message.delete()
-        except (discord.NotFound, discord.Forbidden):
-            pass 
-        
-        try:
+                await info_message.edit(embed=info_embed, view=view)
+            else:
+                raise discord.NotFound
+        except discord.NotFound:
             new_info_message = await channel.send(embed=info_embed, view=view)
             await save_id_to_db(info_msg_key, new_info_message.id)
         except (discord.Forbidden, discord.HTTPException) as e:
-            logger.error(f"[{boss_type.upper()}] 정보 패널 메시지 생성 실패: {e}")
-
+            logger.error(f"[{boss_type.upper()}] 정보 패널 메시지 수정/생성 실패: {e}")
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+    
     def build_boss_info_embed(self, raid_data: Optional[Dict[str, Any]], boss_type: str) -> discord.Embed:
         if not raid_data:
             return discord.Embed(
@@ -265,13 +258,11 @@ class BossRaid(commands.Cog):
         embed.description = log_text
         return embed
     
-    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def handle_challenge(self, interaction: discord.Interaction, boss_type: str):
         user = interaction.user
         
-        # on_challenge_click에서 이미 defer() 대신 edit_message()로 응답했으므로,
-        # 여기서는 followup.send()를 사용해야 합니다.
         if self.combat_lock.locked():
+            # edit_message로 응답했으므로 followup을 사용해야 합니다.
             await interaction.followup.send("❌ 다른 유저가 전투 중입니다. 잠시 후 다시 시도해주세요.", ephemeral=True, delete_after=5)
             return
 
@@ -295,8 +286,6 @@ class BossRaid(commands.Cog):
                  return
         
         async with self.combat_lock:
-            # 원인: followup.send()는 delete_after를 지원하지 않습니다.
-            # 해결: delete_after 인자를 제거합니다. 임시 메시지이므로 괜찮습니다.
             await interaction.followup.send("✅ 전투를 준비합니다... 잠시만 기다려주세요.", ephemeral=True)
             await self.update_all_boss_panels()
             combat_task = asyncio.create_task(self.run_combat_simulation(interaction, user, pet, raid_id, boss_type))
@@ -306,7 +295,6 @@ class BossRaid(commands.Cog):
             finally:
                 self.active_combats.pop(boss_type, None)
         await self.update_all_boss_panels()
-    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     async def run_combat_simulation(self, interaction: discord.Interaction, user: discord.Member, pet: Dict, raid_id: int, boss_type: str):
         """실시간 턴제 전투를 시뮬레이션하고 UI를 업데이트합니다."""
