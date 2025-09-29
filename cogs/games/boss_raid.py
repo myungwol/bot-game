@@ -166,23 +166,28 @@ class BossRaid(commands.Cog):
         await asyncio.sleep(5)
 
 
-# cogs/games/boss_raid.py
-
-# ... (파일 상단 생략) ...
 
 class BossRaid(commands.Cog):
-    # ... (다른 함수들 생략) ...
 
-    # ▼▼▼ create_new_raid 함수를 찾아 아래 코드로 교체 ▼▼▼
     async def create_new_raid(self, boss_type: str, force: bool = False):
         """
         DB에서 해당 타입의 보스 정보를 찾아 새로운 레이드를 생성하고 공지합니다.
         `force=True`이면 기존 레이드를 강제로 종료시킵니다.
         """
         try:
+            # ▼▼▼ [핵심 수정] 기존 레이드를 종료시키는 로직 변경 ▼▼▼
             if force:
-                logger.info(f"[{boss_type.upper()}] 관리자 요청으로 기존 레이드를 강제 종료합니다.")
-                await supabase.table('boss_raids').update({'status': 'expired'}).eq('bosses.type', boss_type).execute()
+                logger.info(f"[{boss_type.upper()}] 관리자 요청으로 기존 레이드를 강제 종료/만료시킵니다.")
+                # 1. 만료시킬 raid_id들을 먼저 조회합니다.
+                raids_to_expire_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('bosses.type', boss_type).eq('status', 'active').execute()
+                
+                if raids_to_expire_res.data:
+                    raid_ids_to_expire = [raid['id'] for raid in raids_to_expire_res.data]
+                    if raid_ids_to_expire:
+                        # 2. 조회된 id들을 사용해 업데이트합니다.
+                        await supabase.table('boss_raids').update({'status': 'expired'}).in_('id', raid_ids_to_expire).execute()
+                        logger.info(f"[{boss_type.upper()}] {len(raid_ids_to_expire)}개의 활성 레이드를 'expired' 상태로 변경했습니다.")
+            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
             # 1. DB에서 생성할 보스의 템플릿 정보를 가져옵니다.
             boss_template_res = await supabase.table('bosses').select('*').eq('type', boss_type).limit(1).single().execute()
@@ -222,50 +227,7 @@ class BossRaid(commands.Cog):
 
         except Exception as e:
             logger.error(f"[{boss_type.upper()}] 신규 레이드 생성 중 오류 발생: {e}", exc_info=True)
-            return
             
-            # 3. 해당 보스 채널에 공지 메시지를 보냅니다.
-            channel_key = WEEKLY_BOSS_CHANNEL_KEY if boss_type == 'weekly' else MONTHLY_BOSS_CHANNEL_KEY
-            channel_id = get_id(channel_key)
-            if channel_id and (channel := self.bot.get_channel(channel_id)):
-                embed = discord.Embed(
-                    title=f"‼️ 새로운 {boss_template['name']}이(가) 나타났습니다!",
-                    description="마을의 평화를 위해 힘을 합쳐 보스를 물리치세요!",
-                    color=0xF1C40F
-                )
-                if boss_template.get('image_url'):
-                    embed.set_thumbnail(url=boss_template['image_url'])
-                
-                await channel.send(embed=embed, delete_after=86400)
-
-            # 4. 패널을 즉시 업데이트하여 새로운 보스 정보를 표시합니다.
-            await self.regenerate_panel(boss_type)
-
-        except Exception as e:
-            logger.error(f"[{boss_type.upper()}] 신규 레이드 생성 중 오류 발생: {e}", exc_info=True)
-            return
-            
-            # 3. 해당 보스 채널에 공지 메시지를 보냅니다.
-            channel_key = WEEKLY_BOSS_CHANNEL_KEY if boss_type == 'weekly' else MONTHLY_BOSS_CHANNEL_KEY
-            channel_id = get_id(channel_key)
-            if channel_id and (channel := self.bot.get_channel(channel_id)):
-                embed = discord.Embed(
-                    title=f"‼️ 새로운 {boss_template['name']}이(가) 나타났습니다!",
-                    description="마을의 평화를 위해 힘을 합쳐 보스를 물리치세요!",
-                    color=0xF1C40F
-                )
-                if boss_template.get('image_url'):
-                    embed.set_thumbnail(url=boss_template['image_url'])
-                
-                # 24시간 후 자동 삭제되는 공지 메시지 전송
-                await channel.send(embed=embed, delete_after=86400)
-
-            # 4. 패널을 즉시 업데이트하여 새로운 보스 정보를 표시합니다.
-            await self.regenerate_panel(boss_type)
-
-        except Exception as e:
-            logger.error(f"[{boss_type.upper()}] 신규 레이드 생성 중 오류 발생: {e}", exc_info=True)
-
     async def update_all_boss_panels(self, boss_type_to_update: Optional[str] = None):
         types_to_process = [boss_type_to_update] if boss_type_to_update else ['weekly', 'monthly']
         for boss_type in types_to_process:
