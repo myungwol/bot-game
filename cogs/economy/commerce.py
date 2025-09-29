@@ -77,7 +77,6 @@ class ShopViewBase(ui.View):
             await interaction.response.send_message(message_content, ephemeral=True, delete_after=5)
 
 class BuyItemView(ShopViewBase):
-    # ... (BuyItemView의 다른 메서드들은 변경 없음, 생략) ...
     def __init__(self, user: discord.Member, category: str):
         super().__init__(user)
         self.category = category
@@ -207,11 +206,9 @@ class BuyCategoryView(ShopViewBase):
         title = commerce_strings.get("category_view_title", "🏪 구매함"); description = commerce_strings.get("category_view_desc", "구매하고 싶은 아이템의 카테고리를 선택해주세요.")
         embed = discord.Embed(title=title, description=description, color=discord.Color.green()); embed.set_footer(text="매일 00:05(KST)에 시세 변동"); return embed
     
-    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def build_components(self):
         self.clear_items()
         
-        # ▼▼▼ [수정] 버튼 라벨과 custom_id의 category_key를 수정합니다. ▼▼▼
         layout = [
             [("잡화", "아이템"), ("입장권", "입장권"), ("장비", "장비")],
             [("미끼", "미끼"), ("조미료", "조미료"), ("씨앗", "농장_씨앗"), ("펫", "펫 아이템"), ("알", "알")]
@@ -222,38 +219,51 @@ class BuyCategoryView(ShopViewBase):
                 button = ui.Button(label=label, custom_id=f"buy_category_{category_key}", row=row_index)
                 button.callback = self.category_callback
                 self.add_item(button)
-    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
     
     async def category_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         category = interaction.data['custom_id'].split('buy_category_')[-1]
         item_view = BuyItemView(self.user, category); item_view.message = self.message; await item_view.update_view(interaction)
 
+# ▼▼▼ [수정] SellFishView 시작 ▼▼▼
 class SellFishView(ShopViewBase):
-    # ... (변경 없음, 생략) ...
     def __init__(self, user: discord.Member):
         super().__init__(user)
         self.fish_data_map: Dict[str, Dict[str, Any]] = {}
+        # 페이지네이션 추가
+        self.all_fish = []
+        self.page_index = 0
+        self.items_per_page = 5
+
     async def refresh_view(self, interaction: discord.Interaction):
-        embed = await self.build_embed()
-        await self.build_components()
-        await interaction.edit_original_response(embed=embed, view=self)
+        await self.update_view(interaction)
+
     async def build_embed(self) -> discord.Embed:
         balance = (await get_wallet(self.user.id)).get('balance', 0)
-        embed = discord.Embed(title="🎣 판매함 - 물고기", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 물고기를 아래 메뉴에서 여러 개 선택해주세요.", color=discord.Color.blue())
+        embed = discord.Embed(title="🎣 판매함 - 물고기", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 물고기를 아래 메뉴에서 선택해주세요.", color=discord.Color.blue())
         embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         return embed
+
     async def build_components(self):
         self.clear_items()
-        aquarium = await get_aquarium(str(self.user.id))
+        
+        if not self.all_fish:
+            self.all_fish = await get_aquarium(str(self.user.id))
+        
         loot_res = await supabase.table('fishing_loots').select('*').execute()
         if not (loot_res and loot_res.data):
             self.add_item(ui.Button(label="오류: 가격 정보를 불러올 수 없습니다.", disabled=True)); return
         loot_db = {loot['name']: loot for loot in loot_res.data}
+
         self.fish_data_map.clear()
+        
+        start_index = self.page_index * self.items_per_page
+        end_index = start_index + self.items_per_page
+        fish_on_page = self.all_fish[start_index:end_index]
+
         options = []
-        if aquarium:
-            for fish in aquarium:
+        if fish_on_page:
+            for fish in fish_on_page:
                 fish_id = str(fish['id']); loot_info = loot_db.get(fish['name'], {})
                 base_value = loot_info.get('current_base_value', loot_info.get('base_value', 0))
                 price = int(base_value + (fish['size'] * loot_info.get('size_multiplier', 0)))
@@ -261,16 +271,32 @@ class SellFishView(ShopViewBase):
                 options.append(discord.SelectOption(label=f"{fish['name']} ({fish['size']}cm)", value=fish_id, description=f"{price}{self.currency_icon}", emoji=coerce_item_emoji(loot_info.get('emoji'))))
         
         if options:
-            # ▼▼▼ [수정] options 리스트를 25개로 제한합니다. ▼▼▼
-            select = ui.Select(placeholder="판매할 물고기를 선택하세요...(최대 25종)", options=options[:25], min_values=1, max_values=min(len(options), 25))
-            # ▲▲▲ [수정] 완료 ▲▲▲
+            select = ui.Select(placeholder="판매할 물고기를 선택하세요...(여러 개 선택 가능)", options=options, min_values=1, max_values=len(options))
             select.callback = self.on_select; self.add_item(select)
         
         sell_button = ui.Button(label="선택한 물고기 판매", style=discord.ButtonStyle.success, disabled=True, custom_id="sell_fish_confirm"); sell_button.callback = self.sell_fish; self.add_item(sell_button)
-        back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey); back_button.callback = self.go_back; self.add_item(back_button)
+        
+        total_pages = math.ceil(len(self.all_fish) / self.items_per_page)
+        if total_pages > 1:
+            prev_button = ui.Button(label="◀ 이전", custom_id="prev_page", disabled=(self.page_index == 0), row=2)
+            prev_button.callback = self.pagination_callback
+            self.add_item(prev_button)
+            next_button = ui.Button(label="다음 ▶", custom_id="next_page", disabled=(self.page_index >= total_pages - 1), row=2)
+            next_button.callback = self.pagination_callback
+            self.add_item(next_button)
+
+        back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=3); back_button.callback = self.go_back; self.add_item(back_button)
+
+    async def pagination_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        if interaction.data['custom_id'] == 'next_page': self.page_index += 1
+        else: self.page_index -= 1
+        await self.update_view(interaction)
+
     async def on_select(self, interaction: discord.Interaction):
         if sell_button := next((c for c in self.children if isinstance(c, ui.Button) and c.custom_id == "sell_fish_confirm"), None): sell_button.disabled = False
         await interaction.response.edit_message(view=self)
+
     async def sell_fish(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         select_menu = next((c for c in self.children if isinstance(c, ui.Select)), None)
@@ -283,206 +309,135 @@ class SellFishView(ShopViewBase):
             new_balance = (await get_wallet(self.user.id)).get('balance', 0)
             success_message = f"✅ 물고기 {len(fish_ids_to_sell)}마리를 `{total_price:,}`{self.currency_icon}에 판매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
             msg = await interaction.followup.send(success_message, ephemeral=True); asyncio.create_task(delete_after(msg, 10))
+            # 판매 후 데이터 리프레시
+            self.all_fish = [] 
+            self.page_index = 0
             await self.refresh_view(interaction)
         except Exception as e: await self.handle_error(interaction, e)
+
     async def go_back(self, interaction: discord.Interaction):
         await interaction.response.defer()
         view = SellCategoryView(self.user); view.message = self.message; await view.update_view(interaction)
+# ▲▲▲ [수정] SellFishView 종료 ▲▲▲
 
-class SellCropView(ShopViewBase):
-    # ... (변경 없음, 생략) ...
-    def __init__(self, user: discord.Member):
+# ▼▼▼ [수정] Sell-기타 아이템 View 공통 상속 클래스 생성 ▼▼▼
+class SellStackableView(ShopViewBase):
+    def __init__(self, user: discord.Member, category: str, title: str, color: int, emoji: str):
         super().__init__(user)
-        self.crop_data_map: Dict[str, Dict[str, Any]] = {}
+        self.category = category
+        self.embed_title = title
+        self.embed_color = color
+        self.default_emoji = emoji
+        self.item_data_map: Dict[str, Dict[str, Any]] = {}
+        self.all_items = []
+        self.page_index = 0
+        self.items_per_page = 20
+
     async def refresh_view(self, interaction: discord.Interaction):
-        embed = await self.build_embed()
-        await self.build_components()
-        await interaction.edit_original_response(embed=embed, view=self)
+        self.all_items = []
+        self.page_index = 0
+        await self.update_view(interaction)
+        
     async def build_embed(self) -> discord.Embed:
         balance = (await get_wallet(self.user.id)).get('balance', 0)
-        embed = discord.Embed(title="🌾 판매함 - 작물", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 작물을 아래 메뉴에서 선택해주세요.", color=discord.Color.green())
+        embed = discord.Embed(title=self.embed_title, description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 아이템을 아래 메뉴에서 선택해주세요.", color=self.embed_color)
         embed.set_footer(text="매일 00:05(KST)에 시세 변동")
         return embed
+
     async def build_components(self):
         self.clear_items()
-        inventory = await get_inventory(self.user); item_db = get_item_database(); self.crop_data_map.clear()
+        
+        if not self.all_items:
+            inventory = await get_inventory(self.user)
+            item_db = get_item_database()
+            self.all_items = sorted(
+                [(name, qty) for name, qty in inventory.items() if item_db.get(name, {}).get('category', '').strip() == self.category],
+                key=lambda x: x[0]
+            )
+        
+        self.item_data_map.clear()
+        
+        start_index = self.page_index * self.items_per_page
+        end_index = start_index + self.items_per_page
+        items_on_page = self.all_items[start_index:end_index]
+
         options = []
-        crop_items = {name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category', '').strip() == '농장_작물'}
-        if crop_items:
-            for name, qty in crop_items.items():
-                item_data = item_db.get(name, {}); price = item_data.get('current_price', int(item_data.get('sell_price', item_data.get('price', 10) * 0.8))) 
-                self.crop_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
-                options.append(discord.SelectOption(label=f"{name} (보유: {qty}개)", value=name, description=f"개당: {price}{self.currency_icon}", emoji=item_data.get('emoji')))
+        if items_on_page:
+            item_db = get_item_database()
+            for name, qty in items_on_page:
+                item_data = item_db.get(name, {})
+                price = item_data.get('current_price', int(item_data.get('sell_price', item_data.get('price', 10) * 0.8))) 
+                self.item_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
+                options.append(discord.SelectOption(label=f"{name} (보유: {qty}개)", value=name, description=f"개당: {price}{self.currency_icon}", emoji=coerce_item_emoji(item_data.get('emoji', self.default_emoji))))
         
         if options:
-            # ▼▼▼ [수정] options 리스트를 25개로 제한합니다. ▼▼▼
-            select = ui.Select(placeholder="판매할 작물을 선택하세요...(최대 25종)", options=options[:25]); select.callback = self.on_select; self.add_item(select)
-            # ▲▲▲ [수정] 완료 ▲▲▲
-        
-        back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=1); back_button.callback = self.go_back; self.add_item(back_button)
+            select = ui.Select(placeholder=f"판매할 {self.category.replace('_', ' ')} 선택...(최대 25종)", options=options)
+            select.callback = self.on_select
+            self.add_item(select)
+            
+        total_pages = math.ceil(len(self.all_items) / self.items_per_page)
+        if total_pages > 1:
+            prev_button = ui.Button(label="◀ 이전", custom_id="prev_page", disabled=(self.page_index == 0), row=2)
+            prev_button.callback = self.pagination_callback
+            self.add_item(prev_button)
+            next_button = ui.Button(label="다음 ▶", custom_id="next_page", disabled=(self.page_index >= total_pages - 1), row=2)
+            next_button.callback = self.pagination_callback
+            self.add_item(next_button)
+
+        back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=3)
+        back_button.callback = self.go_back
+        self.add_item(back_button)
+
+    async def pagination_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        if interaction.data['custom_id'] == 'next_page': self.page_index += 1
+        else: self.page_index -= 1
+        await self.update_view(interaction)
+
     async def on_select(self, interaction: discord.Interaction):
-        selected_crop = interaction.data['values'][0]; crop_info = self.crop_data_map.get(selected_crop)
-        if not crop_info: return
-        modal = QuantityModal(f"'{selected_crop}' 판매", crop_info['max_qty']); await interaction.response.send_modal(modal); await modal.wait()
+        selected_item = interaction.data['values'][0]
+        item_info = self.item_data_map.get(selected_item)
+        if not item_info: return
+
+        modal = QuantityModal(f"'{selected_item}' 판매", item_info['max_qty'])
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+
         if modal.value is None:
             msg = await interaction.followup.send("판매가 취소되었습니다.", ephemeral=True); asyncio.create_task(delete_after(msg, 5)); return
-        quantity_to_sell = modal.value; total_price = crop_info['price'] * quantity_to_sell
+            
+        quantity_to_sell = modal.value
+        total_price = item_info['price'] * quantity_to_sell
         try:
-            await update_inventory(str(self.user.id), selected_crop, -quantity_to_sell); await update_wallet(self.user, total_price)
+            await update_inventory(str(self.user.id), selected_item, -quantity_to_sell)
+            await update_wallet(self.user, total_price)
             new_balance = (await get_wallet(self.user.id)).get('balance', 0)
-            success_message = f"✅ **{selected_crop}** {quantity_to_sell}개를 `{total_price:,}`{self.currency_icon}에 판매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
+            success_message = f"✅ **{selected_item}** {quantity_to_sell}개를 `{total_price:,}`{self.currency_icon}에 판매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
             msg = await interaction.followup.send(success_message, ephemeral=True); asyncio.create_task(delete_after(msg, 10))
             await self.refresh_view(interaction)
-        except Exception as e: await self.handle_error(interaction, e)
+        except Exception as e:
+            await self.handle_error(interaction, e)
+
     async def go_back(self, interaction: discord.Interaction):
         await interaction.response.defer()
         view = SellCategoryView(self.user); view.message = self.message; await view.update_view(interaction)
 
-class SellMineralView(ShopViewBase):
-    # ... (변경 없음, 생략) ...
+class SellCropView(SellStackableView):
     def __init__(self, user: discord.Member):
-        super().__init__(user)
-        self.mineral_data_map: Dict[str, Dict[str, Any]] = {}
-    async def refresh_view(self, interaction: discord.Interaction):
-        embed = await self.build_embed()
-        await self.build_components()
-        await interaction.edit_original_response(embed=embed, view=self)
-    async def build_embed(self) -> discord.Embed:
-        balance = (await get_wallet(self.user.id)).get('balance', 0)
-        embed = discord.Embed(title="💎 판매함 - 광물", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 광물을 아래 메뉴에서 선택해주세요.", color=0x607D8B)
-        embed.set_footer(text="매일 00:05(KST)에 시세 변동")
-        return embed
-    async def build_components(self):
-        self.clear_items()
-        inventory = await get_inventory(self.user); item_db = get_item_database(); self.mineral_data_map.clear()
-        options = []
-        mineral_items = {name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category', '').strip() == '광물'}
-        if mineral_items:
-            for name, qty in mineral_items.items():
-                item_data = item_db.get(name, {}); price = item_data.get('current_price', item_data.get('sell_price', 0))
-                self.mineral_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
-                options.append(discord.SelectOption(label=f"{name} (보유: {qty}개)", value=name, description=f"개당: {price}{self.currency_icon}", emoji=item_data.get('emoji', '💎')))
-        
-        if options:
-            # ▼▼▼ [수정] options 리스트를 25개로 제한합니다. ▼▼▼
-            select = ui.Select(placeholder="판매할 광물을 선택하세요...(최대 25종)", options=options[:25]); select.callback = self.on_select; self.add_item(select)
-            # ▲▲▲ [수정] 완료 ▲▲▲
-        
-        back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=1); back_button.callback = self.go_back; self.add_item(back_button)
-    async def on_select(self, interaction: discord.Interaction):
-        selected_mineral = interaction.data['values'][0]; mineral_info = self.mineral_data_map.get(selected_mineral)
-        if not mineral_info: return
-        modal = QuantityModal(f"'{selected_mineral}' 판매", mineral_info['max_qty']); await interaction.response.send_modal(modal); await modal.wait()
-        if modal.value is None:
-            msg = await interaction.followup.send("판매가 취소되었습니다.", ephemeral=True); asyncio.create_task(delete_after(msg, 5)); return
-        quantity_to_sell = modal.value; total_price = mineral_info['price'] * quantity_to_sell
-        try:
-            await update_inventory(str(self.user.id), selected_mineral, -quantity_to_sell); await update_wallet(self.user, total_price)
-            new_balance = (await get_wallet(self.user.id)).get('balance', 0)
-            success_message = f"✅ **{selected_mineral}** {quantity_to_sell}개를 `{total_price:,}`{self.currency_icon}에 판매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
-            msg = await interaction.followup.send(success_message, ephemeral=True); asyncio.create_task(delete_after(msg, 10))
-            await self.refresh_view(interaction)
-        except Exception as e: await self.handle_error(interaction, e)
-    async def go_back(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        view = SellCategoryView(self.user); view.message = self.message; await view.update_view(interaction)
+        super().__init__(user, '농장_작물', "🌾 판매함 - 작물", 0x2ECC71, "🌾")
 
-class SellCookingView(ShopViewBase):
-    # ... (변경 없음, 생략) ...
+class SellMineralView(SellStackableView):
     def __init__(self, user: discord.Member):
-        super().__init__(user)
-        self.cooking_data_map: Dict[str, Dict[str, Any]] = {}
-    async def refresh_view(self, interaction: discord.Interaction):
-        embed = await self.build_embed()
-        await self.build_components()
-        await interaction.edit_original_response(embed=embed, view=self)
-    async def build_embed(self) -> discord.Embed:
-        balance = (await get_wallet(self.user.id)).get('balance', 0)
-        embed = discord.Embed(title="🍲 판매함 - 음식", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 음식을 아래 메뉴에서 선택해주세요.", color=0xE67E22)
-        embed.set_footer(text="매일 00:05(KST)에 시세 변동")
-        return embed
-    async def build_components(self):
-        self.clear_items()
-        inventory = await get_inventory(self.user); item_db = get_item_database(); self.cooking_data_map.clear()
-        options = []
-        cooking_items = {name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category', '').strip() == '요리'}
-        if cooking_items:
-            for name, qty in cooking_items.items():
-                item_data = item_db.get(name, {}); price = item_data.get('current_price', item_data.get('sell_price', 0)) 
-                self.cooking_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
-                options.append(discord.SelectOption(label=f"{name} (보유: {qty}개)", value=name, description=f"개당: {price}{self.currency_icon}", emoji=item_data.get('emoji', '🍲')))
-        
-        if options:
-            # ▼▼▼ [수정] options 리스트를 25개로 제한합니다. ▼▼▼
-            select = ui.Select(placeholder="판매할 음식을 선택하세요...(최대 25종)", options=options[:25]); select.callback = self.on_select; self.add_item(select)
-            # ▲▲▲ [수정] 완료 ▲▲▲
-        
-        back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=1); back_button.callback = self.go_back; self.add_item(back_button)
-    async def on_select(self, interaction: discord.Interaction):
-        selected_cooking = interaction.data['values'][0]; cooking_info = self.cooking_data_map.get(selected_cooking)
-        if not cooking_info: return
-        modal = QuantityModal(f"'{selected_cooking}' 판매", cooking_info['max_qty']); await interaction.response.send_modal(modal); await modal.wait()
-        if modal.value is None:
-            msg = await interaction.followup.send("판매가 취소되었습니다.", ephemeral=True); asyncio.create_task(delete_after(msg, 5)); return
-        quantity_to_sell = modal.value; total_price = cooking_info['price'] * quantity_to_sell
-        try:
-            await update_inventory(str(self.user.id), selected_cooking, -quantity_to_sell); await update_wallet(self.user, total_price)
-            new_balance = (await get_wallet(self.user.id)).get('balance', 0)
-            success_message = f"✅ **{selected_cooking}** {quantity_to_sell}개를 `{total_price:,}`{self.currency_icon}에 판매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
-            msg = await interaction.followup.send(success_message, ephemeral=True); asyncio.create_task(delete_after(msg, 10))
-            await self.refresh_view(interaction)
-        except Exception as e: await self.handle_error(interaction, e)
-    async def go_back(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        view = SellCategoryView(self.user); view.message = self.message; await view.update_view(interaction)
+        super().__init__(user, '광물', "💎 판매함 - 광물", 0x607D8B, "💎")
 
-class SellLootView(ShopViewBase):
-    # ... (변경 없음, 생략) ...
+class SellCookingView(SellStackableView):
     def __init__(self, user: discord.Member):
-        super().__init__(user)
-        self.loot_data_map: Dict[str, Dict[str, Any]] = {}
-    async def refresh_view(self, interaction: discord.Interaction):
-        embed = await self.build_embed()
-        await self.build_components()
-        await interaction.edit_original_response(embed=embed, view=self)
-    async def build_embed(self) -> discord.Embed:
-        balance = (await get_wallet(self.user.id)).get('balance', 0)
-        embed = discord.Embed(title="🏆 판매함 - 전리품", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 전리품을 아래 메뉴에서 선택해주세요.", color=0xFFD700)
-        return embed
-    async def build_components(self):
-        self.clear_items()
-        inventory = await get_inventory(self.user); item_db = get_item_database(); self.loot_data_map.clear()
-        options = []
-        loot_items = {name: qty for name, qty in inventory.items() if item_db.get(name, {}).get('category', '').strip() == '전리품'}
-        if loot_items:
-            for name, qty in loot_items.items():
-                item_data = item_db.get(name, {}); price = item_data.get('sell_price', 0)
-                self.loot_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
-                options.append(discord.SelectOption(label=f"{name} (보유: {qty}개)", value=name, description=f"개당: {price}{self.currency_icon}", emoji=item_data.get('emoji', '🏆')))
-        
-        if options:
-            # ▼▼▼ [수정] options 리스트를 25개로 제한합니다. ▼▼▼
-            select = ui.Select(placeholder="판매할 전리품을 선택하세요...(최대 25종)", options=options[:25]); select.callback = self.on_select; self.add_item(select)
-            # ▲▲▲ [수정] 완료 ▲▲▲
-        
-        back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=1); back_button.callback = self.go_back; self.add_item(back_button)
-    async def on_select(self, interaction: discord.Interaction):
-        selected_loot = interaction.data['values'][0]; loot_info = self.loot_data_map.get(selected_loot)
-        if not loot_info: return
-        modal = QuantityModal(f"'{selected_loot}' 판매", loot_info['max_qty']); await interaction.response.send_modal(modal); await modal.wait()
-        if modal.value is None:
-            msg = await interaction.followup.send("판매가 취소되었습니다.", ephemeral=True); asyncio.create_task(delete_after(msg, 5)); return
-        quantity_to_sell = modal.value; total_price = loot_info['price'] * quantity_to_sell
-        try:
-            await update_inventory(str(self.user.id), selected_loot, -quantity_to_sell); await update_wallet(self.user, total_price)
-            new_balance = (await get_wallet(self.user.id)).get('balance', 0)
-            success_message = f"✅ **{selected_loot}** {quantity_to_sell}개를 `{total_price:,}`{self.currency_icon}에 판매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
-            msg = await interaction.followup.send(success_message, ephemeral=True); asyncio.create_task(delete_after(msg, 10))
-            await self.refresh_view(interaction)
-        except Exception as e: await self.handle_error(interaction, e)
-    async def go_back(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        view = SellCategoryView(self.user); view.message = self.message; await view.update_view(interaction)
+        super().__init__(user, '요리', "🍲 판매함 - 음식", 0xE67E22, "🍲")
+
+class SellLootView(SellStackableView):
+    def __init__(self, user: discord.Member):
+        super().__init__(user, '전리품', "🏆 판매함 - 전리품", 0xFFD700, "🏆")
+# ▲▲▲ [수정] Sell-기타 아이템 View 공통 상속 클래스 및 개별 View 종료 ▲▲▲
 
 class SellCategoryView(ShopViewBase):
     async def build_embed(self) -> discord.Embed:
@@ -503,10 +458,9 @@ class SellCategoryView(ShopViewBase):
         category = interaction.data['custom_id'].split('_')[-1]
         view_map = {"fish": SellFishView, "crop": SellCropView, "mineral": SellMineralView, "cooking": SellCookingView, "loot": SellLootView}
         if view_class := view_map.get(category):
-            view = view_class(self.user); view.message = self.message; await view.refresh_view(interaction)
+            view = view_class(self.user); view.message = self.message; await view.update_view(interaction)
 
 class CommercePanelView(ui.View):
-    # ... (이하 모든 코드는 변경 없음) ...
     def __init__(self, cog_instance: 'Commerce'):
         super().__init__(timeout=None); self.commerce_cog = cog_instance
         shop_button = ui.Button(label="구매함 (아이템 구매)", style=discord.ButtonStyle.success, emoji="🏪", custom_id="commerce_open_shop"); shop_button.callback = self.open_shop; self.add_item(shop_button)
