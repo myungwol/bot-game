@@ -352,23 +352,23 @@ async def log_chest_reward(user_id: int, chest_type: str, contents: Dict[str, An
         "contents": contents
     }).execute()
 
+# --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
 @supabase_retry_handler()
 async def open_boss_chest(user_id: int, chest_type: str) -> Optional[Dict[str, Any]]:
     """
     DB 함수를 호출하여 상자를 열고 내용물을 가져옵니다.
     """
     try:
-        # 원인: DB 함수가 이제 user_id를 text 타입으로 받습니다.
-        # 해결: user_id를 str()으로 감싸 문자열로 변환하여 전달합니다.
+        # DB 함수가 p_user_id_text를 받으므로, 파라미터 이름을 맞추고 값을 str으로 변환합니다.
         res = await supabase.rpc('open_boss_chest', {
             'p_user_id_text': str(user_id),
             'p_chest_type': chest_type
         }).execute()
         return res.data if res and res.data else None
     except Exception as e:
-        # 요청하신 대로, 오류 발생 시 더 자세한 로그를 남깁니다.
         logger.error(f"open_boss_chest 함수 실행 중 오류 발생! user_id: {user_id}, chest_type: {chest_type}", exc_info=True)
         return None
+# --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
 @supabase_retry_handler()
 async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
