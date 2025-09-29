@@ -560,7 +560,10 @@ class BossRaid(commands.Cog):
         
         raid_id = raid_res.data[0]['id']
         ranking_view = RankingView(self, raid_id, interaction.user, boss_type)
+        # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
+        # 이제 RankingView에 start 메서드가 있으므로 이 호출은 정상적으로 작동합니다.
         await ranking_view.start(interaction)
+        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
 class RankingView(ui.View):
     def __init__(self, cog_instance: 'BossRaid', raid_id: int, user: discord.Member, boss_type: str):
@@ -574,17 +577,36 @@ class RankingView(ui.View):
         self.users_per_page = 10
         self.total_pages = 1
     
-    # ... (interaction_check, start, update_view, update_buttons 메서드는 그대로)
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("랭킹을 조회한 본인만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
+            return False
+        return True
 
-    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+    # --- ▼▼▼▼▼ 핵심 수정 시작 (start 메서드 복원) ▼▼▼▼▼ ---
+    async def start(self, interaction: discord.Interaction):
+        # 이전에 defer()가 호출되었을 수 있으므로 is_done() 체크 없이 바로 followup.send를 사용합니다.
+        # 만약 이전에 응답이 없었다면, 이 followup.send가 첫 응답이 됩니다.
+        embed = await self.build_ranking_embed()
+        self.update_buttons()
+        await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+
+    async def update_view(self, interaction: discord.Interaction):
+        embed = await self.build_ranking_embed()
+        self.update_buttons()
+        await interaction.response.edit_message(embed=embed, view=self)
+        
+    def update_buttons(self):
+        prev_button = discord.utils.get(self.children, custom_id="prev_page")
+        next_button = discord.utils.get(self.children, custom_id="next_page")
+        if prev_button: prev_button.disabled = self.current_page == 0
+        if next_button: next_button.disabled = self.current_page >= self.total_pages - 1
+    
     async def build_ranking_embed(self) -> discord.Embed:
         offset = self.current_page * self.users_per_page
         
-        # 1. 랭킹 데이터와 총 참가자 수를 동시에 가져옵니다.
         participants_task = supabase.table('boss_participants').select('user_id, total_damage_dealt, pets(nickname)', count='exact').eq('raid_id', self.raid_id).order('total_damage_dealt', desc=True).range(offset, offset + self.users_per_page - 1).execute()
-        
-        # 원인: 존재하지 않는 RPC 함수를 호출했습니다.
-        # 해결: 새로 만든 'get_boss_participant_rank' 함수를 올바른 인자와 함께 호출합니다.
         my_rank_task = supabase.rpc('get_boss_participant_rank', {
             'p_user_id': self.user_id,
             'p_raid_id': self.raid_id
@@ -615,7 +637,6 @@ class RankingView(ui.View):
                 rank_list.append(line)
             embed.description = "\n".join(rank_list)
 
-        # 2. 나의 예상 보상 등급을 계산하고 푸터에 추가합니다.
         footer_text = f"페이지 {self.current_page + 1} / {self.total_pages}"
         my_rank = my_rank_res.data if my_rank_res and my_rank_res.data is not None else None
 
@@ -636,10 +657,12 @@ class RankingView(ui.View):
     async def prev_page(self, interaction: discord.Interaction, button: ui.Button):
         self.current_page -= 1
         await self.update_view(interaction)
+        
     @ui.button(label="▶ 다음", style=discord.ButtonStyle.secondary, custom_id="next_page")
     async def next_page(self, interaction: discord.Interaction, button: ui.Button):
         self.current_page += 1
         await self.update_view(interaction)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(BossRaid(bot))
