@@ -222,7 +222,7 @@ class BossRaid(commands.Cog):
 
         except Exception as e:
             logger.error(f"[{boss_type.upper()}] 신규 레이드 생성 중 오류 발생: {e}", exc_info=True)
-                return
+            return
             
             # 3. 해당 보스 채널에 공지 메시지를 보냅니다.
             channel_key = WEEKLY_BOSS_CHANNEL_KEY if boss_type == 'weekly' else MONTHLY_BOSS_CHANNEL_KEY
