@@ -120,6 +120,41 @@ class BossRaid(commands.Cog):
         self.panel_updater_loop.start()
         self.boss_reset_loop.start()
 
+    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+    async def manual_reset_check(self, force_weekly: bool = False, force_monthly: bool = False):
+        """
+        관리자 명령어로 보스 리셋 로직을 수동 실행하기 위한 함수입니다.
+        force 플래그를 사용하여 날짜 검사를 우회합니다.
+        """
+        logger.info(f"수동 보스 리셋 확인 시작 (주간: {force_weekly}, 월간: {force_monthly})")
+        now_kst = datetime.now(KST)
+
+        # 주간 보스 리셋 로직
+        if force_weekly or (now_kst.weekday() == 0 and now_kst.hour == 0):
+            active_weekly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'weekly').limit(1).execute()
+            if not (active_weekly_raid_res and active_weekly_raid_res.data):
+                logger.info("[BossRaid] 새로운 주간 보스를 생성합니다.")
+                await self.create_new_raid('weekly', force=True)
+            else:
+                logger.info("[BossRaid] 이미 활성화된 주간 보스가 있어 생성을 건너뜁니다.")
+
+        # 월간 보스 리셋 로직
+        if force_monthly or (now_kst.day == 1 and now_kst.hour == 0):
+            active_monthly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'monthly').limit(1).execute()
+            if not (active_monthly_raid_res and active_monthly_raid_res.data):
+                logger.info("[BossRaid] 새로운 월간 보스를 생성합니다.")
+                await self.create_new_raid('monthly', force=True)
+            else:
+                logger.info("[BossRaid] 이미 활성화된 월간 보스가 있어 생성을 건너뜁니다.")
+        
+        return "보스 리셋 확인 작업이 완료되었습니다."
+    
+    @tasks.loop(hours=1)
+    async def boss_reset_loop(self):
+        # 이제 루프는 분리된 함수를 호출하기만 합니다.
+        await self.manual_reset_check()
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+    
     def cog_unload(self):
         self.panel_updater_loop.cancel()
         self.boss_reset_loop.cancel()
