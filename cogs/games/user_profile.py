@@ -61,8 +61,6 @@ class ItemUsageView(ui.View):
             self.parent_view.status_message = get_string("profile_view.item_usage_view.error_invalid_item")
             return await self.on_back(interaction, reload_data=True)
             
-        # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
-        # item_name을 DB에서 가져오는 대신, config에서 바로 사용하도록 변경합니다.
         item_name = item_info.get("name")
         if not item_name:
             await interaction.response.defer()
@@ -71,40 +69,38 @@ class ItemUsageView(ui.View):
 
         item_type = item_info.get("type")
 
-        # [추가] 'open_chest' 타입 처리 로직
         if item_type == "open_chest":
             await interaction.response.defer()
             
-            # 1. DB에서 상자를 열고 내용물을 가져옵니다.
             chest_contents = await open_boss_chest(self.user.id, item_name)
             
             if not chest_contents:
                 self.parent_view.status_message = "❌ 열 수 있는 보물 상자가 없거나, 처리 중 오류가 발생했습니다."
                 return await self.on_back(interaction, reload_data=True)
 
-            # 2. 보상을 지급합니다.
             coins = chest_contents.get("coins", 0)
             xp = chest_contents.get("xp", 0)
             items = chest_contents.get("items", {})
 
             db_tasks = []
             if coins > 0: db_tasks.append(update_wallet(self.user, coins))
-            if xp > 0:
-                # 펫과 유저에게 경험치를 동시에 지급합니다.
-                db_tasks.append(supabase.rpc('add_xp_to_pet', {'p_user_id': self.user.id, 'p_xp_to_add': xp}).execute())
             
+            # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
+            if xp > 0:
+                # 유저 경험치 지급 라인을 삭제하고, 펫 경험치 지급 라인만 남깁니다.
+                db_tasks.append(supabase.rpc('add_xp_to_pet', {'p_user_id': self.user.id, 'p_xp_to_add': xp}).execute())
+            # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+
             for item, qty in items.items():
                 db_tasks.append(update_inventory(self.user.id, item, qty))
 
-            # 사용한 보물 상자 1개를 인벤토리에서 제거합니다.
             db_tasks.append(update_inventory(self.user.id, item_name, -1))
             
             results = await asyncio.gather(*db_tasks, return_exceptions=True)
 
-            # 3. 결과 메시지를 생성하고 표시합니다.
             reward_lines = []
             if coins > 0: reward_lines.append(f"🪙 **코인**: `{coins:,}`")
-            if xp > 0: reward_lines.append(f"✨ **경험치**: `{xp:,}`")
+            if xp > 0: reward_lines.append(f"✨ **펫 경험치**: `{xp:,}`") # 텍스트도 '펫 경험치'로 명확하게 변경
             if items:
                 reward_lines.append("\n**획득 아이템:**")
                 for item, qty in items.items():
@@ -117,15 +113,10 @@ class ItemUsageView(ui.View):
             )
             await interaction.followup.send(embed=result_embed, ephemeral=True)
             
-            # 레벨업 또는 펫 레벨업이 발생했는지 확인하고 이벤트를 처리합니다.
+            # 펫 레벨업만 확인
             for res in results:
                 if isinstance(res, dict) and 'data' in res and res.data:
-                    # 유저 레벨업
-                    if isinstance(res.data, list) and res.data[0].get('leveled_up'):
-                        if (level_cog := self.parent_view.cog.bot.get_cog("LevelSystem")):
-                            await level_cog.handle_level_up_event(self.user, res.data)
-                    # 펫 레벨업
-                    elif isinstance(res.data, list) and res.data[0].get('pet_leveled_up'): # rpc 이름이 add_xp_to_pet이므로 pet_leveled_up으로 가정
+                    if isinstance(res.data, list) and res.data and res.data[0].get('leveled_up'):
                          if (pet_cog := self.parent_view.cog.bot.get_cog("PetSystem")):
                             await pet_cog.notify_pet_level_up(self.user.id, res.data[0].get('new_level'), res.data[0].get('points_awarded'))
             
