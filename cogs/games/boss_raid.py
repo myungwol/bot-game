@@ -347,7 +347,7 @@ class BossRaid(commands.Cog):
                         pet_damage = max(1, int(base_damage * (1 - defense_factor)))
                         boss_hp -= pet_damage
                         total_damage_dealt += pet_damage
-                        combat_logs.append(f"🔥 **{pet['nickname']}**이(가) `{pet_damage}`의 피해를 입혔습니다!")
+                        combat_logs.append(f"➡️ **{pet['nickname']}**이(가) `{pet_damage}`의 피해를 입혔습니다!")
                         await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
                         if boss_hp <= 0: break
                     if boss_hp > 0:
@@ -360,7 +360,7 @@ class BossRaid(commands.Cog):
                             combat_logs.append(f"💨 **{pet['nickname']}**이(가) 보스의 공격을 회피했습니다!")
                         else:
                             pet_hp -= boss_damage
-                            combat_logs.append(f"💧 **{boss['name']}**이(가) `{boss_damage}`의 피해를 입혔습니다.")
+                            combat_logs.append(f"⬅️ **{boss['name']}**이(가) `{boss_damage}`의 피해를 입혔습니다.")
                         await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
                         if pet_hp <= 0: break
                 else:
