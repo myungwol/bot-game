@@ -200,6 +200,7 @@ class EconomyCore(commands.Cog):
                     except Exception as e:
                         logger.error(f"펫 탐사 즉시 완료 처리 중 오류: {e}", exc_info=True)
 
+            # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
             if 'boss_spawn_test' in requests_by_prefix or 'boss_defeat_test' in requests_by_prefix:
                 boss_cog = self.bot.get_cog("BossRaid")
                 if boss_cog:
@@ -218,9 +219,13 @@ class EconomyCore(commands.Cog):
                         boss_type = payload.get('boss_type')
                         if boss_type:
                             logger.info(f"[AdminBridge] 강제 처치 요청 수신: {boss_type}")
-                            raid_res = await supabase.table('boss_raids').select('id, bosses(type)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
+                            # 원인: .maybe_single()이 결과가 없을 때 204 오류를 발생시킴
+                            # 해결: .limit(1)을 사용하여 결과가 없으면 빈 리스트를 받도록 수정
+                            raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', boss_type).limit(1).execute()
+                            
+                            # 해결: 결과가 리스트이므로, 리스트가 비어있지 않은지 확인하고 첫 번째 요소를 사용
                             if raid_res and raid_res.data:
-                                raid_id = raid_res.data['id']
+                                raid_id = raid_res.data[0]['id']
                                 channel_key = "weekly_boss_channel_id" if boss_type == 'weekly' else "monthly_boss_channel_id"
                                 if (channel_id := get_id(channel_key)) and (channel := self.bot.get_channel(channel_id)):
                                     await boss_cog.handle_boss_defeat(channel, raid_id)
@@ -228,6 +233,7 @@ class EconomyCore(commands.Cog):
                                     logger.error(f"강제 처치를 위한 {boss_type} 보스 채널을 찾을 수 없습니다.")
                             else:
                                 logger.warning(f"강제 처치 요청: 현재 활성화된 {boss_type} 보스가 없습니다.")
+            # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
             
             server_id_str = get_config("SERVER_ID")
             guild = self.bot.get_guild(int(server_id_str)) if server_id_str else None
