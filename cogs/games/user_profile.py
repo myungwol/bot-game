@@ -10,18 +10,19 @@ from typing import Optional, Dict, List, Any
 from datetime import datetime, timezone, timedelta
 from utils.helpers import coerce_item_emoji
 
+# --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
 from utils.database import (
     get_inventory, get_wallet, get_aquarium, set_user_gear, get_user_gear,
     save_panel_id, get_panel_id, get_id, get_embed_from_db,
     get_item_database, get_config, get_string, BARE_HANDS,
     supabase, get_farm_data, expand_farm_db, update_inventory, save_config_to_db,
-    open_boss_chest
+    open_boss_chest, update_wallet  # update_wallet을 import 목록에 추가합니다.
 )
+# --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-# ... (ReasonModal, ItemUsageView 클래스는 변경 없음, 생략) ...
 class ReasonModal(ui.Modal):
     def __init__(self, item_name: str):
         super().__init__(title="이벤트 우선 참여권 사용")
@@ -51,6 +52,7 @@ class ItemUsageView(ui.View):
             if roles_to_remove: await member.remove_roles(*roles_to_remove, reason="경고 역할 업데이트 (아이템 사용)")
         except discord.Forbidden: logger.error(f"경고 역할 업데이트 실패: {member.display_name}님의 역할을 변경할 권한이 없습니다.")
         except Exception as e: logger.error(f"경고 역할 업데이트 중 오류: {e}", exc_info=True)
+        
     async def on_item_select(self, interaction: discord.Interaction):
         selected_item_key = interaction.data["values"][0]
         usable_items_config = get_config("USABLE_ITEMS", {})
@@ -84,12 +86,8 @@ class ItemUsageView(ui.View):
 
             db_tasks = []
             if coins > 0: db_tasks.append(update_wallet(self.user, coins))
-            
-            # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
             if xp > 0:
-                # 유저 경험치 지급 라인을 삭제하고, 펫 경험치 지급 라인만 남깁니다.
                 db_tasks.append(supabase.rpc('add_xp_to_pet', {'p_user_id': self.user.id, 'p_xp_to_add': xp}).execute())
-            # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
             for item, qty in items.items():
                 db_tasks.append(update_inventory(self.user.id, item, qty))
@@ -100,7 +98,7 @@ class ItemUsageView(ui.View):
 
             reward_lines = []
             if coins > 0: reward_lines.append(f"🪙 **코인**: `{coins:,}`")
-            if xp > 0: reward_lines.append(f"✨ **펫 경험치**: `{xp:,}`") # 텍스트도 '펫 경험치'로 명확하게 변경
+            if xp > 0: reward_lines.append(f"✨ **펫 경험치**: `{xp:,}`")
             if items:
                 reward_lines.append("\n**획득 아이템:**")
                 for item, qty in items.items():
@@ -113,7 +111,6 @@ class ItemUsageView(ui.View):
             )
             await interaction.followup.send(embed=result_embed, ephemeral=True)
             
-            # 펫 레벨업만 확인
             for res in results:
                 if isinstance(res, dict) and 'data' in res and res.data:
                     if isinstance(res.data, list) and res.data and res.data[0].get('leveled_up'):
@@ -122,25 +119,23 @@ class ItemUsageView(ui.View):
             
             return await self.on_back(interaction, reload_data=True)
 
-        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
-        
         if item_type == "consume_with_reason":
             if selected_item_key == "role_item_event_priority":
                 if not get_config("event_priority_pass_active", False): await interaction.response.send_message("❌ 현재 우선 참여권을 사용할 수 있는 이벤트가 없습니다.", ephemeral=True, delete_after=5); return
                 if self.user.id in get_config("event_priority_pass_users", []): await interaction.response.send_message("❌ 이미 이 이벤트에 우선 참여권을 사용했습니다.", ephemeral=True, delete_after=5); return
-            modal = ReasonModal(item_name_from_db); await interaction.response.send_modal(modal); await modal.wait()
+            modal = ReasonModal(item_name); await interaction.response.send_modal(modal); await modal.wait()
             if not modal.reason: return
             try:
-                await self.log_item_usage(item_info, modal.reason); await update_inventory(self.user.id, item_name_from_db, -1)
+                await self.log_item_usage(item_info, modal.reason); await update_inventory(self.user.id, item_name, -1)
                 if selected_item_key == "role_item_event_priority":
                     used_users = get_config("event_priority_pass_users", []); used_users.append(self.user.id); await save_config_to_db("event_priority_pass_users", used_users)
-                self.parent_view.status_message = get_string("profile_view.item_usage_view.consume_success", item_name=item_name_from_db)
+                self.parent_view.status_message = get_string("profile_view.item_usage_view.consume_success", item_name=item_name)
             except Exception as e: logger.error(f"아이템 사용 처리 중 오류 (아이템: {selected_item_key}): {e}", exc_info=True); self.parent_view.status_message = get_string("profile_view.item_usage_view.error_generic")
             return await self.on_back(None, reload_data=True)
         elif item_type == "job_reset":
             await interaction.response.defer()
             try:
-                await supabase.rpc('reset_user_job_and_abilities', {'p_user_id': self.user.id}).execute(); await update_inventory(self.user.id, item_name_from_db, -1); await self.log_item_usage(item_info, f"'{item_name_from_db}'을(를) 사용하여 직업을 초기화했습니다.")
+                await supabase.rpc('reset_user_job_and_abilities', {'p_user_id': self.user.id}).execute(); await update_inventory(self.user.id, item_name, -1); await self.log_item_usage(item_info, f"'{item_name}'을(를) 사용하여 직업을 초기화했습니다.")
                 if handler_cog := self.parent_view.cog.bot.get_cog("JobAndTierHandler"): await handler_cog.trigger_advancement_check(self.user); self.parent_view.status_message = f"✅ 직업이 초기화되었습니다. 곧 전직 안내 스레드가 생성됩니다."
                 else: self.parent_view.status_message = f"✅ 직업이 초기화되었지만, 전직 시스템을 찾을 수 없습니다."
             except Exception as e: logger.error(f"직업 초기화 처리 중 오류: {e}", exc_info=True); self.parent_view.status_message = "❌ 직업 초기화 중 오류가 발생했습니다."
@@ -150,8 +145,8 @@ class ItemUsageView(ui.View):
             if item_type == "deduct_warning":
                 current_warnings = (await supabase.rpc('get_total_warnings', {'p_user_id': self.user.id, 'p_guild_id': self.user.guild.id}).execute()).data
                 if current_warnings <= 0: self.parent_view.status_message = "ℹ️ 차감할 벌점이 없습니다. 아이템을 사용할 수 없습니다."; return await self.on_back(interaction, reload_data=False)
-                new_total = (await supabase.rpc('add_warning_and_get_total', {'p_guild_id': self.user.guild.id, 'p_user_id': self.user.id, 'p_moderator_id': self.user.id, 'p_reason': f"'{item_name_from_db}' 아이템 사용", 'p_amount': -1}).execute()).data
-                await update_inventory(self.user.id, item_name_from_db, -1); await self.log_item_usage(item_info, f"'{item_name_from_db}'을(를) 사용하여 벌점을 1회 차감했습니다. (현재 벌점: {new_total}회)"); await self._update_warning_roles(self.user, new_total); self.parent_view.status_message = f"✅ '{item_name_from_db}'을(를) 사용했습니다. (현재 벌점: {new_total}회)"
+                new_total = (await supabase.rpc('add_warning_and_get_total', {'p_guild_id': self.user.guild.id, 'p_user_id': self.user.id, 'p_moderator_id': self.user.id, 'p_reason': f"'{item_name}' 아이템 사용", 'p_amount': -1}).execute()).data
+                await update_inventory(self.user.id, item_name, -1); await self.log_item_usage(item_info, f"'{item_name}'을(를) 사용하여 벌점을 1회 차감했습니다. (현재 벌점: {new_total}회)"); await self._update_warning_roles(self.user, new_total); self.parent_view.status_message = f"✅ '{item_name}'을(를) 사용했습니다. (현재 벌점: {new_total}회)"
             elif item_type == "farm_expansion":
                 farm_data = await get_farm_data(self.user.id)
                 if not farm_data: self.parent_view.status_message = get_string("profile_view.item_usage_view.farm_expand_fail_no_farm")
@@ -160,11 +155,12 @@ class ItemUsageView(ui.View):
                     if current_plots >= 25: self.parent_view.status_message = get_string("profile_view.item_usage_view.farm_expand_fail_max")
                     else:
                         if await expand_farm_db(farm_data['id'], current_plots):
-                            await update_inventory(self.user.id, item_name_from_db, -1); self.parent_view.status_message = get_string("profile_view.item_usage_view.farm_expand_success", plot_count=current_plots + 1)
+                            await update_inventory(self.user.id, item_name, -1); self.parent_view.status_message = get_string("profile_view.item_usage_view.farm_expand_success", plot_count=current_plots + 1)
                             if farm_cog := self.parent_view.cog.bot.get_cog("Farm"): await farm_cog.request_farm_ui_update(self.user.id)
                         else: raise Exception("DB 농장 확장 실패")
         except Exception as e: logger.error(f"아이템 사용 처리 중 오류 (아이템: {selected_item_key}): {e}", exc_info=True); self.parent_view.status_message = get_string("profile_view.item_usage_view.error_generic")
         await self.on_back(interaction, reload_data=True)
+        
     async def log_item_usage(self, item_info: dict, reason: str):
         if not (log_channel_key := item_info.get("log_channel_key")): return
         log_channel_id = get_id(log_channel_key)
@@ -175,6 +171,7 @@ class ItemUsageView(ui.View):
         if item_info.get("type") == "consume_with_reason": embed.title = f"{self.user.display_name}님이 {item_display_name}을(를) 사용했습니다."; embed.add_field(name="이벤트 양식", value=reason, inline=False)
         else: embed.description=f"{self.user.mention}님이 **'{item_display_name}'**을(를) 사용했습니다."; embed.add_field(name="처리 내용", value=reason, inline=False)
         embed.set_author(name=self.user.display_name, icon_url=self.user.display_avatar.url if self.user.display_avatar else None); await log_channel.send(embed=embed)
+        
     async def on_back(self, interaction: Optional[discord.Interaction], reload_data: bool = False):
         await self.parent_view.update_display(interaction, reload_data=reload_data)
 
