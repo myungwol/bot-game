@@ -209,7 +209,6 @@ class BossRaid(commands.Cog):
         except (discord.Forbidden, discord.HTTPException) as e:
             logger.error(f"[{boss_type.upper()}] 정보 패널 메시지 생성 실패: {e}")
 
-    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     def build_boss_info_embed(self, raid_data: Optional[Dict[str, Any]], boss_type: str) -> discord.Embed:
         if not raid_data:
             return discord.Embed(
@@ -224,12 +223,13 @@ class BossRaid(commands.Cog):
 
         hp_bar = create_bar(raid_data['current_hp'], boss_info['max_hp'])
         hp_text = f"`{raid_data['current_hp']:,} / {boss_info['max_hp']:,}`\n{hp_bar}"
-        # 원인: 이 부분이 한 줄로 표시되고 있었습니다.
-        # 해결: \n을 사용하여 공격력과 방어력을 다른 줄로 분리하고, 속성 정보를 제거했습니다.
+        # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+        # 속성을 제거하고 공격력과 방어력을 줄바꿈하여 표시합니다.
         stats_text = (
             f"**공격력:** `{boss_info['attack']:,}`\n"
             f"**방어력:** `{boss_info['defense']:,}`"
         )
+        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
         
         embed = discord.Embed(title=f"👑 {boss_info['name']} 현황", color=0xE74C3C)
         if boss_info.get('image_url'):
@@ -238,7 +238,6 @@ class BossRaid(commands.Cog):
         embed.add_field(name="--- 보스 정보 ---", value=f"{stats_text}\n\n**체력:**\n{hp_text}", inline=False)
         embed.set_footer(text="패널은 2분마다 자동으로 업데이트됩니다.")
         return embed
-    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     def build_combat_logs_embed(self, raid_data: Optional[Dict[str, Any]], boss_type: str) -> discord.Embed:
         title = f"📜 {('주간' if boss_type == 'weekly' else '월간')} 보스 최근 전투 기록"
@@ -298,7 +297,11 @@ class BossRaid(commands.Cog):
             boss = raid_data['bosses']
             pet_hp, pet_attack, pet_defense, pet_speed = pet.get('current_hp', 100), pet.get('current_attack', 10), pet.get('current_defense', 10), pet.get('current_speed', 10)
             boss_hp, boss_attack, boss_defense = raid_data['current_hp'], boss['attack'], boss['defense']
-            boss_speed = int(boss_attack * 0.5)
+            # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+            # 원인: 보스 속도가 공격력에 비례하여 동적으로 계산되었습니다.
+            # 해결: 보스 속도를 1로 고정합니다.
+            boss_speed = 1
+            # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
             combat_logs = [f"**{user.display_name}**님이 **{pet['nickname']}**와(과) 함께 전투를 시작합니다!"]
             total_damage_dealt = 0
             view = BossCombatView()
@@ -403,7 +406,11 @@ class BossRaid(commands.Cog):
         embed.set_author(name=f"{user.display_name}님의 도전", icon_url=user.display_avatar.url if user.display_avatar else None)
         pet_stats_text = (f"❤️ **HP:** `{max(0, pet_hp)} / {pet['current_hp']}`\n" f"⚔️ **공격력:** `{pet['current_attack']}`\n" f"🛡️ **방어력:** `{pet['current_defense']}`\n" f"💨 **스피드:** `{pet['current_speed']}`")
         embed.add_field(name=f"내 펫: {pet['nickname']} (Lv.{pet['level']})", value=pet_stats_text, inline=True)
-        boss_speed = int(boss['attack'] * 0.5)
+        # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+        # 원인: 보스 속도가 공격력에 비례하여 동적으로 계산되었습니다.
+        # 해결: 보스 속도를 1로 고정합니다. (UI 표시 부분)
+        boss_speed = 1
+        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
         boss_stats_text = (f"❤️ **HP:** `{max(0, boss_hp):,} / {boss['max_hp']:,}`\n" f"⚔️ **공격력:** `{boss['attack']}`\n" f"🛡️ **방어력:** `{boss['defense']}`\n" f"💨 **스피드:** `{boss_speed}`")
         embed.add_field(name=f"보스: {boss['name']}", value=boss_stats_text, inline=True)
         log_text = "\n".join(f"> {line}" for line in logs[-10:])
