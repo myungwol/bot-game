@@ -217,18 +217,34 @@ class BossRaid(commands.Cog):
             logger.error(f"[{boss_type.upper()}] 패널 메시지를 수정/생성/고정하는 데 실패했습니다: {e}")
             
     def build_boss_panel_embed(self, raid_data: Dict[str, Any]) -> discord.Embed:
-        # ... (이하 모든 코드는 이전과 동일하므로 생략)
-        boss_info = raid_data['bosses']
+        """DB에서 가져온 레이드 정보로 패널 임베드를 생성합니다."""
+        
+        # ▼▼▼ [핵심 수정] .get()을 사용하여 안전하게 데이터를 가져오고, None일 경우를 처리합니다. ▼▼▼
+        boss_info = raid_data.get('bosses')
+        if not boss_info:
+            # 이 경우는 데이터 무결성에 문제가 있는 심각한 상황입니다.
+            logger.error(f"레이드 데이터(ID: {raid_data.get('id')})에 연결된 보스 정보(bosses)가 없습니다. DB의 Foreign Key 관계를 확인해주세요.")
+            return discord.Embed(
+                title="데이터 오류",
+                description="활성 레이드에 연결된 보스 정보를 찾을 수 없습니다.\n관리자에게 문의해주세요.",
+                color=discord.Color.red()
+            )
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+        
         recent_logs = raid_data.get('recent_logs', [])
         log_text = "\n".join(recent_logs) if recent_logs else "아직 전투 기록이 없습니다."
+
         hp_bar = create_bar(raid_data['current_hp'], boss_info['max_hp'])
         hp_text = f"`{raid_data['current_hp']:,} / {boss_info['max_hp']:,}`\n{hp_bar}"
         stats_text = f"**속성:** `{boss_info.get('element', '무')}` | **공격력:** `{boss_info['attack']:,}` | **방어력:** `{boss_info['defense']:,}`"
+        
         embed = discord.Embed(title=f"👑 {boss_info['name']} 현황", color=0xE74C3C)
         if boss_info.get('image_url'):
             embed.set_thumbnail(url=boss_info['image_url'])
+
         embed.add_field(name="--- 최근 전투 기록 (최대 10개) ---", value=log_text, inline=False)
         embed.add_field(name="--- 보스 정보 ---", value=f"{stats_text}\n\n**체력:**\n{hp_text}", inline=False)
+        
         embed.set_footer(text="패널은 2분마다 자동으로 업데이트됩니다.")
         return embed
 
