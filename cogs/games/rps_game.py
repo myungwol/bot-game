@@ -107,6 +107,24 @@ class RPSGame(commands.Cog):
         self.cleanup_stale_games.start()
     # ▲▲▲ [수정] 완료 ▲▲▲
 
+    # ▼▼▼▼▼ 핵심 추가 ▼▼▼▼▼
+    async def cog_teardown(self):
+        """Cog가 종료될 때 호출되는 비동기 클린업 메서드입니다."""
+        logger.info("[RPSGame] Cog가 종료됩니다. 모든 활성 가위바위보 게임을 취소하고 환불을 진행합니다.")
+        
+        # active_games 딕셔너리를 반복하는 동안 수정될 수 있으므로 키 목록을 복사합니다.
+        active_channel_ids = list(self.active_games.keys())
+        
+        if not active_channel_ids:
+            logger.info("[RPSGame] 정리할 활성 게임이 없습니다.")
+            return
+
+        # 모든 게임 종료 작업을 동시에 실행합니다.
+        cleanup_tasks = [self.end_game(channel_id, None) for channel_id in active_channel_ids]
+        await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+        
+        logger.info(f"[RPSGame] {len(active_channel_ids)}개의 활성 게임을 성공적으로 정리했습니다.")
+
     def cog_unload(self):
         self.cleanup_stale_games.cancel()
 
