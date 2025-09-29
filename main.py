@@ -62,7 +62,7 @@ class MyBot(commands.Bot):
             "DiceGame", "SlotMachine", "RPSGame",
             "Quests", "Farm", "Mining", "Blacksmith", 
             "Trade", "Cooking", "FriendInvite", "PetSystem",
-            "Exploration"
+            "Exploration", "BossRaid"  # <--- 여기에 추가
         ]
          
         registered_views_count = 0
