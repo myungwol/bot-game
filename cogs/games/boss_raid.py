@@ -120,41 +120,6 @@ class BossRaid(commands.Cog):
         self.panel_updater_loop.start()
         self.boss_reset_loop.start()
 
-    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
-    async def manual_reset_check(self, force_weekly: bool = False, force_monthly: bool = False):
-        """
-        관리자 명령어로 보스 리셋 로직을 수동 실행하기 위한 함수입니다.
-        force 플래그를 사용하여 날짜 검사를 우회합니다.
-        """
-        logger.info(f"수동 보스 리셋 확인 시작 (주간: {force_weekly}, 월간: {force_monthly})")
-        now_kst = datetime.now(KST)
-
-        # 주간 보스 리셋 로직
-        if force_weekly or (now_kst.weekday() == 0 and now_kst.hour == 0):
-            active_weekly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'weekly').limit(1).execute()
-            if not (active_weekly_raid_res and active_weekly_raid_res.data):
-                logger.info("[BossRaid] 새로운 주간 보스를 생성합니다.")
-                await self.create_new_raid('weekly', force=True)
-            else:
-                logger.info("[BossRaid] 이미 활성화된 주간 보스가 있어 생성을 건너뜁니다.")
-
-        # 월간 보스 리셋 로직
-        if force_monthly or (now_kst.day == 1 and now_kst.hour == 0):
-            active_monthly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'monthly').limit(1).execute()
-            if not (active_monthly_raid_res and active_monthly_raid_res.data):
-                logger.info("[BossRaid] 새로운 월간 보스를 생성합니다.")
-                await self.create_new_raid('monthly', force=True)
-            else:
-                logger.info("[BossRaid] 이미 활성화된 월간 보스가 있어 생성을 건너뜁니다.")
-        
-        return "보스 리셋 확인 작업이 완료되었습니다."
-    
-    @tasks.loop(hours=1)
-    async def boss_reset_loop(self):
-        # 이제 루프는 분리된 함수를 호출하기만 합니다.
-        await self.manual_reset_check()
-    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
-    
     def cog_unload(self):
         self.panel_updater_loop.cancel()
         self.boss_reset_loop.cancel()
@@ -165,21 +130,35 @@ class BossRaid(commands.Cog):
     async def panel_updater_loop(self):
         await self.update_all_boss_panels()
 
-    @tasks.loop(hours=1)
-    async def boss_reset_loop(self):
+    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+    async def manual_reset_check(self, force_weekly: bool = False, force_monthly: bool = False):
+        """
+        관리자 명령어나 자동 루프를 통해 보스 리셋 로직을 실행합니다.
+        force 플래그를 사용하면 날짜와 상관없이 강제로 실행됩니다.
+        """
+        logger.info(f"수동 보스 리셋 확인 시작 (주간: {force_weekly}, 월간: {force_monthly})")
         now_kst = datetime.now(KST)
 
-        if now_kst.weekday() == 0 and now_kst.hour == 0:
-            active_weekly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'weekly').limit(1).execute()
-            if not (active_weekly_raid_res and active_weekly_raid_res.data):
-                logger.info("[BossRaid] 새로운 주간 보스를 생성합니다.")
-                await self.create_new_raid('weekly', force=True)
+        # 주간 보스 리셋 로직
+        if force_weekly or (now_kst.weekday() == 0 and now_kst.hour == 0):
+            # 원인: 이전에 활성 보스가 있는지 확인하는 로직이 있었습니다.
+            # 해결: 확인 로직을 제거하고, 리셋 시간이 되면 무조건 새로운 보스 생성을 시도합니다.
+            # create_new_raid(force=True)가 기존 보스를 자동으로 만료 처리합니다.
+            logger.info("[BossRaid] 주간 보스 리셋 조건을 충족했습니다. 새로운 보스 생성을 시도합니다.")
+            await self.create_new_raid('weekly', force=True)
 
-        if now_kst.day == 1 and now_kst.hour == 0:
-            active_monthly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'monthly').limit(1).execute()
-            if not (active_monthly_raid_res and active_monthly_raid_res.data):
-                logger.info("[BossRaid] 새로운 월간 보스를 생성합니다.")
-                await self.create_new_raid('monthly', force=True)
+        # 월간 보스 리셋 로직
+        if force_monthly or (now_kst.day == 1 and now_kst.hour == 0):
+            logger.info("[BossRaid] 월간 보스 리셋 조건을 충족했습니다. 새로운 보스 생성을 시도합니다.")
+            await self.create_new_raid('monthly', force=True)
+        
+        return "보스 리셋 확인 작업이 완료되었습니다."
+
+    @tasks.loop(hours=1)
+    async def boss_reset_loop(self):
+        # 이제 루프는 시간 조건 확인과 실제 로직이 모두 포함된 manual_reset_check를 호출합니다.
+        await self.manual_reset_check()
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
     
     @boss_reset_loop.before_loop
     async def before_boss_reset_loop(self):
@@ -318,14 +297,9 @@ class BossRaid(commands.Cog):
         embed.description = log_text
         return embed
     
-    # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
-    # on_challenge_click에서 넘어온 interaction을 그대로 사용합니다.
-    # 불필요한 defer() 호출을 제거하고, 에러 메시지는 followup.send()로 보냅니다.
     async def handle_challenge(self, interaction: discord.Interaction, boss_type: str):
         user = interaction.user
         
-        # on_challenge_click에서 모든 유효성 검사가 끝나고, 버튼이 비활성화된 후 호출됩니다.
-        # 따라서 여기서는 레이드 ID와 펫 정보만 다시 가져오면 됩니다.
         raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', boss_type).limit(1).execute()
         raid_id = raid_res.data[0]['id']
         pet = await get_user_pet(user.id)
@@ -340,7 +314,6 @@ class BossRaid(commands.Cog):
             finally:
                 self.active_combats.pop(boss_type, None)
         await self.update_all_boss_panels()
-    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     async def run_combat_simulation(self, interaction: discord.Interaction, user: discord.Member, pet: Dict, raid_id: int, boss_type: str):
         """실시간 턴제 전투를 시뮬레이션하고 UI를 업데이트합니다."""
