@@ -104,10 +104,14 @@ class BossCombatView(ui.View):
 
 class BossRaid(commands.Cog):
     def __init__(self, bot: commands.Bot):
+        # ▼▼▼ [핵심 수정] 봇 객체를 클래스 변수로 저장하는 라인을 추가/확인합니다. ▼▼▼
         self.bot = bot
+        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+        
         self.active_combats: Dict[str, asyncio.Task] = {} # key: boss_type ('weekly'/'monthly')
-        self.combat_lock = asyncio.Lock()
+        self.combat_lock = asyncio.Lock() # 단 한 명의 유저만 전투를 시작할 수 있도록 하는 전역 Lock
 
+        # --- [주요 루프] ---
         self.panel_updater_loop.start()
         # self.combat_engine_loop.start() # -> 실시간 턴제 방식으로 변경되어 이 루프는 불필요
         self.boss_reset_loop.start()
