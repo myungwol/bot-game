@@ -703,8 +703,14 @@ class PetSystem(commands.Cog):
             
         await supabase.table('pets').update({
             'current_stage': 2, 'level': 1, 'xp': 0, 'hunger': 100, 'friendship': 0,
-            'current_hp': final_stats['hp'],
             'nickname': species_info['species_name'],
+            # ▼▼▼▼▼ 핵심 수정 ▼▼▼▼▼
+            # 계산된 최종 능력치를 모두 업데이트하도록 수정합니다.
+            'current_hp': final_stats['hp'],
+            'current_attack': final_stats['attack'],
+            'current_defense': final_stats['defense'],
+            'current_speed': final_stats['speed'],
+            # ▲▲▲▲▲ 핵심 수정 ▲▲▲▲▲
             'natural_bonus_hp': natural_bonus_stats['hp'], 
             'natural_bonus_attack': natural_bonus_stats['attack'],
             'natural_bonus_defense': natural_bonus_stats['defense'], 
