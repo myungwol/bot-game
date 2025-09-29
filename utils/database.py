@@ -449,8 +449,9 @@ async def add_xp_to_pet_db(user_id: int, xp_to_add: int) -> Optional[List[Dict]]
     if xp_to_add <= 0:
         return None
     try:
-        res = await supabase.rpc('add_xp_to_pet', {
-            'p_user_id': str(user_id), 
+        # 함수 시그니처를 명시하여 DB가 정확한 함수를 찾도록 강제합니다.
+        res = await supabase.rpc('add_xp_to_pet(p_user_id, p_xp_to_add)', {
+            'p_user_id': str(user_id),
             'p_xp_to_add': xp_to_add
         }).execute()
         return res.data if res and hasattr(res, 'data') else None
