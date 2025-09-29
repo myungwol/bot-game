@@ -321,19 +321,18 @@ class BossRaid(commands.Cog):
                 await message.edit(embed=embed, view=view)
                 logger.info(f"[{boss_type.upper()}] 패널 메시지(ID: {message_id})를 성공적으로 수정했습니다.")
             else:
-                await channel.purge(limit=100)
-                new_message = await channel.send(embed=embed, view=view)
                 # [수정] channel_configs 테이블에 직접 접근하는 대신 save_id_to_db 헬퍼 함수 사용
                 from utils.database import save_id_to_db
+                await channel.purge(limit=100)
+                new_message = await channel.send(embed=embed, view=view)
                 await save_id_to_db(msg_key, new_message.id)
                 await new_message.pin()
                 logger.info(f"[{boss_type.upper()}] 새로운 패널 메시지(ID: {new_message.id})를 생성하고 고정했습니다.")
         except discord.NotFound:
             logger.warning(f"[{boss_type.upper()}] 패널 메시지(ID: {message_id})를 찾을 수 없어 새로 생성합니다.")
+            from utils.database import save_id_to_db
             await channel.purge(limit=100)
             new_message = await channel.send(embed=embed, view=view)
-            # [수정] channel_configs 테이블에 직접 접근하는 대신 save_id_to_db 헬퍼 함수 사용
-            from utils.database import save_id_to_db
             await save_id_to_db(msg_key, new_message.id)
             await new_message.pin()
         except (discord.Forbidden, discord.HTTPException) as e:
