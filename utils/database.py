@@ -34,6 +34,8 @@ _exploration_locations_cache: List[Dict[str, Any]] = []
 _exploration_loot_cache: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 _initial_load_complete = False
 
+
+
 KST = timezone(timedelta(hours=9))
 BARE_HANDS = "맨손"
 DEFAULT_ROD = "평범한 낚싯대"
@@ -65,6 +67,15 @@ async def load_all_data_from_db():
     )
     logger.info("------ [ 모든 DB 데이터 캐시 로드 완료 ] ------")
     _initial_load_complete = True
+
+# --- ▼▼▼▼▼ 핵심 추가 시작 ▼▼▼▼▼ ---
+def clear_user_ability_cache(user_id: int):
+    """특정 유저의 능력 캐시를 강제로 삭제합니다."""
+    global _user_abilities_cache
+    if user_id in _user_abilities_cache:
+        del _user_abilities_cache[user_id]
+        logger.info(f"[Cache] 유저(ID: {user_id})의 능력 캐시가 성공적으로 삭제되었습니다.")
+# --- ▲▲▲▲▲ 핵심 추가 종료 ▲▲▲▲▲ ---
 
 @supabase_retry_handler()
 async def load_bot_configs_from_db():
