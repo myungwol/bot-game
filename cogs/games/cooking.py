@@ -21,7 +21,7 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-COOKABLE_CATEGORIES = ["농장_작물", "광물", "아이템", "생선"]
+COOKABLE_CATEGORIES = ["농장_작물", "광물", "아이템", "생선", "조미료"] # <--- "조미료" 카테고리 추가
 MAX_CAULDRONS = 5
 FAILED_DISH_NAME = "정체불명의 요리"
 DEFAULT_COOK_TIME_MINUTES = 10
