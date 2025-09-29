@@ -359,9 +359,9 @@ async def open_boss_chest(user_id: int, chest_type: str) -> Optional[Dict[str, A
     DB 함수를 호출하여 상자를 열고 내용물을 가져옵니다.
     """
     try:
-        # DB 함수가 p_user_id_text를 받으므로, 파라미터 이름을 맞추고 값을 str으로 변환합니다.
+        # DB 함수는 user_id를 bigint 타입으로 기대하므로 정수(int) 타입으로 전달합니다.
         res = await supabase.rpc('open_boss_chest', {
-            'p_user_id_text': str(user_id),
+            'p_user_id': user_id,
             'p_chest_type': chest_type
         }).execute()
         return res.data if res and res.data else None
