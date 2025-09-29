@@ -53,6 +53,7 @@ class ItemUsageView(ui.View):
         except discord.Forbidden: logger.error(f"경고 역할 업데이트 실패: {member.display_name}님의 역할을 변경할 권한이 없습니다.")
         except Exception as e: logger.error(f"경고 역할 업데이트 중 오류: {e}", exc_info=True)
         
+    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def on_item_select(self, interaction: discord.Interaction):
         selected_item_key = interaction.data["values"][0]
         usable_items_config = get_config("USABLE_ITEMS", {})
@@ -71,30 +72,21 @@ class ItemUsageView(ui.View):
 
         item_type = item_info.get("type")
 
+        # [수정] 'open_chest' 타입 처리 로직을 DB 함수 호출 방식으로 변경
         if item_type == "open_chest":
             await interaction.response.defer()
             
+            # 1. 이제 DB 함수가 모든 것을 처리하고 결과만 반환합니다.
             chest_contents = await open_boss_chest(self.user.id, item_name)
             
             if not chest_contents:
                 self.parent_view.status_message = "❌ 열 수 있는 보물 상자가 없거나, 처리 중 오류가 발생했습니다."
                 return await self.on_back(interaction, reload_data=True)
 
+            # 2. 결과 메시지를 생성하고 표시합니다.
             coins = chest_contents.get("coins", 0)
             xp = chest_contents.get("xp", 0)
             items = chest_contents.get("items", {})
-
-            db_tasks = []
-            if coins > 0: db_tasks.append(update_wallet(self.user, coins))
-            if xp > 0:
-                db_tasks.append(supabase.rpc('add_xp_to_pet', {'p_user_id': self.user.id, 'p_xp_to_add': xp}).execute())
-
-            for item, qty in items.items():
-                db_tasks.append(update_inventory(self.user.id, item, qty))
-
-            db_tasks.append(update_inventory(self.user.id, item_name, -1))
-            
-            results = await asyncio.gather(*db_tasks, return_exceptions=True)
 
             reward_lines = []
             if coins > 0: reward_lines.append(f"🪙 **코인**: `{coins:,}`")
@@ -106,19 +98,17 @@ class ItemUsageView(ui.View):
             
             result_embed = discord.Embed(
                 title=f"🎁 {item_name} 개봉 결과",
-                description="\n".join(reward_lines),
+                description="\n".join(reward_lines) if reward_lines else "상자가 비어있었습니다.",
                 color=0xFFD700
             )
             await interaction.followup.send(embed=result_embed, ephemeral=True)
             
-            for res in results:
-                if isinstance(res, dict) and 'data' in res and res.data:
-                    if isinstance(res.data, list) and res.data and res.data[0].get('leveled_up'):
-                         if (pet_cog := self.parent_view.cog.bot.get_cog("PetSystem")):
-                            await pet_cog.notify_pet_level_up(self.user.id, res.data[0].get('new_level'), res.data[0].get('points_awarded'))
+            # 펫 레벨업/진화 확인 요청을 DB에 보냅니다 (EconomyCore가 처리)
+            if xp > 0:
+                await save_config_to_db(f"pet_levelup_request_{self.user.id}", {"xp_added": xp, "timestamp": time.time()})
+                await save_config_to_db(f"pet_evolution_check_request_{self.user.id}", time.time())
             
             return await self.on_back(interaction, reload_data=True)
-
         if item_type == "consume_with_reason":
             if selected_item_key == "role_item_event_priority":
                 if not get_config("event_priority_pass_active", False): await interaction.response.send_message("❌ 현재 우선 참여권을 사용할 수 있는 이벤트가 없습니다.", ephemeral=True, delete_after=5); return
