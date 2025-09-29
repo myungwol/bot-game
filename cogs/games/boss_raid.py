@@ -360,6 +360,7 @@ class BossRaid(commands.Cog):
 
     # --- [핸들러] 버튼 상호작용 처리 ---
     async def handle_challenge(self, interaction: discord.Interaction, boss_type: str):
+        """'도전하기' 버튼 클릭을 처리하는 로직"""
         user = interaction.user
         
         if self.combat_lock.locked():
@@ -367,26 +368,29 @@ class BossRaid(commands.Cog):
             return
 
         # 1. 도전 조건 확인
-        raid_res = await supabase.table('boss_raids').select('id').eq('status', 'active').eq('bosses.type', boss_type).single().execute()
+        # [수정] bosses 테이블 조인 쿼리 수정
+        raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
         if not raid_res.data:
-            await interaction.response.send_message("❌ 현재 도전할 수 있는 보스가 없습니다.", ephemeral=True); return
+            await interaction.response.send_message("❌ 현재 도전할 수 있는 보스가 없습니다.", ephemeral=True)
+            return # <--- 올바른 들여쓰기
         
         raid_id = raid_res.data['id']
         
         pet = await get_user_pet(user.id)
         if not pet:
-            await interaction.response.send_message("❌ 전투에 참여할 펫이 없습니다.", ephemeral=True); return
+            await interaction.response.send_message("❌ 전투에 참여할 펫이 없습니다.", ephemeral=True)
+            return # <--- 올바른 들여쓰기
         
         # 2. 도전 횟수 확인
         start_time_utc = get_week_start_utc() if boss_type == 'weekly' else get_month_start_utc()
         
         part_res = await supabase.table('boss_participants').select('last_fought_at').eq('raid_id', raid_id).eq('user_id', user.id).maybe_single().execute()
         
-        if part_res.data and part_res.data['last_fought_at']:
+        if part_res.data and part_res.data.get('last_fought_at'):
             last_fought_dt = datetime.fromisoformat(part_res.data['last_fought_at'].replace('Z', '+00:00'))
             if last_fought_dt >= start_time_utc:
                  await interaction.response.send_message(f"❌ 이번 {('주' if boss_type == 'weekly' else '달')}에는 이미 보스에게 도전했습니다.", ephemeral=True)
-                 return
+                 return # <--- 올바른 들여쓰기
         
         # 3. 전투 시작
         async with self.combat_lock:
@@ -395,8 +399,10 @@ class BossRaid(commands.Cog):
 
             combat_task = asyncio.create_task(self.run_combat_simulation(interaction, user, pet, raid_id, boss_type))
             self.active_combats[boss_type] = combat_task
-            await combat_task
-            self.active_combats.pop(boss_type, None)
+            try:
+                await combat_task
+            finally:
+                self.active_combats.pop(boss_type, None)
         
         # 4. 전투 종료 후 패널 즉시 업데이트
         await self.update_all_boss_panels()
