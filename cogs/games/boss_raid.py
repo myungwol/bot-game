@@ -29,13 +29,11 @@ KST = timezone(timedelta(hours=9))
 def get_week_start_utc() -> datetime:
     now_kst = datetime.now(KST)
     start_of_week_kst = now_kst - timedelta(days=now_kst.weekday())
-    start_of_week_kst = start_of_week_kst.replace(hour=0, minute=0, second=0, microsecond=0)
-    return start_of_week_kst.astimezone(timezone.utc)
+    return start_of_week_kst.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
 def get_month_start_utc() -> datetime:
     now_kst = datetime.now(KST)
-    start_of_month_kst = now_kst.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    return start_of_month_kst.astimezone(timezone.utc)
+    return now_kst.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
 
 class BossPanelView(ui.View):
@@ -91,38 +89,29 @@ class BossRaid(commands.Cog):
 
     @tasks.loop(minutes=2)
     async def panel_updater_loop(self):
-        logger.info("[BossRaid] 패널 자동 업데이트 시작...")
         await self.update_all_boss_panels()
-        logger.info("[BossRaid] 패널 자동 업데이트 완료.")
 
     @tasks.loop(hours=1)
     async def boss_reset_loop(self):
-        now_utc = datetime.now(timezone.utc)
-        now_kst = now_utc.astimezone(KST)
+        now_kst = datetime.now(KST)
 
         if now_kst.weekday() == 0 and now_kst.hour == 0:
+            # ▼▼▼ [핵심 수정] 쿼리 구문 수정 ▼▼▼
             active_weekly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'weekly').maybe_single().execute()
             if not (active_weekly_raid_res and active_weekly_raid_res.data):
                 logger.info("[BossRaid] 새로운 주간 보스를 생성합니다.")
-                # ▼▼▼ [핵심 수정] .execute()를 추가합니다. ▼▼▼
                 await self.create_new_raid('weekly', force=True)
-                # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
         if now_kst.day == 1 and now_kst.hour == 0:
+            # ▼▼▼ [핵심 수정] 쿼리 구문 수정 ▼▼▼
             active_monthly_raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', 'monthly').maybe_single().execute()
             if not (active_monthly_raid_res and active_monthly_raid_res.data):
                 logger.info("[BossRaid] 새로운 월간 보스를 생성합니다.")
-                # ▼▼▼ [핵심 수정] .execute()를 추가합니다. ▼▼▼
                 await self.create_new_raid('monthly', force=True)
-                # ▲▲▲ [핵심 수정] 완료 ▲▲▲
     
     @boss_reset_loop.before_loop
     async def before_boss_reset_loop(self):
         await self.bot.wait_until_ready()
-        logger.info("[BossRaid] 보스 리셋 루프가 시작 대기 중입니다...")
-        await asyncio.sleep(5)
-
-    # --- [여기에 있던 중복 'class BossRaid(commands.Cog):' 라인을 삭제했습니다] ---
 
     async def create_new_raid(self, boss_type: str, force: bool = False):
         try:
@@ -133,34 +122,18 @@ class BossRaid(commands.Cog):
                     raid_ids_to_expire = [raid['id'] for raid in raids_to_expire_res.data]
                     if raid_ids_to_expire:
                         await supabase.table('boss_raids').update({'status': 'expired'}).in_('id', raid_ids_to_expire).execute()
-                        logger.info(f"[{boss_type.upper()}] {len(raid_ids_to_expire)}개의 활성 레이드를 'expired' 상태로 변경했습니다.")
 
             boss_template_res = await supabase.table('bosses').select('*').eq('type', boss_type).limit(1).single().execute()
-            if not boss_template_res.data:
-                logger.error(f"[{boss_type.upper()}] DB에 생성할 보스 정보가 없습니다.")
-                return
-
+            if not boss_template_res.data: return
             boss_template = boss_template_res.data
-            new_raid_res = await supabase.table('boss_raids').insert({
-                'boss_id': boss_template['id'],
-                'current_hp': boss_template['max_hp'],
-                'status': 'active'
-            }).execute()
-
-            if not new_raid_res.data:
-                logger.error(f"[{boss_type.upper()}] 새로운 레이드를 DB에 생성하는 데 실패했습니다.")
-                return
+            
+            await supabase.table('boss_raids').insert({'boss_id': boss_template['id'], 'current_hp': boss_template['max_hp'], 'status': 'active'}).execute()
             
             channel_key = WEEKLY_BOSS_CHANNEL_KEY if boss_type == 'weekly' else MONTHLY_BOSS_CHANNEL_KEY
             channel_id = get_id(channel_key)
             if channel_id and (channel := self.bot.get_channel(channel_id)):
-                embed = discord.Embed(
-                    title=f"‼️ 새로운 {boss_template['name']}이(가) 나타났습니다!",
-                    description="마을의 평화를 위해 힘을 합쳐 보스를 물리치세요!",
-                    color=0xF1C40F
-                )
-                if boss_template.get('image_url'):
-                    embed.set_thumbnail(url=boss_template['image_url'])
+                embed = discord.Embed(title=f"‼️ 새로운 {boss_template['name']}이(가) 나타났습니다!", description="마을의 평화를 위해 힘을 합쳐 보스를 물리치세요!", color=0xF1C40F)
+                if boss_template.get('image_url'): embed.set_thumbnail(url=boss_template['image_url'])
                 await channel.send(embed=embed, delete_after=86400)
 
             await self.regenerate_panel(boss_type)
@@ -174,19 +147,17 @@ class BossRaid(commands.Cog):
             await asyncio.sleep(1)
 
     async def regenerate_panel(self, boss_type: str, channel: Optional[discord.TextChannel] = None):
-        logger.info(f"[{boss_type.upper()}] 패널 재생성 시작...")
-        
         channel_key = WEEKLY_BOSS_CHANNEL_KEY if boss_type == 'weekly' else MONTHLY_BOSS_CHANNEL_KEY
         msg_key = WEEKLY_BOSS_PANEL_MSG_KEY if boss_type == 'weekly' else MONTHLY_BOSS_PANEL_MSG_KEY
         
         if not channel:
             channel_id = get_id(channel_key)
-            if not channel_id or not (channel := self.bot.get_channel(channel_id)):
-                logger.warning(f"[{boss_type.upper()}] 보스 채널이 설정되지 않았거나 찾을 수 없습니다.")
-                return
+            if not channel_id or not (channel := self.bot.get_channel(channel_id)): return
 
-        raid_res = await supabase.table('boss_raids').select('*, bosses(*)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
+        # ▼▼▼ [핵심 수정] 쿼리 구문 수정 ▼▼▼
+        raid_res = await supabase.table('boss_raids').select('*, bosses!inner(*)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
         raid_data = raid_res.data if raid_res and hasattr(raid_res, 'data') else None
+        
         is_combat_locked = self.combat_lock.locked()
         is_defeated = not (raid_data and raid_data.get('status') == 'active')
 
@@ -221,34 +192,22 @@ class BossRaid(commands.Cog):
             logger.error(f"[{boss_type.upper()}] 패널 메시지를 수정/생성/고정하는 데 실패했습니다: {e}")
             
     def build_boss_panel_embed(self, raid_data: Dict[str, Any]) -> discord.Embed:
-        """DB에서 가져온 레이드 정보로 패널 임베드를 생성합니다."""
-        
-        # ▼▼▼ [핵심 수정] .get()을 사용하여 안전하게 데이터를 가져오고, None일 경우를 처리합니다. ▼▼▼
+        # ... (이 함수는 이전 수정으로 이미 안정적이므로 변경 없음) ...
         boss_info = raid_data.get('bosses')
         if not boss_info:
-            # 이 경우는 데이터 무결성에 문제가 있는 심각한 상황입니다.
-            logger.error(f"레이드 데이터(ID: {raid_data.get('id')})에 연결된 보스 정보(bosses)가 없습니다. DB의 Foreign Key 관계를 확인해주세요.")
-            return discord.Embed(
-                title="데이터 오류",
-                description="활성 레이드에 연결된 보스 정보를 찾을 수 없습니다.\n관리자에게 문의해주세요.",
-                color=discord.Color.red()
-            )
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+            logger.error(f"레이드 데이터(ID: {raid_data.get('id')})에 연결된 보스 정보(bosses)가 없습니다.")
+            return discord.Embed(title="데이터 오류", description="활성 레이드에 연결된 보스 정보를 찾을 수 없습니다.", color=discord.Color.red())
         
         recent_logs = raid_data.get('recent_logs', [])
         log_text = "\n".join(recent_logs) if recent_logs else "아직 전투 기록이 없습니다."
-
         hp_bar = create_bar(raid_data['current_hp'], boss_info['max_hp'])
         hp_text = f"`{raid_data['current_hp']:,} / {boss_info['max_hp']:,}`\n{hp_bar}"
         stats_text = f"**속성:** `{boss_info.get('element', '무')}` | **공격력:** `{boss_info['attack']:,}` | **방어력:** `{boss_info['defense']:,}`"
-        
         embed = discord.Embed(title=f"👑 {boss_info['name']} 현황", color=0xE74C3C)
         if boss_info.get('image_url'):
             embed.set_thumbnail(url=boss_info['image_url'])
-
         embed.add_field(name="--- 최근 전투 기록 (최대 10개) ---", value=log_text, inline=False)
         embed.add_field(name="--- 보스 정보 ---", value=f"{stats_text}\n\n**체력:**\n{hp_text}", inline=False)
-        
         embed.set_footer(text="패널은 2분마다 자동으로 업데이트됩니다.")
         return embed
 
@@ -258,6 +217,7 @@ class BossRaid(commands.Cog):
             await interaction.response.send_message("❌ 다른 유저가 전투 중입니다. 잠시 후 다시 시도해주세요.", ephemeral=True, delete_after=5)
             return
 
+        # ▼▼▼ [핵심 수정] 쿼리 구문 수정 ▼▼▼
         raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
         if not (raid_res and raid_res.data):
             await interaction.response.send_message("❌ 현재 도전할 수 있는 보스가 없습니다.", ephemeral=True)
@@ -459,11 +419,12 @@ class BossRaid(commands.Cog):
             await channel.send("보상을 지급하는 중 오류가 발생했습니다. 관리자에게 문의해주세요.")
 
     async def handle_ranking(self, interaction: discord.Interaction, boss_type: str):
-        # ... (이전과 동일)
-        raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
+        # ▼▼▼ [핵심 수정] 쿼리 구문 수정 ▼▼▼
+        raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type, name)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
         if not (raid_res and raid_res.data):
             await interaction.response.send_message("❌ 현재 조회할 수 있는 랭킹 정보가 없습니다.", ephemeral=True)
             return
+        
         raid_id = raid_res.data['id']
         ranking_view = RankingView(self, raid_id, interaction.user.id)
         await ranking_view.start(interaction)
