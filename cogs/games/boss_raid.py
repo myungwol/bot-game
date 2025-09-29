@@ -424,18 +424,28 @@ class BossRaid(commands.Cog):
             return
         
         raid_id = raid_res.data['id']
-        ranking_view = RankingView(self, raid_id, interaction.user.id)
+        # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+        # 원인: RankingView 생성자에 user_id 대신 user 객체를 전달해야 합니다.
+        # 해결: interaction.user.id 대신 interaction.user를 전달합니다.
+        ranking_view = RankingView(self, raid_id, interaction.user)
+        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
         await ranking_view.start(interaction)
 
 class RankingView(ui.View):
-    def __init__(self, cog_instance: 'BossRaid', raid_id: int, user_id: int):
+    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+    # 원인: 생성자에서 user_id만 받고 user 객체를 저장하지 않았습니다.
+    # 해결: user 객체를 직접 받고 self.user와 self.user_id에 모두 할당합니다.
+    def __init__(self, cog_instance: 'BossRaid', raid_id: int, user: discord.Member):
         super().__init__(timeout=180)
         self.cog = cog_instance
         self.raid_id = raid_id
-        self.user_id = user_id
+        self.user = user
+        self.user_id = user.id
         self.current_page = 0
         self.users_per_page = 10
         self.total_pages = 1
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+    
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("랭킹을 조회한 본인만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
@@ -467,24 +477,17 @@ class RankingView(ui.View):
             embed.description = "아직 랭킹 정보가 없습니다."
         else:
             rank_list = []
-            # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
-            # 원인: guild 객체를 잘못된 방법으로 가져오고 있었습니다.
-            # 해결: self.user는 이 View를 연 discord.Member 객체이므로, self.user.guild를 통해
-            #       명령어가 사용된 서버(guild) 객체를 직접, 안정적으로 가져옵니다.
             guild = self.user.guild
             
             for i, data in enumerate(rank_res.data):
                 rank = offset + i + 1
                 user_id_int = data['user_id']
                 member = guild.get_member(user_id_int) if guild else None
-                # 해결: member.display_name 대신 member.mention을 사용하여 유저를 멘션합니다.
                 user_display = member.mention if member else f"ID:{user_id_int}"
                 pet_name = data['pets']['nickname'] if data.get('pets') else "알 수 없는 펫"
                 damage = data['total_damage_dealt']
                 
                 line = f"`{rank}위.` {user_display} - `{pet_name}`: `{damage:,}`"
-                # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
-
                 if rank <= math.ceil(total_participants * 0.5):
                     line += " 🌟"
                 rank_list.append(line)
