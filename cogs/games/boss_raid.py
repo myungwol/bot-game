@@ -559,19 +559,22 @@ class BossRaid(commands.Cog):
             return
         
         raid_id = raid_res.data[0]['id']
-        ranking_view = RankingView(self, raid_id, interaction.user)
+        ranking_view = RankingView(self, raid_id, interaction.user, boss_type)
         await ranking_view.start(interaction)
 
 class RankingView(ui.View):
-    def __init__(self, cog_instance: 'BossRaid', raid_id: int, user: discord.Member):
+    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+    def __init__(self, cog_instance: 'BossRaid', raid_id: int, user: discord.Member, boss_type: str):
         super().__init__(timeout=180)
         self.cog = cog_instance
         self.raid_id = raid_id
         self.user = user
         self.user_id = user.id
+        self.boss_type = boss_type # 보스 타입을 저장
         self.current_page = 0
         self.users_per_page = 10
         self.total_pages = 1
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -592,21 +595,28 @@ class RankingView(ui.View):
         if prev_button: prev_button.disabled = self.current_page == 0
         if next_button: next_button.disabled = self.current_page >= self.total_pages - 1
     
+    # --- ▼▼▼▼▼ 핵심 수정 시작 (푸터 텍스트 변경) ▼▼▼▼▼ ---
     async def build_ranking_embed(self) -> discord.Embed:
         offset = self.current_page * self.users_per_page
-        count_res = await supabase.table('boss_participants').select('id', count='exact').eq('raid_id', self.raid_id).execute()
-        total_participants = count_res.count or 0
-        self.total_pages = max(1, (total_participants + self.users_per_page - 1) // self.users_per_page)
-        rank_res = await supabase.table('boss_participants').select('user_id, pet_id, total_damage_dealt, pets(nickname)').eq('raid_id', self.raid_id).order('total_damage_dealt', desc=True).range(offset, offset + self.users_per_page - 1).execute()
+        
+        # 1. 랭킹 데이터와 총 참가자 수를 동시에 가져옵니다.
+        participants_task = supabase.table('boss_participants').select('user_id, total_damage_dealt, pets(nickname)', count='exact').eq('raid_id', self.raid_id).order('total_damage_dealt', desc=True).range(offset, offset + self.users_per_page - 1).execute()
+        my_rank_task = supabase.rpc('get_user_rank', {'p_user_id': self.user_id, 'p_table_name': 'boss_participants', 'p_column_name': 'total_damage_dealt', 'p_raid_id': self.raid_id}).execute()
+        
+        part_res, my_rank_res = await asyncio.gather(participants_task, my_rank_task)
+
+        total_participants = part_res.count or 0
+        self.total_pages = max(1, math.ceil(total_participants / self.users_per_page))
+        
         embed = discord.Embed(title="🏆 피해량 랭킹", color=0xFFD700)
         
-        if not rank_res.data:
+        if not (part_res.data):
             embed.description = "아직 랭킹 정보가 없습니다."
         else:
             rank_list = []
             guild = self.user.guild
             
-            for i, data in enumerate(rank_res.data):
+            for i, data in enumerate(part_res.data):
                 rank = offset + i + 1
                 user_id_int = data['user_id']
                 member = guild.get_member(user_id_int) if guild else None
@@ -615,12 +625,24 @@ class RankingView(ui.View):
                 damage = data['total_damage_dealt']
                 
                 line = f"`{rank}위.` {user_display} - `{pet_name}`: `{damage:,}`"
-                if rank <= math.ceil(total_participants * 0.5):
-                    line += " 🌟"
                 rank_list.append(line)
             embed.description = "\n".join(rank_list)
-            
-        embed.set_footer(text=f"페이지 {self.current_page + 1} / {self.total_pages} (🌟: 상위 50% 보상 대상)")
+
+        # 2. 나의 예상 보상 등급을 계산하고 푸터에 추가합니다.
+        footer_text = f"페이지 {self.current_page + 1} / {self.total_pages}"
+        my_rank = my_rank_res.data if my_rank_res and my_rank_res.data else None
+
+        if my_rank and total_participants > 0:
+            my_percentile = my_rank / total_participants
+            reward_tiers = get_config("BOSS_REWARD_TIERS", {}).get(self.boss_type, [])
+            my_tier_name = "보상 없음"
+            for tier in reward_tiers:
+                if my_percentile <= tier['percentile']:
+                    my_tier_name = tier['name']
+                    break
+            footer_text += f" | 나의 예상 등급: {my_tier_name}"
+
+        embed.set_footer(text=footer_text)
         return embed
 
     @ui.button(label="◀ 이전", style=discord.ButtonStyle.secondary, custom_id="prev_page")
