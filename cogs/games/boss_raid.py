@@ -175,21 +175,16 @@ class BossRaid(commands.Cog):
         `force=True`이면 기존 레이드를 강제로 종료시킵니다.
         """
         try:
-            # ▼▼▼ [핵심 수정] 기존 레이드를 종료시키는 로직 변경 ▼▼▼
             if force:
                 logger.info(f"[{boss_type.upper()}] 관리자 요청으로 기존 레이드를 강제 종료/만료시킵니다.")
-                # 1. 만료시킬 raid_id들을 먼저 조회합니다.
                 raids_to_expire_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('bosses.type', boss_type).eq('status', 'active').execute()
                 
                 if raids_to_expire_res.data:
                     raid_ids_to_expire = [raid['id'] for raid in raids_to_expire_res.data]
                     if raid_ids_to_expire:
-                        # 2. 조회된 id들을 사용해 업데이트합니다.
                         await supabase.table('boss_raids').update({'status': 'expired'}).in_('id', raid_ids_to_expire).execute()
                         logger.info(f"[{boss_type.upper()}] {len(raid_ids_to_expire)}개의 활성 레이드를 'expired' 상태로 변경했습니다.")
-            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
-            # 1. DB에서 생성할 보스의 템플릿 정보를 가져옵니다.
             boss_template_res = await supabase.table('bosses').select('*').eq('type', boss_type).limit(1).single().execute()
             if not boss_template_res.data:
                 logger.error(f"[{boss_type.upper()}] DB에 생성할 보스 정보가 없습니다.")
@@ -197,18 +192,18 @@ class BossRaid(commands.Cog):
 
             boss_template = boss_template_res.data
 
-            # 2. 새로운 레이드 정보를 DB에 삽입합니다.
+            # ▼▼▼ [핵심 수정] .select().single() 부분을 제거합니다. ▼▼▼
             new_raid_res = await supabase.table('boss_raids').insert({
                 'boss_id': boss_template['id'],
                 'current_hp': boss_template['max_hp'],
                 'status': 'active'
-            }).select().single().execute()
+            }).execute()
+            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
             if not new_raid_res.data:
                 logger.error(f"[{boss_type.upper()}] 새로운 레이드를 DB에 생성하는 데 실패했습니다.")
                 return
             
-            # 3. 해당 보스 채널에 공지 메시지를 보냅니다.
             channel_key = WEEKLY_BOSS_CHANNEL_KEY if boss_type == 'weekly' else MONTHLY_BOSS_CHANNEL_KEY
             channel_id = get_id(channel_key)
             if channel_id and (channel := self.bot.get_channel(channel_id)):
@@ -222,7 +217,6 @@ class BossRaid(commands.Cog):
                 
                 await channel.send(embed=embed, delete_after=86400)
 
-            # 4. 패널을 즉시 업데이트하여 새로운 보스 정보를 표시합니다.
             await self.regenerate_panel(boss_type)
 
         except Exception as e:
