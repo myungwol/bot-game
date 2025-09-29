@@ -91,7 +91,6 @@ class ItemUsageView(ui.View):
             if coins > 0: db_tasks.append(update_wallet(self.user, coins))
             if xp > 0:
                 # 펫과 유저에게 경험치를 동시에 지급합니다.
-                db_tasks.append(supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': xp, 'p_source': 'chest'}).execute())
                 db_tasks.append(supabase.rpc('add_xp_to_pet', {'p_user_id': self.user.id, 'p_xp_to_add': xp}).execute())
             
             for item, qty in items.items():
