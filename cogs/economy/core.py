@@ -15,7 +15,7 @@ from utils.database import (
     save_config_to_db, get_all_user_stats, log_activity, get_cooldown, set_cooldown,
     get_user_gear, load_all_data_from_db, ensure_user_gear_exists,
     load_bot_configs_from_db, delete_config_from_db, get_item_database, get_fishing_loot,
-    get_user_pet  # <--- 이 줄이 추가되었습니다.
+    get_user_pet
 )
 from utils.helpers import format_embed_from_db
 
@@ -117,12 +117,10 @@ class EconomyCore(commands.Cog):
 
             requests_by_prefix = defaultdict(list)
             for req in requests:
-                logger.info(f"[Dispatcher-Debug] 감지된 요청 키: {req['config_key']}")
                 prefix_parts = req['config_key'].split('_request')
                 if len(prefix_parts) > 1:
                     prefix = prefix_parts[0]
                     requests_by_prefix[prefix].append(req)
-                    logger.info(f"[Dispatcher-Debug] '{req['config_key']}' -> 접두사 '{prefix}'로 분류됨.")
 
             if 'level_tier_update' in requests_by_prefix or 'job_advancement' in requests_by_prefix:
                 if level_cog := self.bot.get_cog("LevelSystem"):
@@ -146,7 +144,6 @@ class EconomyCore(commands.Cog):
                             pet_data = await get_user_pet(user_id)
                             if pet_data and (thread_id := pet_data.get('thread_id')):
                                 if thread := self.bot.get_channel(thread_id):
-                                    # ▼▼▼ [핵심 수정] is_refresh=True 옵션을 추가하여 항상 UI를 새로 생성하도록 강제합니다. ▼▼▼
                                     await pet_cog.update_pet_ui(user_id, thread, message=None, is_refresh=True)
                         except Exception as e:
                             logger.error(f"개별 펫 UI 업데이트 요청 처리 중 오류: {e}", exc_info=True)
@@ -175,7 +172,6 @@ class EconomyCore(commands.Cog):
                     await pet_cog.process_levelup_requests(requests_by_prefix['pet_levelup'])
 
             if 'pet_admin_levelup' in requests_by_prefix:
-                logger.info(f"[Dispatcher-Debug] 'pet_admin_levelup' 접두사 감지! PetSystem으로 전달합니다.")
                 if pet_cog := self.bot.get_cog("PetSystem"):
                     admin_requests = requests_by_prefix['pet_admin_levelup']
                     await pet_cog.process_levelup_requests(admin_requests, is_admin=True)
@@ -203,6 +199,35 @@ class EconomyCore(commands.Cog):
                             logger.warning(f"[Dispatcher] 즉시 완료 요청된 유저 {user_id}가 탐사 중이 아닙니다.")
                     except Exception as e:
                         logger.error(f"펫 탐사 즉시 완료 처리 중 오류: {e}", exc_info=True)
+
+            if 'boss_spawn_test' in requests_by_prefix or 'boss_defeat_test' in requests_by_prefix:
+                boss_cog = self.bot.get_cog("BossRaid")
+                if boss_cog:
+                    spawn_requests = requests_by_prefix.get('boss_spawn_test', [])
+                    defeat_requests = requests_by_prefix.get('boss_defeat_test', [])
+                    
+                    if spawn_requests:
+                        payload = spawn_requests[-1].get('config_value', {})
+                        boss_type = payload.get('boss_type')
+                        if boss_type:
+                            logger.info(f"[AdminBridge] 강제 소환 요청 수신: {boss_type}")
+                            await boss_cog.create_new_raid(boss_type, force=True)
+                    
+                    if defeat_requests:
+                        payload = defeat_requests[-1].get('config_value', {})
+                        boss_type = payload.get('boss_type')
+                        if boss_type:
+                            logger.info(f"[AdminBridge] 강제 처치 요청 수신: {boss_type}")
+                            raid_res = await supabase.table('boss_raids').select('id, bosses(type)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
+                            if raid_res and raid_res.data:
+                                raid_id = raid_res.data['id']
+                                channel_key = "weekly_boss_channel_id" if boss_type == 'weekly' else "monthly_boss_channel_id"
+                                if (channel_id := get_id(channel_key)) and (channel := self.bot.get_channel(channel_id)):
+                                    await boss_cog.handle_boss_defeat(channel, raid_id)
+                                else:
+                                    logger.error(f"강제 처치를 위한 {boss_type} 보스 채널을 찾을 수 없습니다.")
+                            else:
+                                logger.warning(f"강제 처치 요청: 현재 활성화된 {boss_type} 보스가 없습니다.")
             
             server_id_str = get_config("SERVER_ID")
             guild = self.bot.get_guild(int(server_id_str)) if server_id_str else None
@@ -356,7 +381,7 @@ class EconomyCore(commands.Cog):
                 if new_total_voice_minutes_today > 0 and new_total_voice_minutes_today % self.voice_time_requirement_minutes == 0:
                     today_str = datetime.now(KST).strftime('%Y-%m-%d')
                     cooldown_key = f"voice_reward_{today_str}_{new_total_voice_minutes_today}m"
-                    if await get_cooldown(user_id, cooldown_key) == 0: # OK
+                    if await get_cooldown(user_id, cooldown_key) == 0:
                         reward = random.randint(*self.voice_reward_range)
                         await update_wallet(user, reward)
                         await log_activity(user_id, 'reward_voice', coin_earned=reward)
