@@ -18,11 +18,17 @@ from utils.helpers import format_embed_from_db, create_bar
 
 logger = logging.getLogger(__name__)
 
+# --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+# 메시지 ID를 관리하기 위한 키를 정보(info)와 기록(logs)으로 분리합니다.
 WEEKLY_BOSS_CHANNEL_KEY = "weekly_boss_channel_id"
 MONTHLY_BOSS_CHANNEL_KEY = "monthly_boss_channel_id"
-WEEKLY_BOSS_PANEL_MSG_KEY = "weekly_boss_panel_msg_id"
-MONTHLY_BOSS_PANEL_MSG_KEY = "monthly_boss_panel_msg_id"
+WEEKLY_BOSS_INFO_MSG_KEY = "weekly_boss_info_msg_id"
+MONTHLY_BOSS_INFO_MSG_KEY = "monthly_boss_info_msg_id"
+WEEKLY_BOSS_LOGS_MSG_KEY = "weekly_boss_logs_msg_id"
+MONTHLY_BOSS_LOGS_MSG_KEY = "monthly_boss_logs_msg_id"
 COMBAT_LOG_CHANNEL_KEY = "boss_log_channel_id"
+# --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+
 
 KST = timezone(timedelta(hours=9))
 
@@ -144,13 +150,21 @@ class BossRaid(commands.Cog):
             await self.regenerate_panel(boss_type=boss_type)
             await asyncio.sleep(1)
 
+    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def regenerate_panel(self, boss_type: str, channel: Optional[discord.TextChannel] = None):
-        channel_key = WEEKLY_BOSS_CHANNEL_KEY if boss_type == 'weekly' else MONTHLY_BOSS_CHANNEL_KEY
-        msg_key = WEEKLY_BOSS_PANEL_MSG_KEY if boss_type == 'weekly' else MONTHLY_BOSS_PANEL_MSG_KEY
-        
+        if boss_type == 'weekly':
+            channel_key = WEEKLY_BOSS_CHANNEL_KEY
+            info_msg_key = WEEKLY_BOSS_INFO_MSG_KEY
+            logs_msg_key = WEEKLY_BOSS_LOGS_MSG_KEY
+        else:
+            channel_key = MONTHLY_BOSS_CHANNEL_KEY
+            info_msg_key = MONTHLY_BOSS_INFO_MSG_KEY
+            logs_msg_key = MONTHLY_BOSS_LOGS_MSG_KEY
+
         if not channel:
             channel_id = get_id(channel_key)
-            if not channel_id or not (channel := self.bot.get_channel(channel_id)): return
+            if not channel_id or not (channel := self.bot.get_channel(channel_id)):
+                return
 
         raid_res = await supabase.table('boss_raids').select('*, bosses!inner(*)').eq('status', 'active').eq('bosses.type', boss_type).maybe_single().execute()
         raid_data = raid_res.data if raid_res and hasattr(raid_res, 'data') else None
@@ -158,54 +172,81 @@ class BossRaid(commands.Cog):
         is_combat_locked = self.combat_lock.locked()
         is_defeated = not (raid_data and raid_data.get('status') == 'active')
 
+        # 1. 정보 패널(버튼 포함) 생성 또는 업데이트
+        info_embed = self.build_boss_info_embed(raid_data, boss_type)
         view = BossPanelView(self, boss_type, is_combat_locked, is_defeated)
         
-        if raid_data:
-            embed = self.build_boss_panel_embed(raid_data)
-        else:
-            embed = discord.Embed(
+        info_message_id = get_id(info_msg_key)
+        info_message = None
+        try:
+            if info_message_id:
+                info_message = await channel.fetch_message(info_message_id)
+                await info_message.edit(embed=info_embed, view=view)
+            else:
+                info_message = await channel.send(embed=info_embed, view=view)
+                await save_id_to_db(info_msg_key, info_message.id)
+                await info_message.pin()
+        except discord.NotFound:
+            info_message = await channel.send(embed=info_embed, view=view)
+            await save_id_to_db(info_msg_key, info_message.id)
+            await info_message.pin()
+        except (discord.Forbidden, discord.HTTPException) as e:
+            logger.error(f"[{boss_type.upper()}] 정보 패널 메시지 수정/생성/고정 실패: {e}")
+
+        # 2. 전투 기록 패널 삭제 후 재생성
+        logs_embed = self.build_combat_logs_embed(raid_data, boss_type)
+        
+        logs_message_id = get_id(logs_msg_key)
+        try:
+            if logs_message_id:
+                logs_message = await channel.fetch_message(logs_message_id)
+                await logs_message.delete()
+        except (discord.NotFound, discord.Forbidden):
+            pass # 메시지가 없거나 삭제할 수 없어도 괜찮음
+        
+        try:
+            new_logs_message = await channel.send(embed=logs_embed)
+            await save_id_to_db(logs_msg_key, new_logs_message.id)
+        except (discord.Forbidden, discord.HTTPException) as e:
+            logger.error(f"[{boss_type.upper()}] 전투 기록 패널 메시지 생성 실패: {e}")
+
+    def build_boss_info_embed(self, raid_data: Optional[Dict[str, Any]], boss_type: str) -> discord.Embed:
+        if not raid_data:
+            return discord.Embed(
                 title=f"👑 다음 {('주간' if boss_type == 'weekly' else '월간')} 보스를 기다리는 중...",
                 description="새로운 보스가 곧 나타납니다!\n리셋 시간: " + ("매주 월요일 00시" if boss_type == 'weekly' else "매월 1일 00시"),
                 color=0x34495E
             )
-            for item in view.children: item.disabled = True
 
-        message_id = get_id(msg_key)
-        try:
-            if message_id:
-                message = await channel.fetch_message(message_id)
-                await message.edit(embed=embed, view=view)
-            else:
-                await channel.purge(limit=100)
-                new_message = await channel.send(embed=embed, view=view)
-                await save_id_to_db(msg_key, new_message.id)
-                await new_message.pin()
-        except discord.NotFound:
-            await channel.purge(limit=100)
-            new_message = await channel.send(embed=embed, view=view)
-            await save_id_to_db(msg_key, new_message.id)
-            await new_message.pin()
-        except (discord.Forbidden, discord.HTTPException) as e:
-            logger.error(f"[{boss_type.upper()}] 패널 메시지를 수정/생성/고정하는 데 실패했습니다: {e}")
-            
-    def build_boss_panel_embed(self, raid_data: Dict[str, Any]) -> discord.Embed:
         boss_info = raid_data.get('bosses')
         if not boss_info:
-            logger.error(f"레이드 데이터(ID: {raid_data.get('id')})에 연결된 보스 정보(bosses)가 없습니다.")
             return discord.Embed(title="데이터 오류", description="활성 레이드에 연결된 보스 정보를 찾을 수 없습니다.", color=discord.Color.red())
-        
-        recent_logs = raid_data.get('recent_logs', [])
-        log_text = "\n".join(recent_logs) if recent_logs else "아직 전투 기록이 없습니다."
+
         hp_bar = create_bar(raid_data['current_hp'], boss_info['max_hp'])
         hp_text = f"`{raid_data['current_hp']:,} / {boss_info['max_hp']:,}`\n{hp_bar}"
         stats_text = f"**속성:** `{boss_info.get('element', '무')}` | **공격력:** `{boss_info['attack']:,}` | **방어력:** `{boss_info['defense']:,}`"
+        
         embed = discord.Embed(title=f"👑 {boss_info['name']} 현황", color=0xE74C3C)
         if boss_info.get('image_url'):
             embed.set_thumbnail(url=boss_info['image_url'])
-        embed.add_field(name="--- 최근 전투 기록 (최대 10개) ---", value=log_text, inline=False)
+        
         embed.add_field(name="--- 보스 정보 ---", value=f"{stats_text}\n\n**체력:**\n{hp_text}", inline=False)
         embed.set_footer(text="패널은 2분마다 자동으로 업데이트됩니다.")
         return embed
+
+    def build_combat_logs_embed(self, raid_data: Optional[Dict[str, Any]], boss_type: str) -> discord.Embed:
+        title = f"📜 {('주간' if boss_type == 'weekly' else '월간')} 보스 최근 전투 기록"
+        embed = discord.Embed(title=title, color=0x2C3E50)
+
+        if not raid_data:
+            embed.description = "현재 보스가 없습니다."
+            return embed
+
+        recent_logs = raid_data.get('recent_logs', [])
+        log_text = "\n".join(recent_logs) if recent_logs else "아직 전투 기록이 없습니다."
+        embed.description = log_text
+        return embed
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     async def handle_challenge(self, interaction: discord.Interaction, boss_type: str):
         user = interaction.user
@@ -424,17 +465,10 @@ class BossRaid(commands.Cog):
             return
         
         raid_id = raid_res.data['id']
-        # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
-        # 원인: RankingView 생성자에 user_id 대신 user 객체를 전달해야 합니다.
-        # 해결: interaction.user.id 대신 interaction.user를 전달합니다.
         ranking_view = RankingView(self, raid_id, interaction.user)
-        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
         await ranking_view.start(interaction)
 
 class RankingView(ui.View):
-    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
-    # 원인: 생성자에서 user_id만 받고 user 객체를 저장하지 않았습니다.
-    # 해결: user 객체를 직접 받고 self.user와 self.user_id에 모두 할당합니다.
     def __init__(self, cog_instance: 'BossRaid', raid_id: int, user: discord.Member):
         super().__init__(timeout=180)
         self.cog = cog_instance
@@ -444,7 +478,6 @@ class RankingView(ui.View):
         self.current_page = 0
         self.users_per_page = 10
         self.total_pages = 1
-    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
