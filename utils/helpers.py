@@ -84,3 +84,9 @@ def coerce_item_emoji(value):
             return emoji_str
             
     return cleaned_value
+
+def create_bar(current: int, required: int, length: int = 10, full_char: str = '▓', empty_char: str = '░') -> str:
+    if required <= 0: return full_char * length
+    progress = min(current / required, 1.0)
+    filled_length = int(length * progress)
+    return f"[{full_char * filled_length}{empty_char * (length - filled_length)}]"
