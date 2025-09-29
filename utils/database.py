@@ -438,23 +438,25 @@ async def get_farm_owner_by_thread(thread_id: int) -> Optional[int]:
 async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
     response = await supabase.table('farm_item_details').select('*').eq('item_name', item_name).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
-    
+
+# --- ▼▼▼▼▼ 핵심 추가 시작 ▼▼▼▼▼ ---
 @supabase_retry_handler()
-async def get_inventories_for_users(user_ids: List[int]) -> Dict[int, Dict[str, int]]:
-    """여러 유저 ID를 받아, 각 유저의 인벤토리를 한 번의 쿼리로 가져옵니다."""
-    if not user_ids:
-        return {}
-    
-    user_id_strs = list(set(map(str, user_ids)))
-    
-    response = await supabase.table('inventories').select('user_id, item_name, quantity').in_('user_id', user_id_strs).gt('quantity', 0).execute()
-    
-    inventories = defaultdict(dict)
-    if response and response.data:
-        for item in response.data:
-            inventories[int(item['user_id'])][item['item_name']] = item['quantity']
-    
-    return dict(inventories)
+async def add_xp_to_pet_db(user_id: int, xp_to_add: int) -> Optional[List[Dict]]:
+    """
+    펫에게 경험치를 추가하는 DB 함수를 안전하게 호출합니다.
+    user_id를 문자열로 변환하여 함수 오버로딩 모호성을 해결합니다.
+    """
+    if xp_to_add <= 0:
+        return None
+    try:
+        res = await supabase.rpc('add_xp_to_pet', {
+            'p_user_id': str(user_id), 
+            'p_xp_to_add': xp_to_add
+        }).execute()
+        return res.data if res and hasattr(res, 'data') else None
+    except APIError as e:
+        logger.error(f"add_xp_to_pet_db RPC 실행 중 오류 (User: {user_id}): {e}", exc_info=True)
+        return None
 
 # --- 펫 탐사 시스템을 위한 새로운 함수들 ---
 
