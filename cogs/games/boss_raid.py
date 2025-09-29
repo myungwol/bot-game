@@ -328,14 +328,31 @@ class BossRaid(commands.Cog):
             recent_logs.insert(0, new_log_entry)
             await supabase.table('boss_raids').update({'current_hp': final_boss_hp, 'recent_logs': recent_logs[:10]}).eq('id', raid_id).execute()
 
-            # ▼▼▼ [핵심 수정] .execute()를 추가합니다. ▼▼▼
-            await supabase.rpc('upsert_boss_participant', {
-                'p_raid_id': raid_id,
-                'p_user_id': user.id,
-                'p_pet_id': pet['id'],
-                'p_damage_to_add': total_damage_dealt
+            # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+            # 원인: 존재하지 않는 'upsert_boss_participant' RPC 함수를 호출하고 있었습니다.
+            # 해결: 참가자의 기존 피해량을 먼저 조회(SELECT)하고, 새로운 피해량을 더한 뒤
+            #       결과를 테이블에 업데이트/삽입(UPSERT)하는 로직으로 변경했습니다.
+            #       이 방식은 데이터베이스 함수 없이 동일한 기능을 수행합니다.
+
+            # 1. 이 참가자의 기존 피해량을 가져옵니다.
+            part_res = await supabase.table('boss_participants').select('total_damage_dealt').eq('raid_id', raid_id).eq('user_id', user.id).maybe_single().execute()
+            
+            existing_damage = 0
+            if part_res and part_res.data:
+                existing_damage = part_res.data.get('total_damage_dealt', 0)
+            
+            # 2. 새로운 총 피해량을 계산합니다.
+            new_total_damage = existing_damage + total_damage_dealt
+            
+            # 3. 계산된 값으로 테이블을 업데이트하거나 새로 삽입합니다.
+            await supabase.table('boss_participants').upsert({
+                'raid_id': raid_id,
+                'user_id': user.id,
+                'pet_id': pet['id'],
+                'total_damage_dealt': new_total_damage,
+                'last_fought_at': datetime.now(timezone.utc).isoformat()
             }).execute()
-            # ▲▲▲ [핵심 수정] 완료 ▲▲▲
+            # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
             
             if final_boss_hp <= 0 and raid_data['status'] == 'active':
                  await self.handle_boss_defeat(interaction.channel, raid_id)
