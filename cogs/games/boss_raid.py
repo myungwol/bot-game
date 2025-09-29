@@ -10,10 +10,13 @@ import math
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List, Any
 
+# --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
 from utils.database import (
     supabase, get_user_pet, get_config, get_id,
-    update_wallet, update_inventory, save_id_to_db
+    update_wallet, update_inventory, save_id_to_db,
+    log_chest_reward # log_chest_reward 함수를 import 합니다.
 )
+# --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 from utils.helpers import format_embed_from_db, create_bar
 
 logger = logging.getLogger(__name__)
@@ -490,10 +493,8 @@ class BossRaid(commands.Cog):
                 rank = i + 1
                 percentile = rank / total_participants
                 
-                # 유저의 등급에 맞는 보상 티어를 찾습니다.
                 user_tier = next((tier for tier in reward_tiers if percentile <= tier['percentile']), reward_tiers[-1])
                 
-                # 티어에 따라 보상 내용물을 결정합니다.
                 coins = random.randint(*user_tier['coins'])
                 xp = random.randint(*user_tier['xp'])
                 
@@ -502,22 +503,17 @@ class BossRaid(commands.Cog):
                     rare_item = random.choice(rare_reward_items)
                     rolled_items[rare_item] = 1
                 
-                # 상자 내용물을 JSON으로 구성합니다.
                 chest_contents = {
                     "coins": coins,
                     "xp": xp,
                     "items": rolled_items
                 }
                 
-                # 1. 유저에게 보물 상자 아이템을 지급합니다.
                 db_tasks.append(update_inventory(user_id, base_chest_item, 1))
-                # 2. 이 상자의 내용물을 DB에 기록합니다.
                 db_tasks.append(log_chest_reward(user_id, base_chest_item, chest_contents))
                 
-                # 최종 랭킹 메시지에 표시할 정보를 저장합니다.
                 reward_summary_for_log[user_id] = base_chest_item
 
-            # 모든 DB 작업을 한 번에 처리합니다.
             await asyncio.gather(*db_tasks)
             logger.info(f"Raid ID {raid_id}의 보상 지급(보물 상자) DB 작업 {len(db_tasks)}개를 완료했습니다.")
 
@@ -538,7 +534,6 @@ class BossRaid(commands.Cog):
                 member = self.bot.get_guild(channel.guild.id).get_member(data['user_id'])
                 user_name = member.display_name if member else f"ID:{data['user_id']}"
                 damage = data['total_damage_dealt']
-                # 이제 보상은 항상 보물 상자입니다.
                 rewards = reward_summary_for_log.get(data['user_id'], "알 수 없음")
                 line = f"`{rank}위.` **{user_name}** - `{damage:,}` DMG\n> 🎁 보상: {rewards}"
                 rank_list.append(line)
