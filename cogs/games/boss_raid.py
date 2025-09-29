@@ -126,8 +126,89 @@ class BossRaid(commands.Cog):
 
     @tasks.loop(hours=1)
     async def boss_reset_loop(self):
-        # 다음 단계에서 구현
-        pass
+        """
+        매시간 실행하여 보스를 리셋하거나 생성할 시간인지 확인합니다.
+        KST(UTC+9) 기준 자정을 감지하여 동작합니다.
+        """
+        now_utc = datetime.now(timezone.utc)
+        now_kst = now_utc.astimezone(KST)
+
+        # --- 주간 보스 리셋/생성 로직 ---
+        # 조건: 월요일 00:00 ~ 00:59 사이
+        if now_kst.weekday() == 0 and now_kst.hour == 0:
+            # 현재 활성화된 주간 보스가 있는지 확인
+            active_weekly_raid_res = await supabase.table('boss_raids').select('id').eq('status', 'active').eq('bosses.type', 'weekly').maybe_single().execute()
+
+            if not active_weekly_raid_res.data:
+                logger.info("[BossRaid] 새로운 주간 보스를 생성합니다.")
+                # 1. 만료시킬 이전 보스가 있다면 'expired'로 상태 변경
+                await supabase.table('boss_raids').update({'status': 'expired'}).eq('status', 'active').eq('bosses.type', 'weekly').execute()
+
+                # 2. 새로운 주간 보스 생성
+                await self.create_new_raid('weekly')
+
+        # --- 월간 보스 리셋/생성 로직 ---
+        # 조건: 매월 1일 00:00 ~ 00:59 사이
+        if now_kst.day == 1 and now_kst.hour == 0:
+            active_monthly_raid_res = await supabase.table('boss_raids').select('id').eq('status', 'active').eq('bosses.type', 'monthly').maybe_single().execute()
+            
+            if not active_monthly_raid_res.data:
+                logger.info("[BossRaid] 새로운 월간 보스를 생성합니다.")
+                await supabase.table('boss_raids').update({'status': 'expired'}).eq('status', 'active').eq('bosses.type', 'monthly').execute()
+                await self.create_new_raid('monthly')
+    
+    @boss_reset_loop.before_loop
+    async def before_boss_reset_loop(self):
+        # 봇이 준비될 때까지 기다립니다.
+        await self.bot.wait_until_ready()
+        logger.info("[BossRaid] 보스 리셋 루프가 시작 대기 중입니다...")
+        # 루프가 즉시 실행되지 않도록 약간의 딜레이를 줍니다.
+        await asyncio.sleep(5)
+
+    async def create_new_raid(self, boss_type: str):
+        """
+        DB에서 해당 타입의 보스 정보를 찾아 새로운 레이드를 생성하고 공지합니다.
+        """
+        try:
+            # 1. DB에서 생성할 보스의 템플릿 정보를 가져옵니다.
+            boss_template_res = await supabase.table('bosses').select('*').eq('type', boss_type).limit(1).single().execute()
+            if not boss_template_res.data:
+                logger.error(f"[{boss_type.upper()}] DB에 생성할 보스 정보가 없습니다.")
+                return
+
+            boss_template = boss_template_res.data
+
+            # 2. 새로운 레이드 정보를 DB에 삽입합니다.
+            new_raid_res = await supabase.table('boss_raids').insert({
+                'boss_id': boss_template['id'],
+                'current_hp': boss_template['max_hp'],
+                'status': 'active'
+            }).execute()
+
+            if not new_raid_res.data:
+                logger.error(f"[{boss_type.upper()}] 새로운 레이드를 DB에 생성하는 데 실패했습니다.")
+                return
+            
+            # 3. 해당 보스 채널에 공지 메시지를 보냅니다.
+            channel_key = WEEKLY_BOSS_CHANNEL_KEY if boss_type == 'weekly' else MONTHLY_BOSS_CHANNEL_KEY
+            channel_id = get_id(channel_key)
+            if channel_id and (channel := self.bot.get_channel(channel_id)):
+                embed = discord.Embed(
+                    title=f"‼️ 새로운 {boss_template['name']}이(가) 나타났습니다!",
+                    description="마을의 평화를 위해 힘을 합쳐 보스를 물리치세요!",
+                    color=0xF1C40F
+                )
+                if boss_template.get('image_url'):
+                    embed.set_thumbnail(url=boss_template['image_url'])
+                
+                # 24시간 후 자동 삭제되는 공지 메시지 전송
+                await channel.send(embed=embed, delete_after=86400)
+
+            # 4. 패널을 즉시 업데이트하여 새로운 보스 정보를 표시합니다.
+            await self.regenerate_panel(boss_type)
+
+        except Exception as e:
+            logger.error(f"[{boss_type.upper()}] 신규 레이드 생성 중 오류 발생: {e}", exc_info=True)
 
     async def update_all_boss_panels(self, boss_type_to_update: Optional[str] = None):
         types_to_process = [boss_type_to_update] if boss_type_to_update else ['weekly', 'monthly']
@@ -427,8 +508,32 @@ class BossRaid(commands.Cog):
 
     async def handle_boss_defeat(self, channel: discord.TextChannel, raid_id: int):
         """보스 처치 시 공지 및 보상 지급 로직"""
-        await channel.send("🎉 **보스를 처치했습니다!** 잠시 후 보상이 지급됩니다.")
-        # 다음 단계에서 구현
+        
+        # 1. 레이드 상태를 'defeated'로 변경
+        raid_update_res = await supabase.table('boss_raids').update({
+            'status': 'defeated',
+            'defeat_time': datetime.now(timezone.utc).isoformat()
+        }).eq('id', raid_id).eq('status', 'active').execute()
+        
+        # 이미 다른 프로세스에 의해 처리된 경우 중복 실행 방지
+        if not raid_update_res.data:
+            logger.warning(f"Raid ID {raid_id}는 이미 처치되었거나 활성 상태가 아닙니다. 보상 지급을 건너뜁니다.")
+            return
+
+        raid_data = raid_update_res.data[0]
+        boss_info_res = await supabase.table('bosses').select('name').eq('id', raid_data['boss_id']).single().execute()
+        boss_name = boss_info_res.data['name'] if boss_info_res.data else "보스"
+        
+        # 2. 보스 채널에 처치 공지 (24시간 후 삭제)
+        defeat_embed = discord.Embed(
+            title=f"🎉 {boss_name} 처치 성공!",
+            description="용감한 모험가들의 활약으로 보스를 물리쳤습니다!\n\n참가자들에게 곧 보상이 지급됩니다...",
+            color=0x2ECC71
+        )
+        await channel.send(embed=defeat_embed, delete_after=86400)
+        
+        # 3. 보상 지급 로직 호출 (다음 단계에서 구현)
+        await self.distribute_rewards(channel, raid_id, boss_name)
 
     async def handle_ranking(self, interaction: discord.Interaction, boss_type: str):
         await interaction.response.send_message(f"[{boss_type}] 랭킹 보기 기능은 현재 개발 중입니다.", ephemeral=True)
