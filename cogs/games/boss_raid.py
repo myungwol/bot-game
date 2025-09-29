@@ -148,7 +148,6 @@ class BossRaid(commands.Cog):
             await self.regenerate_panel(boss_type=boss_type)
             await asyncio.sleep(1)
 
-    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def regenerate_panel(self, boss_type: str, channel: Optional[discord.TextChannel] = None):
         if boss_type == 'weekly':
             channel_key = WEEKLY_BOSS_CHANNEL_KEY
@@ -210,6 +209,7 @@ class BossRaid(commands.Cog):
         except (discord.Forbidden, discord.HTTPException) as e:
             logger.error(f"[{boss_type.upper()}] 정보 패널 메시지 생성 실패: {e}")
 
+    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     def build_boss_info_embed(self, raid_data: Optional[Dict[str, Any]], boss_type: str) -> discord.Embed:
         if not raid_data:
             return discord.Embed(
@@ -224,7 +224,12 @@ class BossRaid(commands.Cog):
 
         hp_bar = create_bar(raid_data['current_hp'], boss_info['max_hp'])
         hp_text = f"`{raid_data['current_hp']:,} / {boss_info['max_hp']:,}`\n{hp_bar}"
-        stats_text = f"**속성:** `{boss_info.get('element', '무')}` | **공격력:** `{boss_info['attack']:,}` | **방어력:** `{boss_info['defense']:,}`"
+        # 원인: 이 부분이 한 줄로 표시되고 있었습니다.
+        # 해결: \n을 사용하여 공격력과 방어력을 다른 줄로 분리하고, 속성 정보를 제거했습니다.
+        stats_text = (
+            f"**공격력:** `{boss_info['attack']:,}`\n"
+            f"**방어력:** `{boss_info['defense']:,}`"
+        )
         
         embed = discord.Embed(title=f"👑 {boss_info['name']} 현황", color=0xE74C3C)
         if boss_info.get('image_url'):
@@ -233,6 +238,7 @@ class BossRaid(commands.Cog):
         embed.add_field(name="--- 보스 정보 ---", value=f"{stats_text}\n\n**체력:**\n{hp_text}", inline=False)
         embed.set_footer(text="패널은 2분마다 자동으로 업데이트됩니다.")
         return embed
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     def build_combat_logs_embed(self, raid_data: Optional[Dict[str, Any]], boss_type: str) -> discord.Embed:
         title = f"📜 {('주간' if boss_type == 'weekly' else '월간')} 보스 최근 전투 기록"
@@ -246,7 +252,6 @@ class BossRaid(commands.Cog):
         log_text = "\n".join(recent_logs) if recent_logs else "아직 전투 기록이 없습니다."
         embed.description = log_text
         return embed
-    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
     
     async def handle_challenge(self, interaction: discord.Interaction, boss_type: str):
         user = interaction.user
