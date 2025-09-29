@@ -486,8 +486,28 @@ class BossRaid(commands.Cog):
                     reward_summary[user_id].append(rare_reward)
             await asyncio.gather(*db_tasks)
             logger.info(f"Raid ID {raid_id}의 보상 지급 DB 작업 {len(db_tasks)}개를 완료했습니다.")
-            log_channel_id = get_id(COMBAT_LOG_CHANNEL_KEY)
-            log_channel = self.bot.get_channel(log_channel_id) if log_channel_id else channel
+
+            # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
+            # 원인: 최종 랭킹 메시지를 공용 로그 채널에만 보내도록 고정되어 있었습니다.
+            # 해결: 보스 이름에 '주간' 또는 '월간'이 포함되어 있는지 확인하여,
+            #       각 보스 타입에 맞는 채널을 우선적으로 사용하도록 변경합니다.
+            #       만약 해당 채널이 설정되지 않았다면, 예비로 현재 채널(channel)을 사용합니다.
+            
+            target_channel = None
+            if "주간" in boss_name:
+                channel_id = get_id(WEEKLY_BOSS_CHANNEL_KEY)
+                if channel_id:
+                    target_channel = self.bot.get_channel(channel_id)
+            elif "월간" in boss_name:
+                channel_id = get_id(MONTHLY_BOSS_CHANNEL_KEY)
+                if channel_id:
+                    target_channel = self.bot.get_channel(channel_id)
+            
+            # target_channel을 찾지 못했다면, 원래 로직처럼 현재 채널을 사용합니다.
+            if not target_channel:
+                target_channel = channel
+            # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
+            
             final_embed = discord.Embed(title=f"🏆 {boss_name} 최종 랭킹 및 보상", color=0x5865F2)
             rank_list = []
             for i, data in enumerate(participants[:10]):
@@ -500,7 +520,10 @@ class BossRaid(commands.Cog):
                 rank_list.append(line)
             final_embed.description = "\n".join(rank_list)
             final_embed.set_footer(text=f"총 {total_participants}명의 참가자에게 보상이 지급되었습니다.")
-            await log_channel.send(embed=final_embed)
+            
+            # 최종적으로 결정된 target_channel에 메시지를 보냅니다.
+            await target_channel.send(embed=final_embed)
+
         except Exception as e:
             logger.error(f"보상 지급 중 오류 발생 (Raid ID: {raid_id}): {e}", exc_info=True)
             await channel.send("보상을 지급하는 중 오류가 발생했습니다. 관리자에게 문의해주세요.")
