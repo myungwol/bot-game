@@ -305,30 +305,52 @@ class CookingPanelView(ui.View):
                 child.callback = self.dispatch_button_callback
     
     async def dispatch_button_callback(self, interaction: discord.Interaction):
-        custom_id = interaction.data['custom_id']
-        action = custom_id.split(':')[-1]
-        method_map = {"add_ingredient": self.add_ingredient_prompt, "clear_ingredients": self.clear_ingredients, "start_cooking": self.start_cooking, "claim_selected": self.claim_selected_dishes}
-        if method := method_map.get(action):
-            await method(interaction)
+        # 1. 유저별 Lock을 가져오거나 생성합니다.
+        user_lock = self.cog.user_locks.setdefault(interaction.user.id, asyncio.Lock())
+        
+        # 2. Lock이 이미 점유되어 있는지 확인하고, 그렇다면 사용자에게 알립니다.
+        if user_lock.locked():
+            await interaction.response.send_message("⏳ 이전 작업을 처리 중입니다. 잠시만 기다려주세요.", ephemeral=True, delete_after=3)
+            return
+
+        # 3. Lock을 획득하고 작업을 수행합니다.
+        async with user_lock:
+            custom_id = interaction.data['custom_id']
+            action = custom_id.split(':')[-1]
+            method_map = {"add_ingredient": self.add_ingredient_prompt, "clear_ingredients": self.clear_ingredients, "start_cooking": self.start_cooking, "claim_selected": self.claim_selected_dishes}
+            if method := method_map.get(action):
+                await method(interaction)
 
     async def on_cauldron_select(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        selected_slots = [int(v) for v in interaction.data.get('values', [])]
-        
-        installed_slots = {c['slot_number'] for c in self.cauldrons}
-        newly_installed_slots = [s for s in selected_slots if s not in installed_slots]
-        if newly_installed_slots:
-            new_cauldrons_data = [{'user_id': str(self.user.id), 'slot_number': slot, 'state': 'idle'} for slot in newly_installed_slots]
-            await supabase.table('cauldrons').insert(new_cauldrons_data).execute()
-
-        await supabase.table('user_settings').update({'kitchen_selected_slots': selected_slots}).eq('user_id', str(self.user.id)).execute()
-        self.selected_cauldron_slots = selected_slots
-        await self.refresh(interaction)
+        user_lock = self.cog.user_locks.setdefault(interaction.user.id, asyncio.Lock())
+        if user_lock.locked():
+            await interaction.response.send_message("⏳ 이전 작업을 처리 중입니다. 잠시만 기다려주세요.", ephemeral=True, delete_after=3)
+            return
+            
+        async with user_lock:
+            await interaction.response.defer()
+            selected_slots = [int(v) for v in interaction.data.get('values', [])]
+            
+            installed_slots = {c['slot_number'] for c in self.cauldrons}
+            newly_installed_slots = [s for s in selected_slots if s not in installed_slots]
+            if newly_installed_slots:
+                new_cauldrons_data = [{'user_id': str(self.user.id), 'slot_number': slot, 'state': 'idle'} for slot in newly_installed_slots]
+                await supabase.table('cauldrons').insert(new_cauldrons_data).execute()
+    
+            await supabase.table('user_settings').update({'kitchen_selected_slots': selected_slots}).eq('user_id', str(self.user.id)).execute()
+            self.selected_cauldron_slots = selected_slots
+            await self.refresh(interaction)
     
     async def on_dish_select(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        self.selected_dishes_to_claim = interaction.data.get('values', [])
-        await self.refresh(interaction)
+        user_lock = self.cog.user_locks.setdefault(interaction.user.id, asyncio.Lock())
+        if user_lock.locked():
+            await interaction.response.send_message("⏳ 이전 작업을 처리 중입니다. 잠시만 기다려주세요.", ephemeral=True, delete_after=3)
+            return
+
+        async with user_lock:
+            await interaction.response.defer()
+            self.selected_dishes_to_claim = interaction.data.get('values', [])
+            await self.refresh(interaction)
 
     async def add_ingredient_prompt(self, interaction: discord.Interaction):
         selected_cauldrons = self.get_selected_cauldrons()
@@ -501,6 +523,9 @@ class Cooking(commands.Cog):
         self.bot = bot
         self.currency_icon = "🪙"
         self.check_completed_cooking.start()
+        # ▼▼▼▼▼ 핵심 추가 ▼▼▼▼▼
+        self.user_locks: Dict[int, asyncio.Lock] = {}
+        # ▲▲▲▲▲ 핵심 추가 ▲▲▲▲▲
 
     async def cog_load(self):
         self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙")
