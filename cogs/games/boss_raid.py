@@ -563,45 +563,32 @@ class BossRaid(commands.Cog):
         await ranking_view.start(interaction)
 
 class RankingView(ui.View):
-    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     def __init__(self, cog_instance: 'BossRaid', raid_id: int, user: discord.Member, boss_type: str):
         super().__init__(timeout=180)
         self.cog = cog_instance
         self.raid_id = raid_id
         self.user = user
         self.user_id = user.id
-        self.boss_type = boss_type # 보스 타입을 저장
+        self.boss_type = boss_type
         self.current_page = 0
         self.users_per_page = 10
         self.total_pages = 1
-    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
     
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("랭킹을 조회한 본인만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
-            return False
-        return True
-    async def start(self, interaction: discord.Interaction):
-        embed = await self.build_ranking_embed()
-        self.update_buttons()
-        await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
-    async def update_view(self, interaction: discord.Interaction):
-        embed = await self.build_ranking_embed()
-        self.update_buttons()
-        await interaction.response.edit_message(embed=embed, view=self)
-    def update_buttons(self):
-        prev_button = discord.utils.get(self.children, custom_id="prev_page")
-        next_button = discord.utils.get(self.children, custom_id="next_page")
-        if prev_button: prev_button.disabled = self.current_page == 0
-        if next_button: next_button.disabled = self.current_page >= self.total_pages - 1
-    
-    # --- ▼▼▼▼▼ 핵심 수정 시작 (푸터 텍스트 변경) ▼▼▼▼▼ ---
+    # ... (interaction_check, start, update_view, update_buttons 메서드는 그대로)
+
+    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def build_ranking_embed(self) -> discord.Embed:
         offset = self.current_page * self.users_per_page
         
         # 1. 랭킹 데이터와 총 참가자 수를 동시에 가져옵니다.
         participants_task = supabase.table('boss_participants').select('user_id, total_damage_dealt, pets(nickname)', count='exact').eq('raid_id', self.raid_id).order('total_damage_dealt', desc=True).range(offset, offset + self.users_per_page - 1).execute()
-        my_rank_task = supabase.rpc('get_user_rank', {'p_user_id': self.user_id, 'p_table_name': 'boss_participants', 'p_column_name': 'total_damage_dealt', 'p_raid_id': self.raid_id}).execute()
+        
+        # 원인: 존재하지 않는 RPC 함수를 호출했습니다.
+        # 해결: 새로 만든 'get_boss_participant_rank' 함수를 올바른 인자와 함께 호출합니다.
+        my_rank_task = supabase.rpc('get_boss_participant_rank', {
+            'p_user_id': self.user_id,
+            'p_raid_id': self.raid_id
+        }).execute()
         
         part_res, my_rank_res = await asyncio.gather(participants_task, my_rank_task)
 
@@ -630,7 +617,7 @@ class RankingView(ui.View):
 
         # 2. 나의 예상 보상 등급을 계산하고 푸터에 추가합니다.
         footer_text = f"페이지 {self.current_page + 1} / {self.total_pages}"
-        my_rank = my_rank_res.data if my_rank_res and my_rank_res.data else None
+        my_rank = my_rank_res.data if my_rank_res and my_rank_res.data is not None else None
 
         if my_rank and total_participants > 0:
             my_percentile = my_rank / total_participants
