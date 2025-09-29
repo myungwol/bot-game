@@ -540,3 +540,19 @@ async def claim_and_end_exploration(exploration_id: int, pet_id: int) -> bool:
         logger.error(f"탐사 보상 수령 처리(ID: {exploration_id}) 중 DB 오류: {e}", exc_info=True)
         return False
 
+@supabase_retry_handler()
+async def get_inventories_for_users(user_ids: List[int]) -> Dict[int, Dict[str, int]]:
+    """여러 유저 ID를 받아, 각 유저의 인벤토리를 한 번의 쿼리로 가져옵니다."""
+    if not user_ids:
+        return {}
+    
+    user_id_strs = list(set(map(str, user_ids)))
+    
+    response = await supabase.table('inventories').select('user_id, item_name, quantity').in_('user_id', user_id_strs).gt('quantity', 0).execute()
+    
+    inventories = defaultdict(dict)
+    if response and response.data:
+        for item in response.data:
+            inventories[int(item['user_id'])][item['item_name']] = item['quantity']
+    
+    return dict(inventories)
