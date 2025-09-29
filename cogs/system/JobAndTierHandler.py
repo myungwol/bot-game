@@ -7,7 +7,7 @@ import logging
 import asyncio
 from typing import Dict, Any, List
 
-from utils.database import supabase, get_config, get_id, get_embed_from_db
+from utils.database import supabase, get_config, get_id, get_embed_from_db, clear_user_ability_cache # 💡 clear_user_ability_cache 임포트 추가
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
@@ -130,6 +130,8 @@ class JobAdvancementView(ui.View):
 
             await supabase.rpc('set_user_job_and_ability', {'p_user_id': user.id, 'p_job_id': job_id, 'p_ability_id': ability_id}).execute()
 
+            clear_user_ability_cache(user.id)
+            
             if log_channel_id := get_id("job_log_channel_id"):
                 if log_channel := self.bot.get_channel(log_channel_id):
                     if embed_data := await get_embed_from_db("log_job_advancement"):
