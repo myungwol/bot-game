@@ -66,12 +66,10 @@ class BossPanelView(ui.View):
         ranking_button.callback = self.on_ranking_click
         self.add_item(ranking_button)
 
-    # --- ▼▼▼▼▼ 핵심 수정 시작 (버튼 클릭 로직 변경) ▼▼▼▼▼ ---
     async def on_challenge_click(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user = interaction.user
 
-        # 1. 모든 조건을 여기서 먼저 확인합니다.
         if self.cog.combat_lock.locked():
             await interaction.followup.send("❌ 다른 유저가 전투 중입니다. 잠시 후 다시 시도해주세요.", ephemeral=True, delete_after=5)
             return
@@ -95,7 +93,6 @@ class BossPanelView(ui.View):
                  await interaction.followup.send(f"❌ 이번 {('주' if self.boss_type == 'weekly' else '달')}에는 이미 보스에게 도전했습니다.", ephemeral=True)
                  return
 
-        # 2. 모든 조건을 통과했을 때만, 공용 패널의 버튼을 비활성화합니다.
         for item in self.children:
             item.disabled = True
         
@@ -105,9 +102,7 @@ class BossPanelView(ui.View):
 
         await interaction.message.edit(view=self)
         
-        # 3. 실제 전투 로직을 호출합니다.
         await self.cog.handle_challenge(interaction, self.boss_type)
-    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     async def on_ranking_click(self, interaction: discord.Interaction):
         await self.cog.handle_ranking(interaction, self.boss_type)
@@ -288,18 +283,19 @@ class BossRaid(commands.Cog):
         embed.description = log_text
         return embed
     
-    # --- ▼▼▼▼▼ 핵심 수정 시작 (불필요한 코드 제거) ▼▼▼▼▼ ---
+    # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
+    # on_challenge_click에서 넘어온 interaction을 그대로 사용합니다.
+    # 불필요한 defer() 호출을 제거하고, 에러 메시지는 followup.send()로 보냅니다.
     async def handle_challenge(self, interaction: discord.Interaction, boss_type: str):
-        # on_challenge_click에서 모든 유효성 검사가 끝나고, 버튼이 비활성화된 후 호출됩니다.
         user = interaction.user
         
-        # 유효성 검사가 이미 끝났으므로, 레이드 ID와 펫 정보만 다시 가져옵니다.
-        raid_res = await supabase.table('boss_raids').select('id').eq('status', 'active').eq('bosses.type', boss_type).limit(1).execute()
+        # on_challenge_click에서 모든 유효성 검사가 끝나고, 버튼이 비활성화된 후 호출됩니다.
+        # 따라서 여기서는 레이드 ID와 펫 정보만 다시 가져오면 됩니다.
+        raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', boss_type).limit(1).execute()
         raid_id = raid_res.data[0]['id']
         pet = await get_user_pet(user.id)
         
         async with self.combat_lock:
-            # ephemeral=False로 설정하여 다른 사람에게도 보이도록 할 수 있으나, 전투 시작 메시지는 보통 본인에게만 알리는 것이 좋습니다.
             await interaction.followup.send("✅ 전투를 준비합니다... 잠시만 기다려주세요.", ephemeral=True)
             await self.update_all_boss_panels()
             combat_task = asyncio.create_task(self.run_combat_simulation(interaction, user, pet, raid_id, boss_type))
