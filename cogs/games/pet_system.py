@@ -741,7 +741,7 @@ class PetSystem(commands.Cog):
                     xp_for_this_level = calculate_xp_for_pet_level(current_level)
                     xp_to_add = (xp_for_this_level - current_xp_in_level) + 1
                     if xp_to_add > 0:
-                        res = await supabase.rpc('add_xp_to_pet', {'p_user_id': user_id, 'p_xp_to_add': xp_to_add}).execute()
+                        res = await supabase.rpc('add_xp_to_pet', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add}).execute()
                         if res.data and res.data[0].get('leveled_up'):
                             new_level = res.data[0].get('new_level')
                             points_awarded = res.data[0].get('points_awarded')
