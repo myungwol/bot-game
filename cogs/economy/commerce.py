@@ -85,8 +85,15 @@ class BuyItemView(ShopViewBase):
         self.items_per_page = 20
 
     async def _filter_items_for_user(self):
+        item_db = get_item_database()
+        
+        # '아이템' 카테고리일 경우 '입장권'도 포함하도록 필터링 조건 수정
+        target_categories = [self.category]
+        if self.category == "아이템":
+            target_categories.append("입장권")
+            
         all_items_in_category = sorted(
-            [(n, d) for n, d in get_item_database().items() if d.get('buyable') and d.get('category', '').strip() == self.category],
+            [(n, d) for n, d in item_db.items() if d.get('buyable') and d.get('category', '').strip() in target_categories],
             key=lambda item: item[1].get('price', 0)
         )
         self.items_in_category = all_items_in_category
@@ -209,9 +216,10 @@ class BuyCategoryView(ShopViewBase):
     async def build_components(self):
         self.clear_items()
         
+        # 요청하신 새 레이아웃으로 변경
         layout = [
-            [("잡화", "아이템"), ("입장권", "입장권"), ("장비", "장비")],
-            [("미끼", "미끼"), ("조미료", "조미료"), ("씨앗", "농장_씨앗"), ("펫", "펫 아이템"), ("알", "알")]
+            [("아이템", "아이템"), ("장비", "장비"), ("조미료", "조미료")],
+            [("미끼", "미끼"), ("씨앗", "농장_씨앗"), ("펫", "펫 아이템"), ("알", "알")]
         ]
         
         for row_index, row_items in enumerate(layout):
