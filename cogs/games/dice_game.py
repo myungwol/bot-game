@@ -88,17 +88,25 @@ class NumberSelectView(ui.View):
         except discord.NotFound:
             return self.stop()
 
-        if random.random() < 0.30:
+        # ▼▼▼▼▼ 핵심 수정 부분: 확률 조작 로직 ▼▼▼▼▼
+        # 16.5%의 확률로 승리하도록 설정합니다.
+        if random.random() < 0.165:
+            # 승리: 주사위 결과를 유저가 선택한 숫자로 설정
             dice_result = chosen_number
         else:
+            # 패배: 유저가 선택한 숫자를 제외한 나머지 5개 숫자 중 하나로 설정
             possible_outcomes = [1, 2, 3, 4, 5, 6]
             possible_outcomes.remove(chosen_number)
             dice_result = random.choice(possible_outcomes)
+        # ▲▲▲▲▲ 수정 완료 ▲▲▲▲▲
 
         result_embed = None
         if chosen_number == dice_result:
-            reward_amount = self.bet_amount * 2
-            await update_wallet(self.user, self.bet_amount)
+            # 승리 시, 순이익은 5배, 로그에 표시될 총 지급액은 6배로 설정
+            reward_amount = self.bet_amount * 6
+            profit = self.bet_amount * 5
+            await update_wallet(self.user, profit)
+            
             if embed_data := await get_embed_from_db("log_dice_game_win"):
                 result_embed = format_embed_from_db(
                     embed_data, user_mention=self.user.mention,
@@ -107,6 +115,7 @@ class NumberSelectView(ui.View):
                     currency_icon=self.currency_icon
                 )
         else:
+            # 패배 시, 베팅액만큼 차감 (기존과 동일)
             await update_wallet(self.user, -self.bet_amount)
             if embed_data := await get_embed_from_db("log_dice_game_lose"):
                 result_embed = format_embed_from_db(
