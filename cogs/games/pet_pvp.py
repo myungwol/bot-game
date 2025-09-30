@@ -264,12 +264,27 @@ class PetPvP(commands.Cog, name="PetPvP"):
             await self.end_game(match_id, None)
 
     def _calculate_damage(self, attacker: Dict, defender: Dict) -> int:
-        """보스전 데미지 공식을 펫 PvP에 맞게 적용"""
-        defense_reduction_constant = 100 # 펫 대전은 스탯이 낮으므로 상수 조정
-        defense_factor = defender['current_defense'] / (defender['current_defense'] + defense_reduction_constant)
-        base_damage = attacker['current_attack'] * random.uniform(0.9, 1.1)
-        damage = max(1, int(base_damage * (1 - defense_factor)))
-        return damage
+        """펫 PvP에 맞게 재조정된 데미지 공식"""
+        # 1. 기본 공격력 계산 (랜덤 요소 포함)
+        base_atk = attacker['current_attack'] * random.uniform(0.9, 1.2)
+
+        # 2. 방어력에 기반한 피해 감소율(%) 계산
+        #    - 방어력이 높을수록 감소율이 점근적으로 100%에 가까워지지만, 절대 100%는 넘지 않도록 설계
+        #    - 방어력 50일 때 약 33%, 100일 때 50%의 피해 감소율을 가집니다.
+        defense_efficiency = 100
+        damage_reduction = defender['current_defense'] / (defender['current_defense'] + defense_efficiency)
+
+        # 3. 기본 공격력에서 감소율만큼 피해량 차감
+        mitigated_damage = base_atk * (1 - damage_reduction)
+        
+        # 4. 최종 데미지 보정
+        #    - 펫의 평균 체력을 기준으로 데미지 스케일을 조정하여 전투 턴을 늘립니다.
+        #    - 이 값이 작을수록 전투가 길어집니다. (현재는 평균 체력의 약 8~12% 데미지)
+        final_damage_scaler = 8.0 
+        final_damage = mitigated_damage / final_damage_scaler
+
+        # 5. 최소 데미지는 1로 보장
+        return max(1, int(final_damage))
 
     def _build_combat_embed(self, p1: discord.Member, p2: discord.Member, p1_pet: Dict, p2_pet: Dict, p1_hp: int, p2_hp: int, logs: List[str]) -> discord.Embed:
         embed = discord.Embed(title=f"⚔️ {p1_pet['nickname']} vs {p2_pet['nickname']}", color=0xC27C0E)
