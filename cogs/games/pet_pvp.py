@@ -22,13 +22,23 @@ PVP_REQUEST_TIMEOUT_SECONDS = 300 # 5분
 
 class ChallengeConfirmView(ui.View):
     """도전 수락/거절을 위한 View"""
-    def __init__(self, cog_instance: 'PetPvP', match_id: int):
+    def __init__(self, cog_instance: 'PetPvP', match_id: int, opponent_id: int):
         super().__init__(timeout=PVP_REQUEST_TIMEOUT_SECONDS)
         self.cog = cog_instance
         self.match_id = match_id
+        self.opponent_id = opponent_id  # 도전자 ID를 View에 저장
+
+    # 이 메서드가 버튼 콜백보다 먼저 실행됩니다.
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.opponent_id:
+            # 도전을 받은 당사자가 아니면, 비공개 메시지를 보내고 상호작용을 차단합니다.
+            await interaction.response.send_message("다른 사람의 대전 신청에 응답할 수 없습니다.", ephemeral=True, delete_after=5)
+            return False  # False를 반환하면 버튼 콜백이 실행되지 않습니다.
+        return True  # 당사자일 경우에만 상호작용을 허용합니다.
 
     @ui.button(label="수락", style=discord.ButtonStyle.success, emoji="⚔️")
     async def accept_button(self, interaction: discord.Interaction, button: ui.Button):
+        # interaction_check를 통과했으므로 이 코드는 반드시 도전자 본인이 실행합니다.
         await self.cog.handle_accept(interaction, self.match_id)
         self.stop()
 
@@ -103,7 +113,7 @@ class PetPvP(commands.Cog, name="PetPvP"):
             if not match:
                 return await select_interaction.followup.send("❌ 대전 정보를 생성하는 데 실패했습니다.", ephemeral=True)
 
-            confirm_view = ChallengeConfirmView(self, match['id'])
+            confirm_view = ChallengeConfirmView(self, match['id'], opponent.id)
             
             challenge_embed = discord.Embed(
                 title="⚔️ 펫 대전 신청 도착!",
