@@ -324,12 +324,13 @@ class EconomyCore(commands.Cog):
                     if xp_res.data: await self.handle_level_up_event(user, xp_res.data)
                     
                     pet_xp_res = await supabase.rpc('add_xp_to_pet', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add}).execute()
-                    if pet_xp_res.data and pet_xp_res.data[0].get('leveled_up'):
-                        await save_config_to_db(f"pet_levelup_request_{user_id}", {
-                            "new_level": pet_xp_res.data[0].get('new_level'),
-                            "points_awarded": pet_xp_res.data[0].get('points_awarded')
-                        })
+                    
+                    # ▼▼▼▼▼ [수정된 부분] ▼▼▼▼▼
+                    # pet_xp_res.data[0] -> pet_xp_res.data 로 변경하여 딕셔너리에 직접 접근
+                    if pet_xp_res.data and pet_xp_res.data.get('leveled_up'):
+                        await save_config_to_db(f"pet_levelup_request_{user_id}", pet_xp_res.data)
                         await save_config_to_db(f"pet_evolution_check_request_{user_id}", time.time())
+                    # ▲▲▲▲▲ [수정 완료] ▲▲▲▲▲
 
                 stats = await get_all_user_stats(user_id)
                 daily_stats = stats.get('daily', {})
