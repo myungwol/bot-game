@@ -80,10 +80,21 @@ class PetPvP(commands.Cog, name="PetPvP"):
     async def handle_challenge_start(self, interaction: discord.Interaction):
         challenger = interaction.user
         
-        # 5분 쿨타임 확인
+        # 5분 쿨타임 확인 (수정된 로직)
         cooldown_key = f"pet_pvp_challenge_{challenger.id}"
-        if await get_cooldown(challenger.id, cooldown_key) > 0:
-            return await interaction.response.send_message("❌ 도전 신청 후 5분이 지나야 다시 신청할 수 있습니다.", ephemeral=True, delete_after=10)
+        cooldown_start_time = await get_cooldown(challenger.id, cooldown_key)
+
+        if cooldown_start_time > 0:
+            cooldown_duration_seconds = 300  # 5분
+            cooldown_end_timestamp = int(cooldown_start_time + cooldown_duration_seconds)
+            
+            # 동적 시간 표시 생성 (예: <t:1672531200:R>)
+            dynamic_timestamp = f"<t:{cooldown_end_timestamp}:R>"
+            
+            error_message = f"⏳ 쿨타임 중입니다. {dynamic_timestamp}에 다시 도전할 수 있습니다."
+            
+            # delete_after를 늘려서 유저가 시간을 충분히 볼 수 있도록 합니다.
+            return await interaction.response.send_message(error_message, ephemeral=True, delete_after=60)
 
         challenger_pet = await get_user_pet(challenger.id)
         if not challenger_pet:
