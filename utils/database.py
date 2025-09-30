@@ -567,3 +567,25 @@ async def get_inventories_for_users(user_ids: List[int]) -> Dict[int, Dict[str, 
             inventories[int(item['user_id'])][item['item_name']] = item['quantity']
     
     return dict(inventories)
+
+@supabase_retry_handler()
+async def create_pvp_match(challenger_id: int, opponent_id: int) -> Optional[Dict]:
+    """새로운 PvP 대전 기록을 생성하고 반환합니다."""
+    res = await supabase.table('pet_pvp_matches').insert({
+        'challenger_id': challenger_id,
+        'opponent_id': opponent_id,
+        'status': 'pending'
+    }).select('*').single().execute()
+    return res.data if res.data else None
+
+@supabase_retry_handler()
+async def get_pvp_match(match_id: int) -> Optional[Dict]:
+    """ID로 PvP 대전 정보를 가져옵니다."""
+    res = await supabase.table('pet_pvp_matches').select('*').eq('id', match_id).single().execute()
+    return res.data if res.data else None
+
+@supabase_retry_handler()
+async def update_pvp_match(match_id: int, updates: Dict[str, Any]) -> Optional[Dict]:
+    """PvP 대전 정보를 업데이트합니다."""
+    res = await supabase.table('pet_pvp_matches').update(updates).eq('id', match_id).select('*').single().execute()
+    return res.data if res.data else None
