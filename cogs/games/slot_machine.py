@@ -88,13 +88,33 @@ class SlotMachineGameView(ui.View):
         button.label = "회전 중..."
         await interaction.response.edit_message(embed=self.create_embed("릴이 회전 중입니다..."), view=self)
 
-        if random.random() < 0.50:
-            win_types = ['fruit', 'number', 'seven']
-            weights = [30, 15, 5]
+        # ▼▼▼▼▼ 핵심 수정 부분 시작 ▼▼▼▼▼
+
+        # 1. 전체 당첨 확률 조정 (예: 50% -> 40%)
+        if random.random() < 0.40:
+            win_types = ['seven', 'number', 'cherry', 'other_fruit']
+            
+            # ▼▼▼▼▼ 이 부분을 수정하세요 ▼▼▼▼▼
+            weights =   [3,       10,       5,        22] # 가중치 합계: 40
+            
             chosen_win = random.choices(win_types, weights=weights, k=1)[0]
-            symbol = {'fruit': random.choice(FRUIT_SYMBOLS), 'number': '5️⃣', 'seven': '7️⃣'}[chosen_win]
+            
+            # 3. 세분화된 당첨 종류에 따라 심볼을 결정하는 로직으로 변경
+            symbol = ''
+            if chosen_win == 'seven':
+                symbol = '7️⃣'
+            elif chosen_win == 'number':
+                symbol = '5️⃣'
+            elif chosen_win == 'cherry':
+                symbol = '🍒'
+            elif chosen_win == 'other_fruit':
+                # 'cherry'를 제외한 나머지 과일/벨 중에서 랜덤으로 선택
+                other_fruits = ['🍊', '🍇', '🍋', '🔔']
+                symbol = random.choice(other_fruits)
+            
             self.final_reels = [symbol, symbol, symbol]
         else:
+            # 꽝일 경우의 로직 (기존과 동일)
             while True:
                 reels = [random.choice(REEL_SYMBOLS) for _ in range(3)]
                 if not (reels[0] == reels[1] == reels[2]):
@@ -150,12 +170,10 @@ class SlotMachineGameView(ui.View):
     def _calculate_payout(self) -> tuple[float, str]:
         r = self.reels
         if r[0] == r[1] == r[2]:
-            if r[0] == '7️⃣': return 2.0, "트리플 세븐"
-            if r[0] == '5️⃣': return 1.5, "숫자 맞춤"
-            return 1.0, "과일 맞춤"
-        
-        if r.count('🍒') == 2:
-            return 0.2, "체리 보너스"
+            if r[0] == '7️⃣': return 7.0, "트리플 세븐"
+            if r[0] == '🍒': return 2.5, "트리플 체리"
+            if r[0] == '5️⃣': return 2.0, "숫자 맞춤"
+            return 1.5, "과일 맞춤"
 
         return 0.0, "꽝"
 
