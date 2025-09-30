@@ -290,11 +290,17 @@ class PetPvP(commands.Cog, name="PetPvP"):
         embed = discord.Embed(title=f"⚔️ {p1_pet['nickname']} vs {p2_pet['nickname']}", color=0xC27C0E)
         
         p1_hp_bar = create_bar(p1_hp, p1_pet['current_hp'])
-        p1_stats_text = f"❤️ **HP:** `{max(0, p1_hp)} / {p1_pet['current_hp']}`\n{p1_hp_bar}"
+        p1_stats_text = (
+            f"❤️ **HP:** `{max(0, p1_hp)} / {p1_pet['current_hp']}`\n{p1_hp_bar}\n"
+            f"⚔️`{p1_pet['current_attack']}` 🛡️`{p1_pet['current_defense']}` 💨`{p1_pet['current_speed']}`"
+        )
         embed.add_field(name=f"{p1.display_name}의 {p1_pet['nickname']} (Lv.{p1_pet['level']})", value=p1_stats_text, inline=True)
         
         p2_hp_bar = create_bar(p2_hp, p2_pet['current_hp'])
-        p2_stats_text = f"❤️ **HP:** `{max(0, p2_hp)} / {p2_pet['current_hp']}`\n{p2_hp_bar}"
+        p2_stats_text = (
+            f"❤️ **HP:** `{max(0, p2_hp)} / {p2_pet['current_hp']}`\n{p2_hp_bar}\n"
+            f"⚔️`{p2_pet['current_attack']}` 🛡️`{p2_pet['current_defense']}` 💨`{p2_pet['current_speed']}`"
+        )
         embed.add_field(name=f"{p2.display_name}의 {p2_pet['nickname']} (Lv.{p2_pet['level']})", value=p2_stats_text, inline=True)
         
         log_text = "\n".join(f"> {line}" for line in logs[-10:])
