@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timezone, timedelta, time as dt_time
 from typing import Dict, Optional, List, Deque, Set
 from collections import deque, defaultdict
+from postgrest.exceptions import APIError  # <--- 이 줄을 추가해주세요!
 
 from utils.database import (
     get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
