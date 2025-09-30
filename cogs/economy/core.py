@@ -305,9 +305,16 @@ class EconomyCore(commands.Cog):
             self.chat_cache.clear()
 
         try:
+            # ▼▼▼ [핵심 수정 1] 새로운 활동 기록을 DB에 먼저 저장합니다. ▼▼▼
+            db_logs = []
             for log in logs_to_process:
-                log['user_id'] = str(log['user_id'])
-            await supabase.table('user_activities').insert(logs_to_process).execute()
+                db_log = log.copy()
+                db_log['user_id'] = str(db_log['user_id'])
+                db_logs.append(db_log)
+            
+            if db_logs:
+                await supabase.table('user_activities').insert(db_logs).execute()
+            # ▲▲▲ [핵심 수정 1] 완료 ▲▲▲
 
             user_chat_counts = defaultdict(int)
             for log in logs_to_process:
@@ -318,33 +325,42 @@ class EconomyCore(commands.Cog):
                 user = self.bot.get_user(user_id)
                 if not user: continue
 
+                # 경험치 지급 로직 (기존과 동일)
                 xp_to_add = self.xp_from_chat * count
                 if xp_to_add > 0:
                     xp_res = await supabase.rpc('add_xp', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
                     if xp_res.data: await self.handle_level_up_event(user, xp_res.data)
                     
                     pet_xp_res = await supabase.rpc('add_xp_to_pet', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add}).execute()
-                    
-                    # ▼▼▼▼▼ [수정된 부분] ▼▼▼▼▼
-                    # pet_xp_res.data[0] -> pet_xp_res.data 로 변경하여 딕셔너리에 직접 접근
-                    if pet_xp_res.data and pet_xp_res.data.get('leveled_up'):
-                        await save_config_to_db(f"pet_levelup_request_{user_id}", pet_xp_res.data)
+                    if pet_xp_res.data and pet_xp_res.data[0].get('leveled_up'):
+                        await save_config_to_db(f"pet_levelup_request_{user_id}", {
+                            "new_level": pet_xp_res.data[0].get('new_level'),
+                            "points_awarded": pet_xp_res.data[0].get('points_awarded')
+                        })
                         await save_config_to_db(f"pet_evolution_check_request_{user_id}", time.time())
-                    # ▲▲▲▲▲ [수정 완료] ▲▲▲▲▲
 
+                # ▼▼▼ [핵심 수정 2] DB에 저장했으므로, 최신 통계를 다시 조회합니다. ▼▼▼
                 stats = await get_all_user_stats(user_id)
                 daily_stats = stats.get('daily', {})
+                
                 if daily_stats.get('chat_count', 0) >= self.chat_message_requirement:
+                    # 일일 보상을 이미 받았는지 확인하는 로직 (기존과 동일)
                     reward_res = await supabase.table('user_activities').select('id', count='exact').eq('user_id', str(user_id)).eq('activity_type', 'reward_chat').gte('created_at', datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat()).execute()
+                    
+                    # 보상을 아직 받지 않았다면 지급
                     if reward_res.count == 0:
                         reward = random.randint(*self.chat_reward_range)
                         await update_wallet(user, reward)
-                        await supabase.table('user_activities').insert({'user_id': str(user_id), 'activity_type': 'reward_chat', 'coin_earned': reward}).execute()
+                        # 'reward_chat' 활동 기록
+                        await log_activity(user_id, 'reward_chat', coin_earned=reward)
                         await self.log_coin_activity(user, reward, f"채팅 {self.chat_message_requirement}회 달성")
+                # ▲▲▲ [핵심 수정 2] 완료 ▲▲▲
 
         except Exception as e:
             logger.error(f"활동 로그 루프 중 DB 오류: {e}", exc_info=True)
-            async with self._cache_lock: self.chat_cache.extend(logs_to_process)
+            # 실패 시, 처리되지 않은 로그를 다시 캐시에 추가
+            async with self._cache_lock:
+                self.chat_cache.extend(logs_to_process)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
