@@ -588,5 +588,6 @@ async def get_pvp_match(match_id: int) -> Optional[Dict]:
 @supabase_retry_handler()
 async def update_pvp_match(match_id: int, updates: Dict[str, Any]) -> Optional[Dict]:
     """PvP 대전 정보를 업데이트합니다."""
-    res = await supabase.table('pet_pvp_matches').update(updates).eq('id', match_id).select('*').single().execute()
-    return res.data if res.data else None
+    res = await supabase.table('pet_pvp_matches').update(updates).eq('id', match_id).execute()
+    # update의 결과는 res.data 리스트에 담겨 반환됩니다. single()과 유사한 결과를 위해 첫 번째 요소를 반환합니다.
+    return res.data[0] if res.data else None
