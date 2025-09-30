@@ -575,8 +575,9 @@ async def create_pvp_match(challenger_id: int, opponent_id: int) -> Optional[Dic
         'challenger_id': challenger_id,
         'opponent_id': opponent_id,
         'status': 'pending'
-    }).select('*').single().execute()
-    return res.data if res.data else None
+    }).execute()
+    # insert의 결과는 res.data 리스트에 담겨 반환됩니다.
+    return res.data[0] if res.data else None
 
 @supabase_retry_handler()
 async def get_pvp_match(match_id: int) -> Optional[Dict]:
