@@ -275,16 +275,16 @@ class BossRaid(commands.Cog):
         hp_bar = create_bar(raid_data['current_hp'], boss_info['max_hp'])
         hp_text = f"`{raid_data['current_hp']:,} / {boss_info['max_hp']:,}`\n{hp_bar}"
         stats_text = (
-            f"**공격력:** `{boss_info['attack']:,}`\n"
-            f"**방어력:** `{boss_info['defense']:,}`"
-            f"**스피드:** `1`"
+            f"**⚔️ 공격력:** `{boss_info['attack']:,}`\n"
+            f"**🛡️ 방어력:** `{boss_info['defense']:,}`\n"
+            f"**👟 스피드:** `1`"
         )
         
         embed = discord.Embed(title=f"👑 {boss_info['name']} 현황", color=0xE74C3C)
         if boss_info.get('image_url'):
             embed.set_thumbnail(url=boss_info['image_url'])
         
-        embed.add_field(name="--- 보스 정보 ---", value=f"{stats_text}\n**체력:**\n{hp_text}", inline=False)
+        embed.add_field(name="--- 보스 정보 ---", value=f"{stats_text}\n**❤️ 체력:**\n{hp_text}", inline=False)
         embed.set_footer(text="패널은 2분마다 자동으로 업데이트됩니다.")
         return embed
 
