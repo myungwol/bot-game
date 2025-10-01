@@ -10,7 +10,7 @@ from typing import Optional
 
 from utils.database import (
     get_wallet, update_wallet, get_config,
-    save_panel_id, get_panel_id, get_embed_from_db
+    save_panel_id, get_panel_id, get_embed_from_db, log_activity # <--- log_activity 추가
 )
 from utils.helpers import format_embed_from_db
 
@@ -136,6 +136,11 @@ class SlotMachineGameView(ui.View):
         payout_rate, payout_name = self._calculate_payout()
         result_text = f"| {self.reels[0]} | {self.reels[1]} | {self.reels[2]} |"
         result_embed = None
+
+        # ▼▼▼▼▼ 이 부분을 추가하세요 ▼▼▼▼▼
+        # 게임 플레이 활동 기록
+        await log_activity(self.user.id, 'game_slot', amount=1)
+        # ▲▲▲▲▲ 추가 완료 ▲▲▲▲▲
 
         if payout_rate > 0:
             payout_amount = int(self.bet_amount * payout_rate)
