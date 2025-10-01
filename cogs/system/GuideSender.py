@@ -125,14 +125,14 @@ class GuideSender(commands.Cog):
             color=0x3498DB  # Blue
         )
         embed6.add_field(name="**1. 상점** <#1412052409760481473>", value="아이템을 사거나 팔 수 있습니다. 시세는 매일 조금씩 변동됩니다.", inline=False)
-        embed6.add_field(name="**2. 거래** <#1412052417914081281>, <#1412052417914081281>", value="다른 유저에게 코인을 보내거나, 1:1로 아이템/코인을 안전하게 교환하고, 우편을 보낼 수 있습니다.", inline=False)
+        embed6.add_field(name="**2. 거래** <#1412052417914081281>, <#1413904678378410044>", value="다른 유저에게 코인을 보내거나, 1:1로 아이템/코인을 안전하게 교환하고, 우편을 보낼 수 있습니다.", inline=False)
         embed6.add_field(name="**3. 퀘스트** <#1412362697336426516>", value="매일/매주 주어지는 간단한 목표를 달성하고 보상을 받으세요. 모두 완료 시 보너스가 있습니다!", inline=False)
         embed6.add_field(name="**4. 친구 초대** <#1418265581777584239>", value="나만의 영구 초대 코드로 친구를 초대하고, 친구가 정식 주민이 되면 보상을 받습니다.", inline=False)
         embeds_to_send.append(embed6)
 
         # 7. 마무리
         embed7 = discord.Embed(
-            description="우리 마을의 즐길 거리는 앞으로도 계속해서 늘어날 예정입니다. 궁금한 점이 있다면 언제든지 관리자나 다른 주민들에게 물어보세요!\n\n**그럼, 즐거운 마을 생활 되세요!**",
+            description="궁금한 점이 있다면 언제든지 관리자나 다른 주민들에게 물어보세요!\n\n**그럼, 즐거운 마을 생활 되세요!**",
             color=0x99AAB5 # Greyple
         )
         embeds_to_send.append(embed7)
