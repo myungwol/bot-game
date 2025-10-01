@@ -10,7 +10,7 @@ import asyncio # <--- asyncio를 import 했는지 확인
 
 from utils.database import (
     get_wallet, update_wallet, get_config, get_panel_components_from_db,
-    save_panel_id, get_panel_id, get_embed_from_db
+    save_panel_id, get_panel_id, get_embed_from_db, log_activity # <--- log_activity 추가
 )
 from utils.helpers import format_embed_from_db
 
@@ -100,6 +100,8 @@ class NumberSelectView(ui.View):
             possible_outcomes.remove(chosen_number)
             dice_result = random.choice(possible_outcomes)
         # ▲▲▲▲▲ 수정 완료 ▲▲▲▲▲
+        
+        await log_activity(self.user.id, 'game_dice', amount=1)
 
         result_embed = None
         if chosen_number == dice_result:
