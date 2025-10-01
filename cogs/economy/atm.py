@@ -107,37 +107,39 @@ class AtmPanelView(ui.View):
 class Atm(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.panel_lock = asyncio.Lock()  # ▼▼▼ [핵심 수정] 패널 재생성 Lock 추가 ▼▼▼
 
     async def register_persistent_views(self):
         self.bot.add_view(AtmPanelView(self))
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_atm", last_transfer_log: Optional[discord.Embed] = None):
-        embed_key = "panel_atm"
-        
-        if panel_info := get_panel_id(panel_key):
-            old_message_id = panel_info.get('message_id')
-            old_channel_id = panel_info.get('channel_id')
+        async with self.panel_lock:  # ▼▼▼ [핵심 수정] Lock을 사용하여 전체 로직을 감쌉니다 ▼▼▼
+            embed_key = "panel_atm"
             
-            if old_message_id and old_channel_id and (old_channel := self.bot.get_channel(old_channel_id)):
-                try:
-                    message_to_delete = await old_channel.fetch_message(old_message_id)
-                    await message_to_delete.delete()
-                except (discord.NotFound, discord.Forbidden):
-                    logger.warning(f"이전 ATM 패널(ID: {old_message_id})을 원래 위치인 채널 #{old_channel.name}에서도 찾을 수 없었습니다.")
-        
-        if last_transfer_log:
-            try: await channel.send(embed=last_transfer_log)
-            except Exception as e: logger.error(f"ATM 송금 로그 메시지 전송 실패: {e}")
+            if panel_info := get_panel_id(panel_key):
+                old_message_id = panel_info.get('message_id')
+                old_channel_id = panel_info.get('channel_id')
+                
+                if old_message_id and old_channel_id and (old_channel := self.bot.get_channel(old_channel_id)):
+                    try:
+                        message_to_delete = await old_channel.fetch_message(old_message_id)
+                        await message_to_delete.delete()
+                    except (discord.NotFound, discord.Forbidden):
+                        logger.warning(f"이전 ATM 패널(ID: {old_message_id})을 원래 위치인 채널 #{old_channel.name}에서도 찾을 수 없었습니다.")
+            
+            if last_transfer_log:
+                try: await channel.send(embed=last_transfer_log)
+                except Exception as e: logger.error(f"ATM 송금 로그 메시지 전송 실패: {e}")
 
-        if not (embed_data := await get_embed_from_db(embed_key)):
-            return
+            if not (embed_data := await get_embed_from_db(embed_key)):
+                return
 
-        embed = discord.Embed.from_dict(embed_data)
-        view = AtmPanelView(self)
-        
-        new_message = await channel.send(embed=embed, view=view)
-        await save_panel_id(panel_key, new_message.id, channel.id)
-        logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
+            embed = discord.Embed.from_dict(embed_data)
+            view = AtmPanelView(self)
+            
+            new_message = await channel.send(embed=embed, view=view)
+            await save_panel_id(panel_key, new_message.id, channel.id)
+            logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Atm(bot))
