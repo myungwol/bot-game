@@ -524,14 +524,32 @@ class FarmUIView(ui.View):
     async def on_farm_invite_click(self, i: discord.Interaction):
         view = ui.View(timeout=180)
         select = ui.UserSelect(placeholder="농장에 초대할 유저를 선택하세요...")
+        
+        # 콜백 함수의 인자를 'si' (select_interaction)로 명확히 합니다.
         async def cb(si: discord.Interaction):
+            # 응답은 'si'에 대해 이루어져야 합니다.
             await si.response.defer(ephemeral=True)
+            
+            users_added_names = []
             for user_id_str in si.data.get('values', []):
                 try: 
                     user = self.cog.bot.get_user(int(user_id_str))
-                    if user: await i.channel.add_user(user)
-                except Exception: pass
-            await i.edit_original_response(content="초대가 완료되었습니다.", view=None)
+                    if user:
+                        # 유저를 추가하는 대상 채널은 원래 인터랙션 'i'의 채널이 맞습니다.
+                        await i.channel.add_user(user)
+                        users_added_names.append(user.display_name)
+                except Exception as e:
+                    logger.error(f"농장 초대 중 유저 추가 실패 (User ID: {user_id_str}): {e}")
+            
+            # ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼
+            # 'i'가 아닌 'si'의 원본 메시지(유저 선택창)를 수정합니다.
+            if users_added_names:
+                await si.edit_original_response(content=f"✅ {', '.join(users_added_names)}님을 농장에 초대했습니다.", view=None)
+            else:
+                # 선택은 했으나 어떤 이유로든 추가에 실패한 경우
+                await si.edit_original_response(content="❌ 유저를 초대하는 데 실패했습니다.", view=None)
+            # ▲▲▲▲▲ 수정 완료 ▲▲▲▲▲
+
         select.callback = cb
         view.add_item(select)
         await i.followup.send("누구를 농장에 초대하시겠습니까?", view=view, ephemeral=True)
@@ -539,14 +557,32 @@ class FarmUIView(ui.View):
     async def on_farm_share_click(self, i: discord.Interaction):
         view = ui.View(timeout=180)
         select = ui.UserSelect(placeholder="권한을 부여할 유저를 선택하세요...")
+        
+        # 콜백 함수의 인자를 'si' (select_interaction)로 명확히 합니다.
         async def cb(si: discord.Interaction):
+            # 응답은 'si'에 대해 이루어져야 합니다.
             await si.response.defer(ephemeral=True)
+            
             farm_data = await get_farm_data(self.farm_owner_id)
-            if not farm_data: return
-            users_to_grant = [self.cog.bot.get_user(int(uid)) for uid in si.data.get('values', [])]
-            for user in users_to_grant:
-                if user: await grant_farm_permission(farm_data['id'], user.id)
-            await si.edit_original_response(content=f"{', '.join(u.display_name for u in users_to_grant if u)}님에게 권한을 부여했습니다.", view=None)
+            if not farm_data: 
+                await si.edit_original_response(content="❌ 농장 정보를 찾을 수 없어 권한을 부여할 수 없습니다.", view=None)
+                return
+
+            users_granted_names = []
+            for user_id_str in si.data.get('values', []):
+                user = self.cog.bot.get_user(int(user_id_str))
+                if user:
+                    await grant_farm_permission(farm_data['id'], user.id)
+                    users_granted_names.append(user.display_name)
+            
+            # ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼
+            # 'i'가 아닌 'si'의 원본 메시지(유저 선택창)를 수정합니다.
+            if users_granted_names:
+                await si.edit_original_response(content=f"✅ {', '.join(users_granted_names)}님에게 농장 권한을 부여했습니다.", view=None)
+            else:
+                await si.edit_original_response(content="❌ 권한을 부여하는 데 실패했습니다.", view=None)
+            # ▲▲▲▲▲ 수정 완료 ▲▲▲▲▲
+
         select.callback = cb
         view.add_item(select)
         await i.followup.send("누구에게 농장 권한을 주시겠습니까?", view=view, ephemeral=True)
