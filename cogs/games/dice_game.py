@@ -6,6 +6,7 @@ from discord import ui
 import logging
 import random
 from typing import Optional
+import asyncio # <--- asyncio를 import 했는지 확인
 
 from utils.database import (
     get_wallet, update_wallet, get_config, get_panel_components_from_db,
@@ -171,6 +172,7 @@ class DiceGame(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_sessions = set()
+        self.panel_lock = asyncio.Lock()  # ▼▼▼ [핵심 수정] 패널 재생성 Lock 추가 ▼▼▼
 
     async def register_persistent_views(self):
         view = DiceGamePanelView(self)
@@ -178,30 +180,30 @@ class DiceGame(commands.Cog):
         self.bot.add_view(view)
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_dice_game", last_game_log: Optional[discord.Embed] = None):
-        embed_key = "panel_dice_game"
-        
-        if panel_info := get_panel_id(panel_key):
-            if (old_channel := self.bot.get_channel(panel_info['channel_id'])) and (old_message_id := panel_info.get('message_id')):
-                try:
-                    await (await old_channel.fetch_message(old_message_id)).delete()
-                except (discord.NotFound, discord.Forbidden): pass
-        
-        if last_game_log:
-            try: await channel.send(embed=last_game_log)
-            except Exception as e: logger.error(f"주사위 게임 로그 메시지 전송 실패: {e}")
+        async with self.panel_lock:  # ▼▼▼ [핵심 수정] Lock을 사용하여 전체 로직을 감쌉니다 ▼▼▼
+            embed_key = "panel_dice_game"
+            
+            if panel_info := get_panel_id(panel_key):
+                if (old_channel := self.bot.get_channel(panel_info['channel_id'])) and (old_message_id := panel_info.get('message_id')):
+                    try:
+                        await (await old_channel.fetch_message(old_message_id)).delete()
+                    except (discord.NotFound, discord.Forbidden): pass
+            
+            if last_game_log:
+                try: await channel.send(embed=last_game_log)
+                except Exception as e: logger.error(f"주사위 게임 로그 메시지 전송 실패: {e}")
 
-        if not (embed_data := await get_embed_from_db(embed_key)):
-            logger.warning(f"DB에서 '{embed_key}'의 임베드 데이터를 찾을 수 없어 패널 생성을 건너뜁니다.")
-            return
+            if not (embed_data := await get_embed_from_db(embed_key)):
+                logger.warning(f"DB에서 '{embed_key}'의 임베드 데이터를 찾을 수 없어 패널 생성을 건너뜁니다.")
+                return
 
-        embed = discord.Embed.from_dict(embed_data)
-        view = DiceGamePanelView(self)
-        await view.setup_buttons()
-        self.bot.add_view(view)
-        
-        new_message = await channel.send(embed=embed, view=view)
-        await save_panel_id(panel_key, new_message.id, channel.id)
-        logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
-
+            embed = discord.Embed.from_dict(embed_data)
+            view = DiceGamePanelView(self)
+            await view.setup_buttons()
+            
+            new_message = await channel.send(embed=embed, view=view)
+            await save_panel_id(panel_key, new_message.id, channel.id)
+            logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
+            
 async def setup(bot: commands.Bot):
     await bot.add_cog(DiceGame(bot))
