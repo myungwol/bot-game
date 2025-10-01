@@ -97,15 +97,14 @@ class RPSGameView(ui.View):
         await self.cog.handle_choice(interaction, self.channel_id, "paper")
 
 class RPSGame(commands.Cog):
-    # ▼▼▼ [수정] __init__ 메서드 수정 ▼▼▼
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_games: Dict[int, Dict] = {}
         self.currency_icon = "🪙"
-        self.user_locks: Dict[int, asyncio.Lock] = {} # defaultdict 대신 일반 dict 사용
+        self.user_locks: Dict[int, asyncio.Lock] = {}
         self.max_players = 5
         self.cleanup_stale_games.start()
-    # ▲▲▲ [수정] 완료 ▲▲▲
+        self.panel_lock = asyncio.Lock()  # ▼▼▼ [핵심 수정] 패널 재생성 Lock 추가 ▼▼▼
 
     # ▼▼▼▼▼ 핵심 추가 ▼▼▼▼▼
     async def cog_teardown(self):
@@ -470,23 +469,24 @@ class RPSGame(commands.Cog):
         self.bot.add_view(view)
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_rps_game", last_game_log: Optional[discord.Embed] = None):
-        if last_game_log:
-            try: await channel.send(embed=last_game_log)
-            except Exception as e: logger.error(f"가위바위보 게임 로그 메시지 전송 실패: {e}")
+        async with self.panel_lock:  # ▼▼▼ [핵심 수정] Lock을 사용하여 전체 로직을 감쌉니다 ▼▼▼
+            if last_game_log:
+                try: await channel.send(embed=last_game_log)
+                except Exception as e: logger.error(f"가위바위보 게임 로그 메시지 전송 실패: {e}")
 
-        if panel_info := get_panel_id(panel_key):
-            if (old_channel := self.bot.get_channel(panel_info['channel_id'])) and (old_message_id := panel_info.get('message_id')):
-                try: await (await old_channel.fetch_message(old_message_id)).delete()
-                except (discord.NotFound, discord.Forbidden): pass
+            if panel_info := get_panel_id(panel_key):
+                if (old_channel := self.bot.get_channel(panel_info['channel_id'])) and (old_message_id := panel_info.get('message_id')):
+                    try: await (await old_channel.fetch_message(old_message_id)).delete()
+                    except (discord.NotFound, discord.Forbidden): pass
 
-        embed_data = await get_embed_from_db(panel_key)
-        if not embed_data: return
+            embed_data = await get_embed_from_db(panel_key)
+            if not embed_data: return
 
-        embed = discord.Embed.from_dict(embed_data)
-        view = RPSGamePanelView(self)
+            embed = discord.Embed.from_dict(embed_data)
+            view = RPSGamePanelView(self)
 
-        new_message = await channel.send(embed=embed, view=view)
-        await save_panel_id(panel_key, new_message.id, channel.id)
+            new_message = await channel.send(embed=embed, view=view)
+            await save_panel_id(panel_key, new_message.id, channel.id)
 
 class RPSGamePanelView(ui.View):
     def __init__(self, cog_instance: 'RPSGame'):
