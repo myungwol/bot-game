@@ -721,6 +721,14 @@ class Farm(commands.Cog):
                         plot['growth_stage'] + growth_amount,
                         item_info.get('max_growth_stage', 99)
                     )
+                    
+                    # ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼
+                    # 비가 오는 날 성장했다면, last_watered_at을 오늘 날짜로 갱신합니다.
+                    if is_raining:
+                        update_payload['last_watered_at'] = today_jst_midnight.astimezone(timezone.utc).isoformat()
+                        update_payload['water_count'] = plot['water_count'] + 1
+                    # ▲▲▲▲▲ 수정 완료 ▲▲▲▲▲
+
                     plots_to_update_db.append(update_payload)
 
             if plots_to_update_db:
