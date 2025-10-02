@@ -228,20 +228,35 @@ class ProfileView(ui.View):
         self.cached_data = {"wallet": wallet_data, "inventory": inventory, "aquarium": aquarium, "gear": gear}
 
     def _get_current_tab_config(self) -> Dict:
-        return next((tab for tab in get_string("profile_view.tabs", []) if tab.get("key") == self.current_page), {})
+        # ▼▼▼ [핵심 수정] 새로운 버튼 순서에 맞춰 strings.json 키 경로를 사용하도록 변경 ▼▼▼
+        tabs_config = get_string("profile_view.tabs", [])
+        return next((tab for tab in tabs_config if tab.get("key") == self.current_page), {})
+        # ▲▲▲ 수정 완료 ▲▲▲
 
     async def build_embed(self) -> discord.Embed:
         inventory = self.cached_data.get("inventory", {}); gear = self.cached_data.get("gear", {}); balance = self.cached_data.get("wallet", {}).get('balance', 0)
         item_db = get_item_database(); base_title = get_string("profile_view.base_title", "{user_name}의 소지품", user_name=self.user.display_name)
-        title_suffix = self._get_current_tab_config().get("title_suffix", "")
+        
+        # ▼▼▼ [핵심 수정] 탭 설정 가져오기 및 제목 변경 ▼▼▼
+        tab_config = self._get_current_tab_config()
+        title_suffix = tab_config.get("title_suffix", "")
+        # ▲▲▲ 수정 완료 ▲▲▲
+
         embed = discord.Embed(title=f"{base_title}{title_suffix}", color=self.user.color or discord.Color.blue())
         if self.user.display_avatar: embed.set_thumbnail(url=self.user.display_avatar.url)
         description = f"**{self.status_message}**\n\n" if self.status_message else ""
         
-        # [수정] 모든 탭에 대한 로직을 하나로 통합
+        # ▼▼▼ [핵심 수정] 모든 탭에 대한 로직을 통합 및 재구성 ▼▼▼
         category_map = {
-            "item": ("아이템", "📦"), "ticket": ("입장권", "🎟️"), "gear": None, "fish": None, "seed": ("농장_씨앗", "🌱"),
-            "crop": ("농장_작물", "🌾"), "mineral": ("광물", "💎"), "food": ("요리", "🍲"), "loot": ("전리품", "🏆"), "pet": ("펫 아이템", "🐾")
+            "item": (["아이템", "입장권"], "📦"), # '아이템' 탭이 '입장권'도 포함
+            "gear": None, 
+            "fish": None, 
+            "seed": (["농장_씨앗"], "🌱"),
+            "crop": (["농장_작물"], "🌾"), 
+            "mineral": (["광물"], "💎"), 
+            "food": (["요리"], "🍲"), 
+            "loot": (["전리품"], "🏆"), 
+            "pet": (["펫 아이템", "알"], "🐾") # '펫 아이템' 탭이 '알'도 포함
         }
         
         if self.current_page == "info":
@@ -290,30 +305,36 @@ class ProfileView(ui.View):
         elif self.current_page in category_map:
             category_info = category_map[self.current_page]
             if category_info:
-                category_name, default_emoji = category_info
-                filtered_items = {n: c for n, c in inventory.items() if item_db.get(n, {}).get('category') == category_name}
-                if category_name == "펫 아이템": # 알 포함
-                    filtered_items.update({n: c for n, c in inventory.items() if item_db.get(n, {}).get('category') == '알'})
+                target_categories, default_emoji = category_info
+                filtered_items = {n: c for n, c in inventory.items() if item_db.get(n, {}).get('category') in target_categories}
                 
                 if filtered_items:
                     item_list = [f"{str(coerce_item_emoji(item_db.get(n,{}).get('emoji', default_emoji)))} **{n}**: `{c}`개" for n, c in sorted(filtered_items.items())]
                     description += "\n".join(item_list)
                 else:
-                    description += f"보유 중인 {self.current_page.replace('_', ' ')}이(가) 없습니다."
+                    # [버그 수정] 'loot' 같은 코드명 대신, 현재 탭의 표시 이름을 사용하도록 수정
+                    tab_display_name = tab_config.get("label", self.current_page)
+                    description += f"보유 중인 {tab_display_name}이(가) 없습니다."
         
         embed.description = description
         return embed
 
     def build_components(self):
         self.clear_items()
+        
+        # ▼▼▼ [핵심 수정] 새로운 버튼 레이아웃 적용 ▼▼▼
+        # DB의 strings 테이블에 저장된 순서와 설정을 그대로 따릅니다.
         tabs_config = get_string("profile_view.tabs", [])
         
-        # [수정] 요청된 레이아웃에 맞게 버튼을 배치
-        layout_map = {0: 4, 1: 5, 2: 2} # 0행: 4개, 1행: 5개, 2행: 2개
+        # 요청하신 레이아웃 (5개씩 2줄)
+        layout_map = {0: 5, 1: 5} 
         current_row, buttons_in_row = 0, 0
 
         for config in tabs_config:
-            if not (key := config.get("key")): continue
+            key = config.get("key")
+            if not key: continue
+
+            # 레이아웃에 따라 행 자동 변경
             if buttons_in_row >= layout_map.get(current_row, 5):
                 current_row += 1
                 buttons_in_row = 0
@@ -322,21 +343,24 @@ class ProfileView(ui.View):
             self.add_item(ui.Button(label=config.get("label"), style=style, custom_id=f"profile_tab_{key}", emoji=config.get("emoji"), row=current_row))
             buttons_in_row += 1
         
-        current_row += 1
+        # 맨 아래 줄에 기능 버튼 추가
+        action_button_row = current_row + 1
+        # ▲▲▲ 수정 완료 ▲▲▲
+        
         if self.current_page == "item":
-            self.add_item(ui.Button(label=get_string("profile_view.item_tab.use_item_button_label", "아이템 사용"), style=discord.ButtonStyle.success, emoji="✨", custom_id="profile_use_item", row=current_row))
+            self.add_item(ui.Button(label=get_string("profile_view.item_tab.use_item_button_label", "아이템 사용"), style=discord.ButtonStyle.success, emoji="✨", custom_id="profile_use_item", row=action_button_row))
         if self.current_page == "gear":
-            self.add_item(ui.Button(label="낚싯대 변경", style=discord.ButtonStyle.blurple, custom_id="profile_change_rod", emoji="🎣", row=current_row))
-            self.add_item(ui.Button(label="미끼 변경", style=discord.ButtonStyle.blurple, custom_id="profile_change_bait", emoji="🐛", row=current_row))
-            current_row += 1
-            self.add_item(ui.Button(label="괭이 변경", style=discord.ButtonStyle.success, custom_id="profile_change_hoe", emoji="🪓", row=current_row))
-            self.add_item(ui.Button(label="물뿌리개 변경", style=discord.ButtonStyle.success, custom_id="profile_change_watering_can", emoji="💧", row=current_row))
-            self.add_item(ui.Button(label="곡괭이 변경", style=discord.ButtonStyle.secondary, custom_id="profile_change_pickaxe", emoji="⛏️", row=current_row))
+            self.add_item(ui.Button(label="낚싯대 변경", style=discord.ButtonStyle.blurple, custom_id="profile_change_rod", emoji="🎣", row=action_button_row))
+            self.add_item(ui.Button(label="미끼 변경", style=discord.ButtonStyle.blurple, custom_id="profile_change_bait", emoji="🐛", row=action_button_row))
+            action_button_row += 1 # 다음 줄로
+            self.add_item(ui.Button(label="괭이 변경", style=discord.ButtonStyle.success, custom_id="profile_change_hoe", emoji="🪓", row=action_button_row))
+            self.add_item(ui.Button(label="물뿌리개 변경", style=discord.ButtonStyle.success, custom_id="profile_change_watering_can", emoji="💧", row=action_button_row))
+            self.add_item(ui.Button(label="곡괭이 변경", style=discord.ButtonStyle.secondary, custom_id="profile_change_pickaxe", emoji="⛏️", row=action_button_row))
         if self.current_page == "fish" and self.cached_data.get("aquarium"):
             total_pages = math.ceil(len(self.cached_data["aquarium"]) / 10)
             if total_pages > 1:
-                self.add_item(ui.Button(label=get_string("profile_view.pagination_buttons.prev", "◀"), custom_id="profile_fish_prev", disabled=self.fish_page_index == 0, row=current_row))
-                self.add_item(ui.Button(label=get_string("profile_view.pagination_buttons.next", "▶"), custom_id="profile_fish_next", disabled=self.fish_page_index >= total_pages - 1, row=current_row))
+                self.add_item(ui.Button(label=get_string("profile_view.pagination_buttons.prev", "◀"), custom_id="profile_fish_prev", disabled=self.fish_page_index == 0, row=action_button_row))
+                self.add_item(ui.Button(label=get_string("profile_view.pagination_buttons.next", "▶"), custom_id="profile_fish_next", disabled=self.fish_page_index >= total_pages - 1, row=action_button_row))
         
         for child in self.children:
             if isinstance(child, ui.Button): child.callback = self.button_callback
