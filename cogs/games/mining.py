@@ -25,8 +25,8 @@ DEFAULT_MINE_DURATION_SECONDS = 600
 MINING_COOLDOWN_SECONDS = 10
 
 PICKAXE_LUCK_BONUS = {
-    "木のつるはし": 1.0, "銅のつるはし": 1.1, "鉄のつるはし": 1.25,
-    "金のつるはし": 1.5, "ダイヤのつるはし": 2.0,
+    "木のツルハシ": 1.0, "銅のツルハシ": 1.1, "鉄のツルハシ": 1.25,
+    "金のツルハシ": 1.5, "ダイヤのツルハシ": 2.0,
 }
 
 ORE_DATA = {
@@ -110,10 +110,10 @@ class MiningGameView(ui.View):
         embed = discord.Embed(title=f"{self.user.display_name}さんの鉱山採掘", color=0x607D8B)
         item_db = get_item_database()
         if self.state == "idle":
-            description_parts = ["## 前に進んで鉱物を探そう"]
+            description_parts = ["## 前へ進んで鉱物を探そう"]
             if self.last_result_text: description_parts.append(f"## 採掘結果\n{self.last_result_text}")
             remaining_time = self.end_time - datetime.now(timezone.utc)
-            timer_str = f"鉱山閉鎖まで: **{discord.utils.format_dt(self.end_time, 'R')}**" if remaining_time.total_seconds() > 0 else f"鉱山閉鎖まで: **終了**"
+            timer_str = f"鉱山が閉まるまで: **{discord.utils.format_dt(self.end_time, 'R')}**" if remaining_time.total_seconds() > 0 else f"鉱山が閉まるまで: **終了**"
             description_parts.append(timer_str)
             active_abilities = []
             if self.duration_doubled: active_abilities.append("> ✨ 集中探査 (時間2倍)")
@@ -186,8 +186,8 @@ class MiningGameView(ui.View):
                     await update_inventory(self.user.id, self.discovered_ore, quantity)
                     await log_activity(self.user.id, 'mining', amount=quantity, xp_earned=xp_earned)
                     ore_info = get_item_database().get(self.discovered_ore, {}); ore_emoji = str(coerce_item_emoji(ore_info.get('emoji', '💎')))
-                    self.last_result_text = f"✅ {ore_emoji} **{self.discovered_ore}** {quantity}個を獲得しました！ (`+{xp_earned} XP`)"
-                    if quantity > 1: self.last_result_text += f"\n\n✨ **豊富な鉱脈** の能力で鉱石を2個獲得しました！"
+                    self.last_result_text = f"✅ {ore_emoji} **{self.discovered_ore}** {quantity}個獲得しました！ (`+{xp_earned} XP`)"
+                    if quantity > 1: self.last_result_text += f"\n\n✨ **豊富な鉱脈**の能力で鉱石を2個獲得しました！"
                     if xp_earned > 0:
                         res = await supabase.rpc('add_xp', {'p_user_id': self.user.id, 'p_xp_to_add': xp_earned, 'p_source': 'mining'}).execute()
                         if res.data and (level_cog := self.cog.bot.get_cog("LevelSystem")):
@@ -244,7 +244,7 @@ class Mining(commands.Cog):
         if user.id in self.active_sessions:
             thread_id = self.active_sessions[user.id].get("thread_id")
             if thread := self.bot.get_channel(thread_id):
-                await interaction.followup.send(f"すでに鉱山に入場しています。 {thread.mention}", ephemeral=True)
+                await interaction.followup.send(f"すでに鉱山に入場しています。{thread.mention}", ephemeral=True)
             else:
                 await self.close_mine_session(user.id)
                 await interaction.followup.send("以前の鉱山情報を強制的に初期化しました。もう一度お試しください。", ephemeral=True)
@@ -252,9 +252,9 @@ class Mining(commands.Cog):
 
         inventory, gear, user_abilities = await asyncio.gather(get_inventory(user), get_user_gear(user), get_user_abilities(user.id))
         
-        if inventory.get(MINING_PASS_NAME, 0) < 1: return await interaction.followup.send(f"「{MINING_PASS_NAME}」が不足しています。", ephemeral=True)
+        if inventory.get(MINING_PASS_NAME, 0) < 1: return await interaction.followup.send(f"'{MINING_PASS_NAME}'が不足しています。", ephemeral=True)
         pickaxe = gear.get('pickaxe', BARE_HANDS)
-        if pickaxe == BARE_HANDS: return await interaction.followup.send("❌ つるはしを装着する必要があります。", ephemeral=True)
+        if pickaxe == BARE_HANDS: return await interaction.followup.send("❌ ツルハシを装着する必要があります。", ephemeral=True)
 
         try: thread = await interaction.channel.create_thread(name=f"⛏️｜{user.display_name}の鉱山", type=discord.ChannelType.private_thread)
         except Exception: return await interaction.followup.send("❌ 鉱山を開くのに失敗しました。", ephemeral=True)
@@ -287,7 +287,7 @@ class Mining(commands.Cog):
             if duration > 60:
                 await asyncio.sleep(duration - 60)
                 if user_id in self.active_sessions:
-                    try: await thread.send("⚠️ 1分後に鉱山が閉鎖されます...", delete_after=59)
+                    try: await thread.send("⚠️ 1分後に鉱山が閉まります...", delete_after=59)
                     except (discord.Forbidden, discord.HTTPException): pass
                 else: return
                 await asyncio.sleep(60)
@@ -331,7 +331,7 @@ class Mining(commands.Cog):
                 ore_emoji = str(coerce_item_emoji(ore_info.get('emoji', '💎')))
                 mined_ores_lines.append(f"> {ore_emoji} {ore}: {qty}個")
 
-            mined_ores_text = "\n".join(mined_ores_lines) or "> 採掘した鉱物がありません。"
+            mined_ores_text = "\n".join(mined_ores_lines) or "> 採掘した鉱物はありません。"
             
             embed_data = await get_embed_from_db("log_mining_result") or {"title": "⛏️ 鉱山探査結果", "color": 0x607D8B}
             log_embed = format_embed_from_db(embed_data, user_mention=user.mention, pickaxe_name=session_data.get('pickaxe_name'), mined_ores=mined_ores_text)
@@ -344,7 +344,7 @@ class Mining(commands.Cog):
         try:
             thread = self.bot.get_channel(thread_id) or await self.bot.fetch_channel(thread_id)
             await thread.add_user(self.bot.user)
-            await thread.send("**鉱山が閉鎖されました。**", delete_after=10)
+            await thread.send("**鉱山が閉まりました。**", delete_after=10)
             await asyncio.sleep(1)
             await thread.delete()
         except (discord.NotFound, discord.Forbidden): pass
@@ -372,7 +372,7 @@ class Mining(commands.Cog):
         view = MiningPanelView(self)
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_name, new_message.id, channel.id)
-        logger.info(f"✅ {panel_key} パネルを正常に作成しました。(チャンネル: #{channel.name})")
+        logger.info(f"✅ {panel_key} パネルを正常に生成しました。(チャンネル: #{channel.name})")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Mining(bot))
