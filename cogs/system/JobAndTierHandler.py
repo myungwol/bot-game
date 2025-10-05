@@ -100,12 +100,12 @@ class JobAdvancementView(ui.View):
             return
 
         for item in self.children: item.disabled = True
-        await interaction.edit_original_response(content="少々お待ちください...転職手続きを進行中です。", embed=None, view=self)
+        await interaction.edit_original_response(content="少々お待ちください... 転職手続きを進めています。", embed=None, view=self)
         self.stop()
 
         try:
             user = await interaction.guild.fetch_member(self.user_id)
-            if not user: raise Exception("ユーザーを見つけられませんでした。")
+            if not user: raise Exception("유저를 찾을 수 없습니다.")
 
             selected_job_data = self.jobs_data[self.selected_job_key]
             selected_ability_data = next(a for a in selected_job_data['abilities'] if a['ability_key'] == self.selected_ability_key)
@@ -113,7 +113,7 @@ class JobAdvancementView(ui.View):
             job_res = await supabase.table('jobs').select('id').eq('job_key', self.selected_job_key).single().execute()
             ability_res = await supabase.table('abilities').select('id').eq('ability_key', self.selected_ability_key).single().execute()
             if not (job_res.data and ability_res.data):
-                raise Exception(f"DBで職業または能力IDを見つけられませんでした。")
+                raise Exception(f"DB에서 직업 또는 능력 ID를 찾을 수 없습니다.")
             
             job_id, ability_id = job_res.data['id'], ability_res.data['id']
             job_role_key = selected_job_data['role_key']
@@ -140,7 +140,7 @@ class JobAdvancementView(ui.View):
                         await log_channel.send(embed=log_embed)
             
             job_name = selected_job_data['job_name']
-            success_message = f"🎉 **転職完了！**\nおめでとうございます！これからあなたは**{job_name}**です。\n\nこのウィンドウは次の転職手続きのために間もなく消えます..."
+            success_message = f"🎉 **転職完了！**\nおめでとうございます！ これからあなたは**{job_name}**です。\n\nこのウィンドウは次の転職手続きのために間もなく消えます..."
             await interaction.edit_original_response(content=success_message, view=None)
 
             if handler_cog := self.bot.get_cog("JobAndTierHandler"):
@@ -153,15 +153,15 @@ class JobAdvancementView(ui.View):
 
         except discord.NotFound:
             # 연쇄 전직 로직이 스레드/메시지를 먼저 삭제했을 때 발생하는 오류를 무시합니다.
-            logger.info(f"{self.user_id}の転職完了後、UIの修正/削除を試みましたが、対象が見つかりませんでした。正常に処理されたものとみなします。")
+            logger.info(f"{self.user_id}의 전직 완료 후 UI 수정/삭제 시도 중 대상을 찾지 못했으나 정상 처리된 것으로 간주합니다.")
             pass # 정상적인 흐름이므로 오류를 로깅할 필요 없음
 
         except Exception as e:
-            logger.error(f"転職処理中にエラーが発生しました (ユーザー: {self.user_id}): {e}", exc_info=True)
+            logger.error(f"전직 처리 중 오류가 발생했습니다 (유저: {self.user_id}): {e}", exc_info=True)
             try:
                 await interaction.edit_original_response(content="❌ 転職処理中にエラーが発生しました。管理者に問い合わせてください。", view=None)
             except discord.NotFound:
-                 logger.error(f"{self.user_id}の転職処理失敗メッセージを修正しようとしましたが、メッセージが見つかりませんでした。")
+                 logger.error(f"{self.user_id}의 전직 처리 실패 메시지를 수정하려 했으나 메시지를 찾을 수 없습니다.")
 class StartAdvancementView(ui.View):
     def __init__(self, bot: commands.Bot, user_id: int, jobs: List[Dict[str, Any]], level: int):
         super().__init__(timeout=None)
@@ -171,7 +171,7 @@ class StartAdvancementView(ui.View):
         self.level = level
         self.start_button.custom_id = f"start_advancement_{self.user_id}_{self.level}"
 
-    @ui.button(label="転職を開始する", style=discord.ButtonStyle.primary, emoji="✨")
+    @ui.button(label="転職を始める", style=discord.ButtonStyle.primary, emoji="✨")
     async def start_button(self, interaction: discord.Interaction, button: ui.Button):
         self.stop()
         
@@ -284,11 +284,11 @@ class JobAndTierHandler(commands.Cog):
             thread = await channel.create_thread(name=f"転職｜{member.name}", type=discord.ChannelType.private_thread, invitable=False)
             await thread.add_user(member)
 
-            title = f"🎉 レベル {target_level_for_advancement} 転職案内"
-            description = f"{member.mention}さん、新しい道を開拓する時間です。\n\n下のボタンを押して転職手続きを開始してください。"
+            title = f"🎉 レベル {target_level_for_advancement} 転職のご案内"
+            description = f"{member.mention}さん、新しい道を切り開く時間です。\n\n下のボタンを押して転職手続きを始めてください。"
             if target_level_for_advancement == 50 and level >= 100:
-                title = "✨ 転職追いつき: 1次転職"
-                description = f"{member.mention}さん、2次転職に先立ち、まずあなたの道を決定する1次転職を完了する必要があります。\n\n1次転職を完了すると、自動的に2次転職の案内が開始されます。"
+                title = "✨ 転職追いつき：1次転職"
+                description = f"{member.mention}さん、2次転職の前に、まずあなたの道を決定する1次転職を完了する必要があります。\n\n1次転職を完了すると、自動的に2次転職の案内が始まります。"
             
             embed = discord.Embed(title=title, description=description, color=0xFFD700)
             view = StartAdvancementView(self.bot, member.id, filtered_jobs, target_level_for_advancement)
