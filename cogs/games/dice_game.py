@@ -29,7 +29,7 @@ class BetAmountModal(ui.Modal, title="ベット額入力"):
             bet_amount = int(self.amount.value)
             if bet_amount <= 0 or bet_amount % 10 != 0:
                 await interaction.response.send_message(
-                    "❌ 10コイン単位の正の整数のみ入力できます。",
+                    "❌ 10コイン単位の正数を入力してください。",
                     ephemeral=True
                 )
                 return
@@ -85,7 +85,7 @@ class NumberSelectView(ui.View):
         for item in self.children:
             item.disabled = True
         try:
-            await interaction.response.edit_message(content=f"あなたは `{chosen_number}` を選択しました。サイコロを振ります...", view=self)
+            await interaction.response.edit_message(content=f"あなたは`{chosen_number}`を選択しました。サイコロを振ります...", view=self)
         except discord.NotFound:
             return self.stop()
 
