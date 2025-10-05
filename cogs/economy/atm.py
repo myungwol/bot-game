@@ -15,8 +15,8 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-class TransferAmountModal(ui.Modal, title="송금 금액 입력"):
-    amount = ui.TextInput(label="금액", placeholder="보낼 코인의 액수를 입력해주세요", required=True, style=discord.TextStyle.short)
+class TransferAmountModal(ui.Modal, title="送金額入力"):
+    amount = ui.TextInput(label="金額", placeholder="送るコインの額を入力してください", required=True, style=discord.TextStyle.short)
 
     def __init__(self, sender: discord.Member, recipient: discord.Member, cog_instance: 'Atm'):
         super().__init__(timeout=180)
@@ -30,12 +30,12 @@ class TransferAmountModal(ui.Modal, title="송금 금액 입력"):
         try:
             amount_to_send = int(self.amount.value)
             if amount_to_send <= 0:
-                raise ValueError("금액은 1 이상이어야 합니다.")
+                raise ValueError("金額は1以上である必要があります。")
 
             sender_wallet = await get_wallet(self.sender.id)
             if sender_wallet.get('balance', 0) < amount_to_send:
                 await interaction.followup.send(
-                    f"❌ 잔액이 부족합니다. (현재 잔액: {sender_wallet.get('balance', 0):,}{self.currency_icon})", 
+                    f"❌ 残高が不足しています。(現在の残高: {sender_wallet.get('balance', 0):,}{self.currency_icon})", 
                     ephemeral=True
                 )
                 return
@@ -44,9 +44,9 @@ class TransferAmountModal(ui.Modal, title="송금 금액 입력"):
             response = await supabase.rpc('transfer_coins', params).execute()
             
             if not (response and hasattr(response, 'data') and response.data is True):
-                 raise Exception("송금에 실패했습니다. 잔액 부족 또는 데이터베이스 오류일 수 있습니다.")
+                 raise Exception("送金に失敗しました。残高不足またはデータベースエラーの可能性があります。")
 
-            await interaction.followup.send("✅ 송금이 완료되었습니다. 패널을 새로고침합니다.", ephemeral=True)
+            await interaction.followup.send("✅ 送金が完了しました。パネルを更新します。", ephemeral=True)
 
             log_embed = None
             if embed_data := await get_embed_from_db("log_coin_transfer"):
@@ -57,23 +57,23 @@ class TransferAmountModal(ui.Modal, title="송금 금액 입력"):
                  await self.cog.regenerate_panel(log_channel, last_transfer_log=log_embed)
 
         except ValueError:
-            await interaction.followup.send("❌ 금액은 숫자로 입력해주세요.", ephemeral=True)
+            await interaction.followup.send("❌ 金額は数字で入力してください。", ephemeral=True)
         except Exception as e:
             logger.error(f"송금 처리 중 오류 발생: {e}", exc_info=True)
-            await interaction.followup.send("❌ 송금 중 예기치 않은 오류가 발생했습니다.", ephemeral=True)
+            await interaction.followup.send("❌ 送金中に予期せぬエラーが発生しました。", ephemeral=True)
 
 class AtmPanelView(ui.View):
     def __init__(self, cog_instance: 'Atm'):
         super().__init__(timeout=None)
         self.cog = cog_instance
 
-        transfer_button = ui.Button(label="코인 보내기", style=discord.ButtonStyle.green, emoji="💸", custom_id="atm_start_transfer")
+        transfer_button = ui.Button(label="コインを送る", style=discord.ButtonStyle.green, emoji="💸", custom_id="atm_start_transfer")
         transfer_button.callback = self.start_transfer
         self.add_item(transfer_button)
 
     async def start_transfer(self, interaction: discord.Interaction):
         view = ui.View(timeout=180)
-        user_select = ui.UserSelect(placeholder="코인을 보낼 상대를 선택해주세요...")
+        user_select = ui.UserSelect(placeholder="コインを送る相手を選択してください...")
         
         async def select_callback(select_interaction: discord.Interaction):
             try:
@@ -81,13 +81,13 @@ class AtmPanelView(ui.View):
                 recipient = select_interaction.guild.get_member(selected_user_id)
 
                 if not recipient:
-                    await select_interaction.response.send_message("❌ 유저를 찾을 수 없습니다.", ephemeral=True)
+                    await select_interaction.response.send_message("❌ ユーザーが見つかりません。", ephemeral=True)
                     return
 
                 sender = select_interaction.user
 
                 if recipient.bot or recipient.id == sender.id:
-                    await select_interaction.response.send_message("❌ 자기 자신이나 봇에게는 보낼 수 없습니다.", ephemeral=True)
+                    await select_interaction.response.send_message("❌ 自分自身やボットには送れません。", ephemeral=True)
                     return
                 
                 await select_interaction.response.send_modal(TransferAmountModal(sender, recipient, self.cog))
@@ -102,7 +102,7 @@ class AtmPanelView(ui.View):
 
         user_select.callback = select_callback
         view.add_item(user_select)
-        await interaction.response.send_message("누구에게 코인을 보내시겠습니까?", view=view, ephemeral=True)
+        await interaction.response.send_message("誰にコインを送りますか？", view=view, ephemeral=True)
 
 class Atm(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -139,7 +139,7 @@ class Atm(commands.Cog):
             
             new_message = await channel.send(embed=embed, view=view)
             await save_panel_id(panel_key, new_message.id, channel.id)
-            logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
+            logger.info(f"✅ {panel_key} パネルを正常に作成しました。(チャンネル: #{channel.name})")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Atm(bot))
