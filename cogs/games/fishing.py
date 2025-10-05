@@ -47,16 +47,16 @@ class FishingGameView(ui.View):
             self.game_state = "biting"
             if self.children and isinstance(catch_button := self.children[0], ui.Button):
                 catch_button.style = discord.ButtonStyle.success; catch_button.label = "釣り上げる！"
-            embed = discord.Embed(title="❗ アタリが来た！", description="今だ！ボタンを押して釣り上げてください！", color=discord.Color.red())
+            embed = discord.Embed(title="❗ アタリが来た！", description="今だ！ボタンを押して釣り上げよう！", color=discord.Color.red())
             if self.message: await self.message.edit(embed=embed, view=self)
             await asyncio.sleep(self.bite_reaction_time)
             if not self.is_finished() and self.game_state == "biting":
-                embed = discord.Embed(title="💧 逃した...", description=f"{self.player.mention}さん、残念ながら魚が逃げてしまいました。", color=discord.Color.greyple())
+                embed = discord.Embed(title="💧 逃した...", description=f"{self.player.mention}さん、残念ながら魚に逃げられました。", color=discord.Color.greyple())
                 await self._send_result(embed)
                 self.stop()
         except asyncio.CancelledError: pass
         except Exception as e:
-            logger.error(f"{self.player.display_name}의 낚시 게임 중 오류 발생: {e}", exc_info=True)
+            logger.error(f"{self.player.display_name}の釣りゲーム中にエラー発生: {e}", exc_info=True)
             if not self.is_finished():
                 await self._send_result(discord.Embed(title="❌ エラー発生", description="釣り中に予期せぬエラーが発生しました。", color=discord.Color.red()))
                 self.stop()
@@ -104,7 +104,7 @@ class FishingGameView(ui.View):
 
             is_big_catch = size >= self.big_catch_threshold
             title = "🏆 大物だ！ 🏆" if is_big_catch else "🎉 釣り成功！ 🎉"
-            if is_whale_catch: title = "🐋 伝説の始まり、クジラを釣った！ 🐋"
+            if is_whale_catch: title = "🐋 伝説の始まり、クジラを釣る！ 🐋"
             embed.title, embed.description, embed.color = title, f"{self.player.mention}さんが釣りに成功しました！", discord.Color.blue()
             embed.add_field(name="魚種", value=f"{catch_proto.get('emoji', '🐠')} **{catch_proto['name']}**", inline=True)
             embed.add_field(name="サイズ", value=f"`{size}`cm", inline=True)
@@ -122,7 +122,7 @@ class FishingGameView(ui.View):
         result_embed, log_publicly, is_big_catch, is_whale = None, False, False, False
         if self.game_state == "waiting":
             await interaction.response.defer()
-            result_embed = discord.Embed(title="❌ 早すぎる！", description=f"{interaction.user.mention}さん、急ぎすぎて魚を逃してしまいました...", color=discord.Color.dark_grey())
+            result_embed = discord.Embed(title="❌ 早すぎる！", description=f"{interaction.user.mention}さん、焦りすぎて魚を逃してしまいました...", color=discord.Color.dark_grey())
         elif self.game_state == "biting":
             await interaction.response.defer(); self.game_state = "finished"
             result_embed, log_publicly, is_big_catch, is_whale = await self._handle_catch_logic()
@@ -216,7 +216,7 @@ class FishingPanelView(ui.View):
                 rod_data = item_db.get(rod, {})
                 req_tier = game_config.get("FISHING_SEA_REQ_TIER", 3)
                 if rod_data.get('tier', 0) < req_tier:
-                    await interaction.followup.send(f"❌ 海釣りをするには'{INTERMEDIATE_ROD_NAME}'(等級 {req_tier})以上の釣り竿を**装着**する必要があります。", ephemeral=True)
+                    await interaction.followup.send(f"❌ 海釣りをするには'{INTERMEDIATE_ROD_NAME}'(等級{req_tier})以上の釣り竿を**装着**する必要があります。", ephemeral=True)
                     return
 
             self.fishing_cog.active_fishing_sessions_by_user.add(user.id)
@@ -259,7 +259,7 @@ class FishingPanelView(ui.View):
 
             active_effects = []
             if 'fish_bite_time_down_1' in user_abilities:
-                active_effects.append("> ⏱️ **素早いフッキング**: 魚がより早く食いつきます。")
+                active_effects.append("> ⏱️ **素早いアワセ**: 魚がより早く食いつきます。")
             if 'fish_rare_up_2' in user_abilities:
                 active_effects.append("> ⭐ **レア魚種専門家**: 珍しい魚を釣る確率が上昇します。")
             if 'fish_size_up_2' in user_abilities:
@@ -377,7 +377,7 @@ class Fishing(commands.Cog):
         view = FishingPanelView(self.bot, self, panel_key)
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_key, new_message.id, channel.id)
-        logger.info(f"✅ {panel_key} パネルを正常に作成しました。(チャンネル: #{channel.name})")
+        logger.info(f"✅ {panel_key} パネルを正常に生成しました。(チャンネル: #{channel.name})")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Fishing(bot))
