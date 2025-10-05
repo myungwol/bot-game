@@ -56,7 +56,7 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
                 if role_id := get_id(role_key): job_role_mention = f"<@&{role_id}>"
         
         level_tier_roles = job_system_config.get("LEVEL_TIER_ROLES", [])
-        tier_role_mention = "`新米住民`"; user_roles = {role.id for role in user.roles}
+        tier_role_mention = "`新入り住民`"; user_roles = {role.id for role in user.roles}
         for tier in sorted(level_tier_roles, key=lambda x: x['level'], reverse=True):
             if role_id := get_id(tier['role_key']):
                 if role_id in user_roles: tier_role_mention = f"<@&{role_id}>"; break
@@ -94,7 +94,7 @@ async def build_level_embed(user: discord.Member) -> discord.Embed:
             f"**経験値**\n`{xp_in_current_level:,} / {required_xp_for_this_level:,}`",
             f"{xp_bar}\n",
             f"**🏆 総獲得経験値**\n`{total_xp:,} XP`\n",
-            f"**📊 経験値獲得内訳**\n{xp_details_text}"
+            f"**📊 経験値獲得履歴**\n{xp_details_text}"
         ]
         embed.description = "\n".join(description_parts)
         return embed
@@ -244,7 +244,7 @@ class RankingView(ui.View):
 
         except Exception as e:
             logger.error(f"내 순위 조회 중 오류: {e}", exc_info=True)
-            await interaction.response.send_message("❌ 順位の取得中にエラーが発生しました。", ephemeral=True, delete_after=5)
+            await interaction.response.send_message("❌ 順位を取得中にエラーが発生しました。", ephemeral=True, delete_after=5)
 
     async def build_embed(self) -> discord.Embed:
         offset = self.current_page * self.users_per_page
@@ -522,7 +522,7 @@ class LevelSystem(commands.Cog):
             logger.info(f"✅ '{panel_key}' パネルを #{channel.name} に再設置しました。")
             return True
         except Exception as e:
-            logger.error(f"'{panel_key}' 패널 재설치 중 오류: {e}", exc_info=True)
+            logger.error(f"'{panel_key}' パネル再設置中にエラー: {e}", exc_info=True)
             return False
 
 async def setup(bot: commands.Bot):
