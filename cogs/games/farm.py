@@ -32,8 +32,8 @@ CROP_EMOJI_MAP = {
     'sapling_palm': {0: '🫘', 1: '🌱', 2: '🪴', 3: '🌿', 4: '🌴'}
 }
 WEATHER_TYPES = { "sunny": {"emoji": "☀️", "name": "晴れ", "water_effect": False}, "cloudy": {"emoji": "☁️", "name": "曇り", "water_effect": False}, "rainy": {"emoji": "🌧️", "name": "雨", "water_effect": True}, "stormy": {"emoji": "⛈️", "name": "嵐", "water_effect": True}, }
-KST = timezone(timedelta(hours=9))
-KST_MIDNIGHT_UPDATE = dt_time(hour=0, minute=5, tzinfo=KST)
+JST = timezone(timedelta(hours=9))
+JST_MIDNIGHT_UPDATE = dt_time(hour=0, minute=5, tzinfo=JST)
 
 async def delete_after(message: discord.WebhookMessage, delay: int):
     """메시지를 보낸 후 지정된 시간 뒤에 삭제하는 헬퍼 함수"""
@@ -384,9 +384,9 @@ class FarmUIView(ui.View):
         
         farm_date_str = get_config("farm_current_date")
         if farm_date_str:
-            today_jst_midnight = datetime.fromisoformat(farm_date_str).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=KST)
+            today_jst_midnight = datetime.fromisoformat(farm_date_str).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=JST)
         else:
-            today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+            today_jst_midnight = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
         
         farm_data = await get_farm_data(self.farm_owner_id)
         if not farm_data: return
@@ -398,7 +398,7 @@ class FarmUIView(ui.View):
             if watered_count >= power: break
             last_watered_dt = datetime.fromisoformat(p['last_watered_at']) if p.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
             
-            if p['state'] == 'planted' and last_watered_dt.astimezone(KST).date() < today_jst_midnight.date():
+            if p['state'] == 'planted' and last_watered_dt.astimezone(JST).date() < today_jst_midnight.date():
                 plots_to_update_db.add(p['id'])
                 watered_count += 1
                 
@@ -525,9 +525,7 @@ class FarmUIView(ui.View):
         view = ui.View(timeout=180)
         select = ui.UserSelect(placeholder="農場に招待するユーザーを選択してください...")
         
-        # 콜백 함수의 인자를 'si' (select_interaction)로 명확히 합니다.
         async def cb(si: discord.Interaction):
-            # 응답은 'si'에 대해 이루어져야 합니다.
             await si.response.defer(ephemeral=True)
             
             users_added_names = []
@@ -535,20 +533,15 @@ class FarmUIView(ui.View):
                 try: 
                     user = self.cog.bot.get_user(int(user_id_str))
                     if user:
-                        # 유저를 추가하는 대상 채널은 원래 인터랙션 'i'의 채널이 맞습니다.
                         await i.channel.add_user(user)
                         users_added_names.append(user.display_name)
                 except Exception as e:
                     logger.error(f"농장 초대 중 유저 추가 실패 (User ID: {user_id_str}): {e}")
             
-            # ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼
-            # 'i'가 아닌 'si'의 원본 메시지(유저 선택창)를 수정합니다.
             if users_added_names:
                 await si.edit_original_response(content=f"✅ {', '.join(users_added_names)}さんを農場に招待しました。", view=None)
             else:
-                # 선택은 했으나 어떤 이유로든 추가에 실패한 경우
                 await si.edit_original_response(content="❌ ユーザーを招待するのに失敗しました。", view=None)
-            # ▲▲▲▲▲ 수정 완료 ▲▲▲▲▲
 
         select.callback = cb
         view.add_item(select)
@@ -558,9 +551,7 @@ class FarmUIView(ui.View):
         view = ui.View(timeout=180)
         select = ui.UserSelect(placeholder="権限を付与するユーザーを選択してください...")
         
-        # 콜백 함수의 인자를 'si' (select_interaction)로 명확히 합니다.
         async def cb(si: discord.Interaction):
-            # 응답은 'si'에 대해 이루어져야 합니다.
             await si.response.defer(ephemeral=True)
             
             farm_data = await get_farm_data(self.farm_owner_id)
@@ -575,13 +566,10 @@ class FarmUIView(ui.View):
                     await grant_farm_permission(farm_data['id'], user.id)
                     users_granted_names.append(user.display_name)
             
-            # ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼
-            # 'i'가 아닌 'si'의 원본 메시지(유저 선택창)를 수정합니다.
             if users_granted_names:
                 await si.edit_original_response(content=f"✅ {', '.join(users_granted_names)}さんに農場の権限を付与しました。", view=None)
             else:
                 await si.edit_original_response(content="❌ 権限の付与に失敗しました。", view=None)
-            # ▲▲▲▲▲ 수정 완료 ▲▲▲▲▲
 
         select.callback = cb
         view.add_item(select)
@@ -642,7 +630,7 @@ class Farm(commands.Cog):
         self.bot.add_view(FarmUIView(self))
         logger.info("✅ 농장 관련 영구 View가 정상적으로 등록되었습니다.")
 
-    @tasks.loop(time=KST_MIDNIGHT_UPDATE)
+    @tasks.loop(time=JST_MIDNIGHT_UPDATE)
     async def daily_crop_update(self):
         logger.info("--- [CROP UPDATE START] ---")
         try:
@@ -651,10 +639,10 @@ class Farm(commands.Cog):
             
             farm_date_str = get_config("farm_current_date")
             if farm_date_str:
-                today_jst_midnight = datetime.fromisoformat(farm_date_str).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=KST)
+                today_jst_midnight = datetime.fromisoformat(farm_date_str).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=JST)
                 logger.info(f"[CROP UPDATE] 가상 농장 날짜 사용: {farm_date_str}")
             else:
-                today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+                today_jst_midnight = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
                 logger.info(f"[CROP UPDATE] 현재 실제 날짜 사용: {today_jst_midnight.date()}")
             
             planted_plots_res = await supabase.table('farm_plots').select('*, farms!inner(user_id, id, thread_id)').eq('state', 'planted').execute()
@@ -690,8 +678,8 @@ class Farm(commands.Cog):
                 if not plot.get('last_watered_at'):
                     update_payload['state'] = 'withered'; plots_to_update_db.append(update_payload); continue
 
-                last_watered_kst = datetime.fromisoformat(plot['last_watered_at']).astimezone(KST)
-                days_since_watered = (today_jst_midnight.date() - last_watered_kst.date()).days
+                last_watered_jst = datetime.fromisoformat(plot['last_watered_at']).astimezone(JST)
+                days_since_watered = (today_jst_midnight.date() - last_watered_jst.date()).days
                 owner_abilities = owner_abilities_map.get(owner_id, set())
                 owner_has_water_ability = 'farm_water_retention_1' in owner_abilities
                 should_wither = False
@@ -722,12 +710,9 @@ class Farm(commands.Cog):
                         item_info.get('max_growth_stage', 99)
                     )
                     
-                    # ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼
-                    # 비가 오는 날 성장했다면, last_watered_at을 오늘 날짜로 갱신합니다.
                     if is_raining:
                         update_payload['last_watered_at'] = today_jst_midnight.astimezone(timezone.utc).isoformat()
                         update_payload['water_count'] = plot['water_count'] + 1
-                    # ▲▲▲▲▲ 수정 완료 ▲▲▲▲▲
 
                     plots_to_update_db.append(update_payload)
 
@@ -801,9 +786,9 @@ class Farm(commands.Cog):
         
         farm_date_str = get_config("farm_current_date")
         if farm_date_str:
-            today_jst_midnight = datetime.fromisoformat(farm_date_str).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=KST)
+            today_jst_midnight = datetime.fromisoformat(farm_date_str).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=JST)
         else:
-            today_jst_midnight = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+            today_jst_midnight = datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0)
         
         owner_abilities = await get_user_abilities(user.id)
         owner_has_water_ability = 'farm_water_retention_1' in owner_abilities
@@ -841,7 +826,7 @@ class Farm(commands.Cog):
                                         emoji = CROP_EMOJI_MAP.get('seed', {}).get(stage, '🌱')
 
                                 last_watered_dt = datetime.fromisoformat(plot['last_watered_at']) if plot.get('last_watered_at') else datetime.fromtimestamp(0, tz=timezone.utc)
-                                last_watered_jst = last_watered_dt.astimezone(KST)
+                                last_watered_jst = last_watered_dt.astimezone(JST)
                                 
                                 days_since_watered = (today_jst_midnight.date() - last_watered_jst.date()).days
                                 
@@ -912,10 +897,10 @@ class Farm(commands.Cog):
         weather = WEATHER_TYPES.get(weather_key, {"emoji": "❔", "name": "不明"})
         description_parts.append(f"**今日の天気:** {weather['emoji']} {weather['name']}")
         
-        now_kst = discord.utils.utcnow().astimezone(KST)
+        now_jst = discord.utils.utcnow().astimezone(JST)
         next_update_time = today_jst_midnight.replace(hour=0, minute=5)
         
-        if now_kst >= next_update_time:
+        if now_jst >= next_update_time:
             next_update_time += timedelta(days=1)
         
         description_parts.append(f"次の作物アップデート: {discord.utils.format_dt(next_update_time, style='R')}")
