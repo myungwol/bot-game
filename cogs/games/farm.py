@@ -61,8 +61,8 @@ class ConfirmationView(ui.View):
         if not interaction.response.is_done():
             await interaction.response.defer()
         self.stop()
-class FarmNameModal(ui.Modal, title="農場名変更"):
-    farm_name = ui.TextInput(label="新しい農場名", placeholder="新しい農場名を入力してください", required=True, max_length=20)
+class FarmNameModal(ui.Modal, title="農場の名前を変更"):
+    farm_name = ui.TextInput(label="新しい農場の名前", placeholder="新しい農場の名前を入力してください", required=True, max_length=20)
     def __init__(self, cog: 'Farm', farm_data: Dict):
         super().__init__()
         self.cog, self.farm_data = cog, farm_data
@@ -92,7 +92,7 @@ class FarmActionView(ui.View):
         await interaction.followup.send(embed=embed, view=self, ephemeral=True)
     def build_embed(self) -> discord.Embed:
         titles = {"plant_seed": "🌱 種の選択", "plant_location": "📍 場所の選択", "uproot": "❌ 作物の除去"}
-        descs = {"plant_seed": "インベントリから植えたい種や苗木を選択してください。", "plant_location": f"選択した '{self.selected_item}' を植える場所を選択してください。", "uproot": "除去したい作物や木を選択してください。この作業は元に戻せません。"}
+        descs = {"plant_seed": "インベントリから植えたい種や苗木を選択してください。", "plant_location": f"選択した'{self.selected_item}'を植える場所を選択してください。", "uproot": "除去したい作物や木を選択してください。この作業は元に戻せません。"}
         return discord.Embed(title=titles.get(self.action_type, "エラー"), description=descs.get(self.action_type, "不明な作業です。"), color=0x8BC34A)
     async def build_components(self):
         self.clear_items()
@@ -104,7 +104,7 @@ class FarmActionView(ui.View):
         self.add_item(back_button)
     async def _build_seed_select(self):
         inventory = await get_inventory(self.user)
-        farmable_items = {n: q for n, q in inventory.items() if get_item_database().get(n, {}).get('category') == '농장_씨앗'}
+        farmable_items = {n: q for n, q in inventory.items() if get_item_database().get(n, {}).get('category') == '農場_씨앗'}
         if not farmable_items: self.add_item(ui.Button(label="植えられる種がありません。", disabled=True)); return
         options = [discord.SelectOption(label=f"{name} ({qty}個)", value=name) for name, qty in farmable_items.items()]
         select = ui.Select(placeholder="種/苗木を選択...", options=options, custom_id="seed_select")
@@ -125,7 +125,7 @@ class FarmActionView(ui.View):
             self.add_item(ui.Button(label="耕された空き地がありません。", disabled=True))
             return
         if num_seeds == 0:
-            self.add_item(ui.Button(label=f"'{self.selected_item}' の種が不足しています。", disabled=True))
+            self.add_item(ui.Button(label=f"'{self.selected_item}'の種が不足しています。", disabled=True))
             return
 
         options = [discord.SelectOption(label=f"{p['pos_y']+1}行 {p['pos_x']+1}列", value=f"{p['id']}") for p in available_plots]
@@ -133,7 +133,7 @@ class FarmActionView(ui.View):
         max_selectable = min(len(available_plots), num_seeds, 25)
         
         select = ui.Select(
-            placeholder=f"植える場所を選択してください（最大{max_selectable}個）", 
+            placeholder=f"植える場所を選択してください (最大{max_selectable}個)", 
             options=options[:25], 
             min_values=1,
             max_values=max_selectable,
@@ -186,9 +186,9 @@ class FarmActionView(ui.View):
         if updated_farm_data and owner:
             await self.cog.update_farm_ui(interaction.channel, owner, updated_farm_data)
         
-        followup_message = f"✅ '{self.selected_item}' を {num_planted}箇所に植えました。"
+        followup_message = f"✅ '{self.selected_item}'を{num_planted}箇所に植えました。"
         if seeds_saved > 0:
-            followup_message += f"\n✨ 能力効果で種を {seeds_saved}個節約しました！"
+            followup_message += f"\n✨ 能力効果で種を{seeds_saved}個節約しました！"
         if is_raining:
             followup_message += "\n🌧️ 雨が降って自動で水がまかれました！"
         
@@ -225,7 +225,7 @@ class FarmActionView(ui.View):
         
         view = ConfirmationView(self.user)
         await interaction.response.send_message(
-            f"本当に **{count}個** の作物を取り除きますか？\nこの作業は元に戻せません。", 
+            f"本当に**{count}個**の作物を取り除きますか？\nこの作業は元に戻せません。", 
             view=view, 
             ephemeral=True
         )
@@ -256,12 +256,12 @@ class FarmUIView(ui.View):
         buttons = [
             ui.Button(label="畑を耕す", emoji="🪓", row=0, custom_id="farm_till"), 
             ui.Button(label="種を植える", emoji="🌱", row=0, custom_id="farm_plant"), 
-            ui.Button(label="水をやる", emoji="💧", row=0, custom_id="farm_water"), 
+            ui.Button(label="水やり", emoji="💧", row=0, custom_id="farm_water"), 
             ui.Button(label="収穫する", emoji="🧺", row=0, custom_id="farm_harvest"), 
             ui.Button(label="畑の整理", emoji="🧹", row=0, custom_id="farm_uproot"), 
             ui.Button(label="農場に招待", emoji="📢", row=1, custom_id="farm_invite"), 
             ui.Button(label="権限付与", emoji="🤝", row=1, custom_id="farm_share"), 
-            ui.Button(label="名前変更", emoji="✏️", row=1, custom_id="farm_rename"),
+            ui.Button(label="名前の変更", emoji="✏️", row=1, custom_id="farm_rename"),
             ui.Button(label="更新", emoji="🔄", row=1, custom_id="farm_regenerate")
         ]
         for item in buttons:
@@ -288,7 +288,7 @@ class FarmUIView(ui.View):
     
         if not self.farm_owner_id: 
             if not interaction.response.is_done():
-                await interaction.response.send_message("❌ この農場の情報を見つけられません。", ephemeral=True, delete_after=5)
+                await interaction.response.send_message("❌ この農場の情報が見つかりません。", ephemeral=True, delete_after=5)
             return False
     
         if interaction.user.id == self.farm_owner_id: 
@@ -340,7 +340,7 @@ class FarmUIView(ui.View):
         gear = await get_user_gear(interaction.user)
         hoe = gear.get('hoe', BARE_HANDS)
         if hoe == BARE_HANDS:
-            msg = await interaction.followup.send("❌ まず商店で「クワ」を購入し、プロフィール画面で装着してください。", ephemeral=True)
+            msg = await interaction.followup.send("❌ まず商店で'クワ'を購入し、プロフィール画面で装着してください。", ephemeral=True)
             self.cog.bot.loop.create_task(delete_after(msg, 10))
             return
         power = get_item_database().get(hoe, {}).get('power', 1)
@@ -376,7 +376,7 @@ class FarmUIView(ui.View):
         gear = await get_user_gear(interaction.user)
         can = gear.get('watering_can', BARE_HANDS)
         if can == BARE_HANDS:
-            msg = await interaction.followup.send("❌ まず商店で「じょうろ」を購入し、プロフィール画面で装着してください。", ephemeral=True)
+            msg = await interaction.followup.send("❌ まず商店で'じょうろ'を購入し、プロフィール画面で装着してください。", ephemeral=True)
             self.cog.bot.loop.create_task(delete_after(msg, 10))
             return
             
@@ -509,8 +509,8 @@ class FarmUIView(ui.View):
         if yield_bonus > 0.0:
             followup_message += "\n✨ **大農**の能力で収穫量が大幅に増加しました！"
         if seeds_to_add:
-            seeds_info = ", ".join([f"「{name}」{qty}個" for name, qty in seeds_to_add.items()])
-            followup_message += f"\n🌱 **種収穫**の能力で{seeds_info}を追加で獲得しました！"
+            seeds_info = ", ".join([f"'{name}' {qty}個" for name, qty in seeds_to_add.items()])
+            followup_message += f"\n🌱 **種の収穫**能力で{seeds_info}を追加で獲得しました！"
 
         msg = await interaction.followup.send(followup_message, ephemeral=True)
         self.cog.bot.loop.create_task(delete_after(msg, 15))
@@ -547,7 +547,7 @@ class FarmUIView(ui.View):
                 await si.edit_original_response(content=f"✅ {', '.join(users_added_names)}さんを農場に招待しました。", view=None)
             else:
                 # 선택은 했으나 어떤 이유로든 추가에 실패한 경우
-                await si.edit_original_response(content="❌ ユーザーの招待に失敗しました。", view=None)
+                await si.edit_original_response(content="❌ ユーザーを招待するのに失敗しました。", view=None)
             # ▲▲▲▲▲ 수정 완료 ▲▲▲▲▲
 
         select.callback = cb
@@ -565,7 +565,7 @@ class FarmUIView(ui.View):
             
             farm_data = await get_farm_data(self.farm_owner_id)
             if not farm_data: 
-                await si.edit_original_response(content="❌ 農場情報が見つからず、権限を付与できません。", view=None)
+                await si.edit_original_response(content="❌ 農場情報が見つからないため、権限を付与できません。", view=None)
                 return
 
             users_granted_names = []
@@ -741,7 +741,7 @@ class Farm(commands.Cog):
             db_save_tasks = []
             for user_id, data in ability_activations_by_user.items():
                 if data['water'] > 0 and data['thread_id']:
-                    message = f"**[農場通知]**\n今日の農場アップデートで **水分維持力UP** の能力が発動し、水をやらなかった {data['water']}個の作物の水分が維持されました！"
+                    message = f"**[農場通知]**\n本日の農場アップデートで**水分維持力UP**能力が発動し、水やりをしていない{data['water']}個の作物の水分が維持されました！"
                     payload = {"thread_id": data['thread_id'], "messages": [message]}
                     db_save_tasks.append(save_config_to_db(f"farm_ability_messages_{user_id}", payload))
             
@@ -857,13 +857,13 @@ class Farm(commands.Cog):
                                     if info.get('is_tree', False):
                                         if stage >= 4:
                                             days_to_fruit = max_stage - stage
-                                            growth_status_text = f"実りまで: {days_to_fruit}日"
+                                            growth_status_text = f"実がなるまで: {days_to_fruit}日"
                                         else:
                                             days_to_grow = 4 - stage
                                             growth_status_text = f"成長まで: {days_to_grow}日"
                                     else:
                                         days_to_grow = max_stage - stage
-                                        growth_status_text = f"残り日数: {days_to_grow}日"
+                                        growth_status_text = f"残り: {days_to_grow}日"
 
                                 info_text = f"{emoji} **{name}** (水: {water_emoji}): {growth_status_text}"
                                 infos.append(info_text)
@@ -905,7 +905,7 @@ class Farm(commands.Cog):
         
         if active_effects:
             effects_text = "\n".join(active_effects)
-            description_parts.append(f"**--- 農場パッシブ効果 ---**\n{effects_text}")
+            description_parts.append(f"**--- 農場のパッシブ効果 ---**\n{effects_text}")
         
         description_parts.append("⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯")
         weather_key = get_config("current_weather", "sunny")
@@ -976,7 +976,7 @@ class Farm(commands.Cog):
                     await interaction.followup.send("❌ 農場の初期化に失敗しました。しばらくしてからもう一度お試しください。", ephemeral=True)
                     return
             
-            farm_name = f"{user.display_name}の農場"
+            farm_name = f"{user.display_name}さんの農場"
             thread = await interaction.channel.create_thread(
                 name=f"🌱｜{farm_name}", 
                 type=discord.ChannelType.private_thread,
@@ -993,7 +993,7 @@ class Farm(commands.Cog):
             if updated_farm_data:
                 await self.update_farm_ui(thread, user, updated_farm_data, force_new=True)
 
-            await interaction.followup.send(f"✅ あなただけの農場を作成しました！ {thread.mention} チャンネルを確認してください。", ephemeral=True)
+            await interaction.followup.send(f"✅ あなただけの農場を作成しました！{thread.mention}チャンネルを確認してください。", ephemeral=True)
 
         except APIError as e:
             if '23505' in str(e.code): 
@@ -1002,15 +1002,15 @@ class Farm(commands.Cog):
                  if updated_farm_data and (thread_id := updated_farm_data.get('thread_id')):
                      if thread := self.bot.get_channel(thread_id):
                          await self.update_farm_ui(thread, user, updated_farm_data, force_new=True)
-                         await interaction.followup.send(f"✅ 農場を見つけました！ {thread.mention} チャンネルを確認してください。", ephemeral=True)
+                         await interaction.followup.send(f"✅ 農場を見つけました！{thread.mention}チャンネルを確認してください。", ephemeral=True)
                  else:
-                    await interaction.followup.send("❌ 農場の作成中に問題が発生しました。管理者に問い合わせてください。", ephemeral=True)
+                    await interaction.followup.send("❌ 農場を作成中に問題が発生しました。管理者に問い合わせてください。", ephemeral=True)
             else:
                 logger.error(f"농장 생성 중 API 오류 발생: {e}", exc_info=True)
-                await interaction.followup.send("❌ 農場の作成中にデータベースエラーが発生しました。", ephemeral=True)
+                await interaction.followup.send("❌ 農場を作成中にデータベースエラーが発生しました。", ephemeral=True)
         except Exception as e:
             logger.error(f"농장 생성 중 예기치 않은 오류 발생: {e}", exc_info=True)
-            await interaction.followup.send("❌ 農場の作成中にエラーが発生しました。", ephemeral=True)
+            await interaction.followup.send("❌ 農場を作成中にエラーが発生しました。", ephemeral=True)
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_farm_creation", **kwargs):
         if panel_info := get_panel_id(panel_key):
@@ -1020,7 +1020,7 @@ class Farm(commands.Cog):
         if not (embed_data := await get_embed_from_db(panel_key)): return
         new_message = await channel.send(embed=discord.Embed.from_dict(embed_data), view=FarmCreationPanelView(self))
         await save_panel_id(panel_key, new_message.id, channel.id)
-        logger.info(f"✅ {panel_key} パネルを正常に作成しました。(チャンネル: #{channel.name})")
+        logger.info(f"✅ {panel_key} パネルを正常に生成しました。(チャンネル: #{channel.name})")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Farm(bot))
