@@ -30,7 +30,7 @@ class TransferAmountModal(ui.Modal, title="送金額入力"):
         try:
             amount_to_send = int(self.amount.value)
             if amount_to_send <= 0:
-                raise ValueError("金額は1以上である必要があります。")
+                raise ValueError("金額は1以上でなければなりません。")
 
             sender_wallet = await get_wallet(self.sender.id)
             if sender_wallet.get('balance', 0) < amount_to_send:
@@ -139,7 +139,7 @@ class Atm(commands.Cog):
             
             new_message = await channel.send(embed=embed, view=view)
             await save_panel_id(panel_key, new_message.id, channel.id)
-            logger.info(f"✅ {panel_key} パネルを正常に作成しました。(チャンネル: #{channel.name})")
+            logger.info(f"✅ {panel_key} パネルを正常に生成しました。(チャンネル: #{channel.name})")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Atm(bot))
