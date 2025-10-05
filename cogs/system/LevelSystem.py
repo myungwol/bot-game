@@ -21,8 +21,8 @@ from utils.helpers import format_embed_from_db, calculate_xp_for_level, format_t
 
 logger = logging.getLogger(__name__)
 
-KST = timezone(timedelta(hours=9))
-KST_MIDNIGHT_UPDATE = dt_time(hour=0, minute=5, tzinfo=KST)
+JST = timezone(timedelta(hours=9))
+JST_MIDNIGHT_UPDATE = dt_time(hour=0, minute=5, tzinfo=JST)
 
 def create_xp_bar(current_xp: int, required_xp: int, length: int = 10) -> str:
     if required_xp <= 0: return "▓" * length
@@ -348,7 +348,7 @@ class LevelSystem(commands.Cog):
     def cog_unload(self):
         self.update_champion_panel.cancel()
         
-    @tasks.loop(time=KST_MIDNIGHT_UPDATE)
+    @tasks.loop(time=JST_MIDNIGHT_UPDATE)
     async def update_champion_panel(self):
         logger.info("[LevelSystem] 챔피언 보드 패널 새로고침을 시작합니다.")
         try:
