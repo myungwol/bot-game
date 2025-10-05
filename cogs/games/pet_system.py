@@ -25,7 +25,7 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-KST = timezone(timedelta(hours=9))
+JST = timezone(timedelta(hours=9))
 
 HATCH_TIMES = {
     "ランダムペットの卵": 172800, "火の卵": 172800, "水の卵": 172800,
@@ -406,10 +406,10 @@ class PetSystem(commands.Cog):
         if last_played_timestamp == 0:
             return False
         
-        now_kst = datetime.now(KST)
-        last_played_kst = datetime.fromtimestamp(last_played_timestamp, tz=timezone.utc).astimezone(KST)
+        now_jst = datetime.now(JST)
+        last_played_jst = datetime.fromtimestamp(last_played_timestamp, tz=timezone.utc).astimezone(JST)
         
-        return now_kst.date() == last_played_kst.date()
+        return now_jst.date() == last_played_jst.date()
 
     async def _is_evolution_ready(self, pet_data: Dict, inventory: Dict) -> bool:
         if not pet_data: return False
@@ -549,7 +549,7 @@ class PetSystem(commands.Cog):
         hatches_at = now + timedelta(seconds=final_hatch_seconds)
         thread = None
         try:
-            safe_name = re.sub(r'[^\w\s\-_가-힣]', '', user.display_name).strip()
+            safe_name = re.sub(r'[^\w\s\-_]', '', user.display_name).strip() # 일본어 환경을 위해 가-힣 제거
             if not safe_name: safe_name = f"ユーザー-{user.id}"
             thread_name = f"🥚｜{safe_name}の卵"
             thread = await interaction.channel.create_thread(name=thread_name, type=discord.ChannelType.public_thread, auto_archive_duration=10080)
@@ -704,13 +704,10 @@ class PetSystem(commands.Cog):
         await supabase.table('pets').update({
             'current_stage': 2, 'level': 1, 'xp': 0, 'hunger': 100, 'friendship': 0,
             'nickname': species_info['species_name'],
-            # ▼▼▼▼▼ 핵심 수정 ▼▼▼▼▼
-            # 계산된 최종 능력치를 모두 업데이트하도록 수정합니다.
             'current_hp': final_stats['hp'],
             'current_attack': final_stats['attack'],
             'current_defense': final_stats['defense'],
             'current_speed': final_stats['speed'],
-            # ▲▲▲▲▲ 핵심 수정 ▲▲▲▲▲
             'natural_bonus_hp': natural_bonus_stats['hp'], 
             'natural_bonus_attack': natural_bonus_stats['attack'],
             'natural_bonus_defense': natural_bonus_stats['defense'], 
