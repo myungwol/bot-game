@@ -78,7 +78,7 @@ class PetExplorationPanelView(ui.View):
             return await interaction.followup.send("❌ 無効な探検地域です。", ephemeral=True)
 
         if pet.get('level', 0) < location_data.get('required_pet_level', 999):
-            return await interaction.followup.send(f"❌ この地域はペットレベル {location_data['required_pet_level']} 以上から探検できます。", ephemeral=True)
+            return await interaction.followup.send(f"❌ この地域はペットレベル{location_data['required_pet_level']}以上から探検できます。", ephemeral=True)
 
         await self.cog.start_exploration(interaction, interaction.user, location_data)
 
@@ -109,7 +109,7 @@ class Exploration(commands.Cog):
             return
         
         description_text = (
-            f"ペットが **{location['name']}** へ探検に出かけました。\n\n"
+            f"ペットが **{location['name']}** へ探検に出発しました。\n\n"
             f"> 完了予定: {discord.utils.format_dt(end_time, 'R')}"
         )
         embed = discord.Embed(
@@ -150,7 +150,7 @@ class Exploration(commands.Cog):
                 view = ClaimRewardView(self, exp['id'])
 
                 message = await thread.send(
-                    content=f"{user.mention}、ペットが探検を終えて戻ってきました！下のボタンを押して報酬を確認してください。",
+                    content=f"{user.mention}, ペットが探検を終えて戻ってきました！下のボタンを押して報酬を確認してください。",
                     view=view
                 )
                 await update_exploration_message_id(exp['id'], message.id)
@@ -252,7 +252,7 @@ class Exploration(commands.Cog):
         view = PetExplorationPanelView(self)
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_name, new_message.id, channel.id)
-        logger.info(f"✅ {panel_key} パネルを #{channel.name} チャンネルに正常に作成しました。")
+        logger.info(f"✅ {panel_key} パネルを #{channel.name} チャンネルに正常に生成しました。")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Exploration(bot))
