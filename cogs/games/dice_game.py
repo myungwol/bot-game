@@ -16,8 +16,8 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-class BetAmountModal(ui.Modal, title="베팅 금액 입력"):
-    amount = ui.TextInput(label="금액 (10코인 단위)", placeholder="예: 100", required=True)
+class BetAmountModal(ui.Modal, title="ベット額入力"):
+    amount = ui.TextInput(label="金額 (10コイン単位)", placeholder="例: 100", required=True)
 
     def __init__(self, cog_instance: 'DiceGame'):
         super().__init__(timeout=180)
@@ -29,7 +29,7 @@ class BetAmountModal(ui.Modal, title="베팅 금액 입력"):
             bet_amount = int(self.amount.value)
             if bet_amount <= 0 or bet_amount % 10 != 0:
                 await interaction.response.send_message(
-                    "❌ 10코인 단위의 양수만 입력할 수 있습니다.",
+                    "❌ 10コイン単位の正の整数のみ入力できます。",
                     ephemeral=True
                 )
                 return
@@ -37,24 +37,24 @@ class BetAmountModal(ui.Modal, title="베팅 금액 입력"):
             wallet = await get_wallet(interaction.user.id)
             if wallet.get('balance', 0) < bet_amount:
                 await interaction.response.send_message(
-                    f"❌ 잔액이 부족합니다. (현재 잔액: {wallet.get('balance', 0):,}{self.currency_icon})",
+                    f"❌ 残高が不足しています。(現在の残高: {wallet.get('balance', 0):,}{self.currency_icon})",
                     ephemeral=True
                 )
                 return
             
             view = NumberSelectView(interaction.user, bet_amount, self.cog)
-            await interaction.response.send_message(f"베팅 금액 `{bet_amount:,}`{self.currency_icon}을(를) 설정했습니다. 다음으로 주사위 눈을 선택해주세요.", view=view, ephemeral=True)
+            await interaction.response.send_message(f"ベット額 `{bet_amount:,}`{self.currency_icon}を設定しました。次にサイコロの目を選択してください。", view=view, ephemeral=True)
             view.message = await interaction.original_response() 
             self.cog.active_sessions.add(interaction.user.id)
         
         except ValueError:
             await interaction.response.send_message(
-                "❌ 숫자만 입력해주세요.",
+                "❌ 数字のみ入力してください。",
                 ephemeral=True
             )
         except Exception as e:
             logger.error(f"주사위 베팅 처리 중 오류: {e}", exc_info=True)
-            message_content = "❌ 처리 중 오류가 발생했습니다."
+            message_content = "❌ 処理中にエラーが発生しました。"
             if not interaction.response.is_done():
                 await interaction.response.send_message(message_content, ephemeral=True)
             else:
@@ -85,7 +85,7 @@ class NumberSelectView(ui.View):
         for item in self.children:
             item.disabled = True
         try:
-            await interaction.response.edit_message(content=f"당신은 `{chosen_number}`을(를) 선택했습니다. 주사위를 굴립니다...", view=self)
+            await interaction.response.edit_message(content=f"あなたは `{chosen_number}` を選択しました。サイコロを振ります...", view=self)
         except discord.NotFound:
             return self.stop()
 
@@ -141,7 +141,7 @@ class NumberSelectView(ui.View):
         self.cog.active_sessions.discard(self.user.id)
         if self.message:
             try:
-                await self.message.edit(content="시간이 초과되었습니다.", view=None)
+                await self.message.edit(content="時間切れです。", view=None)
             except discord.NotFound:
                 pass
 
@@ -164,7 +164,7 @@ class DiceGamePanelView(ui.View):
     async def start_game_callback(self, interaction: discord.Interaction):
         if interaction.user.id in self.cog.active_sessions:
             await interaction.response.send_message(
-                "❌ 이미 게임을 플레이 중입니다.", 
+                "❌ すでにゲームをプレイ中です。", 
                 ephemeral=True
             )
             return
