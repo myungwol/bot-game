@@ -28,25 +28,25 @@ logger = logging.getLogger(__name__)
 KST = timezone(timedelta(hours=9))
 
 HATCH_TIMES = {
-    "랜덤 펫 알": 172800, "불의알": 172800, "물의알": 172800,
-    "전기알": 172800, "풀의알": 172800, "빛의알": 172800, "어둠의알": 172800,
+    "ランダムペットの卵": 172800, "火の卵": 172800, "水の卵": 172800,
+    "電気の卵": 172800, "草の卵": 172800, "光の卵": 172800, "闇の卵": 172800,
 }
 EGG_TO_ELEMENT = {
-    "불의알": "불", "물의알": "물", "전기알": "전기", "풀의알": "풀",
-    "빛의알": "빛", "어둠의알": "어둠",
+    "火の卵": "火", "水の卵": "水", "電気の卵": "電気", "草の卵": "草",
+    "光の卵": "光", "闇の卵": "闇",
 }
-ELEMENTS = ["불", "물", "전기", "풀", "빛", "어둠"]
+ELEMENTS = ["火", "水", "電気", "草", "光", "闇"]
 ELEMENT_TO_FILENAME = {
-    "불": "fire", "물": "water", "전기": "electric", "풀": "grass",
-    "빛": "light", "어둠": "dark"
+    "火": "fire", "水": "water", "電気": "electric", "草": "grass",
+    "光": "light", "闇": "dark"
 }
 ELEMENT_TO_TYPE = {
-    "불": "공격형",
-    "물": "방어형",
-    "전기": "스피드형",
-    "풀": "체력형",
-    "빛": "체력/방어형",
-    "어둠": "공격/스피드형"
+    "火": "攻撃型",
+    "水": "防御型",
+    "電気": "スピード型",
+    "草": "体力型",
+    "光": "体力/防御型",
+    "闇": "攻撃/スピード型"
 }
 
 def create_bar(current: int, required: int, length: int = 10, full_char: str = '▓', empty_char: str = '░') -> str:
@@ -88,14 +88,14 @@ class StatAllocationView(ui.View):
         await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     def build_embed(self) -> discord.Embed:
-        embed = discord.Embed(title="✨ 스탯 포인트 분배", color=0xFFD700)
+        embed = discord.Embed(title="✨ ステータスポイント分配", color=0xFFD700)
         remaining_points = self.points_to_spend - sum(self.spent_points.values())
-        embed.description = f"남은 포인트: **{remaining_points}**"
+        embed.description = f"残りポイント: **{remaining_points}**"
 
         base_stats = self.cog.get_base_stats(self.pet_data)
         
         stat_emojis = {'hp': '❤️', 'attack': '⚔️', 'defense': '🛡️', 'speed': '💨'}
-        stat_names = {'hp': '체력', 'attack': '공격력', 'defense': '방어력', 'speed': '스피드'}
+        stat_names = {'hp': '体力', 'attack': '攻撃力', 'defense': '防御力', 'speed': 'スピード'}
 
         for key in ['hp', 'attack', 'defense', 'speed']:
             base = base_stats[key]
@@ -124,11 +124,11 @@ class StatAllocationView(ui.View):
         self.add_item(self.create_stat_button('defense', -1, '➖🛡️', 1, self.spent_points['defense'] <= 0))
         self.add_item(self.create_stat_button('speed', -1, '➖💨', 1, self.spent_points['speed'] <= 0))
         
-        confirm_button = ui.Button(label="확정", style=discord.ButtonStyle.success, row=2, custom_id="confirm_stats", disabled=(sum(self.spent_points.values()) == 0))
+        confirm_button = ui.Button(label="確定", style=discord.ButtonStyle.success, row=2, custom_id="confirm_stats", disabled=(sum(self.spent_points.values()) == 0))
         confirm_button.callback = self.on_confirm
         self.add_item(confirm_button)
         
-        cancel_button = ui.Button(label="취소", style=discord.ButtonStyle.grey, row=2, custom_id="cancel_stats")
+        cancel_button = ui.Button(label="キャンセル", style=discord.ButtonStyle.grey, row=2, custom_id="cancel_stats")
         cancel_button.callback = self.on_cancel
         self.add_item(cancel_button)
 
@@ -171,14 +171,14 @@ class StatAllocationView(ui.View):
                 
             except Exception as e:
                 logger.error(f"스탯 포인트 분배 DB 업데이트 중 오류: {e}", exc_info=True)
-                await interaction.followup.send("❌ 스탯 분배 중 오류가 발생했습니다.", ephemeral=True)
+                await interaction.followup.send("❌ ステータス分配中にエラーが発生しました。", ephemeral=True)
 
     async def on_cancel(self, interaction: discord.Interaction):
         await interaction.response.defer()
         await interaction.delete_original_response()
 
-class PetNicknameModal(ui.Modal, title="펫 이름 변경"):
-    nickname_input = ui.TextInput(label="새로운 이름", placeholder="펫의 새 이름을 입력하세요.", max_length=20)
+class PetNicknameModal(ui.Modal, title="ペットの名前を変更"):
+    nickname_input = ui.TextInput(label="新しい名前", placeholder="ペットの新しい名前を入力してください。", max_length=20)
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer()
         self.stop()
@@ -190,15 +190,15 @@ class ConfirmReleaseView(ui.View):
         self.value = None
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ 본인만 결정할 수 있습니다.", ephemeral=True, delete_after=5)
+            await interaction.response.send_message("❌ 本人のみ決定できます。", ephemeral=True, delete_after=5)
             return False
         return True
-    @ui.button(label="예, 놓아줍니다", style=discord.ButtonStyle.danger)
+    @ui.button(label="はい、手放します", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: ui.Button):
         self.value = True
         self.stop()
         await interaction.response.defer()
-    @ui.button(label="아니요", style=discord.ButtonStyle.secondary)
+    @ui.button(label="いいえ", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: ui.Button):
         self.value = False
         self.stop()
@@ -232,28 +232,28 @@ class PetUIView(ui.View):
         try:
             target_user_id = int(interaction.data['custom_id'].split(':')[1])
             if interaction.user.id != target_user_id:
-                await interaction.response.send_message("❌ 자신의 펫만 돌볼 수 있습니다.", ephemeral=True, delete_after=5)
+                await interaction.response.send_message("❌ 自分のペットのみ世話をすることができます。", ephemeral=True, delete_after=5)
                 return False
             self.user_id = target_user_id
             return True
         except (IndexError, ValueError):
-            await interaction.response.send_message("❌ 잘못된 상호작용입니다.", ephemeral=True, delete_after=5)
+            await interaction.response.send_message("❌ 無効なインタラクションです。", ephemeral=True, delete_after=5)
             return False
 
-    @ui.button(label="스탯 분배", style=discord.ButtonStyle.success, emoji="✨", row=0)
+    @ui.button(label="ステータス分配", style=discord.ButtonStyle.success, emoji="✨", row=0)
     async def allocate_stats_button(self, interaction: discord.Interaction, button: ui.Button):
         allocation_view = StatAllocationView(self, interaction.message)
         await allocation_view.start(interaction)
 
-    @ui.button(label="먹이주기", style=discord.ButtonStyle.primary, emoji="🍖", row=0)
+    @ui.button(label="エサやり", style=discord.ButtonStyle.primary, emoji="🍖", row=0)
     async def feed_pet_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         inventory = await get_inventory(interaction.user)
         feed_items = {name: qty for name, qty in inventory.items() if get_item_database().get(name, {}).get('effect_type') == 'pet_feed'}
         if not feed_items:
-            return await interaction.followup.send("❌ 펫에게 줄 수 있는 먹이가 없습니다.", ephemeral=True)
-        options = [discord.SelectOption(label=f"{name} ({qty}개)", value=name) for name, qty in feed_items.items()]
-        feed_select = ui.Select(placeholder="줄 먹이를 선택하세요...", options=options)
+            return await interaction.followup.send("❌ ペットにあげられるエサがありません。", ephemeral=True)
+        options = [discord.SelectOption(label=f"{name} ({qty}個)", value=name) for name, qty in feed_items.items()]
+        feed_select = ui.Select(placeholder="あげるエサを選択してください...", options=options)
         async def feed_callback(select_interaction: discord.Interaction):
             await select_interaction.response.defer()
             item_name = select_interaction.data['values'][0]
@@ -262,39 +262,39 @@ class PetUIView(ui.View):
             await update_inventory(self.user_id, item_name, -1)
             await supabase.rpc('increase_pet_hunger', {'p_user_id': self.user_id, 'p_amount': hunger_to_add}).execute()
             await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
-            msg = await select_interaction.followup.send(f"🍖 {item_name}을(를) 주었습니다. 펫의 배가 든든해졌습니다!", ephemeral=True)
+            msg = await select_interaction.followup.send(f"🍖 {item_name}をあげました。ペットがお腹いっぱいになりました！", ephemeral=True)
             self.cog.bot.loop.create_task(delete_message_after(msg, 5))
             await select_interaction.delete_original_response()
         feed_select.callback = feed_callback
         view = ui.View(timeout=60).add_item(feed_select)
-        await interaction.followup.send("어떤 먹이를 주시겠습니까?", view=view, ephemeral=True)
+        await interaction.followup.send("どのエサをあげますか？", view=view, ephemeral=True)
 
-    @ui.button(label="놀아주기", style=discord.ButtonStyle.primary, emoji="🎾", row=0)
+    @ui.button(label="遊ぶ", style=discord.ButtonStyle.primary, emoji="🎾", row=0)
     async def play_with_pet_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         cooldown_key = f"daily_pet_play"
         pet_id = self.pet_data['id']
         if await self.cog._is_play_on_cooldown(pet_id):
-             return await interaction.followup.send("❌ 오늘은 이미 놀아주었습니다. 내일 다시 시도해주세요.", ephemeral=True)
+             return await interaction.followup.send("❌ 今日はすでに遊びました。また明日試してください。", ephemeral=True)
         inventory = await get_inventory(interaction.user)
-        if inventory.get("공놀이 세트", 0) < 1:
-            return await interaction.followup.send("❌ '공놀이 세트' 아이템이 부족합니다.", ephemeral=True)
-        await update_inventory(self.user_id, "공놀이 세트", -1)
+        if inventory.get("ボール遊びセット", 0) < 1:
+            return await interaction.followup.send("❌ 'ボール遊びセット'アイテムが不足しています。", ephemeral=True)
+        await update_inventory(self.user_id, "ボール遊びセット", -1)
         friendship_amount = 1; stat_increase_amount = 1
         await supabase.rpc('increase_pet_friendship_and_stats', {'p_user_id': self.user_id, 'p_friendship_amount': friendship_amount, 'p_stat_amount': stat_increase_amount}).execute()
         await set_cooldown(pet_id, cooldown_key)
         await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
-        msg = await interaction.followup.send(f"❤️ 펫과 즐거운 시간을 보냈습니다! 친밀도가 {friendship_amount} 오르고 모든 스탯이 {stat_increase_amount} 상승했습니다.", ephemeral=True)
+        msg = await interaction.followup.send(f"❤️ ペットと楽しい時間を過ごしました！親密度が{friendship_amount}上がり、すべてのステータスが{stat_increase_amount}上昇しました。", ephemeral=True)
         self.cog.bot.loop.create_task(delete_message_after(msg, 5))
 
-    @ui.button(label="진화", style=discord.ButtonStyle.success, emoji="🌟", row=0)
+    @ui.button(label="進化", style=discord.ButtonStyle.success, emoji="🌟", row=0)
     async def evolve_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer()
         success = await self.cog.handle_evolution(interaction.user.id, interaction.channel)
         if not success:
-            await interaction.followup.send("❌ 진화 조건을 만족하지 못했습니다. 레벨과 필요 아이템을 확인해주세요.", ephemeral=True, delete_after=10)
+            await interaction.followup.send("❌ 進化条件を満たしていません。レベルと必要アイテムを確認してください。", ephemeral=True, delete_after=10)
 
-    @ui.button(label="이름 변경", style=discord.ButtonStyle.secondary, emoji="✏️", row=1)
+    @ui.button(label="名前の変更", style=discord.ButtonStyle.secondary, emoji="✏️", row=1)
     async def rename_pet_button(self, interaction: discord.Interaction, button: ui.Button):
         modal = PetNicknameModal()
         await interaction.response.send_modal(modal)
@@ -308,14 +308,14 @@ class PetUIView(ui.View):
                 except (discord.Forbidden, discord.HTTPException) as e:
                     logger.warning(f"펫 스레드 이름 변경 실패: {e}")
             await self.cog.update_pet_ui(self.user_id, interaction.channel, interaction.message)
-            msg = await interaction.followup.send(f"펫의 이름이 '{new_name}'(으)로 변경되었습니다.", ephemeral=True)
+            msg = await interaction.followup.send(f"ペットの名前が'{new_name}'に変更されました。", ephemeral=True)
             self.cog.bot.loop.create_task(delete_message_after(msg, 5))
 
-    @ui.button(label="놓아주기", style=discord.ButtonStyle.danger, emoji="👋", row=1)
+    @ui.button(label="手放す", style=discord.ButtonStyle.danger, emoji="👋", row=1)
     async def release_pet_button(self, interaction: discord.Interaction, button: ui.Button):
         confirm_view = ConfirmReleaseView(self.user_id)
         msg = await interaction.response.send_message(
-            "**⚠️ 경고: 펫을 놓아주면 다시는 되돌릴 수 없습니다. 정말로 놓아주시겠습니까?**", 
+            "**⚠️ 警告: ペットを手放すと二度と戻ってきません。本当に手放しますか？**", 
             view=confirm_view, 
             ephemeral=True
         )
@@ -323,19 +323,19 @@ class PetUIView(ui.View):
         if confirm_view.value is True:
             try:
                 await supabase.table('pets').delete().eq('user_id', self.user_id).execute()
-                await interaction.edit_original_response(content="펫을 자연으로 돌려보냈습니다...", view=None)
-                await interaction.channel.send(f"{interaction.user.mention}님이 펫을 자연의 품으로 돌려보냈습니다.")
+                await interaction.edit_original_response(content="ペットを自然に返しました...", view=None)
+                await interaction.channel.send(f"{interaction.user.mention}さんがペットを自然の懐に返しました。")
                 await asyncio.sleep(10)
                 try:
                     await interaction.channel.delete()
                 except (discord.NotFound, discord.Forbidden): pass
             except APIError as e:
                 logger.error(f"펫 놓아주기 처리 중 DB 오류 발생: {e}", exc_info=True)
-                await interaction.edit_original_response(content="❌ 펫을 놓아주는 중 오류가 발생했습니다. 관리자에게 문의해주세요.", view=None)
+                await interaction.edit_original_response(content="❌ ペットを手放す際にエラーが発生しました。管理者に問い合わせてください。", view=None)
         else:
-            await interaction.edit_original_response(content="펫 놓아주기를 취소했습니다.", view=None)
+            await interaction.edit_original_response(content="ペットを手放すのをキャンセルしました。", view=None)
 
-    @ui.button(label="새로고침", style=discord.ButtonStyle.secondary, emoji="🔄", row=1)
+    @ui.button(label="更新", style=discord.ButtonStyle.secondary, emoji="🔄", row=1)
     async def refresh_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer()
         await self.cog.update_pet_ui(interaction.user.id, interaction.channel, interaction.message, is_refresh=True)
@@ -350,29 +350,29 @@ class EggSelectView(ui.View):
         inventory = await get_inventory(self.user)
         egg_items = {name: qty for name, qty in inventory.items() if get_item_database().get(name, {}).get('category') == '알'}
         if not egg_items:
-            await interaction.followup.send("❌ 부화시킬 수 있는 알이 없습니다.", ephemeral=True)
+            await interaction.followup.send("❌ 孵化させることができる卵がありません。", ephemeral=True)
             return
-        options = [discord.SelectOption(label=f"{name} ({qty}개 보유)", value=name) for name, qty in egg_items.items()]
-        select = ui.Select(placeholder="부화시킬 알을 선택하세요...", options=options)
+        options = [discord.SelectOption(label=f"{name} ({qty}個保有)", value=name) for name, qty in egg_items.items()]
+        select = ui.Select(placeholder="孵化させる卵を選択してください...", options=options)
         select.callback = self.select_callback
         self.add_item(select)
-        self.message = await interaction.followup.send("어떤 알을 부화기에 넣으시겠습니까?", view=self, ephemeral=True)
+        self.message = await interaction.followup.send("どの卵を孵化器に入れますか？", view=self, ephemeral=True)
     async def select_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
         egg_name = interaction.data['values'][0]
         for item in self.children:
             item.disabled = True
-        await self.message.edit(content=f"'{egg_name}'을 선택했습니다. 부화 절차를 시작합니다...", view=self)
+        await self.message.edit(content=f"'{egg_name}'を選択しました。孵化手続きを開始します...", view=self)
         await self.cog.start_incubation_process(interaction, egg_name)
 
 class IncubatorPanelView(ui.View):
     def __init__(self, cog_instance: 'PetSystem'):
         super().__init__(timeout=None)
         self.cog = cog_instance
-    @ui.button(label="알 부화시키기", style=discord.ButtonStyle.secondary, emoji="🥚", custom_id="incubator_start")
+    @ui.button(label="卵を孵化させる", style=discord.ButtonStyle.secondary, emoji="🥚", custom_id="incubator_start")
     async def start_incubation_button(self, interaction: discord.Interaction, button: ui.Button):
         if await get_user_pet(interaction.user.id):
-            await interaction.response.send_message("❌ 이미 펫을 소유하고 있습니다. 펫은 한 마리만 키울 수 있습니다.", ephemeral=True, delete_after=5)
+            await interaction.response.send_message("❌ すでにペットを所有しています。ペットは一匹しか飼えません。", ephemeral=True, delete_after=5)
             return
         await interaction.response.defer(ephemeral=True, thinking=False)
         view = EggSelectView(interaction.user, self.cog)
@@ -535,10 +535,10 @@ class PetSystem(commands.Cog):
 
     async def start_incubation_process(self, interaction: discord.Interaction, egg_name: str):
         user = interaction.user
-        element = EGG_TO_ELEMENT.get(egg_name) if egg_name != "랜덤 펫 알" else random.choice(ELEMENTS)
+        element = EGG_TO_ELEMENT.get(egg_name) if egg_name != "ランダムペットの卵" else random.choice(ELEMENTS)
         species_res = await supabase.table('pet_species').select('*').eq('element', element).limit(1).maybe_single().execute()
         if not (species_res and species_res.data):
-            await interaction.followup.send("❌ 펫 기본 정보가 없습니다. 관리자에게 문의해주세요.", ephemeral=True)
+            await interaction.followup.send("❌ ペットの基本情報がありません。管理者に問い合わせてください。", ephemeral=True)
             return
         pet_species_data = species_res.data
         pet_species_id = pet_species_data['id']
@@ -550,8 +550,8 @@ class PetSystem(commands.Cog):
         thread = None
         try:
             safe_name = re.sub(r'[^\w\s\-_가-힣]', '', user.display_name).strip()
-            if not safe_name: safe_name = f"유저-{user.id}"
-            thread_name = f"🥚｜{safe_name}의 알"
+            if not safe_name: safe_name = f"ユーザー-{user.id}"
+            thread_name = f"🥚｜{safe_name}の卵"
             thread = await interaction.channel.create_thread(name=thread_name, type=discord.ChannelType.public_thread, auto_archive_duration=10080)
             await thread.add_user(user)
             pet_insert_res = await supabase.table('pets').insert({
@@ -571,13 +571,13 @@ class PetSystem(commands.Cog):
                 except discord.NotFound: await asyncio.sleep(0.5)
                 except discord.Forbidden: break
             await supabase.table('pets').update({'message_id': message.id}).eq('id', pet_data['id']).execute()
-            await interaction.edit_original_response(content=f"✅ 부화가 시작되었습니다! {thread.mention} 채널에서 확인해주세요.", view=None)
+            await interaction.edit_original_response(content=f"✅ 孵化が始まりました！{thread.mention}チャンネルで確認してください。", view=None)
         except Exception as e:
             logger.error(f"인큐베이션 시작 중 오류 (유저: {user.id}, 알: {egg_name}): {e}", exc_info=True)
             if thread:
                 try: await thread.delete()
                 except (discord.NotFound, discord.Forbidden): pass
-            await interaction.edit_original_response(content="❌ 부화 절차를 시작하는 중 오류가 발생했습니다.", view=None)
+            await interaction.edit_original_response(content="❌ 孵化手続きの開始中にエラーが発生しました。", view=None)
             
     def get_base_stats(self, pet_data: Dict) -> Dict[str, int]:
         species_info = pet_data.get('pet_species', {})
@@ -592,30 +592,30 @@ class PetSystem(commands.Cog):
 
     def build_pet_ui_embed(self, user: discord.Member, pet_data: Dict) -> discord.Embed:
         species_info = pet_data.get('pet_species')
-        if not species_info: return discord.Embed(title="오류", description="펫 기본 정보를 불러올 수 없습니다.", color=discord.Color.red())
+        if not species_info: return discord.Embed(title="エラー", description="ペットの基本情報を読み込めません。", color=discord.Color.red())
         current_stage = pet_data['current_stage']
         storage_base_url = f"{os.environ.get('SUPABASE_URL')}/storage/v1/object/public/pet_images"
         element_filename = ELEMENT_TO_FILENAME.get(species_info['element'], 'unknown')
         image_url = f"{storage_base_url}/{element_filename}_{current_stage}.png"
         if current_stage == 1:
-            embed = discord.Embed(title="🥚 알 부화 진행 중...", color=0xFAFAFA)
-            embed.set_author(name=f"{user.display_name}님의 알", icon_url=user.display_avatar.url if user.display_avatar else None)
+            embed = discord.Embed(title="🥚 卵の孵化進行中...", color=0xFAFAFA)
+            embed.set_author(name=f"{user.display_name}さんの卵", icon_url=user.display_avatar.url if user.display_avatar else None)
             embed.set_thumbnail(url=image_url)
-            egg_name = f"{species_info['element']}의알"
-            embed.add_field(name="부화 중인 알", value=f"`{egg_name}`", inline=False)
+            egg_name = f"{species_info['element']}の卵"
+            embed.add_field(name="孵化中の卵", value=f"`{egg_name}`", inline=False)
             hatches_at = datetime.fromisoformat(pet_data['hatches_at'])
-            embed.add_field(name="예상 부화 시간", value=f"{discord.utils.format_dt(hatches_at, style='R')}", inline=False)
-            embed.set_footer(text="시간이 되면 자동으로 부화합니다.")
+            embed.add_field(name="予想孵化時間", value=f"{discord.utils.format_dt(hatches_at, style='R')}", inline=False)
+            embed.set_footer(text="時間になると自動で孵化します。")
         else:
             stage_info_json = species_info.get('stage_info', {})
             current_stage_info = stage_info_json.get(str(current_stage), {})
-            stage_name = current_stage_info.get('name', '알 수 없는 단계')
+            stage_name = current_stage_info.get('name', '不明な段階')
             level_cap = current_stage_info.get('level_cap', 100)
             
             nickname = pet_data.get('nickname') or species_info['species_name']
             
             embed = discord.Embed(title=f"🐾 {nickname}", color=0xFFD700)
-            embed.set_author(name=f"{user.display_name}님의 펫", icon_url=user.display_avatar.url if user.display_avatar else None)
+            embed.set_author(name=f"{user.display_name}さんのペット", icon_url=user.display_avatar.url if user.display_avatar else None)
             embed.set_thumbnail(url=image_url)
 
             current_level, current_xp = pet_data['level'], pet_data['xp']
@@ -626,21 +626,21 @@ class PetSystem(commands.Cog):
             friendship = pet_data.get('friendship', 0); friendship_bar = create_bar(friendship, 100, full_char='❤️', empty_char='🖤')
 
             pet_status = pet_data.get('status', 'idle')
-            status_text = "휴식 중 💤"
+            status_text = "休憩中 💤"
             if pet_status == 'exploring':
                 end_time = datetime.fromisoformat(pet_data['exploration_end_time'])
-                status_text = f"탐사 중... (완료: {discord.utils.format_dt(end_time, 'R')})"
+                status_text = f"探検中... (完了: {discord.utils.format_dt(end_time, 'R')})"
 
-            embed.add_field(name="단계", value=f"**{stage_name}**", inline=True)
-            embed.add_field(name="타입", value=f"{ELEMENT_TO_TYPE.get(species_info['element'], '알 수 없음')}", inline=True)
-            embed.add_field(name="레벨", value=f"**Lv. {current_level} / {level_cap}**", inline=True)
-            embed.add_field(name="경험치", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=False)
-            embed.add_field(name="배고픔", value=f"`{hunger} / 100`\n{hunger_bar}", inline=False)
-            embed.add_field(name="친밀도", value=f"`{friendship} / 100`\n{friendship_bar}", inline=False)
+            embed.add_field(name="段階", value=f"**{stage_name}**", inline=True)
+            embed.add_field(name="タイプ", value=f"{ELEMENT_TO_TYPE.get(species_info['element'], '不明')}", inline=True)
+            embed.add_field(name="レベル", value=f"**Lv. {current_level} / {level_cap}**", inline=True)
+            embed.add_field(name="経験値", value=f"`{current_xp} / {xp_for_next_level}`\n{xp_bar}", inline=False)
+            embed.add_field(name="空腹", value=f"`{hunger} / 100`\n{hunger_bar}", inline=False)
+            embed.add_field(name="親密度", value=f"`{friendship} / 100`\n{friendship_bar}", inline=False)
 
             stat_points = pet_data.get('stat_points', 0)
             if stat_points > 0:
-                embed.add_field(name="✨ 남은 스탯 포인트", value=f"**{stat_points}**", inline=False)
+                embed.add_field(name="✨ 残りステータスポイント", value=f"**{stat_points}**", inline=False)
 
             hatch_base_stats = {
                 'hp': species_info.get('base_hp', 0) + pet_data.get('natural_bonus_hp', 0),
@@ -661,22 +661,22 @@ class PetSystem(commands.Cog):
                 'defense': round(hatch_base_stats['defense'] + total_bonus_stats['defense']),
                 'speed': round(hatch_base_stats['speed'] + total_bonus_stats['speed'])
             }
-            embed.add_field(name="❤️ 체력", value=f"**{current_stats['hp']}** (`{round(hatch_base_stats['hp'])}` + `{round(total_bonus_stats['hp'])}`)", inline=True)
-            embed.add_field(name="⚔️ 공격력", value=f"**{current_stats['attack']}** (`{round(hatch_base_stats['attack'])}` + `{round(total_bonus_stats['attack'])}`)", inline=True)
+            embed.add_field(name="❤️ 体力", value=f"**{current_stats['hp']}** (`{round(hatch_base_stats['hp'])}` + `{round(total_bonus_stats['hp'])}`)", inline=True)
+            embed.add_field(name="⚔️ 攻撃力", value=f"**{current_stats['attack']}** (`{round(hatch_base_stats['attack'])}` + `{round(total_bonus_stats['attack'])}`)", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) 
-            embed.add_field(name="🛡️ 방어력", value=f"**{current_stats['defense']}** (`{round(hatch_base_stats['defense'])}` + `{round(total_bonus_stats['defense'])}`)", inline=True)
-            embed.add_field(name="👟 스피드", value=f"**{current_stats['speed']}** (`{round(hatch_base_stats['speed'])}` + `{round(total_bonus_stats['speed'])}`)", inline=True)
+            embed.add_field(name="🛡️ 防御力", value=f"**{current_stats['defense']}** (`{round(hatch_base_stats['defense'])}` + `{round(total_bonus_stats['defense'])}`)", inline=True)
+            embed.add_field(name="👟 スピード", value=f"**{current_stats['speed']}** (`{round(hatch_base_stats['speed'])}` + `{round(total_bonus_stats['speed'])}`)", inline=True)
             embed.add_field(name="\u200b", value="\u200b", inline=True) 
-            embed.add_field(name="상태", value=status_text, inline=False)
+            embed.add_field(name="状態", value=status_text, inline=False)
             
             next_stage_num = current_stage + 1
             next_stage_info = stage_info_json.get(str(next_stage_num))
             if next_stage_info and pet_data.get('level', 0) >= level_cap:
                 required_items = next_stage_info.get('items', {})
                 if required_items:
-                    req_list = [f"> {item}: {qty}개" for item, qty in required_items.items()]
+                    req_list = [f"> {item}: {qty}個" for item, qty in required_items.items()]
                     embed.add_field(
-                        name=f"🌟 다음 단계({next_stage_info.get('name')}) 진화 재료",
+                        name=f"🌟 次の段階({next_stage_info.get('name')})進化素材",
                         value="\n".join(req_list),
                         inline=False
                     )
@@ -730,7 +730,7 @@ class PetSystem(commands.Cog):
                 evo_ready = await self._is_evolution_ready(final_pet_data, inventory)
                 view = PetUIView(self, user_id, final_pet_data, play_cooldown_active=cooldown_active, evolution_ready=evo_ready)
                 await message.edit(embed=hatched_embed, view=view) 
-                await thread.send(f"{user.mention} 님의 알이 부화했습니다!")
+                await thread.send(f"{user.mention}さんの卵が孵化しました！")
                 await thread.edit(name=f"🐾｜{species_info['species_name']}")
             except (discord.NotFound, discord.Forbidden) as e:
                 logger.error(f"부화 UI 업데이트 실패 (스레드: {thread.id}): {e}")
@@ -781,11 +781,11 @@ class PetSystem(commands.Cog):
         user = self.bot.get_user(user_id)
         if not user: return
 
-        nickname = pet_data.get('nickname', '이름 없는 펫')
+        nickname = pet_data.get('nickname', '名前のないペット')
         
         log_channel_id = get_id("log_pet_levelup_channel_id")
         if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
-            message_text = (f"🎉 {user.mention}님의 '**{nickname}**'이(가) **레벨 {new_level}**(으)로 성장했습니다! 스탯 포인트 **{points_awarded}**개를 획득했습니다. ✨")
+            message_text = (f"🎉 {user.mention}さんの'**{nickname}**'が**レベル{new_level}**に成長しました！ステータスポイント**{points_awarded}**個を獲得しました。 ✨")
             try: await log_channel.send(message_text)
             except Exception as e: logger.error(f"펫 레벨업 로그 전송 실패: {e}")
 
@@ -815,11 +815,11 @@ class PetSystem(commands.Cog):
 
         species_info = pet_data.get('pet_species', {})
         stage_info_json = species_info.get('stage_info', {})
-        new_stage_name = stage_info_json.get(str(new_stage_num), {}).get('name', '새로운 모습')
+        new_stage_name = stage_info_json.get(str(new_stage_num), {}).get('name', '新しい姿')
         
         if thread := self.bot.get_channel(thread_id):
             user = self.bot.get_user(user_id)
-            if user: await thread.send(f"🌟 {user.mention}님의 펫이 **{new_stage_name}**(으)로 진화했습니다! 스탯 포인트 **{points_granted}**개를 획득했습니다!")
+            if user: await thread.send(f"🌟 {user.mention}さんのペットが**{new_stage_name}**に進化しました！ステータスポイント**{points_granted}**個を獲得しました！")
             
             await self.update_pet_ui(user_id, thread)
 
@@ -857,7 +857,7 @@ class PetSystem(commands.Cog):
         pet_data = pet_data_override if pet_data_override else await get_user_pet(user_id)
         if not pet_data:
             if message:
-                try: await message.edit(content="펫 정보를 찾을 수 없습니다.", embed=None, view=None)
+                try: await message.edit(content="ペット情報が見つかりません。", embed=None, view=None)
                 except discord.NotFound: pass
             return
         
@@ -909,7 +909,7 @@ class PetSystem(commands.Cog):
         view = IncubatorPanelView(self)
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_name, new_message.id, channel.id)
-        logger.info(f"✅ {panel_key} 패널을 #{channel.name} 채널에 성공적으로 생성했습니다.")
+        logger.info(f"✅ {panel_key} パネルを #{channel.name} チャンネルに正常に生成しました。")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(PetSystem(bot))
