@@ -15,18 +15,18 @@ logger = logging.getLogger(__name__)
 WEATHER_TYPES = {
     "sunny": {
         "emoji": "☀️", "name": "晴れ", "water_effect": False, "color": 0xFFAC33,
-        "description": "空は一点の曇りもなく、暖かい日差しが村を照らしています。",
+        "description": "空は一点の雲もなく、暖かい日差しが村を照らしています。",
         "tip": "農作物にとっては最高の成長日和かもしれません！"
     },
     "cloudy": {
         "emoji": "☁️", "name": "曇り", "water_effect": False, "color": 0x95A5A6,
         "description": "過ごしやすい曇り空です。時々、太陽が顔を出すかもしれません。",
-        "tip": "のんびりと釣りをするのに最適な一日です。"
+        "tip": "のんびりと釣りをするには最適な一日です。"
     },
     "rainy": {
         "emoji": "🌧️", "name": "雨", "water_effect": True, "color": 0x3498DB,
-        "description": "しとしとと雨が降り続いています。傘を忘れないでください！",
-        "tip": "農場に自動で水がまかれます！水やりの手間が省けますね。"
+        "description": "しとしとと雨が降り続いています。傘をお忘れなく！",
+        "tip": "農場に自動で水がまかれます！水やりの手間が省けそうですね。"
     },
     "stormy": {
         "emoji": "⛈️", "name": "嵐", "water_effect": True, "color": 0x2C3E50,
@@ -89,7 +89,7 @@ class WorldSystem(commands.Cog):
                 logger.error(f"날씨 예보 전송에 실패했습니다: {e}", exc_info=True)
         else:
             # [✅ 핵심 수정] 채널이 설정되지 않았을 때, 명확한 에러 로그를 남깁니다.
-            logger.error("天気予報を送信するチャンネルが設定されていません。管理者コマンド `/admin setup` を通じて [通知] 天気予報チャンネルを設定してください。")
+            logger.error("天気予報を送信するチャンネルが設定されていません。管理者コマンド`/admin setup`で[通知]天気予報チャンネルを設定してください。")
 
 
     @update_weather.before_loop
