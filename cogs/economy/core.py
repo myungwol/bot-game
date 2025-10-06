@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone, timedelta, time as dt_time
 from typing import Dict, Optional, List, Deque, Set
 from collections import deque, defaultdict
-from postgrest.exceptions import APIError  # <--- 이 줄을 추가해주세요!
+from postgrest.exceptions import APIError
 
 from utils.database import (
     get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
@@ -22,9 +22,9 @@ from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-KST = timezone(timedelta(hours=9))
-KST_MONTHLY_RESET = dt_time(hour=0, minute=2, tzinfo=KST)
-KST_MIDNIGHT_AGGREGATE = dt_time(hour=0, minute=5, tzinfo=KST)
+JST = timezone(timedelta(hours=9))
+JST_MONTHLY_RESET = dt_time(hour=0, minute=2, tzinfo=JST)
+JST_MIDNIGHT_AGGREGATE = dt_time(hour=0, minute=5, tzinfo=JST)
 
 class EconomyCore(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -201,13 +201,11 @@ class EconomyCore(commands.Cog):
                     except Exception as e:
                         logger.error(f"펫 탐사 즉시 완료 처리 중 오류: {e}", exc_info=True)
 
-            # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
             if 'boss_reset_manual' in requests_by_prefix:
                 if boss_cog := self.bot.get_cog("BossRaid"):
                     logger.info("[Dispatcher] 수동 보스 리셋 요청을 감지하여 처리합니다.")
                     await boss_cog.manual_reset_check(force_weekly=True, force_monthly=True)
-            # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
-
+            
             if 'boss_spawn_test' in requests_by_prefix or 'boss_defeat_test' in requests_by_prefix:
                 boss_cog = self.bot.get_cog("BossRaid")
                 if boss_cog:
@@ -329,7 +327,6 @@ class EconomyCore(commands.Cog):
                     xp_res = await supabase.rpc('add_xp', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
                     if xp_res.data: await self.handle_level_up_event(user, xp_res.data)
                     
-                    # ▼▼▼▼▼ 핵심 수정 부분 시작 ▼▼▼▼▼
                     try:
                         pet_xp_res = await supabase.rpc('add_xp_to_pet', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add}).execute()
                         if pet_xp_res.data and pet_xp_res.data[0].get('leveled_up'):
@@ -340,22 +337,19 @@ class EconomyCore(commands.Cog):
                             await save_config_to_db(f"pet_evolution_check_request_{user_id}", time.time())
                     except APIError as e:
                         if "Pet not found" in str(e):
-                            # 유저가 펫이 없는 경우이므로 정상적인 상황입니다. 오류를 무시합니다.
                             pass
                         else:
-                            # 다른 예상치 못한 DB 오류일 경우 로그를 남깁니다.
                             logger.error(f"채팅 활동으로 펫 경험치 추가 중 예상치 못한 DB 오류 (User: {user_id}): {e}", exc_info=True)
-                    # ▲▲▲▲▲ 핵심 수정 부분 종료 ▲▲▲▲▲
 
                 stats = await get_all_user_stats(user_id)
                 daily_stats = stats.get('daily', {})
                 if daily_stats.get('chat_count', 0) >= self.chat_message_requirement:
-                    reward_res = await supabase.table('user_activities').select('id', count='exact').eq('user_id', str(user_id)).eq('activity_type', 'reward_chat').gte('created_at', datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat()).execute()
+                    reward_res = await supabase.table('user_activities').select('id', count='exact').eq('user_id', str(user_id)).eq('activity_type', 'reward_chat').gte('created_at', datetime.now(JST).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat()).execute()
                     if reward_res.count == 0:
                         reward = random.randint(*self.chat_reward_range)
                         await update_wallet(user, reward)
                         await log_activity(user_id, 'reward_chat', coin_earned=reward)
-                        await self.log_coin_activity(user, reward, f"채팅 {self.chat_message_requirement}회 달성")
+                        await self.log_coin_activity(user, reward, f"チャット{self.chat_message_requirement}回達成")
 
         except Exception as e:
             logger.error(f"활동 로그 루프 중 DB 오류: {e}", exc_info=True)
@@ -403,13 +397,13 @@ class EconomyCore(commands.Cog):
                 stats = await get_all_user_stats(user_id)
                 new_total_voice_minutes_today = stats.get('daily', {}).get('voice_minutes', 0) + 1
                 if new_total_voice_minutes_today > 0 and new_total_voice_minutes_today % self.voice_time_requirement_minutes == 0:
-                    today_str = datetime.now(KST).strftime('%Y-%m-%d')
+                    today_str = datetime.now(JST).strftime('%Y-%m-%d')
                     cooldown_key = f"voice_reward_{today_str}_{new_total_voice_minutes_today}m"
                     if await get_cooldown(user_id, cooldown_key) == 0:
                         reward = random.randint(*self.voice_reward_range)
                         await update_wallet(user, reward)
                         await log_activity(user_id, 'reward_voice', coin_earned=reward)
-                        await self.log_coin_activity(user, reward, f"음성 채널에서 {new_total_voice_minutes_today}분 활동")
+                        await self.log_coin_activity(user, reward, f"ボイスチャンネルで{new_total_voice_minutes_today}分活動")
                         await set_cooldown(user_id, cooldown_key)
             
             logs_to_insert = [{'user_id': str(uid), 'activity_type': 'voice', 'amount': 1, 'xp_earned': xp_per_minute} for uid in users_to_reward]
@@ -428,27 +422,22 @@ class EconomyCore(commands.Cog):
                         user = self.bot.get_user(list(users_to_reward)[i])
                         if user: await self.handle_level_up_event(user, result.data)
                 
-                # ▼▼▼▼▼ 핵심 수정 부분 시작 ▼▼▼▼▼
                 for i, result in enumerate(pet_xp_results):
                     user_id_from_list = list(users_to_reward)[i]
                     
-                    # 펫이 없어서 발생한 예상된 오류는 무시하고 넘어갑니다.
                     if isinstance(result, APIError) and "Pet not found" in str(result):
                         continue
                     
-                    # 그 외 다른 실제 예외는 로그로 남깁니다.
                     if isinstance(result, Exception):
                         logger.error(f"음성 활동 펫 경험치 지급 중 오류 (User: {user_id_from_list}): {result}", exc_info=result)
                         continue
 
-                    # 성공적인 결과만 처리합니다.
                     if hasattr(result, 'data') and result.data and result.data[0].get('leveled_up'):
                         await save_config_to_db(f"pet_levelup_request_{user_id_from_list}", {
                             "new_level": result.data[0].get('new_level'),
                             "points_awarded": result.data[0].get('points_awarded')
                         })
                         await save_config_to_db(f"pet_evolution_check_request_{user_id_from_list}", time.time())
-                # ▲▲▲▲▲ 핵심 수정 부분 종료 ▲▲▲▲▲
         except Exception as e:
             logger.error(f"[음성 활동 추적] 순찰 중 오류 발생: {e}", exc_info=True)
         finally:
@@ -476,9 +465,9 @@ class EconomyCore(commands.Cog):
         if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
         async with self.log_sender_lock: self.coin_log_queue.append(embed)
 
-    @tasks.loop(time=KST_MONTHLY_RESET)
+    @tasks.loop(time=JST_MONTHLY_RESET)
     async def monthly_whale_reset(self):
-        now = datetime.now(KST)
+        now = datetime.now(JST)
         if now.day != 1: return
         logger.info("[월간 리셋] 고래 출현 공지 및 패널 재설치를 시작합니다.")
         try:
@@ -501,7 +490,7 @@ class EconomyCore(commands.Cog):
     async def before_monthly_whale_reset(self):
         await self.bot.wait_until_ready()
 
-    @tasks.loop(time=KST_MIDNIGHT_AGGREGATE)
+    @tasks.loop(time=JST_MIDNIGHT_AGGREGATE)
     async def update_market_prices(self):
         logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
         try:
@@ -517,7 +506,7 @@ class EconomyCore(commands.Cog):
                         item_update_payload = {**data, 'name': name, 'current_price': new_price}
                         items_to_update.append(item_update_payload)
                         if abs((new_price - old_price) / old_price) > 0.25:
-                            status = "폭등 📈" if new_price > old_price else "폭락 📉"
+                            status = "高騰 📈" if new_price > old_price else "暴落 📉"
                             announcements.append(f" - {name}: `{old_price}` → `{new_price}`{self.currency_icon} ({status})")
             for fish in loot_db:
                 if fish.get('volatility', 0) > 0 and 'id' in fish:
@@ -527,15 +516,15 @@ class EconomyCore(commands.Cog):
                         fish_update_payload = {**fish, 'current_base_value': new_price}
                         fish_to_update.append(fish_update_payload)
                         if abs((new_price - old_price) / old_price) > 0.20:
-                            status = "풍어 📈" if new_price > old_price else "흉어 📉"
-                            announcements.append(f" - {fish['name']} (기본 가치): `{old_price}` → `{new_price}`{self.currency_icon} ({status})")
+                            status = "豊漁 📈" if new_price > old_price else "不漁 📉"
+                            announcements.append(f" - {fish['name']} (基本価値): `{old_price}` → `{new_price}`{self.currency_icon} ({status})")
             if items_to_update: await supabase.table('items').upsert(items_to_update, on_conflict="name").execute()
             if fish_to_update: await supabase.table('fishing_loots').upsert(fish_to_update, on_conflict="id").execute()
             if items_to_update or fish_to_update:
                 await load_game_data_from_db()
             await save_config_to_db("market_fluctuations", announcements)
             if announcements and (log_channel_id := get_id("market_log_channel_id")) and (log_channel := self.bot.get_channel(log_channel_id)):
-                embed = discord.Embed(title="📢 오늘의 주요 시세 변동 정보", description="\n".join(announcements), color=0xFEE75C)
+                embed = discord.Embed(title="📢 今日の主な相場変動情報", description="\n".join(announcements), color=0xFEE75C)
                 await log_channel.send(embed=embed)
             if (commerce_cog := self.bot.get_cog("Commerce")) and (commerce_channel_id := get_id("commerce_panel_channel_id")) and (channel := self.bot.get_channel(commerce_channel_id)):
                 await commerce_cog.regenerate_panel(channel)
