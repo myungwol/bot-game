@@ -36,9 +36,9 @@ _initial_load_complete = False
 
 
 
-KST = timezone(timedelta(hours=9))
-BARE_HANDS = "맨손"
-DEFAULT_ROD = "평범한 낚싯대"
+JST = timezone(timedelta(hours=9))
+BARE_HANDS = "素手"
+DEFAULT_ROD = "普通の釣り竿"
 
 def supabase_retry_handler(retries: int = 3, delay: int = 2):
     def decorator(func: Callable) -> Callable:
@@ -68,14 +68,12 @@ async def load_all_data_from_db():
     logger.info("------ [ 모든 DB 데이터 캐시 로드 완료 ] ------")
     _initial_load_complete = True
 
-# --- ▼▼▼▼▼ 핵심 추가 시작 ▼▼▼▼▼ ---
 def clear_user_ability_cache(user_id: int):
     """특정 유저의 능력 캐시를 강제로 삭제합니다."""
     global _user_abilities_cache
     if user_id in _user_abilities_cache:
         del _user_abilities_cache[user_id]
         logger.info(f"[Cache] 유저(ID: {user_id})의 능력 캐시가 성공적으로 삭제되었습니다.")
-# --- ▲▲▲▲▲ 핵심 추가 종료 ▲▲▲▲▲ ---
 
 @supabase_retry_handler()
 async def load_bot_configs_from_db():
@@ -250,7 +248,7 @@ async def get_user_gear(user: discord.User) -> dict:
         return response.data
     
     logger.warning(f"DB에서 유저(ID: {user.id})의 장비 정보를 가져오지 못했습니다. 기본값을 반환합니다.")
-    return {"rod": BARE_HANDS, "bait": "미끼 없음", "hoe": BARE_HANDS, "watering_can": BARE_HANDS, "pickaxe": BARE_HANDS}
+    return {"rod": BARE_HANDS, "bait": "エサなし", "hoe": BARE_HANDS, "watering_can": BARE_HANDS, "pickaxe": BARE_HANDS}
 
 @supabase_retry_handler()
 async def set_user_gear(user_id: int, **kwargs):
@@ -351,7 +349,6 @@ async def get_all_user_stats(user_id: int) -> Dict[str, Any]:
         logger.error(f"전체 유저 통계 VIEW 조회 중 오류가 발생했습니다: {e}")
         return {}
 
-# --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
 @supabase_retry_handler()
 async def log_chest_reward(user_id: int, chest_type: str, contents: Dict[str, Any]):
     """
@@ -364,7 +361,6 @@ async def log_chest_reward(user_id: int, chest_type: str, contents: Dict[str, An
     }).execute()
 
 
-# --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
 @supabase_retry_handler()
 async def open_boss_chest(user_id: int, chest_type: str) -> Optional[Dict[str, Any]]:
     """
@@ -374,7 +370,6 @@ async def open_boss_chest(user_id: int, chest_type: str) -> Optional[Dict[str, A
     3. 내용물을 반환합니다.
     """
     try:
-        # 1. 유저가 열 수 있는 해당 타입의 상자가 있는지 확인하고 가져옵니다.
         chest_res = await supabase.table('user_chests').select('*').eq('user_id', user_id).eq('chest_type', chest_type).limit(1).maybe_single().execute()
 
         if not (chest_res and chest_res.data):
@@ -385,21 +380,15 @@ async def open_boss_chest(user_id: int, chest_type: str) -> Optional[Dict[str, A
         chest_id = chest_to_open['id']
         contents = chest_to_open.get('contents')
         
-        # 2. 내용물을 가져온 후, DB에서 해당 상자 기록을 삭제합니다.
         await supabase.table('user_chests').delete().eq('id', chest_id).execute()
         
         logger.info(f"상자 열기 성공: 유저(ID:{user_id})가 chest_id:{chest_id} ('{chest_type}')를 열었습니다. 내용물: {contents}")
 
-        # 3. 내용물 반환
         return contents
 
     except Exception as e:
-        # 오류 발생 시 어떤 상자를 열려고 했는지 명확히 로깅합니다.
         logger.error(f"open_boss_chest 함수 실행 중 오류 발생! user_id: {user_id}, chest_type: {chest_type}", exc_info=True)
-        # 실패 시에는 상자가 삭제되지 않으므로, 유저는 아이템을 잃지 않습니다.
         return None
-# --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
-
 
 @supabase_retry_handler()
 async def get_farm_data(user_id: int) -> Optional[Dict[str, Any]]:
@@ -450,22 +439,15 @@ async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
     response = await supabase.table('farm_item_details').select('*').eq('item_name', item_name).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
 
-# --- ▼▼▼▼▼ 핵심 추가 시작 ▼▼▼▼▼ ---
 @supabase_retry_handler()
 async def add_xp_to_pet_db(user_id: int, xp_to_add: int) -> Optional[List[Dict]]:
-    """
-    [최종] 펫에게 경험치를 추가하는 DB 함수를 안전하게 호출합니다.
-    정리된 DB 함수에 맞춰 user_id를 정수(int) 타입으로 전달합니다.
-    """
     if xp_to_add <= 0:
         return None
     try:
-        # DB 함수가 이제 bigint를 받으므로, user_id를 int 타입 그대로 전달합니다.
         res = await supabase.rpc('add_xp_to_pet', {
             'p_user_id': user_id, 
             'p_xp_to_add': xp_to_add
         }).execute()
-        # RPC 결과는 단일 JSON 객체이므로, list가 아닌 dict를 반환하도록 처리
         return [res.data] if res and hasattr(res, 'data') and res.data else None
     except APIError as e:
         logger.error(f"add_xp_to_pet_db RPC 실행 중 오류 (User: {user_id}): {e}", exc_info=True)
@@ -476,7 +458,6 @@ async def add_xp_to_pet_db(user_id: int, xp_to_add: int) -> Optional[List[Dict]]
 @supabase_retry_handler()
 async def start_pet_exploration(pet_id: int, user_id: int, location_key: str, start_time: datetime, end_time: datetime) -> Optional[Dict]:
     """새로운 펫 탐사를 시작하고, pets 테이블 상태를 업데이트합니다."""
-    # 1. pet_explorations 테이블에 새로운 탐사 기록 생성
     exploration_res = await supabase.table('pet_explorations').insert({
         'pet_id': pet_id,
         'user_id': str(user_id),
@@ -491,7 +472,6 @@ async def start_pet_exploration(pet_id: int, user_id: int, location_key: str, st
     
     new_exploration = exploration_res.data[0]
     
-    # 2. pets 테이블의 상태를 'exploring'으로 업데이트
     await supabase.table('pets').update({
         'status': 'exploring',
         'exploration_end_time': end_time.isoformat(),
@@ -515,19 +495,16 @@ async def update_exploration_message_id(exploration_id: int, message_id: int):
 @supabase_retry_handler()
 async def get_exploration_by_id(exploration_id: int) -> Optional[Dict]:
     """특정 ID의 탐사 정보를 가져옵니다. (수정된 버전)"""
-    # 1. 기본 탐사 정보 조회
     exp_res = await supabase.table('pet_explorations').select('*').eq('id', exploration_id).maybe_single().execute()
     if not (exp_res and exp_res.data):
         return None
     exploration_data = exp_res.data
 
-    # 2. 관련 펫 및 지역 정보 별도 조회
     pet_task = supabase.table('pets').select('level').eq('id', exploration_data['pet_id']).maybe_single().execute()
     loc_task = supabase.table('exploration_locations').select('*').eq('location_key', exploration_data['location_key']).maybe_single().execute()
     
     pet_res, loc_res = await asyncio.gather(pet_task, loc_task)
     
-    # 3. 결과 조합
     exploration_data['pets'] = pet_res.data if pet_res and pet_res.data else {}
     exploration_data['exploration_locations'] = loc_res.data if loc_res and loc_res.data else {}
     
@@ -537,14 +514,12 @@ async def get_exploration_by_id(exploration_id: int) -> Optional[Dict]:
 async def claim_and_end_exploration(exploration_id: int, pet_id: int) -> bool:
     """탐사 보상을 수령하고, 펫의 상태를 되돌린 후 탐사 기록을 삭제합니다."""
     try:
-        # 1. 펫 상태를 'idle'로 되돌림
         await supabase.table('pets').update({
             'status': 'idle',
             'exploration_end_time': None,
             'current_exploration_id': None
         }).eq('id', pet_id).execute()
 
-        # 2. 탐사 기록 삭제
         await supabase.table('pet_explorations').delete().eq('id', exploration_id).execute()
         return True
     except Exception as e:
@@ -576,7 +551,6 @@ async def create_pvp_match(challenger_id: int, opponent_id: int) -> Optional[Dic
         'opponent_id': opponent_id,
         'status': 'pending'
     }).execute()
-    # insert의 결과는 res.data 리스트에 담겨 반환됩니다.
     return res.data[0] if res.data else None
 
 @supabase_retry_handler()
@@ -589,5 +563,4 @@ async def get_pvp_match(match_id: int) -> Optional[Dict]:
 async def update_pvp_match(match_id: int, updates: Dict[str, Any]) -> Optional[Dict]:
     """PvP 대전 정보를 업데이트합니다."""
     res = await supabase.table('pet_pvp_matches').update(updates).eq('id', match_id).execute()
-    # update의 결과는 res.data 리스트에 담겨 반환됩니다. single()과 유사한 결과를 위해 첫 번째 요소를 반환합니다.
     return res.data[0] if res.data else None
