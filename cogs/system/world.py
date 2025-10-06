@@ -35,8 +35,8 @@ WEATHER_TYPES = {
     },
 }
 
-KST = timezone(timedelta(hours=9))
-KST_MIDNIGHT = dt_time(hour=0, minute=0, tzinfo=KST)
+JST = timezone(timedelta(hours=9))
+JST_MIDNIGHT = dt_time(hour=0, minute=0, tzinfo=JST)
 
 class WorldSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -47,9 +47,8 @@ class WorldSystem(commands.Cog):
     def cog_unload(self):
         self.update_weather.cancel()
 
-    @tasks.loop(time=KST_MIDNIGHT)
+    @tasks.loop(time=JST_MIDNIGHT)
     async def update_weather(self):
-        # [✅ 핵심 수정] 랜덤 선택 로직을 더 명확하게 변경
         weather_keys = list(WEATHER_TYPES.keys())
         weights = [0.5, 0.25, 0.2, 0.05]
         chosen_key = random.choices(population=weather_keys, weights=weights, k=1)[0]
@@ -72,7 +71,6 @@ class WorldSystem(commands.Cog):
                         "footer": {"text": "天気は毎日深夜0時に変わります。"}
                     }
 
-                # [✅ 핵심 수정] embed_data가 None일 경우를 대비하여 로직 안정화
                 embed_data_copy = embed_data.copy()
                 embed_data_copy['color'] = weather_info['color']
 
@@ -88,7 +86,6 @@ class WorldSystem(commands.Cog):
             except Exception as e:
                 logger.error(f"날씨 예보 전송에 실패했습니다: {e}", exc_info=True)
         else:
-            # [✅ 핵심 수정] 채널이 설정되지 않았을 때, 명확한 에러 로그를 남깁니다.
             logger.error("天気予報を送信するチャンネルが設定されていません。管理者コマンド`/admin setup`で[通知]天気予報チャンネルを設定してください。")
 
 
