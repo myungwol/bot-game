@@ -197,7 +197,10 @@ class CookingPanelView(ui.View):
     async def build_embed(self) -> discord.Embed:
         embed = discord.Embed(title=f"🍲 {self.user.display_name}のキッチン", color=0xE67E22)
         inventory = await get_inventory(self.user)
-        total_cauldrons = inventory.get("釜", 0)
+        
+        # ▼▼▼ 오류 수정 부분 ▼▼▼
+        total_cauldrons_owned = inventory.get("釜", 0)
+        # ▲▲▲ 오류 수정 완료 ▲▲▲
         
         installed_cauldrons = len(self.cauldrons)
         embed.description = "下のリストから管理する釜を選択するか、ボタンを押して作業を開始してください。"
@@ -672,7 +675,7 @@ class Cooking(commands.Cog):
             thread = await interaction.channel.create_thread(
                 name=f"🍲｜{user.display_name}のキッチン",
                 type=discord.ChannelType.private_thread,
-                auto_archive_duration=10080, # 1週間 (60 * 24 * 7)
+                auto_archive_duration=10080,
                 invitable=False
             )
             await thread.add_user(user)
