@@ -348,7 +348,7 @@ class EggSelectView(ui.View):
         self.message: Optional[discord.WebhookMessage] = None
     async def start(self, interaction: discord.Interaction):
         inventory = await get_inventory(self.user)
-        egg_items = {name: qty for name, qty in inventory.items() if get_item_database().get(name, {}).get('category') == '알'}
+        egg_items = {name: qty for name, qty in inventory.items() if get_item_database().get(name, {}).get('category') == '卵'}
         if not egg_items:
             await interaction.followup.send("❌ 孵化させることができる卵がありません。", ephemeral=True)
             return
