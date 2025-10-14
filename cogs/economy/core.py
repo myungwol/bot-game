@@ -326,10 +326,12 @@ class EconomyCore(commands.Cog):
                 if xp_to_add > 0:
                     xp_res = await supabase.rpc('add_xp', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
                     if xp_res.data: await self.handle_level_up_event(user, xp_res.data)
-                    
+
+
                     try:
                         pet_xp_res = await supabase.rpc('add_xp_to_pet', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add}).execute()
-                        if pet_xp_res.data and pet_xp_res.data[0].get('leveled_up'):
+    
+                        if pet_xp_res and hasattr(pet_xp_res, 'data') and pet_xp_res.data and pet_xp_res.data[0].get('leveled_up'):
                             await save_config_to_db(f"pet_levelup_request_{user_id}", {
                                 "new_level": pet_xp_res.data[0].get('new_level'),
                                 "points_awarded": pet_xp_res.data[0].get('points_awarded')
