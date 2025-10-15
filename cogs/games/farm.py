@@ -104,7 +104,7 @@ class FarmActionView(ui.View):
         self.add_item(back_button)
     async def _build_seed_select(self):
         inventory = await get_inventory(self.user)
-        farmable_items = {n: q for n, q in inventory.items() if get_item_database().get(n, {}).get('category') == '農場_씨앗'}
+        farmable_items = {n: q for n, q in inventory.items() if get_item_database().get(n, {}).get('category') == '農場_種'}
         if not farmable_items: self.add_item(ui.Button(label="植えられる種がありません。", disabled=True)); return
         options = [discord.SelectOption(label=f"{name} ({qty}個)", value=name) for name, qty in farmable_items.items()]
         select = ui.Select(placeholder="種/苗木を選択...", options=options, custom_id="seed_select")
