@@ -18,7 +18,6 @@ class LobbyView(ui.View):
         self.interaction = interaction
 
     async def on_timeout(self):
-        # View가 타임아웃되면, 해당 게임을 정리합니다.
         channel_id = self.interaction.channel.id
         if channel_id in self.cog.active_games:
              await self.cog.cleanup_game(channel_id, "時間切れのため、ゲームは自動的にキャンセルされました。")
@@ -27,9 +26,10 @@ class LobbyView(ui.View):
     async def join_button(self, interaction: discord.Interaction, button: ui.Button):
         await self.cog.handle_join(interaction)
 
+    # ▼▼▼ [수정 1] start_button 콜백에서 self (View 인스턴스)를 전달합니다. ▼▼▼
     @ui.button(label="ゲーム開始", style=discord.ButtonStyle.primary, emoji="▶️")
     async def start_button(self, interaction: discord.Interaction, button: ui.Button):
-        await self.cog.handle_start(interaction)
+        await self.cog.handle_start(interaction, self)
 
     @ui.button(label="キャンセル", style=discord.ButtonStyle.danger, emoji="✖️")
     async def cancel_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -40,11 +40,10 @@ class LobbyView(ui.View):
 class GhostLegGame(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.active_games: Dict[int, Dict] = {}  # Key: channel_id, Value: game_state
+        self.active_games: Dict[int, Dict] = {}
 
     # --- 임베드 생성 헬퍼 ---
     def build_lobby_embed(self, game_state: Dict) -> discord.Embed:
-        """게임 로비 상태를 보여주는 임베드를 생성합니다."""
         host = game_state['host']
         players = game_state['players']
         num_winners = game_state['num_winners']
@@ -63,7 +62,6 @@ class GhostLegGame(commands.Cog):
 
     # --- 게임 상태 관리 ---
     async def cleanup_game(self, channel_id: int, reason: Optional[str] = None):
-        """진행 중인 게임을 정리하고 메시지를 수정합니다."""
         if channel_id in self.active_games:
             game = self.active_games.pop(channel_id)
             try:
@@ -77,7 +75,6 @@ class GhostLegGame(commands.Cog):
         
     # --- 버튼 콜백 핸들러 ---
     async def handle_join(self, interaction: discord.Interaction):
-        """'참가하기' 버튼 로직"""
         game = self.active_games.get(interaction.channel.id)
         if not game:
             return await interaction.response.send_message("募集が終了したゲームです。", ephemeral=True)
@@ -92,8 +89,8 @@ class GhostLegGame(commands.Cog):
         embed = self.build_lobby_embed(game)
         await interaction.response.edit_message(embed=embed)
 
-    async def handle_start(self, interaction: discord.Interaction):
-        """'게임 시작' 버튼 로직"""
+    # ▼▼▼ [수정 2] handle_start가 view 인자를 받도록 수정합니다. ▼▼▼
+    async def handle_start(self, interaction: discord.Interaction, view: LobbyView):
         game = self.active_games.get(interaction.channel.id)
         if not game:
             return await interaction.response.send_message("募集が終了したゲームです。", ephemeral=True)
@@ -107,11 +104,10 @@ class GhostLegGame(commands.Cog):
         if game['num_winners'] >= len(game['players']):
             return await interaction.response.send_message("当たりの人数は、参加者の人数より少なくなければなりません。", ephemeral=True)
 
-        # 게임 시작 처리
-        await self.run_game_logic(interaction)
+        # view 인자를 run_game_logic으로 전달합니다.
+        await self.run_game_logic(interaction, view)
 
     async def handle_cancel(self, interaction: discord.Interaction):
-        """'취소' 버튼 로직"""
         game = self.active_games.get(interaction.channel.id)
         if not game:
             return await interaction.response.send_message("募集が終了したゲームです。", ephemeral=True)
@@ -120,22 +116,19 @@ class GhostLegGame(commands.Cog):
             return await interaction.response.send_message("ゲームの主催者のみキャンセルできます。", ephemeral=True)
         
         await self.cleanup_game(interaction.channel.id, "主催者によってゲームがキャンセルされました。")
-        await interaction.response.defer() # 버튼 클릭에 대한 응답
+        await interaction.response.defer()
 
     # --- 메인 게임 로직 ---
-    async def run_game_logic(self, interaction: discord.Interaction):
-        """사다리타기 결과를 생성하고 발표합니다."""
+    # ▼▼▼ [수정 3] run_game_logic이 view 인자를 받고, 직접 사용하도록 수정합니다. ▼▼▼
+    async def run_game_logic(self, interaction: discord.Interaction, view: LobbyView):
         game = self.active_games.get(interaction.channel.id)
         if not game: return
 
-        # ▼▼▼ [수정] 이 부분을 아래와 같이 변경합니다. ▼▼▼
         # 로비 View 비활성화
-        view = interaction.view
         if view:
             for item in view.children:
                 item.disabled = True
             await interaction.message.edit(view=view)
-        # ▲▲▲ 수정 완료 ▲▲▲
         
         # 애니메이션 효과
         await interaction.response.send_message("🚀 あみだくじを開始します！")
@@ -180,10 +173,9 @@ class GhostLegGame(commands.Cog):
             
         await interaction.edit_original_response(content=None, embed=result_embed)
 
-        # 게임 상태 정리 (View는 이미 수정되었으므로 메시지 수정 없이 상태만 제거)
+        # 게임 상태 정리
         if interaction.channel.id in self.active_games:
             self.active_games.pop(interaction.channel.id)
-
 
     # --- 슬래시 커맨드 ---
     @app_commands.command(name="あみだくじ", description="運命のあみだくじゲームを開始します。")
@@ -198,25 +190,21 @@ class GhostLegGame(commands.Cog):
                 ephemeral=True
             )
         
-        # 게임 상태 초기화
         game_state = {
             "host": interaction.user,
             "players": [interaction.user],
             "num_winners": winners,
-            "message_id": None # 메시지 ID는 나중에 저장
+            "message_id": None
         }
         self.active_games[interaction.channel.id] = game_state
         
-        # 로비 임베드 및 View 생성
         embed = self.build_lobby_embed(game_state)
         view = LobbyView(self, interaction)
         
         await interaction.response.send_message(embed=embed, view=view)
         message = await interaction.original_response()
         
-        # 메시지 ID 저장
         self.active_games[interaction.channel.id]['message_id'] = message.id
-
 
 # --- Cog 등록 ---
 async def setup(bot: commands.Bot):
