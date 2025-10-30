@@ -100,10 +100,12 @@ class GhostLegGame(commands.Cog):
         if len(game['players']) < 2:
             return await interaction.response.send_message("ゲームを開始するには最低2人の参加者が必要です。", ephemeral=True)
 
+    # ▼▼▼ 바로 이 부분입니다 ▼▼▼
+    # 당첨 인원이 참가 인원보다 많거나 같을 경우 시작 불가
         if game['num_winners'] >= len(game['players']):
             return await interaction.response.send_message("当たりの人数は、参加者の人数より少なくなければなりません。", ephemeral=True)
 
-        # 게임 시작 처리
+    # 위 조건을 통과하면 게임 시작 로직 실행
         await self.run_game_logic(interaction)
 
     async def handle_cancel(self, interaction: discord.Interaction):
