@@ -13,13 +13,15 @@ logger = logging.getLogger(__name__)
 # --- 게임 로비 UI ---
 class LobbyView(ui.View):
     def __init__(self, cog: 'GhostLegGame', interaction: discord.Interaction):
-        super().__init__(timeout=300)  # 5분 동안 아무도 시작/취소하지 않으면 자동 종료
+        super().__init__(timeout=300)
         self.cog = cog
         self.interaction = interaction
 
     async def on_timeout(self):
         # View가 타임아웃되면, 해당 게임을 정리합니다.
-        await self.cog.cleanup_game(self.interaction.channel.id, "時間切れのため、ゲームは自動的にキャンセルされました。")
+        channel_id = self.interaction.channel.id
+        if channel_id in self.cog.active_games:
+             await self.cog.cleanup_game(channel_id, "時間切れのため、ゲームは自動的にキャンセルされました。")
 
     @ui.button(label="参加する", style=discord.ButtonStyle.success, emoji="✅")
     async def join_button(self, interaction: discord.Interaction, button: ui.Button):
@@ -64,12 +66,14 @@ class GhostLegGame(commands.Cog):
         """진행 중인 게임을 정리하고 메시지를 수정합니다."""
         if channel_id in self.active_games:
             game = self.active_games.pop(channel_id)
-            message = await self.bot.get_channel(channel_id).fetch_message(game['message_id'])
-            if message and reason:
-                await message.edit(content=reason, embed=None, view=None)
-            elif message:
-                # 이유가 없으면 그냥 View만 제거
-                await message.edit(view=None)
+            try:
+                message = await self.bot.get_channel(channel_id).fetch_message(game['message_id'])
+                if message and reason:
+                    await message.edit(content=reason, embed=None, view=None)
+                elif message:
+                    await message.edit(view=None)
+            except (discord.NotFound, discord.Forbidden):
+                logger.warning(f"사다리타기 게임(채널: {channel_id})의 로비 메시지를 찾을 수 없어 정리하지 못했습니다.")
         
     # --- 버튼 콜백 핸들러 ---
     async def handle_join(self, interaction: discord.Interaction):
@@ -100,12 +104,10 @@ class GhostLegGame(commands.Cog):
         if len(game['players']) < 2:
             return await interaction.response.send_message("ゲームを開始するには最低2人の参加者が必要です。", ephemeral=True)
 
-    # ▼▼▼ 바로 이 부분입니다 ▼▼▼
-    # 당첨 인원이 참가 인원보다 많거나 같을 경우 시작 불가
         if game['num_winners'] >= len(game['players']):
             return await interaction.response.send_message("当たりの人数は、参加者の人数より少なくなければなりません。", ephemeral=True)
 
-    # 위 조건을 통과하면 게임 시작 로직 실행
+        # 게임 시작 처리
         await self.run_game_logic(interaction)
 
     async def handle_cancel(self, interaction: discord.Interaction):
@@ -126,12 +128,14 @@ class GhostLegGame(commands.Cog):
         game = self.active_games.get(interaction.channel.id)
         if not game: return
 
+        # ▼▼▼ [수정] 이 부분을 아래와 같이 변경합니다. ▼▼▼
         # 로비 View 비활성화
-        original_message = await interaction.channel.fetch_message(game['message_id'])
-        if original_message and original_message.view:
-            for item in original_message.view.children:
+        view = interaction.view
+        if view:
+            for item in view.children:
                 item.disabled = True
-            await original_message.edit(view=original_message.view)
+            await interaction.message.edit(view=view)
+        # ▲▲▲ 수정 완료 ▲▲▲
         
         # 애니메이션 효과
         await interaction.response.send_message("🚀 あみだくじを開始します！")
@@ -176,8 +180,9 @@ class GhostLegGame(commands.Cog):
             
         await interaction.edit_original_response(content=None, embed=result_embed)
 
-        # 게임 상태 정리
-        await self.cleanup_game(interaction.channel.id)
+        # 게임 상태 정리 (View는 이미 수정되었으므로 메시지 수정 없이 상태만 제거)
+        if interaction.channel.id in self.active_games:
+            self.active_games.pop(interaction.channel.id)
 
 
     # --- 슬래시 커맨드 ---
