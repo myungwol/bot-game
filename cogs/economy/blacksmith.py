@@ -42,27 +42,27 @@ def format_timedelta(delta: timedelta) -> str:
 UPGRADE_RECIPES = {
     # 낚싯대
     "銅の釣り竿":   {"requires_tool": "木の釣り竿", "requires_items": {"銅鉱石": 50}, "requires_coins": 5000},
-    "鉄の釣り竿":     {"requires_tool": "銅の釣り竿", "requires_items": {"鉄鉱石": 100}, "requires_coins": 25000},
-    "金の釣り竿":      {"requires_tool": "鉄の釣り竿",   "requires_items": {"金鉱石": 150}, "requires_coins": 150000},
-    "ダイヤの釣り竿":   {"requires_tool": "金の釣り竿",   "requires_items": {"ダイヤモンド": 200}, "requires_coins": 500000},
+    "鉄の釣り竿":     {"requires_tool": "銅の釣り竿", "requires_items": {"鉄鉱石": 40}, "requires_coins": 25000},
+    "金の釣り竿":      {"requires_tool": "鉄の釣り竿",   "requires_items": {"金鉱石": 30}, "requires_coins": 150000},
+    "ダイヤの釣り竿":   {"requires_tool": "金の釣り竿",   "requires_items": {"ダイヤモンド": 25}, "requires_coins": 500000},
     
     # 괭이
     "銅のクワ":   {"requires_tool": "木のクワ",   "requires_items": {"銅鉱石": 50}, "requires_coins": 5000},
-    "鉄のクワ":     {"requires_tool": "銅のクワ",   "requires_items": {"鉄鉱石": 100}, "requires_coins": 25000},
-    "金のクワ":      {"requires_tool": "鉄のクワ",     "requires_items": {"金鉱石": 150}, "requires_coins": 150000},
-    "ダイヤのクワ":   {"requires_tool": "金のクワ",     "requires_items": {"ダイヤモンド": 200}, "requires_coins": 500000},
+    "鉄のクワ":     {"requires_tool": "銅のクワ",   "requires_items": {"鉄鉱石": 40}, "requires_coins": 25000},
+    "金のクワ":      {"requires_tool": "鉄のクワ",     "requires_items": {"金鉱石": 30}, "requires_coins": 150000},
+    "ダイヤのクワ":   {"requires_tool": "金のクワ",     "requires_items": {"ダイヤモンド": 25}, "requires_coins": 500000},
 
     # 물뿌리개
     "銅のじょうろ": {"requires_tool": "木のじょうろ", "requires_items": {"銅鉱石": 50}, "requires_coins": 5000},
-    "鉄のじょうろ":   {"requires_tool": "銅のじょうろ", "requires_items": {"鉄鉱石": 100}, "requires_coins": 25000},
-    "金のじょうろ":    {"requires_tool": "鉄のじょうろ",   "requires_items": {"金鉱石": 150}, "requires_coins": 150000},
-    "ダイヤのじょうろ": {"requires_tool": "金のじょうろ",   "requires_items": {"ダイヤモンド": 200}, "requires_coins": 500000},
+    "鉄のじょうろ":   {"requires_tool": "銅のじょうろ", "requires_items": {"鉄鉱石": 40}, "requires_coins": 25000},
+    "金のじょうろ":    {"requires_tool": "鉄のじょうろ",   "requires_items": {"金鉱石": 30}, "requires_coins": 150000},
+    "ダイヤのじょうろ": {"requires_tool": "金のじょうろ",   "requires_items": {"ダイヤモンド": 25}, "requires_coins": 500000},
     
     # 곡괭이
     "銅のツルハシ": {"requires_tool": "木のツルハシ", "requires_items": {"銅鉱石": 50}, "requires_coins": 5000},
-    "鉄のツルハシ":   {"requires_tool": "銅のツルハシ", "requires_items": {"鉄鉱石": 100}, "requires_coins": 25000},
-    "金のツルハシ":    {"requires_tool": "鉄のツルハシ",   "requires_items": {"金鉱石": 150}, "requires_coins": 150000},
-    "ダイヤのツルハシ": {"requires_tool": "金のツルハシ",   "requires_items": {"ダイヤモンド": 200}, "requires_coins": 500000},
+    "鉄のツルハシ":   {"requires_tool": "銅のツルハシ", "requires_items": {"鉄鉱石": 40}, "requires_coins": 25000},
+    "金のツルハシ":    {"requires_tool": "鉄のツルハシ",   "requires_items": {"金鉱石": 30}, "requires_coins": 150000},
+    "ダイヤのツルハシ": {"requires_tool": "金のツルハシ",   "requires_items": {"ダイヤモンド": 25}, "requires_coins": 500000},
 }
 
 class ConfirmationView(ui.View):
