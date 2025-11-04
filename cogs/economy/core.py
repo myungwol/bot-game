@@ -451,7 +451,11 @@ class EconomyCore(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def handle_level_up_event(self, user: discord.User, result_data: List[Dict]):
-        if not result_data or not result_data[0].get('leveled_up'): return
+    # 1. result_data가 리스트 타입인지 확인
+    # 2. 리스트가 비어있지 않은지 확인
+    # 3. 첫 번째 요소에 leveled_up 키가 있는지 확인
+        if not isinstance(result_data, list) or not result_data or not result_data[0].get('leveled_up'):
+            return
         new_level = result_data[0].get('new_level')
         logger.info(f"유저 {user.display_name}(ID: {user.id})가 레벨 {new_level}(으)로 레벨업했습니다.")
         game_config = get_config("GAME_CONFIG", {})
