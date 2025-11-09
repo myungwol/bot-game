@@ -21,7 +21,7 @@ class FriendInvitePanelView(ui.View):
         self.cog = cog_instance
         
         button = ui.Button(
-            label="自分の招待コードを確認/作成",
+            label="내 초대 코드 확인/생성",
             style=discord.ButtonStyle.success,
             emoji="💌",
             custom_id="create_friend_invite"
@@ -177,7 +177,7 @@ class FriendInvite(commands.Cog):
         if res and res.data:
             # 이미 코드가 있는 경우
             invite_code = res.data['invite_code']
-            await interaction.followup.send(f"✅ あなたの無期限招待コードはこちらです:\nhttps://discord.gg/{invite_code}", ephemeral=True)
+            await interaction.followup.send(f"✅ 당신의 영구 초대 코드는 다음과 같습니다:\nhttps://discord.gg/{invite_code}", ephemeral=True)
         else:
             # 새 코드를 생성해야 하는 경우
             try:
@@ -190,10 +190,10 @@ class FriendInvite(commands.Cog):
                     'invite_code': invite.code
                 }).execute()
 
-                await interaction.followup.send(f"🎉 あなたの無期限招待コードが生成されました！\n> このコードを友達に共有してください。\nhttps://discord.gg/{invite.code}", ephemeral=True)
+                await interaction.followup.send(f"🎉 당신의 영구 초대 코드가 생성되었습니다!\n> 이 코드를 친구에게 공유해주세요.\nhttps://discord.gg/{invite.code}", ephemeral=True)
             except Exception as e:
                 logger.error(f"영구 초대 코드 생성 중 오류: {e}", exc_info=True)
-                await interaction.followup.send("❌ 招待コードの作成中にエラーが発生しました。", ephemeral=True)
+                await interaction.followup.send("❌ 초대 코드를 생성하는 중 오류가 발생했습니다.", ephemeral=True)
 
     async def register_persistent_views(self):
         self.bot.add_view(FriendInvitePanelView(self))
