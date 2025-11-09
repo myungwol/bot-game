@@ -32,17 +32,17 @@ class ChallengeConfirmView(ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.opponent_id:
             # 도전을 받은 당사자가 아니면, 비공개 메시지를 보내고 상호작용을 차단합니다.
-            await interaction.response.send_message("他の人の対戦申請に応答することはできません。", ephemeral=True, delete_after=5)
+            await interaction.response.send_message("다른 사람의 대전 신청에 응답할 수 없습니다.", ephemeral=True, delete_after=5)
             return False  # False를 반환하면 버튼 콜백이 실행되지 않습니다.
         return True  # 당사자일 경우에만 상호작용을 허용합니다.
 
-    @ui.button(label="承諾", style=discord.ButtonStyle.success, emoji="⚔️")
+    @ui.button(label="수락", style=discord.ButtonStyle.success, emoji="⚔️")
     async def accept_button(self, interaction: discord.Interaction, button: ui.Button):
         # interaction_check를 통과했으므로 이 코드는 반드시 도전자 본인이 실행합니다.
         await self.cog.handle_accept(interaction, self.match_id)
         self.stop()
 
-    @ui.button(label="拒否", style=discord.ButtonStyle.danger, emoji="✖️")
+    @ui.button(label="거절", style=discord.ButtonStyle.danger, emoji="✖️")
     async def decline_button(self, interaction: discord.Interaction, button: ui.Button):
         await self.cog.handle_decline(interaction, self.match_id)
         self.stop()
@@ -63,7 +63,7 @@ class PetPvPPanelView(ui.View):
         super().__init__(timeout=None)
         self.cog = cog_instance
 
-    @ui.button(label="挑戦する", style=discord.ButtonStyle.primary, emoji="⚔️", custom_id="pvp_challenge")
+    @ui.button(label="도전하기", style=discord.ButtonStyle.primary, emoji="⚔️", custom_id="pvp_challenge")
     async def challenge_button(self, interaction: discord.Interaction, button: ui.Button):
         await self.cog.handle_challenge_start(interaction)
 
@@ -85,23 +85,23 @@ class PetPvP(commands.Cog, name="PetPvP"):
         cooldown_start_time = await get_cooldown(challenger.id, cooldown_key)
 
         if cooldown_start_time > 0:
-            cooldown_duration_seconds = 300  # 5分
+            cooldown_duration_seconds = 300  # 5분
             cooldown_end_timestamp = int(cooldown_start_time + cooldown_duration_seconds)
             
             # 동적 시간 표시 생성 (예: <t:1672531200:R>)
             dynamic_timestamp = f"<t:{cooldown_end_timestamp}:R>"
             
-            error_message = f"⏳ クールダウン中です。{dynamic_timestamp}に再度挑戦できます。"
+            error_message = f"⏳ 쿨타임 중입니다. {dynamic_timestamp}에 다시 도전할 수 있습니다."
             
             # delete_after를 늘려서 유저가 시간을 충분히 볼 수 있도록 합니다.
             return await interaction.response.send_message(error_message, ephemeral=True, delete_after=60)
 
         challenger_pet = await get_user_pet(challenger.id)
         if not challenger_pet:
-            return await interaction.response.send_message("❌ 対戦に出すペットがいません。", ephemeral=True)
+            return await interaction.response.send_message("❌ 대결에 내보낼 펫이 없습니다.", ephemeral=True)
             
         select_view = ui.View(timeout=180)
-        user_select = ui.UserSelect(placeholder="対戦相手を選択してください。")
+        user_select = ui.UserSelect(placeholder="대결할 상대를 선택하세요.")
         
         async def select_callback(select_interaction: discord.Interaction):
             await select_interaction.response.defer(ephemeral=True)
@@ -110,11 +110,11 @@ class PetPvP(commands.Cog, name="PetPvP"):
             opponent = select_interaction.guild.get_member(opponent_id)
 
             if not opponent or opponent.bot or opponent.id == challenger.id:
-                return await select_interaction.followup.send("❌ 無効な相手です。", ephemeral=True)
+                return await select_interaction.followup.send("❌ 유효하지 않은 상대입니다.", ephemeral=True)
             
             opponent_pet = await get_user_pet(opponent.id)
             if not opponent_pet:
-                return await select_interaction.followup.send("❌ 相手がペットを所有していません。", ephemeral=True)
+                return await select_interaction.followup.send("❌ 상대방이 펫을 소유하고 있지 않습니다.", ephemeral=True)
 
             # 쿨타임 설정
             await set_cooldown(challenger.id, cooldown_key)
@@ -122,16 +122,16 @@ class PetPvP(commands.Cog, name="PetPvP"):
             # DB에 대전 기록 생성
             match = await create_pvp_match(challenger.id, opponent.id)
             if not match:
-                return await select_interaction.followup.send("❌ 対戦情報の作成に失敗しました。", ephemeral=True)
+                return await select_interaction.followup.send("❌ 대전 정보를 생성하는 데 실패했습니다.", ephemeral=True)
 
             confirm_view = ChallengeConfirmView(self, match['id'], opponent.id)
             
             challenge_embed = discord.Embed(
-                title="⚔️ ペット対戦申請到着！",
-                description=f"{challenger.mention}さんのペット**'{challenger_pet['nickname']}'**が、あなたのペット**'{opponent_pet['nickname']}'**に挑戦を申請しました！",
+                title="⚔️ 펫 대전 신청 도착!",
+                description=f"{challenger.mention}님의 펫 **'{challenger_pet['nickname']}'**(이)가 당신의 펫 **'{opponent_pet['nickname']}'**에게 도전을 신청했습니다!",
                 color=0xE91E63
             )
-            challenge_embed.set_footer(text=f"{PVP_REQUEST_TIMEOUT_SECONDS // 60}分以内に承諾または拒否を選択してください。")
+            challenge_embed.set_footer(text=f"{PVP_REQUEST_TIMEOUT_SECONDS // 60}분 내에 수락 또는 거절을 선택해주세요.")
             
             challenge_message = await interaction.channel.send(
                 content=opponent.mention,
@@ -141,16 +141,16 @@ class PetPvP(commands.Cog, name="PetPvP"):
             
             self.active_pvp[match['id']] = {"challenge_message": challenge_message}
             
-            await select_interaction.followup.send(f"✅ {opponent.display_name}さんに挑戦申請を送りました。", ephemeral=True)
+            await select_interaction.followup.send(f"✅ {opponent.display_name}님에게 도전 신청을 보냈습니다.", ephemeral=True)
 
         user_select.callback = select_callback
         select_view.add_item(user_select)
-        await interaction.response.send_message("誰に挑戦しますか？", view=select_view, ephemeral=True)
+        await interaction.response.send_message("누구에게 도전하시겠습니까?", view=select_view, ephemeral=True)
 
     async def handle_accept(self, interaction: discord.Interaction, match_id: int):
         match = await get_pvp_match(match_id)
         if not match or interaction.user.id != int(match['opponent_id']):
-            return await interaction.response.send_message("❌ 無効な対戦申請です。", ephemeral=True, delete_after=5)
+            return await interaction.response.send_message("❌ 유효하지 않은 대전 신청입니다.", ephemeral=True, delete_after=5)
 
         await interaction.response.defer()
 
@@ -161,7 +161,7 @@ class PetPvP(commands.Cog, name="PetPvP"):
         if session := self.active_pvp.get(match_id):
             if msg := session.get("challenge_message"):
                 try:
-                    await msg.edit(content="対戦が承諾されました。まもなく戦闘が開始されます。", embed=None, view=None, delete_after=10)
+                    await msg.edit(content="대전이 수락되었습니다. 잠시 후 전투가 시작됩니다.", embed=None, view=None, delete_after=10)
                 except discord.NotFound: pass
         
         # 전투 스레드 생성
@@ -181,20 +181,20 @@ class PetPvP(commands.Cog, name="PetPvP"):
 
         except Exception as e:
             logger.error(f"PvP 스레드 생성 또는 전투 시작 중 오류: {e}", exc_info=True)
-            await interaction.followup.send("❌ 戦闘の開始中にエラーが発生しました。", ephemeral=True)
+            await interaction.followup.send("❌ 전투를 시작하는 중 오류가 발생했습니다.", ephemeral=True)
             await self.end_game(match_id, None) # 오류 시 게임 종료 처리
 
     async def handle_decline(self, interaction: discord.Interaction, match_id: int):
         match = await get_pvp_match(match_id)
         if not match or interaction.user.id != int(match['opponent_id']):
-            return await interaction.response.send_message("❌ 無効な対戦申請です。", ephemeral=True, delete_after=5)
+            return await interaction.response.send_message("❌ 유효하지 않은 대전 신청입니다.", ephemeral=True, delete_after=5)
             
         await interaction.response.defer()
         await update_pvp_match(match_id, {'status': 'declined'})
 
         if session := self.active_pvp.pop(match_id, None):
             if msg := session.get("challenge_message"):
-                try: await msg.edit(content=f"{interaction.user.mention}さんが挑戦を拒否しました。", embed=None, view=None, delete_after=10)
+                try: await msg.edit(content=f"{interaction.user.mention}님이 도전을 거절했습니다.", embed=None, view=None, delete_after=10)
                 except discord.NotFound: pass
 
     async def handle_timeout(self, match_id: int):
@@ -203,7 +203,7 @@ class PetPvP(commands.Cog, name="PetPvP"):
                 await update_pvp_match(match_id, {'status': 'cancelled'})
                 if session := self.active_pvp.pop(match_id, None):
                     if msg := session.get("challenge_message"):
-                        try: await msg.edit(content="時間切れのため、対戦申請がキャンセルされました。", embed=None, view=None, delete_after=10)
+                        try: await msg.edit(content="시간이 초과되어 대전 신청이 취소되었습니다.", embed=None, view=None, delete_after=10)
                         except discord.NotFound: pass
 
     async def run_combat_simulation(self, thread: discord.Thread, match_id: int, p1: discord.Member, p2: discord.Member):
@@ -214,11 +214,11 @@ class PetPvP(commands.Cog, name="PetPvP"):
             p1_pet, p2_pet = await asyncio.gather(p1_pet_task, p2_pet_task)
             
             if not p1_pet or not p2_pet:
-                await thread.send("エラー: ペット情報を読み込めず、対戦をキャンセルします。")
+                await thread.send("오류: 펫 정보를 불러올 수 없어 대전을 취소합니다.")
                 return await self.end_game(match_id, None)
             
             p1_hp, p2_hp = p1_pet['current_hp'], p2_pet['current_hp']
-            combat_logs = [f"**{p1.display_name}**の**{p1_pet['nickname']}**と**{p2.display_name}**の**{p2_pet['nickname']}**の対決が始まります！"]
+            combat_logs = [f"**{p1.display_name}**의 **{p1_pet['nickname']}**와(과) **{p2.display_name}**의 **{p2_pet['nickname']}**의 대결이 시작됩니다!"]
             
             view = PetPvPGameView()
             embed = self._build_combat_embed(p1, p2, p1_pet, p2_pet, p1_hp, p2_hp, combat_logs)
@@ -241,7 +241,7 @@ class PetPvP(commands.Cog, name="PetPvP"):
                 damage_to_defender = self._calculate_damage(attacker, defender)
                 if p1_first: p2_hp -= damage_to_defender
                 else: p1_hp -= damage_to_defender
-                combat_logs.append(f"➡️ **{attacker['nickname']}**が`{damage_to_defender}`のダメージを与えました！")
+                combat_logs.append(f"➡️ **{attacker['nickname']}**이(가) `{damage_to_defender}`의 피해를 입혔습니다!")
                 await combat_message.edit(embed=self._build_combat_embed(p1, p2, p1_pet, p2_pet, p1_hp, p2_hp, combat_logs))
                 if p1_hp <= 0 or p2_hp <= 0: break
                 
@@ -249,7 +249,7 @@ class PetPvP(commands.Cog, name="PetPvP"):
                 damage_to_attacker = self._calculate_damage(defender, attacker)
                 if p1_first: p1_hp -= damage_to_attacker
                 else: p2_hp -= damage_to_attacker
-                combat_logs.append(f"⬅️ **{defender['nickname']}**が`{damage_to_attacker}`のダメージを与えました！")
+                combat_logs.append(f"⬅️ **{defender['nickname']}**이(가) `{damage_to_attacker}`의 피해를 입혔습니다.")
                 await combat_message.edit(embed=self._build_combat_embed(p1, p2, p1_pet, p2_pet, p1_hp, p2_hp, combat_logs))
                 if p1_hp <= 0 or p2_hp <= 0: break
 
@@ -258,12 +258,12 @@ class PetPvP(commands.Cog, name="PetPvP"):
             elif p2_hp > p1_hp: winner = p2
             elif turn_count >= 50: # 무승부 시 처리
                 combat_logs.append("---")
-                combat_logs.append("⚔️ 最大ターンに達したため、引き分けとなりました！")
+                combat_logs.append("⚔️ 최대 턴에 도달하여 무승부로 처리되었습니다!")
                 
             if winner:
                 winner_pet = p1_pet if winner.id == p1.id else p2_pet
                 combat_logs.append("---")
-                combat_logs.append(f"🎉 **{winner_pet['nickname']}**の勝利！")
+                combat_logs.append(f"🎉 **{winner_pet['nickname']}**의 승리!")
             
             await combat_message.edit(embed=self._build_combat_embed(p1, p2, p1_pet, p2_pet, p1_hp, p2_hp, combat_logs))
             await self.end_game(match_id, winner)
@@ -271,7 +271,7 @@ class PetPvP(commands.Cog, name="PetPvP"):
         except Exception as e:
             logger.error(f"PvP 전투 시뮬레이션 중 오류: {e}", exc_info=True)
             if combat_message:
-                await combat_message.edit(content="戦闘中にエラーが発生しました。", embed=None, view=None)
+                await combat_message.edit(content="전투 중 오류가 발생했습니다.", embed=None, view=None)
             await self.end_game(match_id, None)
 
     def _calculate_damage(self, attacker: Dict, defender: Dict) -> int:
@@ -305,17 +305,17 @@ class PetPvP(commands.Cog, name="PetPvP"):
             f"❤️ **HP:** `{max(0, p1_hp)} / {p1_pet['current_hp']}`\n{p1_hp_bar}\n"
             f"⚔️`{p1_pet['current_attack']}` 🛡️`{p1_pet['current_defense']}` 💨`{p1_pet['current_speed']}`"
         )
-        embed.add_field(name=f"{p1.display_name}の{p1_pet['nickname']} (Lv.{p1_pet['level']})", value=p1_stats_text, inline=True)
+        embed.add_field(name=f"{p1.display_name}의 {p1_pet['nickname']} (Lv.{p1_pet['level']})", value=p1_stats_text, inline=True)
         
         p2_hp_bar = create_bar(p2_hp, p2_pet['current_hp'])
         p2_stats_text = (
             f"❤️ **HP:** `{max(0, p2_hp)} / {p2_pet['current_hp']}`\n{p2_hp_bar}\n"
             f"⚔️`{p2_pet['current_attack']}` 🛡️`{p2_pet['current_defense']}` 💨`{p2_pet['current_speed']}`"
         )
-        embed.add_field(name=f"{p2.display_name}の{p2_pet['nickname']} (Lv.{p2_pet['level']})", value=p2_stats_text, inline=True)
+        embed.add_field(name=f"{p2.display_name}의 {p2_pet['nickname']} (Lv.{p2_pet['level']})", value=p2_stats_text, inline=True)
         
         log_text = "\n".join(f"> {line}" for line in logs[-10:])
-        embed.add_field(name="--- 戦闘記録 ---", value=log_text, inline=False)
+        embed.add_field(name="--- 전투 기록 ---", value=log_text, inline=False)
         return embed
 
     async def end_game(self, match_id: int, winner: Optional[discord.Member]):
@@ -339,8 +339,8 @@ class PetPvP(commands.Cog, name="PetPvP"):
                 log_embed = format_embed_from_db(
                     embed_data, 
                     winner_mention=winner.mention, 
-                    loser_mention=loser.mention if loser else "不明な相手",
-                    winner_pet_name=winner_pet['nickname'] if winner_pet else "ペット"
+                    loser_mention=loser.mention if loser else "알 수 없는 상대",
+                    winner_pet_name=winner_pet['nickname'] if winner_pet else "펫"
                 )
 
         # 스레드 정리 및 패널 재생성
@@ -352,7 +352,7 @@ class PetPvP(commands.Cog, name="PetPvP"):
 
         if thread_id and (thread := self.bot.get_channel(int(thread_id))):
             try:
-                await thread.send("対戦が終了しました。このチャンネルは15秒後に自動的に削除されます。")
+                await thread.send("대전이 종료되었습니다. 이 채널은 15초 후에 자동으로 삭제됩니다.")
                 await asyncio.sleep(15)
                 await thread.delete()
             except (discord.NotFound, discord.Forbidden): pass
@@ -380,7 +380,7 @@ class PetPvP(commands.Cog, name="PetPvP"):
         view = PetPvPPanelView(self)
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_name, new_message.id, channel.id)
-        logger.info(f"✅ {panel_key} パネルを正常に生成しました。(チャンネル: #{channel.name})")
+        logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(PetPvP(bot))
