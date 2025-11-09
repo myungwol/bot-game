@@ -10,15 +10,18 @@ import math
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List, Any
 
+# --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
 from utils.database import (
     supabase, get_user_pet, get_config, get_id,
     update_wallet, update_inventory, save_id_to_db,
-    log_chest_reward
+    log_chest_reward # log_chest_reward 함수를 import 합니다.
 )
+# --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 from utils.helpers import format_embed_from_db, create_bar
 
 logger = logging.getLogger(__name__)
 
+# 메시지 ID를 관리하기 위한 키를 명확하게 정의합니다.
 WEEKLY_BOSS_CHANNEL_KEY = "weekly_boss_channel_id"
 MONTHLY_BOSS_CHANNEL_KEY = "monthly_boss_channel_id"
 WEEKLY_BOSS_INFO_MSG_KEY = "weekly_boss_info_msg_id"
@@ -27,16 +30,17 @@ WEEKLY_BOSS_LOGS_MSG_KEY = "weekly_boss_logs_msg_id"
 MONTHLY_BOSS_LOGS_MSG_KEY = "monthly_boss_logs_msg_id"
 COMBAT_LOG_CHANNEL_KEY = "boss_log_channel_id"
 
-JST = timezone(timedelta(hours=9))
+
+KST = timezone(timedelta(hours=9))
 
 def get_week_start_utc() -> datetime:
-    now_jst = datetime.now(JST)
-    start_of_week_jst = now_jst - timedelta(days=now_jst.weekday())
-    return start_of_week_jst.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    now_kst = datetime.now(KST)
+    start_of_week_kst = now_kst - timedelta(days=now_kst.weekday())
+    return start_of_week_kst.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
 def get_month_start_utc() -> datetime:
-    now_jst = datetime.now(JST)
-    return now_jst.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    now_kst = datetime.now(KST)
+    return now_kst.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
 
 class BossPanelView(ui.View):
@@ -45,11 +49,11 @@ class BossPanelView(ui.View):
         self.cog = cog_instance
         self.boss_type = boss_type
 
-        challenge_label = "⚔️ 挑戦する"
+        challenge_label = "⚔️ 도전하기"
         if is_combat_locked:
-            challenge_label = "🔴 戦闘進行中..."
+            challenge_label = "🔴 전투 진행 중..."
         elif is_defeated:
-            challenge_label = "✅ 討伐完了"
+            challenge_label = "✅ 처치 완료"
 
         challenge_button = ui.Button(
             label=challenge_label, style=discord.ButtonStyle.success,
@@ -59,7 +63,7 @@ class BossPanelView(ui.View):
         self.add_item(challenge_button)
 
         ranking_button = ui.Button(
-            label="🏆 現在のランキング", style=discord.ButtonStyle.secondary,
+            label="🏆 현재 랭킹", style=discord.ButtonStyle.secondary,
             custom_id=f"boss_ranking:{self.boss_type}", disabled=(raid_data is None)
         )
         ranking_button.callback = self.on_ranking_click
@@ -70,18 +74,18 @@ class BossPanelView(ui.View):
         user = interaction.user
 
         if self.cog.combat_lock.locked():
-            await interaction.followup.send("❌ 他のユーザーが戦闘中です。しばらくしてからもう一度お試しください。", ephemeral=True, delete_after=5)
+            await interaction.followup.send("❌ 다른 유저가 전투 중입니다. 잠시 후 다시 시도해주세요.", ephemeral=True, delete_after=5)
             return
 
         raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', self.boss_type).limit(1).execute()
         if not (raid_res and raid_res.data):
-            await interaction.followup.send("❌ 現在挑戦できるボスがいません。", ephemeral=True)
+            await interaction.followup.send("❌ 현재 도전할 수 있는 보스가 없습니다.", ephemeral=True)
             return
         
         raid_id = raid_res.data[0]['id']
         pet = await get_user_pet(user.id)
         if not pet:
-            await interaction.followup.send("❌ 戦闘に参加するペットがいません。", ephemeral=True)
+            await interaction.followup.send("❌ 전투에 참여할 펫이 없습니다.", ephemeral=True)
             return
         
         start_time_utc = get_week_start_utc() if self.boss_type == 'weekly' else get_month_start_utc()
@@ -89,7 +93,7 @@ class BossPanelView(ui.View):
         if part_res and part_res.data and part_res.data.get('last_fought_at'):
             last_fought_dt = datetime.fromisoformat(part_res.data['last_fought_at'].replace('Z', '+00:00'))
             if last_fought_dt >= start_time_utc:
-                 await interaction.followup.send(f"❌ 今{('週' if self.boss_type == 'weekly' else '月')}はすでにボスに挑戦しました。", ephemeral=True)
+                 await interaction.followup.send(f"❌ 이번 {('주' if self.boss_type == 'weekly' else '달')}에는 이미 보스에게 도전했습니다.", ephemeral=True)
                  return
 
         for item in self.children:
@@ -97,7 +101,7 @@ class BossPanelView(ui.View):
         
         challenge_button = discord.utils.get(self.children, custom_id=f"boss_challenge:{self.boss_type}")
         if challenge_button:
-            challenge_button.label = "🔴 戦闘準備中..."
+            challenge_button.label = "🔴 전투 준비 중..."
 
         await interaction.message.edit(view=self)
         
@@ -129,23 +133,35 @@ class BossRaid(commands.Cog):
     async def panel_updater_loop(self):
         await self.update_all_boss_panels()
 
+    # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
     async def manual_reset_check(self, force_weekly: bool = False, force_monthly: bool = False):
+        """
+        관리자 명령어나 자동 루프를 통해 보스 리셋 로직을 실행합니다.
+        force 플래그를 사용하면 날짜와 상관없이 강제로 실행됩니다.
+        """
         logger.info(f"수동 보스 리셋 확인 시작 (주간: {force_weekly}, 월간: {force_monthly})")
-        now_jst = datetime.now(JST)
+        now_kst = datetime.now(KST)
 
-        if force_weekly or (now_jst.weekday() == 0 and now_jst.hour == 0):
+        # 주간 보스 리셋 로직
+        if force_weekly or (now_kst.weekday() == 0 and now_kst.hour == 0):
+            # 원인: 이전에 활성 보스가 있는지 확인하는 로직이 있었습니다.
+            # 해결: 확인 로직을 제거하고, 리셋 시간이 되면 무조건 새로운 보스 생성을 시도합니다.
+            # create_new_raid(force=True)가 기존 보스를 자동으로 만료 처리합니다.
             logger.info("[BossRaid] 주간 보스 리셋 조건을 충족했습니다. 새로운 보스 생성을 시도합니다.")
             await self.create_new_raid('weekly', force=True)
 
-        if force_monthly or (now_jst.day == 1 and now_jst.hour == 0):
+        # 월간 보스 리셋 로직
+        if force_monthly or (now_kst.day == 1 and now_kst.hour == 0):
             logger.info("[BossRaid] 월간 보스 리셋 조건을 충족했습니다. 새로운 보스 생성을 시도합니다.")
             await self.create_new_raid('monthly', force=True)
         
-        return "ボスリセット確認作業が完了しました。"
+        return "보스 리셋 확인 작업이 완료되었습니다."
 
     @tasks.loop(hours=1)
     async def boss_reset_loop(self):
+        # 이제 루프는 시간 조건 확인과 실제 로직이 모두 포함된 manual_reset_check를 호출합니다.
         await self.manual_reset_check()
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
     
     @boss_reset_loop.before_loop
     async def before_boss_reset_loop(self):
@@ -170,6 +186,7 @@ class BossRaid(commands.Cog):
             channel_key = WEEKLY_BOSS_CHANNEL_KEY if boss_type == 'weekly' else MONTHLY_BOSS_CHANNEL_KEY
             channel_id = get_id(channel_key)
             if channel_id and (channel := self.bot.get_channel(channel_id)):
+                # 보스 소환 시, 이전 패널 메시지를 모두 정리합니다.
                 if info_msg_id := get_id(WEEKLY_BOSS_INFO_MSG_KEY if boss_type == 'weekly' else MONTHLY_BOSS_INFO_MSG_KEY):
                     try: await (await channel.fetch_message(info_msg_id)).delete()
                     except (discord.NotFound, discord.Forbidden): pass
@@ -177,7 +194,7 @@ class BossRaid(commands.Cog):
                     try: await (await channel.fetch_message(logs_msg_id)).delete()
                     except (discord.NotFound, discord.Forbidden): pass
 
-                embed = discord.Embed(title=f"‼️ 新しい{boss_template['name']}が現れました！", description="村の平和のために力を合わせてボスを倒しましょう！", color=0xF1C40F)
+                embed = discord.Embed(title=f"‼️ 새로운 {boss_template['name']}이(가) 나타났습니다!", description="마을의 평화를 위해 힘을 합쳐 보스를 물리치세요!", color=0xF1C40F)
                 if boss_template.get('image_url'): embed.set_thumbnail(url=boss_template['image_url'])
                 await channel.send(embed=embed, delete_after=86400)
 
@@ -212,6 +229,7 @@ class BossRaid(commands.Cog):
         is_combat_locked = self.combat_lock.locked()
         is_defeated = not (raid_data and raid_data.get('status') == 'active')
         
+        # 1. 전투 기록 패널을 먼저 업데이트/생성합니다.
         logs_embed = self.build_combat_logs_embed(raid_data, boss_type)
         logs_message_id = get_id(logs_msg_key)
         try:
@@ -226,6 +244,7 @@ class BossRaid(commands.Cog):
         except (discord.Forbidden, discord.HTTPException) as e:
             logger.error(f"[{boss_type.upper()}] 전투 기록 패널 메시지 수정/생성 실패: {e}")
 
+        # 2. 정보 패널을 업데이트/생성합니다.
         info_embed = self.build_boss_info_embed(raid_data, boss_type)
         view = BossPanelView(self, boss_type, is_combat_locked, is_defeated, raid_data)
         info_message_id = get_id(info_msg_key)
@@ -244,41 +263,41 @@ class BossRaid(commands.Cog):
     def build_boss_info_embed(self, raid_data: Optional[Dict[str, Any]], boss_type: str) -> discord.Embed:
         if not raid_data:
             return discord.Embed(
-                title=f"👑 次の{('週間' if boss_type == 'weekly' else '月間')}ボスを待っています...",
-                description="新しいボスがまもなく現れます！\nリセット時間: " + ("毎週月曜日00時" if boss_type == 'weekly' else "毎月1日00時"),
+                title=f"👑 다음 {('주간' if boss_type == 'weekly' else '월간')} 보스를 기다리는 중...",
+                description="새로운 보스가 곧 나타납니다!\n리셋 시간: " + ("매주 월요일 00시" if boss_type == 'weekly' else "매월 1일 00시"),
                 color=0x34495E
             )
 
         boss_info = raid_data.get('bosses')
         if not boss_info:
-            return discord.Embed(title="データエラー", description="アクティブなレイドに接続されたボス情報が見つかりません。", color=discord.Color.red())
+            return discord.Embed(title="데이터 오류", description="활성 레이드에 연결된 보스 정보를 찾을 수 없습니다.", color=discord.Color.red())
 
         hp_bar = create_bar(raid_data['current_hp'], boss_info['max_hp'])
         hp_text = f"`{raid_data['current_hp']:,} / {boss_info['max_hp']:,}`\n{hp_bar}"
         stats_text = (
-            f"**⚔️ 攻撃力:** `{boss_info['attack']:,}`\n"
-            f"**🛡️ 防御力:** `{boss_info['defense']:,}`\n"
-            f"**👟 スピード:** `1`"
+            f"**⚔️ 공격력:** `{boss_info['attack']:,}`\n"
+            f"**🛡️ 방어력:** `{boss_info['defense']:,}`\n"
+            f"**👟 스피드:** `1`"
         )
         
-        embed = discord.Embed(title=f"👑 {boss_info['name']}の現況", color=0xE74C3C)
+        embed = discord.Embed(title=f"👑 {boss_info['name']} 현황", color=0xE74C3C)
         if boss_info.get('image_url'):
             embed.set_thumbnail(url=boss_info['image_url'])
         
-        embed.add_field(name="--- ボス情報 ---", value=f"{stats_text}\n**❤️ 体力:**\n{hp_text}", inline=False)
-        embed.set_footer(text="パネルは2分ごとに自動で更新されます。")
+        embed.add_field(name="--- 보스 정보 ---", value=f"{stats_text}\n**❤️ 체력:**\n{hp_text}", inline=False)
+        embed.set_footer(text="패널은 2분마다 자동으로 업데이트됩니다.")
         return embed
 
     def build_combat_logs_embed(self, raid_data: Optional[Dict[str, Any]], boss_type: str) -> discord.Embed:
-        title = f"📜 {('週間' if boss_type == 'weekly' else '月間')}ボス 最近の戦闘記録"
+        title = f"📜 {('주간' if boss_type == 'weekly' else '월간')} 보스 최근 전투 기록"
         embed = discord.Embed(title=title, color=0x2C3E50)
 
         if not raid_data:
-            embed.description = "現在ボスがいません。"
+            embed.description = "현재 보스가 없습니다."
             return embed
 
         recent_logs = raid_data.get('recent_logs', [])
-        log_text = "\n".join(recent_logs) if recent_logs else "まだ戦闘記録がありません。"
+        log_text = "\n".join(recent_logs) if recent_logs else "아직 전투 기록이 없습니다."
         embed.description = log_text
         return embed
     
@@ -290,7 +309,7 @@ class BossRaid(commands.Cog):
         pet = await get_user_pet(user.id)
         
         async with self.combat_lock:
-            await interaction.followup.send("✅ 戦闘を準備します... しばらくお待ちください。", ephemeral=True)
+            await interaction.followup.send("✅ 전투를 준비합니다... 잠시만 기다려주세요.", ephemeral=True)
             await self.update_all_boss_panels()
             combat_task = asyncio.create_task(self.run_combat_simulation(interaction, user, pet, raid_id, boss_type))
             self.active_combats[boss_type] = combat_task
@@ -301,6 +320,7 @@ class BossRaid(commands.Cog):
         await self.update_all_boss_panels()
 
     async def run_combat_simulation(self, interaction: discord.Interaction, user: discord.Member, pet: Dict, raid_id: int, boss_type: str):
+        """실시간 턴제 전투를 시뮬레이션하고 UI를 업데이트합니다."""
         combat_message = None
         try:
             raid_res = await supabase.table('boss_raids').select('*, bosses(*)').eq('id', raid_id).single().execute()
@@ -309,7 +329,7 @@ class BossRaid(commands.Cog):
             pet_hp, pet_attack, pet_defense, pet_speed = pet.get('current_hp', 100), pet.get('current_attack', 10), pet.get('current_defense', 10), pet.get('current_speed', 10)
             boss_hp, boss_attack, boss_defense = raid_data['current_hp'], boss['attack'], boss['defense']
             boss_speed = 1
-            combat_logs = [f"**{user.display_name}**さんが**{pet['nickname']}**と共に戦闘を開始します！"]
+            combat_logs = [f"**{user.display_name}**님이 **{pet['nickname']}**와(과) 함께 전투를 시작합니다!"]
             total_damage_dealt = 0
             view = BossCombatView()
             embed = self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs)
@@ -327,7 +347,7 @@ class BossRaid(commands.Cog):
                         pet_damage = max(1, int(base_damage * (1 - defense_factor)))
                         boss_hp -= pet_damage
                         total_damage_dealt += pet_damage
-                        combat_logs.append(f"➡️ **{pet['nickname']}**が`{pet_damage}`のダメージを与えました！")
+                        combat_logs.append(f"➡️ **{pet['nickname']}**이(가) `{pet_damage}`의 피해를 입혔습니다!")
                         await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
                         if boss_hp <= 0: break
                     if boss_hp > 0:
@@ -337,10 +357,10 @@ class BossRaid(commands.Cog):
                         speed_diff = pet_speed - boss_speed
                         dodge_chance = min(0.3, max(0, speed_diff / 100))
                         if random.random() < dodge_chance:
-                            combat_logs.append(f"💨 **{pet['nickname']}**がボスの攻撃を回避しました！")
+                            combat_logs.append(f"💨 **{pet['nickname']}**이(가) 보스의 공격을 회피했습니다!")
                         else:
                             pet_hp -= boss_damage
-                            combat_logs.append(f"⬅️ **{boss['name']}**が`{boss_damage}`のダメージを与えました。")
+                            combat_logs.append(f"⬅️ **{boss['name']}**이(가) `{boss_damage}`의 피해를 입혔습니다.")
                         await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
                         if pet_hp <= 0: break
                 else:
@@ -351,10 +371,10 @@ class BossRaid(commands.Cog):
                         speed_diff = pet_speed - boss_speed
                         dodge_chance = min(0.3, max(0, speed_diff / 100))
                         if random.random() < dodge_chance:
-                            combat_logs.append(f"💨 **{pet['nickname']}**がボスの攻撃を回避しました！")
+                            combat_logs.append(f"💨 **{pet['nickname']}**이(가) 보스의 공격을 회피했습니다!")
                         else:
                             pet_hp -= boss_damage
-                            combat_logs.append(f"💧 **{boss['name']}**が`{boss_damage}`のダメージを与えました。")
+                            combat_logs.append(f"💧 **{boss['name']}**이(가) `{boss_damage}`의 피해를 입혔습니다.")
                         await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
                         if pet_hp <= 0: break
                     if pet_hp > 0:
@@ -364,19 +384,19 @@ class BossRaid(commands.Cog):
                         pet_damage = max(1, int(base_damage * (1 - defense_factor)))
                         boss_hp -= pet_damage
                         total_damage_dealt += pet_damage
-                        combat_logs.append(f"🔥 **{pet['nickname']}**が`{pet_damage}`のダメージを与えました！")
+                        combat_logs.append(f"🔥 **{pet['nickname']}**이(가) `{pet_damage}`의 피해를 입혔습니다!")
                         await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
                         if boss_hp <= 0: break
             combat_logs.append("---")
             if boss_hp <= 0:
-                combat_logs.append(f"🎉 **{boss['name']}**を倒しました！")
+                combat_logs.append(f"🎉 **{boss['name']}**을(를) 쓰러뜨렸습니다!")
             else:
-                combat_logs.append(f"☠️ **{pet['nickname']}**が倒れました。")
-            combat_logs.append(f"✅ 戦闘終了！合計`{total_damage_dealt:,}`のダメージを与えました。")
+                combat_logs.append(f"☠️ **{pet['nickname']}**이(가) 쓰러졌습니다.")
+            combat_logs.append(f"✅ 전투 종료! 총 `{total_damage_dealt:,}`의 피해를 입혔습니다.")
             await combat_message.edit(embed=self.build_combat_embed(user, pet, boss, pet_hp, boss_hp, combat_logs))
 
             final_boss_hp = max(0, raid_data['current_hp'] - total_damage_dealt)
-            new_log_entry = f"`[{datetime.now(JST).strftime('%H:%M')}]` ⚔️ **{user.display_name}** さんが `{total_damage_dealt:,}` のダメージを与えました。(残りHP: `{final_boss_hp:,}`)"
+            new_log_entry = f"`[{datetime.now(KST).strftime('%H:%M')}]` ⚔️ **{user.display_name}** 님이 `{total_damage_dealt:,}`의 피해를 입혔습니다. (남은 HP: `{final_boss_hp:,}`)"
             recent_logs = raid_data.get('recent_logs', [])
             recent_logs.insert(0, new_log_entry)
             await supabase.table('boss_raids').update({'current_hp': final_boss_hp, 'recent_logs': recent_logs[:10]}).eq('id', raid_id).execute()
@@ -403,7 +423,7 @@ class BossRaid(commands.Cog):
         except Exception as e:
             logger.error(f"보스 전투 시뮬레이션 중 오류: {e}", exc_info=True)
             if combat_message:
-                await combat_message.edit(content="戦闘中にエラーが発生しました。", embed=None, view=None)
+                await combat_message.edit(content="전투 중 오류가 발생했습니다.", embed=None, view=None)
         finally:
             if combat_message:
                 await asyncio.sleep(10)
@@ -411,27 +431,30 @@ class BossRaid(commands.Cog):
                 except discord.NotFound: pass
 
     def build_combat_embed(self, user: discord.Member, pet: Dict, boss: Dict, pet_hp: int, boss_hp: int, logs: List[str]) -> discord.Embed:
-        embed = discord.Embed(title=f"⚔️ {boss['name']}との戦闘", color=0xC27C0E)
-        embed.set_author(name=f"{user.display_name}さんの挑戦", icon_url=user.display_avatar.url if user.display_avatar else None)
-        pet_stats_text = (f"❤️ **HP:** `{max(0, pet_hp)} / {pet['current_hp']}`\n" f"⚔️ **攻撃力:** `{pet['current_attack']}`\n" f"🛡️ **防御力:** `{pet['current_defense']}`\n" f"💨 **スピード:** `{pet['current_speed']}`")
-        embed.add_field(name=f"自分のペット: {pet['nickname']} (Lv.{pet['level']})", value=pet_stats_text, inline=True)
+        embed = discord.Embed(title=f"⚔️ {boss['name']}와(과)의 전투", color=0xC27C0E)
+        embed.set_author(name=f"{user.display_name}님의 도전", icon_url=user.display_avatar.url if user.display_avatar else None)
+        pet_stats_text = (f"❤️ **HP:** `{max(0, pet_hp)} / {pet['current_hp']}`\n" f"⚔️ **공격력:** `{pet['current_attack']}`\n" f"🛡️ **방어력:** `{pet['current_defense']}`\n" f"💨 **스피드:** `{pet['current_speed']}`")
+        embed.add_field(name=f"내 펫: {pet['nickname']} (Lv.{pet['level']})", value=pet_stats_text, inline=True)
         boss_speed = 1
-        boss_stats_text = (f"❤️ **HP:** `{max(0, boss_hp):,} / {boss['max_hp']:,}`\n" f"⚔️ **攻撃力:** `{boss['attack']}`\n" f"🛡️ **防御力:** `{boss['defense']}`\n" f"💨 **スピード:** `{boss_speed}`")
-        embed.add_field(name=f"ボス: {boss['name']}", value=boss_stats_text, inline=True)
+        boss_stats_text = (f"❤️ **HP:** `{max(0, boss_hp):,} / {boss['max_hp']:,}`\n" f"⚔️ **공격력:** `{boss['attack']}`\n" f"🛡️ **방어력:** `{boss['defense']}`\n" f"💨 **스피드:** `{boss_speed}`")
+        embed.add_field(name=f"보스: {boss['name']}", value=boss_stats_text, inline=True)
         log_text = "\n".join(f"> {line}" for line in logs[-10:])
-        embed.add_field(name="--- 戦闘記録 ---", value=log_text, inline=False)
+        embed.add_field(name="--- 전투 기록 ---", value=log_text, inline=False)
         return embed
 
     async def handle_boss_defeat(self, channel: discord.TextChannel, raid_id: int):
+        # 1. 먼저 보스 정보를 업데이트합니다.
         update_res = await supabase.table('boss_raids').update({
             'status': 'defeated',
             'defeat_time': datetime.now(timezone.utc).isoformat()
         }).eq('id', raid_id).eq('status', 'active').execute()
         
+        # 업데이트가 성공했는지 (즉, 1개의 행이 변경되었는지) 확인합니다.
         if not (update_res and update_res.data):
             logger.warning(f"Raid ID {raid_id}는 이미 처치되었거나 활성 상태가 아닙니다. 보상 지급을 건너뜁니다.")
             return
 
+        # 2. 업데이트가 성공했다면, 이제 전체 정보를 조회합니다.
         select_res = await supabase.table('boss_raids').select('*, bosses(*)').eq('id', raid_id).single().execute()
         
         if not select_res.data:
@@ -440,7 +463,7 @@ class BossRaid(commands.Cog):
             
         raid_data = select_res.data
         boss_name = raid_data['bosses']['name']
-        defeat_embed = discord.Embed(title=f"🎉 {boss_name} 討伐成功！", description="勇敢な冒険者たちの活躍でボスを倒しました！\n\n参加者にはまもなく報酬が支給され、最終ランキングが告知される予定です...", color=0x2ECC71)
+        defeat_embed = discord.Embed(title=f"🎉 {boss_name} 처치 성공!", description="용감한 모험가들의 활약으로 보스를 물리쳤습니다!\n\n참가자들에게 곧 보상이 지급되며, 최종 랭킹이 공지될 예정입니다...", color=0x2ECC71)
         await channel.send(embed=defeat_embed, delete_after=86400)
         await self.distribute_rewards(channel, raid_id, boss_name)
 
@@ -454,14 +477,14 @@ class BossRaid(commands.Cog):
             participants = part_res.data
             total_participants = len(participants)
             
-            boss_type = 'weekly' if "週間" in boss_name else 'monthly'
+            boss_type = 'weekly' if "주간" in boss_name else 'monthly'
             reward_tiers = get_config("BOSS_REWARD_TIERS", {}).get(boss_type, [])
             if not reward_tiers:
                 logger.error(f"'{boss_type}' 보스의 보상 티어 정보를 찾을 수 없습니다.")
                 return
 
-            base_chest_item = "週間ボス宝箱" if boss_type == 'weekly' else "月間ボス宝箱"
-            rare_reward_items = ["覚醒のコア", "超越の核"]
+            base_chest_item = "주간 보스 보물 상자" if boss_type == 'weekly' else "월간 보스 보물 상자"
+            rare_reward_items = ["각성의 코어", "초월의 핵"]
             
             db_tasks = []
             reward_summary_for_log = {}
@@ -505,34 +528,38 @@ class BossRaid(commands.Cog):
             
             if not target_channel: target_channel = channel
             
-            final_embed = discord.Embed(title=f"🏆 {boss_name} 最終ランキング及び報酬", color=0x5865F2)
+            final_embed = discord.Embed(title=f"🏆 {boss_name} 최종 랭킹 및 보상", color=0x5865F2)
             rank_list = []
             for i, data in enumerate(participants[:10]):
                 rank = i + 1
                 member = self.bot.get_guild(channel.guild.id).get_member(data['user_id'])
                 user_name = member.display_name if member else f"ID:{data['user_id']}"
                 damage = data['total_damage_dealt']
-                rewards = reward_summary_for_log.get(data['user_id'], "不明")
-                line = f"`{rank}位.` **{user_name}** - `{damage:,}` DMG\n> 🎁 報酬: {rewards}"
+                rewards = reward_summary_for_log.get(data['user_id'], "알 수 없음")
+                line = f"`{rank}위.` **{user_name}** - `{damage:,}` DMG\n> 🎁 보상: {rewards}"
                 rank_list.append(line)
             final_embed.description = "\n".join(rank_list)
-            final_embed.set_footer(text=f"合計{total_participants}名の参加者に報酬が支給されました。")
+            final_embed.set_footer(text=f"총 {total_participants}명의 참가자에게 보상이 지급되었습니다.")
             
             await target_channel.send(embed=final_embed)
 
         except Exception as e:
             logger.error(f"보상 지급 중 오류 발생 (Raid ID: {raid_id}): {e}", exc_info=True)
-            await channel.send("報酬を支給中にエラーが発生しました。管理者に問い合わせてください。")
+            await channel.send("보상을 지급하는 중 오류가 발생했습니다. 관리자에게 문의해주세요.")
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     async def handle_ranking(self, interaction: discord.Interaction, boss_type: str):
         raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type, name)').eq('bosses.type', boss_type).order('start_time', desc=True).limit(1).execute()
         if not (raid_res and raid_res.data):
-            await interaction.response.send_message("❌ 現在照会できるランキング情報がありません。", ephemeral=True)
+            await interaction.response.send_message("❌ 현재 조회할 수 있는 랭킹 정보가 없습니다.", ephemeral=True)
             return
         
         raid_id = raid_res.data[0]['id']
         ranking_view = RankingView(self, raid_id, interaction.user, boss_type)
+        # --- ▼▼▼▼▼ 핵심 수정 부분 ▼▼▼▼▼ ---
+        # 이제 RankingView에 start 메서드가 있으므로 이 호출은 정상적으로 작동합니다.
         await ranking_view.start(interaction)
+        # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
 class RankingView(ui.View):
     def __init__(self, cog_instance: 'BossRaid', raid_id: int, user: discord.Member, boss_type: str):
@@ -548,14 +575,18 @@ class RankingView(ui.View):
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("ランキングを照会した本人のみ操作できます。", ephemeral=True, delete_after=5)
+            await interaction.response.send_message("랭킹을 조회한 본인만 조작할 수 있습니다.", ephemeral=True, delete_after=5)
             return False
         return True
 
+    # --- ▼▼▼▼▼ 핵심 수정 시작 (start 메서드 복원) ▼▼▼▼▼ ---
     async def start(self, interaction: discord.Interaction):
+        # 이전에 defer()가 호출되었을 수 있으므로 is_done() 체크 없이 바로 followup.send를 사용합니다.
+        # 만약 이전에 응답이 없었다면, 이 followup.send가 첫 응답이 됩니다.
         embed = await self.build_ranking_embed()
         self.update_buttons()
         await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+    # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
     async def update_view(self, interaction: discord.Interaction):
         embed = await self.build_ranking_embed()
@@ -582,10 +613,10 @@ class RankingView(ui.View):
         total_participants = part_res.count or 0
         self.total_pages = max(1, math.ceil(total_participants / self.users_per_page))
         
-        embed = discord.Embed(title="🏆 ダメージランキング", color=0xFFD700)
+        embed = discord.Embed(title="🏆 피해량 랭킹", color=0xFFD700)
         
         if not (part_res.data):
-            embed.description = "まだランキング情報がありません。"
+            embed.description = "아직 랭킹 정보가 없습니다."
         else:
             rank_list = []
             guild = self.user.guild
@@ -595,35 +626,35 @@ class RankingView(ui.View):
                 user_id_int = data['user_id']
                 member = guild.get_member(user_id_int) if guild else None
                 user_display = member.mention if member else f"ID:{user_id_int}"
-                pet_name = data['pets']['nickname'] if data.get('pets') else "不明なペット"
+                pet_name = data['pets']['nickname'] if data.get('pets') else "알 수 없는 펫"
                 damage = data['total_damage_dealt']
                 
-                line = f"`{rank}位.` {user_display} - `{pet_name}`: `{damage:,}`"
+                line = f"`{rank}위.` {user_display} - `{pet_name}`: `{damage:,}`"
                 rank_list.append(line)
             embed.description = "\n".join(rank_list)
 
-        footer_text = f"ページ {self.current_page + 1} / {self.total_pages}"
+        footer_text = f"페이지 {self.current_page + 1} / {self.total_pages}"
         my_rank = my_rank_res.data if my_rank_res and my_rank_res.data is not None else None
 
         if my_rank and total_participants > 0:
             my_percentile = my_rank / total_participants
             reward_tiers = get_config("BOSS_REWARD_TIERS", {}).get(self.boss_type, [])
-            my_tier_name = "報酬なし"
+            my_tier_name = "보상 없음"
             for tier in reward_tiers:
                 if my_percentile <= tier['percentile']:
                     my_tier_name = tier['name']
                     break
-            footer_text += f" | 私の予想等級: {my_tier_name}"
+            footer_text += f" | 나의 예상 등급: {my_tier_name}"
 
         embed.set_footer(text=footer_text)
         return embed
 
-    @ui.button(label="◀ 前へ", style=discord.ButtonStyle.secondary, custom_id="prev_page")
+    @ui.button(label="◀ 이전", style=discord.ButtonStyle.secondary, custom_id="prev_page")
     async def prev_page(self, interaction: discord.Interaction, button: ui.Button):
         self.current_page -= 1
         await self.update_view(interaction)
         
-    @ui.button(label="▶ 次へ", style=discord.ButtonStyle.secondary, custom_id="next_page")
+    @ui.button(label="▶ 다음", style=discord.ButtonStyle.secondary, custom_id="next_page")
     async def next_page(self, interaction: discord.Interaction, button: ui.Button):
         self.current_page += 1
         await self.update_view(interaction)
