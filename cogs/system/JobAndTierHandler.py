@@ -27,7 +27,7 @@ class JobAdvancementView(ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("このメニューは本人のみ使用できます。", ephemeral=True)
+            await interaction.response.send_message("이 메뉴는 본인만 사용할 수 있습니다.", ephemeral=True)
             return False
         return True
 
@@ -41,9 +41,9 @@ class JobAdvancementView(ui.View):
                 for job in self.jobs_data.values()
             ]
         else:
-            job_options.append(discord.SelectOption(label="選択できる職業がありません。", value="no_jobs_available", default=True))
+            job_options.append(discord.SelectOption(label="선택할 수 있는 직업이 없습니다.", value="no_jobs_available", default=True))
         
-        job_select = ui.Select(placeholder="① まず職業を選択してください...", options=job_options, custom_id="job_adv_job_select", disabled=(not self.jobs_data))
+        job_select = ui.Select(placeholder="① 먼저 직업을 선택해주세요...", options=job_options, custom_id="job_adv_job_select", disabled=(not self.jobs_data))
         if self.selected_job_key:
             job_select.placeholder = self.jobs_data[self.selected_job_key]['job_name']
         job_select.callback = self.on_job_select
@@ -51,27 +51,27 @@ class JobAdvancementView(ui.View):
 
         ability_options = []
         is_ability_disabled = True
-        ability_placeholder = "まず職業を選択してください。"
+        ability_placeholder = "먼저 직업을 선택해주세요."
         if self.selected_job_key and self.selected_job_key in self.jobs_data:
             is_ability_disabled = False
-            ability_placeholder = "② 次に能力を選択してください..."
+            ability_placeholder = "② 다음으로 능력을 선택해주세요..."
             selected_job = self.jobs_data[self.selected_job_key]
             for ability in selected_job.get('abilities', []):
                 ability_options.append(discord.SelectOption(label=ability['ability_name'], value=ability['ability_key'], description=ability['description'][:100]))
         
         if not ability_options:
-            ability_options.append(discord.SelectOption(label="選択可能な能力がありません。", value="no_abilities_placeholder", default=True))
+            ability_options.append(discord.SelectOption(label="선택 가능한 능력이 없습니다.", value="no_abilities_placeholder", default=True))
 
         ability_select = ui.Select(placeholder=ability_placeholder, options=ability_options, disabled=is_ability_disabled, custom_id="job_adv_ability_select")
         if self.selected_ability_key:
             selected_job = self.jobs_data[self.selected_job_key]
-            ability_name = next((a['ability_name'] for a in selected_job['abilities'] if a['ability_key'] == self.selected_ability_key), "能力選択")
+            ability_name = next((a['ability_name'] for a in selected_job['abilities'] if a['ability_key'] == self.selected_ability_key), "능력 선택")
             ability_select.placeholder = ability_name
         ability_select.callback = self.on_ability_select
         self.add_item(ability_select)
 
         is_confirm_disabled = not (self.selected_job_key and self.selected_ability_key)
-        confirm_button = ui.Button(label="決定する", style=discord.ButtonStyle.success, disabled=is_confirm_disabled, custom_id="job_adv_confirm")
+        confirm_button = ui.Button(label="결정하기", style=discord.ButtonStyle.success, disabled=is_confirm_disabled, custom_id="job_adv_confirm")
         confirm_button.callback = self.on_confirm
         self.add_item(confirm_button)
 
@@ -96,11 +96,11 @@ class JobAdvancementView(ui.View):
         await interaction.response.defer()
 
         if not (self.selected_job_key and self.selected_ability_key):
-            await interaction.followup.send("職業と能力を両方選択してください。", ephemeral=True)
+            await interaction.followup.send("직업과 능력을 모두 선택해주세요.", ephemeral=True)
             return
 
         for item in self.children: item.disabled = True
-        await interaction.edit_original_response(content="少々お待ちください... 転職手続きを進めています。", embed=None, view=self)
+        await interaction.edit_original_response(content="잠시만 기다려주세요... 전직 절차를 진행 중입니다.", embed=None, view=self)
         self.stop()
 
         try:
@@ -122,11 +122,11 @@ class JobAdvancementView(ui.View):
             all_job_role_keys = list(job_system_config.get("JOB_ROLE_MAP", {}).values())
             
             roles_to_remove = [role for key in all_job_role_keys if (role_id := get_id(key)) and (role := interaction.guild.get_role(role_id)) and role in user.roles and key != job_role_key]
-            if roles_to_remove: await user.remove_roles(*roles_to_remove, reason="転職による以前の職業役職の削除")
+            if roles_to_remove: await user.remove_roles(*roles_to_remove, reason="전직으로 인한 이전 직업 역할 제거")
 
             if new_role_id := get_id(job_role_key):
                 if new_role := interaction.guild.get_role(new_role_id):
-                    await user.add_roles(new_role, reason="転職完了")
+                    await user.add_roles(new_role, reason="전직 완료")
 
             await supabase.rpc('set_user_job_and_ability', {'p_user_id': user.id, 'p_job_id': job_id, 'p_ability_id': ability_id}).execute()
 
@@ -140,7 +140,7 @@ class JobAdvancementView(ui.View):
                         await log_channel.send(embed=log_embed)
             
             job_name = selected_job_data['job_name']
-            success_message = f"🎉 **転職完了！**\nおめでとうございます！ これからあなたは**{job_name}**です。\n\nこのウィンドウは次の転職手続きのために間もなく消えます..."
+            success_message = f"🎉 **전직 완료!**\n축하합니다! 이제부터 당신은 **{job_name}** 입니다.\n\n이 창은 다음 전직 절차를 위해 곧 사라집니다..."
             await interaction.edit_original_response(content=success_message, view=None)
 
             if handler_cog := self.bot.get_cog("JobAndTierHandler"):
@@ -159,7 +159,7 @@ class JobAdvancementView(ui.View):
         except Exception as e:
             logger.error(f"전직 처리 중 오류가 발생했습니다 (유저: {self.user_id}): {e}", exc_info=True)
             try:
-                await interaction.edit_original_response(content="❌ 転職処理中にエラーが発生しました。管理者に問い合わせてください。", view=None)
+                await interaction.edit_original_response(content="❌ 전직 처리 중 오류가 발생했습니다. 관리자에게 문의해주세요.", view=None)
             except discord.NotFound:
                  logger.error(f"{self.user_id}의 전직 처리 실패 메시지를 수정하려 했으나 메시지를 찾을 수 없습니다.")
 class StartAdvancementView(ui.View):
@@ -171,13 +171,13 @@ class StartAdvancementView(ui.View):
         self.level = level
         self.start_button.custom_id = f"start_advancement_{self.user_id}_{self.level}"
 
-    @ui.button(label="転職を始める", style=discord.ButtonStyle.primary, emoji="✨")
+    @ui.button(label="전직 시작하기", style=discord.ButtonStyle.primary, emoji="✨")
     async def start_button(self, interaction: discord.Interaction, button: ui.Button):
         self.stop()
         
         embed = discord.Embed(
-            title=f"職業・能力選択 (レベル {self.level})",
-            description="転職する職業と習得する能力を一つずつ選択した後、「決定する」ボタンを押してください。",
+            title=f"직업·능력 선택 (레벨 {self.level})",
+            description="전직할 직업과 습득할 능력을 하나씩 선택한 후, '결정하기' 버튼을 눌러주세요.",
             color=0xFFD700
         )
         for job in self.jobs_data:
@@ -213,7 +213,7 @@ class JobAndTierHandler(commands.Cog):
 
         for thread in active_threads:
             try:
-                if not thread.name.startswith("転職｜"): continue
+                if not thread.name.startswith("전직｜"): continue
                 
                 owner_id = thread.owner_id
                 if not owner_id: continue
@@ -248,7 +248,7 @@ class JobAndTierHandler(commands.Cog):
                 return
 
             for thread in channel.threads:
-                if thread.name == f"転職｜{member.name}":
+                if thread.name == f"전직｜{member.name}":
                     logger.info(f"{member.name}님의 이전 전직 스레드를 삭제하고 새 절차를 시작합니다.")
                     try: await thread.delete()
                     except Exception as e: logger.error(f"이전 전직 스레드 삭제 실패: {e}")
@@ -281,14 +281,14 @@ class JobAndTierHandler(commands.Cog):
                 logger.warning(f"{member.name} (직업: {current_job_key}) 님을 위한 레벨 {target_level_for_advancement} 직업을 찾을 수 없습니다.")
                 return
 
-            thread = await channel.create_thread(name=f"転職｜{member.name}", type=discord.ChannelType.private_thread, invitable=False)
+            thread = await channel.create_thread(name=f"전직｜{member.name}", type=discord.ChannelType.private_thread, invitable=False)
             await thread.add_user(member)
 
-            title = f"🎉 レベル {target_level_for_advancement} 転職のご案内"
-            description = f"{member.mention}さん、新しい道を切り開く時間です。\n\n下のボタンを押して転職手続きを始めてください。"
+            title = f"🎉 레벨 {target_level_for_advancement} 전직 안내"
+            description = f"{member.mention}님, 새로운 길을 개척할 시간입니다.\n\n아래 버튼을 눌러 전직 절차를 시작해주세요."
             if target_level_for_advancement == 50 and level >= 100:
-                title = "✨ 転職追いつき：1次転職"
-                description = f"{member.mention}さん、2次転職の前に、まずあなたの道を決定する1次転職を完了する必要があります。\n\n1次転職を完了すると、自動的に2次転職の案内が始まります。"
+                title = "✨ 전직 따라잡기: 1차 전직"
+                description = f"{member.mention}님, 2차 전직에 앞서 먼저 당신의 길을 결정할 1차 전직을 완료해야 합니다.\n\n1차 전직을 완료하면 자동으로 2차 전직 안내가 시작됩니다."
             
             embed = discord.Embed(title=title, description=description, color=0xFFD700)
             view = StartAdvancementView(self.bot, member.id, filtered_jobs, target_level_for_advancement)
@@ -322,8 +322,8 @@ class JobAndTierHandler(commands.Cog):
                 if role.id in all_tier_role_ids and role.id != target_role_id:
                     roles_to_remove.append(role)
             
-            if roles_to_add: await member.add_roles(*roles_to_add, reason=f"レベル {level} 達成、等級役職付与")
-            if roles_to_remove: await member.remove_roles(*roles_to_remove, reason="レベル変更による等級役職調整")
+            if roles_to_add: await member.add_roles(*roles_to_add, reason=f"레벨 {level} 달성, 등급 역할 부여")
+            if roles_to_remove: await member.remove_roles(*roles_to_remove, reason="레벨 변경으로 인한 등급 역할 조정")
 
         except Exception as e:
             logger.error(f"{member.name}님의 등급 역할 업데이트 처리 중 오류가 발생했습니다: {e}", exc_info=True)
