@@ -6,18 +6,17 @@ from discord import ui
 import logging
 import random
 from typing import Optional
-import asyncio # <--- asyncio를 import 했는지 확인
 
 from utils.database import (
     get_wallet, update_wallet, get_config, get_panel_components_from_db,
-    save_panel_id, get_panel_id, get_embed_from_db, log_activity # <--- log_activity 추가
+    save_panel_id, get_panel_id, get_embed_from_db
 )
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-class BetAmountModal(ui.Modal, title="ベット額入力"):
-    amount = ui.TextInput(label="金額 (10コイン単位)", placeholder="例: 100", required=True)
+class BetAmountModal(ui.Modal, title="베팅 금액 입력"):
+    amount = ui.TextInput(label="금액 (10코인 단위)", placeholder="예: 100", required=True)
 
     def __init__(self, cog_instance: 'DiceGame'):
         super().__init__(timeout=180)
@@ -29,7 +28,7 @@ class BetAmountModal(ui.Modal, title="ベット額入力"):
             bet_amount = int(self.amount.value)
             if bet_amount <= 0 or bet_amount % 10 != 0:
                 await interaction.response.send_message(
-                    "❌ 10コイン単位の正数を入力してください。",
+                    "❌ 10코인 단위의 양수만 입력할 수 있습니다.",
                     ephemeral=True
                 )
                 return
@@ -37,24 +36,24 @@ class BetAmountModal(ui.Modal, title="ベット額入力"):
             wallet = await get_wallet(interaction.user.id)
             if wallet.get('balance', 0) < bet_amount:
                 await interaction.response.send_message(
-                    f"❌ 残高が不足しています。(現在の残高: {wallet.get('balance', 0):,}{self.currency_icon})",
+                    f"❌ 잔액이 부족합니다. (현재 잔액: {wallet.get('balance', 0):,}{self.currency_icon})",
                     ephemeral=True
                 )
                 return
             
             view = NumberSelectView(interaction.user, bet_amount, self.cog)
-            await interaction.response.send_message(f"ベット額 `{bet_amount:,}`{self.currency_icon}を設定しました。次にサイコロの目を選択してください。", view=view, ephemeral=True)
+            await interaction.response.send_message(f"베팅 금액 `{bet_amount:,}`{self.currency_icon}을(를) 설정했습니다. 다음으로 주사위 눈을 선택해주세요.", view=view, ephemeral=True)
             view.message = await interaction.original_response() 
             self.cog.active_sessions.add(interaction.user.id)
         
         except ValueError:
             await interaction.response.send_message(
-                "❌ 数字のみ入力してください。",
+                "❌ 숫자만 입력해주세요.",
                 ephemeral=True
             )
         except Exception as e:
             logger.error(f"주사위 베팅 처리 중 오류: {e}", exc_info=True)
-            message_content = "❌ 処理中にエラーが発生しました。"
+            message_content = "❌ 처리 중 오류가 발생했습니다."
             if not interaction.response.is_done():
                 await interaction.response.send_message(message_content, ephemeral=True)
             else:
@@ -85,31 +84,21 @@ class NumberSelectView(ui.View):
         for item in self.children:
             item.disabled = True
         try:
-            await interaction.response.edit_message(content=f"あなたは`{chosen_number}`を選択しました。サイコロを振ります...", view=self)
+            await interaction.response.edit_message(content=f"당신은 `{chosen_number}`을(를) 선택했습니다. 주사위를 굴립니다...", view=self)
         except discord.NotFound:
             return self.stop()
 
-        # ▼▼▼▼▼ 핵심 수정 부분: 확률 조작 로직 ▼▼▼▼▼
-        # 16.5%의 확률로 승리하도록 설정합니다.
-        if random.random() < 0.165:
-            # 승리: 주사위 결과를 유저가 선택한 숫자로 설정
+        if random.random() < 0.30:
             dice_result = chosen_number
         else:
-            # 패배: 유저가 선택한 숫자를 제외한 나머지 5개 숫자 중 하나로 설정
             possible_outcomes = [1, 2, 3, 4, 5, 6]
             possible_outcomes.remove(chosen_number)
             dice_result = random.choice(possible_outcomes)
-        # ▲▲▲▲▲ 수정 완료 ▲▲▲▲▲
-        
-        await log_activity(self.user.id, 'game_dice', amount=1)
 
         result_embed = None
         if chosen_number == dice_result:
-            # 승리 시, 순이익은 5배, 로그에 표시될 총 지급액은 6배로 설정
-            reward_amount = self.bet_amount * 6
-            profit = self.bet_amount * 5
-            await update_wallet(self.user, profit)
-            
+            reward_amount = self.bet_amount * 2
+            await update_wallet(self.user, self.bet_amount)
             if embed_data := await get_embed_from_db("log_dice_game_win"):
                 result_embed = format_embed_from_db(
                     embed_data, user_mention=self.user.mention,
@@ -118,7 +107,6 @@ class NumberSelectView(ui.View):
                     currency_icon=self.currency_icon
                 )
         else:
-            # 패배 시, 베팅액만큼 차감 (기존과 동일)
             await update_wallet(self.user, -self.bet_amount)
             if embed_data := await get_embed_from_db("log_dice_game_lose"):
                 result_embed = format_embed_from_db(
@@ -141,7 +129,7 @@ class NumberSelectView(ui.View):
         self.cog.active_sessions.discard(self.user.id)
         if self.message:
             try:
-                await self.message.edit(content="時間切れです。", view=None)
+                await self.message.edit(content="시간이 초과되었습니다.", view=None)
             except discord.NotFound:
                 pass
 
@@ -164,7 +152,7 @@ class DiceGamePanelView(ui.View):
     async def start_game_callback(self, interaction: discord.Interaction):
         if interaction.user.id in self.cog.active_sessions:
             await interaction.response.send_message(
-                "❌ すでにゲームをプレイ中です。", 
+                "❌ 이미 게임을 플레이 중입니다.", 
                 ephemeral=True
             )
             return
@@ -174,7 +162,6 @@ class DiceGame(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.active_sessions = set()
-        self.panel_lock = asyncio.Lock()  # ▼▼▼ [핵심 수정] 패널 재생성 Lock 추가 ▼▼▼
 
     async def register_persistent_views(self):
         view = DiceGamePanelView(self)
@@ -182,30 +169,30 @@ class DiceGame(commands.Cog):
         self.bot.add_view(view)
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_dice_game", last_game_log: Optional[discord.Embed] = None):
-        async with self.panel_lock:  # ▼▼▼ [핵심 수정] Lock을 사용하여 전체 로직을 감쌉니다 ▼▼▼
-            embed_key = "panel_dice_game"
-            
-            if panel_info := get_panel_id(panel_key):
-                if (old_channel := self.bot.get_channel(panel_info['channel_id'])) and (old_message_id := panel_info.get('message_id')):
-                    try:
-                        await (await old_channel.fetch_message(old_message_id)).delete()
-                    except (discord.NotFound, discord.Forbidden): pass
-            
-            if last_game_log:
-                try: await channel.send(embed=last_game_log)
-                except Exception as e: logger.error(f"주사위 게임 로그 메시지 전송 실패: {e}")
+        embed_key = "panel_dice_game"
+        
+        if panel_info := get_panel_id(panel_key):
+            if (old_channel := self.bot.get_channel(panel_info['channel_id'])) and (old_message_id := panel_info.get('message_id')):
+                try:
+                    await (await old_channel.fetch_message(old_message_id)).delete()
+                except (discord.NotFound, discord.Forbidden): pass
+        
+        if last_game_log:
+            try: await channel.send(embed=last_game_log)
+            except Exception as e: logger.error(f"주사위 게임 로그 메시지 전송 실패: {e}")
 
-            if not (embed_data := await get_embed_from_db(embed_key)):
-                logger.warning(f"DB에서 '{embed_key}'의 임베드 데이터를 찾을 수 없어 패널 생성을 건너뜁니다.")
-                return
+        if not (embed_data := await get_embed_from_db(embed_key)):
+            logger.warning(f"DB에서 '{embed_key}'의 임베드 데이터를 찾을 수 없어 패널 생성을 건너뜁니다.")
+            return
 
-            embed = discord.Embed.from_dict(embed_data)
-            view = DiceGamePanelView(self)
-            await view.setup_buttons()
-            
-            new_message = await channel.send(embed=embed, view=view)
-            await save_panel_id(panel_key, new_message.id, channel.id)
-            logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
-            
+        embed = discord.Embed.from_dict(embed_data)
+        view = DiceGamePanelView(self)
+        await view.setup_buttons()
+        self.bot.add_view(view)
+        
+        new_message = await channel.send(embed=embed, view=view)
+        await save_panel_id(panel_key, new_message.id, channel.id)
+        logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(DiceGame(bot))
