@@ -10,7 +10,7 @@ from typing import Optional
 
 from utils.database import (
     get_wallet, update_wallet, get_config,
-    save_panel_id, get_panel_id, get_embed_from_db, log_activity # <--- log_activity 추가
+    save_panel_id, get_panel_id, get_embed_from_db
 )
 from utils.helpers import format_embed_from_db
 
@@ -21,8 +21,8 @@ FRUIT_SYMBOLS = ['🍒', '🍊', '🍇', '🍋', '🔔']
 SPIN_ANIMATION_FRAMES = 5
 SPIN_ANIMATION_SPEED = 0.4
 
-class BetAmountModal(ui.Modal, title="ベット額入力 (スロット)"):
-    amount = ui.TextInput(label="金額 (100コイン単位)", placeholder="例: 1000", required=True)
+class BetAmountModal(ui.Modal, title="베팅 금액 입력 (슬롯)"):
+    amount = ui.TextInput(label="금액 (100코인 단위)", placeholder="예: 1000", required=True)
 
     def __init__(self, cog_instance: 'SlotMachine'):
         super().__init__(timeout=180)
@@ -33,12 +33,12 @@ class BetAmountModal(ui.Modal, title="ベット額入力 (スロット)"):
         try:
             bet_amount = int(self.amount.value)
             if bet_amount <= 0 or bet_amount % 100 != 0:
-                await interaction.response.send_message("❌ 100コイン単位の正数を入力してください。", ephemeral=True)
+                await interaction.response.send_message("❌ 100코인 단위의 양수만 입력할 수 있습니다.", ephemeral=True)
                 return
 
             wallet = await get_wallet(interaction.user.id)
             if wallet.get('balance', 0) < bet_amount:
-                await interaction.response.send_message(f"❌ 残高が不足しています。(現在の残高: {wallet.get('balance', 0):,}{self.currency_icon})", ephemeral=True)
+                await interaction.response.send_message(f"❌ 잔액이 부족합니다. (현재 잔액: {wallet.get('balance', 0):,}{self.currency_icon})", ephemeral=True)
                 return
             
             self.cog.active_sessions.add(interaction.user.id)
@@ -48,11 +48,11 @@ class BetAmountModal(ui.Modal, title="ベット額入力 (スロット)"):
             await game_view.start_game(interaction)
 
         except ValueError:
-            await interaction.response.send_message("❌ 数字のみ入力してください。", ephemeral=True)
+            await interaction.response.send_message("❌ 숫자만 입력해주세요.", ephemeral=True)
             
         except Exception as e:
             logger.error(f"슬롯 베팅 처리 중 오류: {e}", exc_info=True)
-            message_content = "❌ 処理中にエラーが発生しました。"
+            message_content = "❌ 처리 중 오류가 발생했습니다."
             if not interaction.response.is_done():
                 await interaction.response.send_message(message_content, ephemeral=True)
             else:
@@ -71,50 +71,30 @@ class SlotMachineGameView(ui.View):
         self.message: Optional[discord.InteractionMessage] = None
 
     async def start_game(self, interaction: discord.Interaction):
-        embed = self.create_embed("下のボタンでスロットを開始してください！")
+        embed = self.create_embed("아래 버튼으로 슬롯을 시작하세요!")
         await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
         self.message = await interaction.original_response()
 
     def create_embed(self, description: str) -> discord.Embed:
-        embed = discord.Embed(title="🎰 スロットマシン", description=description, color=0xFF9800)
-        embed.add_field(name="結果", value=f"**| {self.reels[0]} | {self.reels[1]} | {self.reels[2]} |**", inline=False)
-        embed.add_field(name="ベット額", value=f"`{self.bet_amount:,}`{self.currency_icon}")
-        embed.set_footer(text=f"{self.user.display_name}さんのプレイ")
+        embed = discord.Embed(title="🎰 슬롯머신", description=description, color=0xFF9800)
+        embed.add_field(name="결과", value=f"**| {self.reels[0]} | {self.reels[1]} | {self.reels[2]} |**", inline=False)
+        embed.add_field(name="베팅액", value=f"`{self.bet_amount:,}`{self.currency_icon}")
+        embed.set_footer(text=f"{self.user.display_name}님의 플레이")
         return embed
 
-    @ui.button(label="スピン！", style=discord.ButtonStyle.success, emoji="🔄")
+    @ui.button(label="스핀!", style=discord.ButtonStyle.success, emoji="🔄")
     async def spin_button(self, interaction: discord.Interaction, button: ui.Button):
         button.disabled = True
-        button.label = "回転中..."
-        await interaction.response.edit_message(embed=self.create_embed("リールが回転中です..."), view=self)
+        button.label = "회전 중..."
+        await interaction.response.edit_message(embed=self.create_embed("릴이 회전 중입니다..."), view=self)
 
-        # ▼▼▼▼▼ 핵심 수정 부분 시작 ▼▼▼▼▼
-
-        # 1. 전체 당첨 확률 조정 (예: 50% -> 40%)
-        if random.random() < 0.40:
-            win_types = ['seven', 'number', 'cherry', 'other_fruit']
-            
-            # ▼▼▼▼▼ 이 부분을 수정하세요 ▼▼▼▼▼
-            weights =   [3,       10,       5,        22] # 가중치 합계: 40
-            
+        if random.random() < 0.50:
+            win_types = ['fruit', 'number', 'seven']
+            weights = [30, 15, 5]
             chosen_win = random.choices(win_types, weights=weights, k=1)[0]
-            
-            # 3. 세분화된 당첨 종류에 따라 심볼을 결정하는 로직으로 변경
-            symbol = ''
-            if chosen_win == 'seven':
-                symbol = '7️⃣'
-            elif chosen_win == 'number':
-                symbol = '5️⃣'
-            elif chosen_win == 'cherry':
-                symbol = '🍒'
-            elif chosen_win == 'other_fruit':
-                # 'cherry'를 제외한 나머지 과일/벨 중에서 랜덤으로 선택
-                other_fruits = ['🍊', '🍇', '🍋', '🔔']
-                symbol = random.choice(other_fruits)
-            
+            symbol = {'fruit': random.choice(FRUIT_SYMBOLS), 'number': '5️⃣', 'seven': '7️⃣'}[chosen_win]
             self.final_reels = [symbol, symbol, symbol]
         else:
-            # 꽝일 경우의 로직 (기존과 동일)
             while True:
                 reels = [random.choice(REEL_SYMBOLS) for _ in range(3)]
                 if not (reels[0] == reels[1] == reels[2]):
@@ -126,21 +106,16 @@ class SlotMachineGameView(ui.View):
                 if i < 1: self.reels[0] = random.choice(REEL_SYMBOLS)
                 if i < 2: self.reels[1] = random.choice(REEL_SYMBOLS)
                 self.reels[2] = random.choice(REEL_SYMBOLS)
-                await interaction.edit_original_response(embed=self.create_embed("リールが回転中です..."))
+                await interaction.edit_original_response(embed=self.create_embed("릴이 회전 중입니다..."))
                 await asyncio.sleep(SPIN_ANIMATION_SPEED)
 
             self.reels[i] = self.final_reels[i]
-            await interaction.edit_original_response(embed=self.create_embed("リールが回転中です..."))
+            await interaction.edit_original_response(embed=self.create_embed("릴이 회전 중입니다..."))
             await asyncio.sleep(0.5)
 
         payout_rate, payout_name = self._calculate_payout()
         result_text = f"| {self.reels[0]} | {self.reels[1]} | {self.reels[2]} |"
         result_embed = None
-
-        # ▼▼▼▼▼ 이 부분을 추가하세요 ▼▼▼▼▼
-        # 게임 플레이 활동 기록
-        await log_activity(self.user.id, 'game_slot', amount=1)
-        # ▲▲▲▲▲ 추가 완료 ▲▲▲▲▲
 
         if payout_rate > 0:
             payout_amount = int(self.bet_amount * payout_rate)
@@ -175,19 +150,21 @@ class SlotMachineGameView(ui.View):
     def _calculate_payout(self) -> tuple[float, str]:
         r = self.reels
         if r[0] == r[1] == r[2]:
-            if r[0] == '7️⃣': return 7.0, "トリプルセブン"
-            if r[0] == '🍒': return 2.5, "トリプルチェリー"
-            if r[0] == '5️⃣': return 2.0, "数字揃い"
-            return 1.5, "フルーツ揃い"
+            if r[0] == '7️⃣': return 2.0, "트리플 세븐"
+            if r[0] == '5️⃣': return 1.5, "숫자 맞춤"
+            return 1.0, "과일 맞춤"
+        
+        if r.count('🍒') == 2:
+            return 0.2, "체리 보너스"
 
-        return 0.0, "ハズレ"
+        return 0.0, "꽝"
 
     async def on_timeout(self):
         self.cog.active_sessions.discard(self.user.id)
         await self.cog.update_panel_embed()
         if self.message:
             try:
-                await self.message.edit(content="時間切れです。", view=None)
+                await self.message.edit(content="시간이 초과되었습니다.", view=None)
             except discord.NotFound:
                 pass
 
@@ -197,7 +174,7 @@ class SlotMachinePanelView(ui.View):
         self.cog = cog_instance
 
         slot_button = ui.Button(
-            label="スロットマシンをプレイ",
+            label="슬롯머신 플레이",
             style=discord.ButtonStyle.success,
             emoji="🎰",
             custom_id="slot_machine_play_button"
@@ -207,11 +184,11 @@ class SlotMachinePanelView(ui.View):
 
     async def start_game_callback(self, interaction: discord.Interaction):
         if len(self.cog.active_sessions) >= self.cog.max_active_slots:
-            await interaction.response.send_message(f"❌ 全てのスロットマシンが使用中です。しばらくしてからもう一度お試しください。({len(self.cog.active_sessions)}/{self.cog.max_active_slots})", ephemeral=True)
+            await interaction.response.send_message(f"❌ 모든 슬롯머신이 사용 중입니다. 잠시 후 다시 시도해주세요. ({len(self.cog.active_sessions)}/{self.cog.max_active_slots})", ephemeral=True)
             return
 
         if interaction.user.id in self.cog.active_sessions:
-            await interaction.response.send_message("❌ すでにゲームをプレイ中です。", ephemeral=True)
+            await interaction.response.send_message("❌ 이미 게임을 플레이 중입니다.", ephemeral=True)
             return
         await interaction.response.send_modal(BetAmountModal(self.cog))
 
@@ -221,7 +198,6 @@ class SlotMachine(commands.Cog):
         self.active_sessions = set()
         self.panel_message: Optional[discord.Message] = None
         self.max_active_slots = 5
-        self.panel_lock = asyncio.Lock()  # ▼▼▼ [핵심 수정] 패널 재생성 Lock 추가 ▼▼▼
 
     async def cog_load(self):
         self.max_active_slots = int(get_config("SLOT_MAX_ACTIVE", "5").strip('"'))
@@ -248,7 +224,7 @@ class SlotMachine(commands.Cog):
 
         original_description = embed_data.get('description', '')
         current_players = len(self.active_sessions)
-        status_line = f"\n\n**[現在使用中のマシン: {current_players}/{self.max_active_slots}]**"
+        status_line = f"\n\n**[현재 사용 중인 머신: {current_players}/{self.max_active_slots}]**"
         
         new_embed = discord.Embed.from_dict(embed_data)
         new_embed.description = original_description + status_line
@@ -264,28 +240,27 @@ class SlotMachine(commands.Cog):
         self.bot.add_view(SlotMachinePanelView(self))
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_slot_machine", last_game_log: Optional[discord.Embed] = None):
-        async with self.panel_lock:  # ▼▼▼ [핵심 수정] Lock을 사용하여 전체 로직을 감쌉니다 ▼▼▼
-            if last_game_log:
-                try: await channel.send(embed=last_game_log)
-                except Exception as e: logger.error(f"슬롯머신 게임 로그 메시지 전송 실패: {e}")
+        if last_game_log:
+            try: await channel.send(embed=last_game_log)
+            except Exception as e: logger.error(f"슬롯머신 게임 로그 메시지 전송 실패: {e}")
 
-            if panel_info := get_panel_id(panel_key):
-                if (old_channel := self.bot.get_channel(panel_info['channel_id'])) and (old_message_id := panel_info.get('message_id')):
-                    try: await (await old_channel.fetch_message(old_message_id)).delete()
-                    except (discord.NotFound, discord.Forbidden): pass
+        if panel_info := get_panel_id(panel_key):
+            if (old_channel := self.bot.get_channel(panel_info['channel_id'])) and (old_message_id := panel_info.get('message_id')):
+                try: await (await old_channel.fetch_message(old_message_id)).delete()
+                except (discord.NotFound, discord.Forbidden): pass
 
-            embed_data = await get_embed_from_db(panel_key)
-            if not embed_data: return
+        embed_data = await get_embed_from_db(panel_key)
+        if not embed_data: return
 
-            embed = discord.Embed.from_dict(embed_data)
-            view = SlotMachinePanelView(self)
-            
-            new_message = await channel.send(embed=embed, view=view)
-            await save_panel_id(panel_key, new_message.id, channel.id)
-            
-            self.panel_message = new_message
-            await self.update_panel_embed()
-            logger.info(f"✅ {panel_key} パネルを正常に生成しました。(チャンネル: #{channel.name})")
-            
+        embed = discord.Embed.from_dict(embed_data)
+        view = SlotMachinePanelView(self)
+        
+        new_message = await channel.send(embed=embed, view=view)
+        await save_panel_id(panel_key, new_message.id, channel.id)
+        
+        self.panel_message = new_message
+        await self.update_panel_embed()
+        logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(SlotMachine(bot))
