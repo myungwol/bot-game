@@ -28,7 +28,7 @@ class ClaimRewardView(ui.View):
         self.cog = cog_instance
         self.exploration_id = exploration_id
 
-    @ui.button(label="報酬を受け取る", style=discord.ButtonStyle.success, emoji="🎁")
+    @ui.button(label="보상 수령", style=discord.ButtonStyle.success, emoji="🎁")
     async def claim_reward_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         await self.cog.handle_claim_reward(interaction, self.exploration_id)
@@ -67,18 +67,18 @@ class PetExplorationPanelView(ui.View):
         
         pet = await get_user_pet(interaction.user.id)
         if not pet:
-            return await interaction.followup.send("❌ 探検に送るペットがいません。", ephemeral=True)
+            return await interaction.followup.send("❌ 탐사를 보낼 펫이 없습니다.", ephemeral=True)
         if pet.get('status') == 'exploring':
-            return await interaction.followup.send("❌ ペットはすでに探検中です。", ephemeral=True)
+            return await interaction.followup.send("❌ 펫이 이미 탐사 중입니다.", ephemeral=True)
         
         locations = get_exploration_locations()
         location_data = next((loc for loc in locations if loc['location_key'] == location_key), None)
         
         if not location_data:
-            return await interaction.followup.send("❌ 無効な探検地域です。", ephemeral=True)
+            return await interaction.followup.send("❌ 유효하지 않은 탐사 지역입니다.", ephemeral=True)
 
         if pet.get('level', 0) < location_data.get('required_pet_level', 999):
-            return await interaction.followup.send(f"❌ この地域はペットレベル{location_data['required_pet_level']}以上から探検できます。", ephemeral=True)
+            return await interaction.followup.send(f"❌ 이 지역은 펫 레벨 {location_data['required_pet_level']} 이상부터 탐사할 수 있습니다.", ephemeral=True)
 
         await self.cog.start_exploration(interaction, interaction.user, location_data)
 
@@ -105,15 +105,15 @@ class Exploration(commands.Cog):
         new_exploration = await start_pet_exploration(pet['id'], user.id, location['location_key'], start_time, end_time)
 
         if not new_exploration:
-            await interaction.followup.send("❌ 探検の開始に失敗しました。もう一度お試しください。", ephemeral=True)
+            await interaction.followup.send("❌ 탐사를 시작하는 데 실패했습니다. 다시 시도해주세요.", ephemeral=True)
             return
         
         description_text = (
-            f"ペットが **{location['name']}** へ探検に出発しました。\n\n"
-            f"> 完了予定: {discord.utils.format_dt(end_time, 'R')}"
+            f"펫이 **{location['name']}**(으)로 탐사를 떠났습니다.\n\n"
+            f"> 완료 예정: {discord.utils.format_dt(end_time, 'R')}"
         )
         embed = discord.Embed(
-            title="🧭 探検開始",
+            title="🧭 탐사 시작",
             description=description_text,
             color=0x5865F2
         )
@@ -150,7 +150,7 @@ class Exploration(commands.Cog):
                 view = ClaimRewardView(self, exp['id'])
 
                 message = await thread.send(
-                    content=f"{user.mention}, ペットが探検を終えて戻ってきました！下のボタンを押して報酬を確認してください。",
+                    content=f"{user.mention}, 펫이 탐사를 마치고 돌아왔습니다! 아래 버튼을 눌러 보상을 확인하세요.",
                     view=view
                 )
                 await update_exploration_message_id(exp['id'], message.id)
@@ -164,7 +164,7 @@ class Exploration(commands.Cog):
     async def handle_claim_reward(self, interaction: discord.Interaction, exploration_id: int):
         exploration_data = await get_exploration_by_id(exploration_id)
         if not exploration_data:
-            return await interaction.followup.send("❌ 期限切れまたは無効な探検情報です。", ephemeral=True)
+            return await interaction.followup.send("❌ 만료되었거나 잘못된 탐사 정보입니다.", ephemeral=True)
         
         pet_level = exploration_data.get('pets', {}).get('level', 1)
         location = exploration_data.get('exploration_locations', {})
@@ -193,15 +193,15 @@ class Exploration(commands.Cog):
         await claim_and_end_exploration(exploration_id, exploration_data['pet_id'])
 
         reward_lines = [
-            f"✨ **経験値**: `{xp_reward:,}` XP",
-            f"🪙 **コイン**: `{coin_reward:,}` コイン"
+            f"✨ **경험치**: `{xp_reward:,}` XP",
+            f"🪙 **코인**: `{coin_reward:,}` 코인"
         ]
         if item_rewards:
-            reward_lines.append("\n**獲得アイテム:**")
+            reward_lines.append("\n**획득 아이템:**")
             for item, qty in item_rewards.items():
-                reward_lines.append(f"📦 {item}: `{qty}`個")
+                reward_lines.append(f"📦 {item}: `{qty}`개")
 
-        await interaction.followup.send(f"🎉 **探検報酬**\n\n" + "\n".join(reward_lines), ephemeral=True)
+        await interaction.followup.send(f"🎉 **탐사 보상**\n\n" + "\n".join(reward_lines), ephemeral=True)
         
         try:
             await interaction.message.delete()
@@ -252,7 +252,7 @@ class Exploration(commands.Cog):
         view = PetExplorationPanelView(self)
         new_message = await channel.send(embed=embed, view=view)
         await save_panel_id(panel_name, new_message.id, channel.id)
-        logger.info(f"✅ {panel_key} パネルを #{channel.name} チャンネルに正常に生成しました。")
+        logger.info(f"✅ {panel_key} 패널을 #{channel.name} 채널에 성공적으로 생성했습니다.")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Exploration(bot))
