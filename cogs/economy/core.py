@@ -15,7 +15,7 @@ from utils.database import (
     save_config_to_db, get_all_user_stats, log_activity, get_cooldown, set_cooldown,
     get_user_gear, load_all_data_from_db, ensure_user_gear_exists,
     load_bot_configs_from_db, delete_config_from_db, get_item_database, get_fishing_loot,
-    get_user_pet
+    get_user_pet, add_xp_to_pet_db 
 )
 from utils.helpers import format_embed_from_db
 
