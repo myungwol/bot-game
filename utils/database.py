@@ -9,8 +9,10 @@ from functools import wraps
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Callable, Any, List, Optional
 from collections import defaultdict
-from supabase import create_client, AsyncClient
 from postgrest.exceptions import APIError
+from supabase import create_client, AsyncClient
+# ▼▼▼ [수정] SystemExit 추가 ▼▼▼
+from sys import exit 
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,9 @@ try:
     logger.info("✅ Supabase 비동기 클라이언트가 성공적으로 생성되었습니다.")
 except Exception as e:
     logger.critical(f"❌ Supabase 클라이언트 생성에 실패했습니다: {e}", exc_info=True)
+    # ▼▼▼ [추가] DB 연결 실패 시 봇 즉시 종료 ▼▼▼
+    logger.critical("환경 변수(SUPABASE_URL, SUPABASE_KEY)가 올바르게 설정되었는지 확인해주세요.")
+    exit(1) # 오류 코드를 반환하며 프로세스 종료
 
 _bot_configs_cache: Dict[str, Any] = {}
 _channel_id_cache: Dict[str, int] = {}
