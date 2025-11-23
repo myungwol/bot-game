@@ -455,12 +455,11 @@ async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
     response = await supabase.table('farm_item_details').select('*').eq('item_name', item_name).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
 
-# --- ▼▼▼▼▼ 핵심 추가 시작 ▼▼▼▼▼ ---
+# ▼▼▼ [수정] 아래 add_xp_to_pet_db 함수를 이 코드로 전체 교체해주세요. ▼▼▼
 @supabase_retry_handler()
 async def add_xp_to_pet_db(user_id: int, xp_to_add: int) -> Optional[List[Dict]]:
     """
-    [최종] 펫에게 경험치를 추가하는 DB 함수를 안전하게 호출합니다.
-    정리된 DB 함수에 맞춰 user_id를 정수(int) 타입으로 전달합니다.
+    [최종 수정] 펫에게 경험치를 추가하고, 'Pet not found' 오류를 정상 처리하는 DB 함수를 안전하게 호출합니다.
     """
     if xp_to_add <= 0:
         return None
@@ -470,12 +469,18 @@ async def add_xp_to_pet_db(user_id: int, xp_to_add: int) -> Optional[List[Dict]]
             'p_user_id': user_id, 
             'p_xp_to_add': xp_to_add
         }).execute()
-        # RPC 결과는 단일 JSON 객체이므로, list가 아닌 dict를 반환하도록 처리
-        return [res.data] if res and hasattr(res, 'data') and res.data else None
+        
+        # [추가] RPC 결과가 단일 JSON 객체일 경우 리스트로 감싸서 반환 형식을 통일합니다.
+        return [res.data] if res and hasattr(res, 'data') and res.data and isinstance(res.data, dict) else None
+        
     except APIError as e:
-        logger.error(f"add_xp_to_pet_db RPC 실행 중 오류 (User: {user_id}): {e}", exc_info=True)
+        # [추가] 'Pet not found'는 예상 가능한 시나리오이므로 오류로 처리하지 않고 None을 반환합니다.
+        if 'Pet not found' in str(e.message):
+            return None
+        # [추가] 그 외의 실제 DB 오류는 로그로 남깁니다.
+        logger.error(f"add_xp_to_pet_db RPC 실행 중 예상치 못한 오류 (User: {user_id}): {e}", exc_info=True)
         return None
-
+# ▲▲▲ [수정] 완료 ▲▲▲
 # --- 펫 탐사 시스템을 위한 새로운 함수들 ---
 
 @supabase_retry_handler()
