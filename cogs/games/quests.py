@@ -145,28 +145,31 @@ class QuestView(ui.View):
         await interaction.edit_original_response(embed=embed, view=self)
 
     async def _get_weekly_progress(self) -> Dict[str, int]:
-        """현재 주의 활동량을 user_activities 테이블에서 직접 집계합니다. (캐싱 적용)"""
-        # ▼▼▼ [수정] 캐시 확인 로직 추가 ▼▼▼
-        if self.weekly_progress_cache and time.time() - self.cache_timestamp < 30: # 30초 캐시
+        """
+        [수정됨] 주간 활동량을 weekly_stats 뷰에서 직접 조회합니다.
+        이제 RPC를 여러 번 호출할 필요 없이, DB 뷰가 자동으로 계산한 값을 가져옵니다.
+        """
+        # 1. 캐시 확인 (30초)
+        if self.weekly_progress_cache and time.time() - self.cache_timestamp < 30:
             return self.weekly_progress_cache
 
-        start_utc, end_utc = get_current_week_start_end_utc()
-        
-        attendance_task = supabase.rpc('count_activity_in_range', {'p_user_id': str(self.user.id), 'p_activity_type': 'daily_check_in', 'p_start_time': start_utc, 'p_end_time': end_utc}).execute()
-        voice_task = supabase.rpc('sum_activity_in_range', {'p_user_id': str(self.user.id), 'p_activity_type': 'voice', 'p_start_time': start_utc, 'p_end_time': end_utc}).execute()
-        fishing_task = supabase.rpc('sum_activity_in_range', {'p_user_id': str(self.user.id), 'p_activity_type': 'fishing_catch', 'p_start_time': start_utc, 'p_end_time': end_utc}).execute()
-        
-        att_res, voice_res, fish_res = await asyncio.gather(attendance_task, voice_task, fishing_task)
+        try:
+            # 2. DB의 'weekly_stats' 뷰에서 내 정보 조회
+            #    이미 DB 뷰에 채팅, 도박, 낚시 등 모든 정보가 정의되어 있으므로 한 번에 가져옵니다.
+            res = await supabase.table('weekly_stats').select('*').eq('user_id', str(self.user.id)).maybe_single().execute()
+            
+            # 3. 데이터가 없으면(이번 주 활동 없음) 빈 딕셔너리 반환
+            data = res.data if res and res.data else {}
+            
+            # 4. 캐시 업데이트 및 반환
+            self.weekly_progress_cache = data
+            self.cache_timestamp = time.time()
+            return data
 
-        # ▼▼▼ [수정] 결과를 캐시에 저장 ▼▼▼
-        self.weekly_progress_cache = {
-            "check_in_count": att_res.data if att_res.data is not None else 0,
-            "voice_minutes": voice_res.data if voice_res.data is not None else 0,
-            "fishing_count": fish_res.data if fish_res.data is not None else 0
-        }
-        self.cache_timestamp = time.time()
-        return self.weekly_progress_cache
-
+        except Exception as e:
+            logger.error(f"주간 퀘스트 진행 상황 조회 중 오류: {e}", exc_info=True)
+            return {}
+            
     async def build_embed(self) -> discord.Embed:
         if self.current_tab == "daily":
             summary = await get_all_user_stats(self.user.id)
