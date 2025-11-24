@@ -389,14 +389,28 @@ class GearSelectView(ui.View):
         await interaction.response.defer()
         inventory, item_db = self.parent_view.cached_data.get("inventory", {}), get_item_database()
         options = [discord.SelectOption(label=f'{get_string("profile_view.gear_select_view.unequip_prefix", "✋")} {self.unequip_label}', value="unequip")]
+        
+        # ▼▼▼ [수정] 아래 for 루프의 필터링 조건을 변경합니다. ▼▼▼
         for name, count in inventory.items():
             item_data = item_db.get(name)
-            if item_data and item_data.get('gear_type') == self.gear_type_db:
+            
+            # 기존 조건: gear_type이 정확히 일치해야 함
+            # if item_data and item_data.get('gear_type') == self.gear_type_db:
+
+            # 새 조건: gear_type이 일치하거나, 아이템 이름에 해당 장비 타입의 이름이 포함된 경우
+            if item_data and (item_data.get('gear_type') == self.gear_type_db or self.gear_type_db in name):
                  options.append(discord.SelectOption(label=f"{name} ({count}개)", value=name, emoji=coerce_item_emoji(item_data.get('emoji'))))
-        select = ui.Select(placeholder=get_string("profile_view.gear_select_view.placeholder", "{category_name} 선택...", category_name=self.display_name), options=options); select.callback = self.select_callback; self.add_item(select)
-        back_button = ui.Button(label=get_string("profile_view.gear_select_view.back_button", "뒤로"), style=discord.ButtonStyle.grey, row=1); back_button.callback = self.back_callback; self.add_item(back_button)
+        # ▲▲▲ [수정] 완료 ▲▲▲
+
+        select = ui.Select(placeholder=get_string("profile_view.gear_select_view.placeholder", "{category_name} 선택...", category_name=self.display_name), options=options)
+        select.callback = self.select_callback
+        self.add_item(select)
+        back_button = ui.Button(label=get_string("profile_view.gear_select_view.back_button", "뒤로"), style=discord.ButtonStyle.grey, row=1)
+        back_button.callback = self.back_callback
+        self.add_item(back_button)
         embed = discord.Embed(title=get_string("profile_view.gear_select_view.embed_title", "{category_name} 변경", category_name=self.display_name), description=get_string("profile_view.gear_select_view.embed_description", "장착할 아이템을 선택하세요."), color=self.user.color)
         await interaction.edit_original_response(embed=embed, view=self)
+
     async def select_callback(self, interaction: discord.Interaction):
         selected_option = interaction.data['values'][0]
         if selected_option == "unequip": selected_item_name = self.default_item; self.parent_view.status_message = f"✅ {self.display_name}을(를) 해제했습니다."
