@@ -10,6 +10,7 @@ from typing import Optional
 from utils.database import (
     get_wallet, update_wallet, get_config, get_panel_components_from_db,
     save_panel_id, get_panel_id, get_embed_from_db
+    log_activity  # ◀◀◀ [추가] log_activity를 import 합니다.
 )
 from utils.helpers import format_embed_from_db
 
@@ -94,6 +95,10 @@ class NumberSelectView(ui.View):
             possible_outcomes = [1, 2, 3, 4, 5, 6]
             possible_outcomes.remove(chosen_number)
             dice_result = random.choice(possible_outcomes)
+
+        # ▼▼▼ [추가] 게임 참여 기록을 남깁니다. ▼▼▼
+        await log_activity(self.user.id, 'dice_game_play', amount=1)
+        # ▲▲▲ [추가] 완료 ▲▲▲
 
         result_embed = None
         if chosen_number == dice_result:
