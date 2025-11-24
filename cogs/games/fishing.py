@@ -63,8 +63,15 @@ class FishingGameView(ui.View):
 
     async def _handle_catch_logic(self) -> tuple[discord.Embed, bool, bool, bool]:
         all_loot = get_fishing_loot()
-        location_map = {"river": "강", "sea": "바다"}; current_location_name = location_map.get(self.location_type, "강")
-        base_loot = [item for item in all_loot if item.get('location_type') == current_location_name or item.get('location_type') is None]
+        
+        # ▼▼▼ [수정] location_map 제거 및 직접 비교로 변경 ▼▼▼
+        # 기존: location_map = {"river": "강", "sea": "바다"}; current_location_name = location_map.get(self.location_type, "강")
+        # 수정: self.location_type은 이미 "river" 또는 "sea"입니다. DB 데이터도 "river", "sea"이므로 그대로 사용합니다.
+        
+        # location_type이 현재 장소(river/sea)와 같거나, null인 아이템을 포함합니다.
+        base_loot = [item for item in all_loot if item.get('location_type') == self.location_type or item.get('location_type') is None]
+        # ▲▲▲ [수정] 완료 ▲▲▲
+
         rod_data = self.rod_data; rod_tier = rod_data.get('tier', 0); rod_bonus = rod_data.get('loot_bonus', 0.0)
         loot_pool = []; is_whale_catchable = is_whale_available()
         for item in base_loot:
