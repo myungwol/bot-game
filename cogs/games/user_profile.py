@@ -388,26 +388,40 @@ class GearSelectView(ui.View):
     async def setup_and_update(self, interaction: discord.Interaction):
         await interaction.response.defer()
         inventory, item_db = self.parent_view.cached_data.get("inventory", {}), get_item_database()
+        
         options = [discord.SelectOption(label=f'{get_string("profile_view.gear_select_view.unequip_prefix", "✋")} {self.unequip_label}', value="unequip")]
         
-        # ▼▼▼ [수정] 아래 for 루프의 필터링 조건을 변경합니다. ▼▼▼
         for name, count in inventory.items():
             item_data = item_db.get(name)
             
-            # 기존 조건: gear_type이 정확히 일치해야 함
-            # if item_data and item_data.get('gear_type') == self.gear_type_db:
+            # [수정된 부분] 
+            # 기존: gear_type 컬럼이 정확히 일치하는 경우에만 표시
+            # 변경: gear_type이 일치하거나, OR 아이템 이름에 '낚싯대', '곡괭이' 등의 단어가 포함된 경우에도 표시
+            if item_data:
+                is_match = False
+                # 1. DB의 장비 타입 설정과 일치하는지 확인
+                if item_data.get('gear_type') == self.gear_type_db:
+                    is_match = True
+                # 2. 아이템 이름에 장비 타입이 포함되어 있는지 확인 (예: '나무 낚싯대' 에는 '낚싯대'가 포함됨)
+                elif self.gear_type_db in name:
+                    is_match = True
+                
+                if is_match:
+                    options.append(discord.SelectOption(label=f"{name} ({count}개)", value=name, emoji=coerce_item_emoji(item_data.get('emoji'))))
 
-            # 새 조건: gear_type이 일치하거나, 아이템 이름에 해당 장비 타입의 이름이 포함된 경우
-            if item_data and (item_data.get('gear_type') == self.gear_type_db or self.gear_type_db in name):
-                 options.append(discord.SelectOption(label=f"{name} ({count}개)", value=name, emoji=coerce_item_emoji(item_data.get('emoji'))))
-        # ▲▲▲ [수정] 완료 ▲▲▲
+        # 옵션이 '해제' 하나밖에 없다면 (장착 가능한 아이템을 못 찾음)
+        if len(options) == 1:
+            # 상황에 따라 안내 메시지를 띄울 수도 있으나, 우선은 빈 목록으로 둡니다.
+            pass
 
-        select = ui.Select(placeholder=get_string("profile_view.gear_select_view.placeholder", "{category_name} 선택...", category_name=self.display_name), options=options)
+        select = ui.Select(placeholder=get_string("profile_view.gear_select_view.placeholder", "{category_name} 선택...", category_name=self.display_name), options=options[:25]) # 최대 25개 제한 안전장치 추가
         select.callback = self.select_callback
         self.add_item(select)
+        
         back_button = ui.Button(label=get_string("profile_view.gear_select_view.back_button", "뒤로"), style=discord.ButtonStyle.grey, row=1)
         back_button.callback = self.back_callback
         self.add_item(back_button)
+        
         embed = discord.Embed(title=get_string("profile_view.gear_select_view.embed_title", "{category_name} 변경", category_name=self.display_name), description=get_string("profile_view.gear_select_view.embed_description", "장착할 아이템을 선택하세요."), color=self.user.color)
         await interaction.edit_original_response(embed=embed, view=self)
 
