@@ -233,11 +233,23 @@ class QuestView(ui.View):
         else:
             stats_to_check = await self._get_weekly_progress()
         
-        progress_key_map = {"attendance": "check_in_count", "voice": "voice_minutes", "fishing": "fishing_count"}
+        # ▼▼▼ [수정] 여기에 progress_key_map을 build_embed와 동일하게 추가합니다. ▼▼▼
+        progress_key_map = {
+            "attendance": "check_in_count",
+            "voice": "voice_minutes",
+            "fishing": "fishing_count",
+            "chat": "chat_count",
+            "dice_game": "dice_game_count",
+            "slot_machine": "slot_machine_count"
+        }
+        # ▲▲▲ [수정] 완료 ▲▲▲
 
         all_quests_complete = True
         for key, quest in quests_to_check.items():
-            db_key = progress_key_map[key]
+            db_key = progress_key_map.get(key) # .get()으로 안전하게 접근
+            if not db_key:
+                all_quests_complete = False
+                break
             if stats_to_check.get(db_key, 0) < quest["goal"]:
                 all_quests_complete = False
                 break
