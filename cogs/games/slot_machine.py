@@ -11,6 +11,7 @@ from typing import Optional
 from utils.database import (
     get_wallet, update_wallet, get_config,
     save_panel_id, get_panel_id, get_embed_from_db
+    log_activity  # ◀◀◀ [추가] log_activity를 import 합니다.
 )
 from utils.helpers import format_embed_from_db
 
@@ -87,6 +88,10 @@ class SlotMachineGameView(ui.View):
         button.disabled = True
         button.label = "회전 중..."
         await interaction.response.edit_message(embed=self.create_embed("릴이 회전 중입니다..."), view=self)
+
+        # ▼▼▼ [추가] 게임 참여 기록을 남깁니다. ▼▼▼
+        await log_activity(self.user.id, 'slot_machine_play', amount=1)
+        # ▲▲▲ [추가] 완료 ▲▲▲
 
         if random.random() < 0.50:
             win_types = ['fruit', 'number', 'seven']
