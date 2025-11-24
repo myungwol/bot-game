@@ -36,11 +36,45 @@ def get_current_week_start_end_utc() -> (str, str):
     return start_of_week_utc, end_of_week_utc
 
 QUEST_REWARDS = {
-    "daily": { "attendance": {"coin": 10, "xp": 5}, "voice": {"coin": 55, "xp": 20}, "fishing": {"coin": 35, "xp": 15}, "all_complete": {"coin": 100, "xp": 50} },
-    "weekly": { "attendance": {"coin": 100, "xp": 50}, "voice": {"coin": 550, "xp": 200}, "fishing": {"coin": 350, "xp": 150}, "all_complete": {"coin": 1000, "xp": 500} }
+    "daily": {
+        "attendance": {"coin": 50, "xp": 10},
+        "chat": {"coin": 50, "xp": 20},
+        "voice": {"coin": 100, "xp": 50},
+        "dice_game": {"coin": 30, "xp": 15},
+        "slot_machine": {"coin": 30, "xp": 15},
+        "all_complete": {"coin": 200, "xp": 100} # 모든 일일 퀘스트 완료 보너스
+    },
+    "weekly": {
+        "attendance": {"coin": 300, "xp": 150},
+        "chat": {"coin": 300, "xp": 150},
+        "voice": {"coin": 600, "xp": 300},
+        "dice_game": {"coin": 200, "xp": 100},
+        "slot_machine": {"coin": 200, "xp": 100},
+        "fishing": {"coin": 250, "xp": 120},
+        "all_complete": {"coin": 1500, "xp": 750} # 모든 주간 퀘스트 완료 보너스
+    }
 }
-DAILY_QUESTS = { "attendance": {"name": "출석 체크하기", "goal": 1}, "voice": {"name": "음성 채널에 10분 참가하기", "goal": 10}, "fishing": {"name": "물고기 3마리 낚기", "goal": 3}, }
-WEEKLY_QUESTS = { "attendance": {"name": "출석 체크 5회 하기", "goal": 5}, "voice": {"name": "음성 채널에 1시간 참가하기", "goal": 60}, "fishing": {"name": "물고기 10마리 낚기", "goal": 10}, }
+
+# 새로운 일일 퀘스트 목록
+DAILY_QUESTS = {
+    "attendance": {"name": "출석 체크하기", "goal": 1},
+    "chat": {"name": "채팅 5회 입력하기", "goal": 5},
+    "voice": {"name": "음성 채널에 30분 참가하기", "goal": 30},
+    "dice_game": {"name": "주사위 게임 1회 참여하기", "goal": 1},
+    "slot_machine": {"name": "슬롯 머신 1회 참여하기", "goal": 1},
+}
+
+# 새로운 주간 퀘스트 목록
+WEEKLY_QUESTS = {
+    "attendance": {"name": "출석 체크 5회하기", "goal": 5},
+    "chat": {"name": "채팅 30회 입력하기", "goal": 30},
+    "voice": {"name": "음성 채널에 300분 참가하기", "goal": 300},
+    "dice_game": {"name": "주사위 게임 5회 참여하기", "goal": 5},
+    "slot_machine": {"name": "슬롯 머신 5회 참여하기", "goal": 5},
+    "fishing": {"name": "낚시 5회 성공하기", "goal": 5},
+}
+# ▲▲▲ [수정] 완료 ▲▲▲
+
 
 class TaskBoardView(ui.View):
     def __init__(self, cog_instance: 'Quests'):
@@ -146,12 +180,23 @@ class QuestView(ui.View):
         quests_to_show = DAILY_QUESTS if self.current_tab == "daily" else WEEKLY_QUESTS
         rewards = QUEST_REWARDS[self.current_tab]
 
-        progress_key_map = {"attendance": "check_in_count", "voice": "voice_minutes", "fishing": "fishing_count"}
+        # ▼▼▼ [수정] progress_key_map에 새로운 퀘스트 종류를 추가합니다. ▼▼▼
+        progress_key_map = {
+            "attendance": "check_in_count",
+            "voice": "voice_minutes",
+            "fishing": "fishing_count",
+            "chat": "chat_count",
+            "dice_game": "dice_game_count",
+            "slot_machine": "slot_machine_count"
+        }
+        # ▲▲▲ [수정] 완료 ▲▲▲
         
         embed.title = "📅 일일 퀘스트" if self.current_tab == "daily" else "🗓️ 주간 퀘스트"
         all_complete = True
         for key, quest in quests_to_show.items():
-            db_key = progress_key_map[key]
+            db_key = progress_key_map.get(key) # .get()으로 안전하게 접근
+            if not db_key: continue # 맵에 없으면 건너뜀
+
             current = stats_to_show.get(db_key, 0)
             goal = quest["goal"]
             reward_coin = rewards.get(key, {}).get("coin", 0)
