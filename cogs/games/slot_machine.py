@@ -8,11 +8,13 @@ import random
 import asyncio
 from typing import Optional
 
+# ▼▼▼ [수정] 아래 from ... import ... 구문을 수정해주세요. ▼▼▼
 from utils.database import (
     get_wallet, update_wallet, get_config,
-    save_panel_id, get_panel_id, get_embed_from_db
-    log_activity  # ◀◀◀ [추가] log_activity를 import 합니다.
+    save_panel_id, get_panel_id, get_embed_from_db,
+    log_activity # 'log_activity'를 괄호 안에 추가합니다.
 )
+# ▲▲▲ [수정] 완료 ▲▲▲
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
