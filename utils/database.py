@@ -459,29 +459,33 @@ async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
 @supabase_retry_handler()
 async def add_xp_to_pet_db(user_id: int, xp_to_add: int) -> Optional[List[Dict]]:
     """
-    [최종 수정] 펫에게 경험치를 추가하고, 'Pet not found' 오류를 정상 처리하는 DB 함수를 안전하게 호출합니다.
+    [최종 수정] 펫에게 경험치를 추가하고, 'Pet not found' 오류를 정상 처리하며, user_id를 int로 전달하는 DB 함수를 안전하게 호출합니다.
     """
     if xp_to_add <= 0:
         return None
     try:
-        # DB 함수가 이제 bigint를 받으므로, user_id를 int 타입 그대로 전달합니다.
+        # [수정] DB 함수가 bigint를 받을 수 있도록 user_id를 int 타입 그대로 전달합니다.
         res = await supabase.rpc('add_xp_to_pet', {
             'p_user_id': user_id, 
             'p_xp_to_add': xp_to_add
         }).execute()
-        
-        # [추가] RPC 결과가 단일 JSON 객체일 경우 리스트로 감싸서 반환 형식을 통일합니다.
-        return [res.data] if res and hasattr(res, 'data') and res.data and isinstance(res.data, dict) else None
-        
+
+        # [수정] RPC 결과가 단일 JSON 객체일 경우 리스트로 감싸서 반환 형식을 통일합니다.
+        if res and hasattr(res, 'data') and res.data and isinstance(res.data, dict):
+             # 'Pet not found' 메시지는 성공이 아니므로 None을 반환합니다.
+            if res.data.get('message') == 'Pet not found':
+                return None
+            return [res.data]
+        return None # 그 외의 경우 (데이터가 없거나 리스트가 아닌 경우 등)
+
     except APIError as e:
-        # [추가] 'Pet not found'는 예상 가능한 시나리오이므로 오류로 처리하지 않고 None을 반환합니다.
+        # 'Pet not found'는 예상 가능한 시나리오이므로 오류로 처리하지 않고 None을 반환합니다.
         if 'Pet not found' in str(e.message):
             return None
-        # [추가] 그 외의 실제 DB 오류는 로그로 남깁니다.
+        # 그 외의 실제 DB 오류는 로그로 남깁니다.
         logger.error(f"add_xp_to_pet_db RPC 실행 중 예상치 못한 오류 (User: {user_id}): {e}", exc_info=True)
         return None
 # ▲▲▲ [수정] 완료 ▲▲▲
-# --- 펫 탐사 시스템을 위한 새로운 함수들 ---
 
 @supabase_retry_handler()
 async def start_pet_exploration(pet_id: int, user_id: int, location_key: str, start_time: datetime, end_time: datetime) -> Optional[Dict]:
