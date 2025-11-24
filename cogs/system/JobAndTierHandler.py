@@ -311,6 +311,9 @@ class JobAndTierHandler(commands.Cog):
             all_tier_role_ids = {get_id(tier['role_key']) for tier in tier_roles_config if get_id(tier['role_key'])}
             target_role_id = get_id(target_role_key)
 
+            # [추가] '해몽'(기본 주민) 역할의 ID를 가져옵니다. 절대 제거하면 안 되는 역할입니다.
+            resident_role_id = get_id('role_resident')
+
             roles_to_add = []
             roles_to_remove = []
 
@@ -319,7 +322,11 @@ class JobAndTierHandler(commands.Cog):
                     roles_to_add.append(role_obj)
             
             for role in member.roles:
+                # 기존 등급 역할 목록에 있고, 이번에 받을 역할이 아닌 경우 제거 대상
                 if role.id in all_tier_role_ids and role.id != target_role_id:
+                    # [추가] 단, '해몽' 역할(role_resident)이라면 절대 제거하지 않고 건너뜁니다.
+                    if resident_role_id and role.id == resident_role_id:
+                        continue
                     roles_to_remove.append(role)
             
             if roles_to_add: await member.add_roles(*roles_to_add, reason=f"레벨 {level} 달성, 등급 역할 부여")
@@ -327,6 +334,7 @@ class JobAndTierHandler(commands.Cog):
 
         except Exception as e:
             logger.error(f"{member.name}님의 등급 역할 업데이트 처리 중 오류가 발생했습니다: {e}", exc_info=True)
+    # ▲▲▲ [수정] 완료 ▲▲▲
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(JobAndTierHandler(bot))
