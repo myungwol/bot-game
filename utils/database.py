@@ -455,7 +455,6 @@ async def get_farmable_item_info(item_name: str) -> Optional[Dict[str, Any]]:
     response = await supabase.table('farm_item_details').select('*').eq('item_name', item_name).maybe_single().execute()
     return response.data if response and hasattr(response, 'data') else None
 
-# ▼▼▼ [수정] 아래 add_xp_to_pet_db 함수를 이 코드로 전체 교체해주세요. ▼▼▼
 @supabase_retry_handler()
 async def add_xp_to_pet_db(user_id: int, xp_to_add: int) -> Optional[List[Dict]]:
     """
@@ -479,11 +478,19 @@ async def add_xp_to_pet_db(user_id: int, xp_to_add: int) -> Optional[List[Dict]]
         return None # 그 외의 경우 (데이터가 없거나 리스트가 아닌 경우 등)
 
     except APIError as e:
-        # 'Pet not found'는 예상 가능한 시나리오이므로 오류로 처리하지 않고 None을 반환합니다.
-        if 'Pet not found' in str(e.message):
+        # ▼▼▼ [수정] 에러 메시지 확인 로직을 강화합니다. ▼▼▼
+        # APIError의 details나 message 속성을 문자열로 변환하여 확인합니다.
+        error_msg = str(e)
+        if 'Pet not found' in error_msg:
+            # 펫이 없는 것은 정상적인 상황이므로 조용히 무시하고 None 반환
             return None
+        
         # 그 외의 실제 DB 오류는 로그로 남깁니다.
-        logger.error(f"add_xp_to_pet_db RPC 실행 중 예상치 못한 오류 (User: {user_id}): {e}", exc_info=True)
+        logger.error(f"add_xp_to_pet_db RPC 실행 중 예상치 못한 오류 (User: {user_id}): {error_msg}", exc_info=True)
+        return None
+    except Exception as e:
+        # APIError 외의 다른 예외도 잡아냅니다.
+        logger.error(f"add_xp_to_pet_db 실행 중 알 수 없는 오류 (User: {user_id}): {e}", exc_info=True)
         return None
 # ▲▲▲ [수정] 완료 ▲▲▲
 
