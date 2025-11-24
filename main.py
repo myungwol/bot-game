@@ -56,13 +56,13 @@ class MyBot(commands.Bot):
         await load_all_data_from_db()
         logger.info("✅ 데이터베이스 로드가 완료되었습니다. 영구 View 등록을 시작합니다.")
 
-        # 3. 데이터 로드가 완료된 후에 영구 View를 등록합니다.
         cogs_with_persistent_views = [
             "UserProfile", "Fishing", "Commerce", "Atm",
             "DiceGame", "SlotMachine", "RPSGame",
             "Quests", "Farm", "Mining", "Blacksmith", 
             "Trade", "Cooking", "FriendInvite", "PetSystem",
-            "Exploration", "BossRaid", "PetPvP" # <--- 'PetPvP' 추가
+            "Exploration", "BossRaid", "PetPvP",
+            "LevelSystem" # ◀◀◀ [추가] 여기에 'LevelSystem'을 꼭 추가해야 합니다!
         ]
          
         registered_views_count = 0
