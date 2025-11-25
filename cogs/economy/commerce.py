@@ -18,7 +18,7 @@ from utils.database import (
     get_aquarium, get_fishing_loot, sell_fish_from_db,
     save_panel_id, get_panel_id, get_embed_from_db,
     update_inventory, update_wallet, get_farm_data, expand_farm_db,
-    save_config_to_db
+    save_config_to_db, log_activity
 )
 from utils.helpers import format_embed_from_db
 
@@ -314,6 +314,7 @@ class SellFishView(ShopViewBase):
         total_price = sum(self.fish_data_map[val]['price'] for val in select_menu.values)
         try:
             await sell_fish_from_db(str(self.user.id), fish_ids_to_sell, total_price)
+            await log_activity(self.user.id, "sell_fish", amount=len(fish_ids_to_sell), coin_earned=total_price)
             new_balance = (await get_wallet(self.user.id)).get('balance', 0)
             success_message = f"✅ 물고기 {len(fish_ids_to_sell)}마리를 `{total_price:,}`{self.currency_icon}에 판매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
             msg = await interaction.followup.send(success_message, ephemeral=True); asyncio.create_task(delete_after(msg, 10))
