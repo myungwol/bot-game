@@ -418,25 +418,33 @@ class EconomyCore(commands.Cog):
             logs_to_insert = [{'user_id': str(uid), 'activity_type': 'voice', 'amount': 1, 'xp_earned': xp_per_minute} for uid in users_to_reward]
             if logs_to_insert:
                 await supabase.table('user_activities').insert(logs_to_insert).execute()
+                
+                # [유저 경험치] 기존 방식 유지 (supabase.rpc 직접 호출 -> APIResponse 반환)
                 xp_update_tasks = [supabase.rpc('add_xp', {'p_user_id': str(uid), 'p_xp_to_add': xp_per_minute, 'p_source': 'voice'}).execute() for uid in users_to_reward]
-                pet_xp_tasks = [supabase.rpc('add_xp_to_pet', {'p_user_id': str(uid), 'p_xp_to_add': xp_per_minute}).execute() for uid in users_to_reward]
+                
+                # [펫 경험치] 수정된 함수 사용 (add_xp_to_pet_db 호출 -> List[Dict] 반환)
+                pet_xp_tasks = [add_xp_to_pet_db(uid, xp_per_minute) for uid in users_to_reward]
                 
                 xp_results, pet_xp_results = await asyncio.gather(
                     asyncio.gather(*xp_update_tasks, return_exceptions=True),
                     asyncio.gather(*pet_xp_tasks, return_exceptions=True)
                 )
 
+                # 유저 레벨업 처리
                 for i, result in enumerate(xp_results):
                     if not isinstance(result, Exception) and hasattr(result, 'data') and result.data:
                         user = self.bot.get_user(list(users_to_reward)[i])
                         if user: await self.handle_level_up_event(user, result.data)
                 
+                # 펫 레벨업 처리
                 for i, result in enumerate(pet_xp_results):
                     user_id_from_list = list(users_to_reward)[i]
-                    if not isinstance(result, Exception) and hasattr(result, 'data') and result.data and result.data[0].get('leveled_up'):
+                    # [수정됨] result는 APIResponse가 아니라 순수한 List[Dict] 혹은 None 입니다.
+                    # 따라서 hasattr(result, 'data') 검사를 하지 않고 바로 리스트로 취급합니다.
+                    if not isinstance(result, Exception) and result and isinstance(result, list) and result[0].get('leveled_up'):
                         await save_config_to_db(f"pet_levelup_request_{user_id_from_list}", {
-                            "new_level": result.data[0].get('new_level'),
-                            "points_awarded": result.data[0].get('points_awarded')
+                            "new_level": result[0].get('new_level'),
+                            "points_awarded": result[0].get('points_awarded')
                         })
                         await save_config_to_db(f"pet_evolution_check_request_{user_id_from_list}", time.time())
         except Exception as e:
