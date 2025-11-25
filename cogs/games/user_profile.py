@@ -16,9 +16,9 @@ from utils.database import (
     get_item_database, get_config, get_string, BARE_HANDS,
     supabase, get_farm_data, expand_farm_db, update_inventory, save_config_to_db,
     open_boss_chest, update_wallet, add_xp_to_pet_db,
-    clear_user_ability_cache # 💡 clear_user_ability_cache 임포트 추가
+    clear_user_ability_cache 
 )
-import time # time 모듈 import 추가
+import time
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
@@ -71,46 +71,36 @@ class ItemUsageView(ui.View):
 
         item_type = item_info.get("type")
 
-        # --- 보물 상자 열기 로직 강화 ---
         if item_type == "open_chest":
             await interaction.response.defer()
             
-            # 1. 수정된 open_boss_chest 함수를 호출합니다.
             chest_contents = await open_boss_chest(self.user.id, item_name)
             
             if not chest_contents:
                 self.parent_view.status_message = "❌ 열 수 있는 보물 상자가 없거나, 처리 중 오류가 발생했습니다."
                 return await self.on_back(interaction, reload_data=True)
 
-            # 2. 결과 메시지를 생성하고 표시합니다.
             coins = chest_contents.get("coins", 0)
             xp = chest_contents.get("xp", 0)
             items = chest_contents.get("items", {})
 
-            # 2-1. 획득한 재화를 DB에 실제로 반영합니다.
             db_tasks = []
-
-            # ▼▼▼▼▼ 핵심 추가 ▼▼▼▼▼
-            # 사용한 보물 상자 아이템을 인벤토리에서 1개 차감합니다.
             db_tasks.append(update_inventory(self.user.id, item_name, -1))
-            # ▲▲▲▲▲ 핵심 추가 ▲▲▲▲▲
 
             if coins > 0:
                 db_tasks.append(update_wallet(self.user, coins))
+            
+
+            pet_xp_result = None
             if xp > 0:
-                # 새로 만든 헬퍼 함수를 사용하여 안전하게 펫 경험치 추가
-                db_tasks.append(add_xp_to_pet_db(self.user.id, xp))
+
+                pet_xp_result = await add_xp_to_pet_db(self.user.id, xp)
+
             for item, qty in items.items():
                 db_tasks.append(update_inventory(self.user.id, item, qty))
             
-            # DB 작업 실행
-            results = await asyncio.gather(*db_tasks, return_exceptions=True)
-            for res in results:
-                if isinstance(res, Exception):
-                    logger.error(f"보물상자 보상 지급 중 DB 오류 발생: {res}", exc_info=True)
-                    # 여기서 사용자에게 오류 메시지를 보내는 것을 고려할 수 있습니다.
+            await asyncio.gather(*db_tasks, return_exceptions=True)
                     
-            # 2-2. 결과 임베드를 생성합니다.
             reward_lines = []
             if coins > 0: reward_lines.append(f"🪙 **코인**: `{coins:,}`")
             if xp > 0: reward_lines.append(f"✨ **펫 경험치**: `{xp:,}`")
@@ -126,12 +116,17 @@ class ItemUsageView(ui.View):
             )
             await interaction.followup.send(embed=result_embed, ephemeral=True)
             
-            # 3. 펫 레벨업/진화 확인 요청을 DB에 보냅니다.
-            if xp > 0:
-                await save_config_to_db(f"pet_levelup_request_{self.user.id}", {"xp_added": xp, "timestamp": time.time()})
-                await save_config_to_db(f"pet_evolution_check_request_{self.user.id}", time.time())
+            if pet_xp_result and isinstance(pet_xp_result, list) and pet_xp_result[0].get('leveled_up'):
+                new_level = pet_xp_result[0].get('new_level')
+                points = pet_xp_result[0].get('points_awarded')
+                
+                if pet_cog := self.parent_view.cog.bot.get_cog("PetSystem"):
+
+                    await pet_cog.notify_pet_level_up(self.user.id, new_level, points)
+
+                    if thread := self.parent_view.cog.bot.get_channel(pet_xp_result[0].get('thread_id')): 
+                         await pet_cog.check_and_process_auto_evolution({self.user.id})
             
-            # 4. 프로필 UI를 새로고침하여 상자가 사라진 것을 반영합니다.
             return await self.on_back(interaction, reload_data=True)
         if item_type == "consume_with_reason":
             if selected_item_key == "role_item_event_priority":
