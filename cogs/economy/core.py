@@ -304,27 +304,22 @@ class EconomyCore(commands.Cog):
             logs_to_process = list(self.chat_cache)
             self.chat_cache.clear()
 
-        # ▼▼▼ [핵심 수정] 아래 로직 전체를 교체합니다. ▼▼▼
         try:
-            # 1. 먼저 활동 기록을 DB에 삽입합니다. 이 작업이 가장 중요합니다.
+            # 1. 활동 기록 DB 삽입
             for log in logs_to_process:
                 log['user_id'] = str(log['user_id'])
             await supabase.table('user_activities').insert(logs_to_process).execute()
 
         except Exception as e:
-            # 만약 활동 기록 삽입 자체에 실패하면, 데이터를 다시 캐시에 넣고 다음 루프에서 재시도합니다.
             logger.error(f"활동 기록 DB 삽입 중 심각한 오류 발생. 데이터를 캐시로 복원합니다: {e}", exc_info=True)
             async with self._cache_lock:
                 self.chat_cache.extend(logs_to_process)
-            return # 이번 루프는 여기서 종료합니다.
+            return
 
-        # 2. 활동 기록 삽입이 성공한 후에만 경험치/코인 보상 지급을 시도합니다.
-        # 이 블록에서 오류가 발생해도 데이터는 이미 저장되었으므로 중복되지 않습니다.
         try:
             user_chat_counts = defaultdict(int)
             for log in logs_to_process:
                 user_id = int(log['user_id'])
-                # amount 키가 없는 경우를 대비하여 기본값 0을 사용
                 user_chat_counts[user_id] += log.get('amount', 0)
 
             for user_id, count in user_chat_counts.items():
@@ -338,20 +333,26 @@ class EconomyCore(commands.Cog):
                     if xp_res.data:
                         await self.handle_level_up_event(user, xp_res.data)
                     
-                    # 펫 경험치 지급
+                    # ▼▼▼ [수정된 부분 시작] 펫 경험치 지급 및 즉시 알림 ▼▼▼
                     pet_xp_res = await add_xp_to_pet_db(user_id, xp_to_add)
+                    
+                    # 결과가 있고, 레벨업이 확인되면 즉시 알림 전송
                     if pet_xp_res and pet_xp_res[0].get('leveled_up'):
-                        await save_config_to_db(f"pet_levelup_request_{user_id}", {
-                            "new_level": pet_xp_res[0].get('new_level'),
-                            "points_awarded": pet_xp_res[0].get('points_awarded')
-                        })
-                        await save_config_to_db(f"pet_evolution_check_request_{user_id}", time.time())
+                        new_level = pet_xp_res[0].get('new_level')
+                        points = pet_xp_res[0].get('points_awarded')
+                        
+                        # PetSystem Cog를 가져와서 직접 호출
+                        if pet_cog := self.bot.get_cog("PetSystem"):
+                            await pet_cog.notify_pet_level_up(user_id, new_level, points)
+                            
+                            # 진화 조건 체크 (선택 사항)
+                            await pet_cog.check_and_process_auto_evolution({user_id})
+                    # ▲▲▲ [수정된 부분 끝] ▲▲▲
 
-                # 채팅 횟수 달성 보상
+                # 채팅 횟수 달성 보상 로직 (기존 코드 유지)
                 stats = await get_all_user_stats(user_id)
                 daily_stats = stats.get('daily', {})
                 if daily_stats.get('chat_count', 0) >= self.chat_message_requirement:
-                    # 오늘 이미 보상을 받았는지 확인
                     reward_res = await supabase.table('user_activities').select('id', count='exact').eq('user_id', str(user_id)).eq('activity_type', 'reward_chat').gte('created_at', datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat()).execute()
                     if reward_res.count == 0:
                         reward = random.randint(*self.chat_reward_range)
@@ -360,9 +361,7 @@ class EconomyCore(commands.Cog):
                         await self.log_coin_activity(user, reward, f"채팅 {self.chat_message_requirement}회 달성")
 
         except Exception as e:
-            # 보상 지급 중 오류가 발생하더라도, 이미 로그는 저장되었으므로 오류만 기록하고 넘어갑니다.
             logger.error(f"활동 로그 보상 지급 중 오류 발생: {e}", exc_info=True)
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -400,6 +399,8 @@ class EconomyCore(commands.Cog):
 
         try:
             xp_per_minute = self.xp_from_voice
+            
+            # 코인 보상 (10분마다) 로직 (기존 코드 유지)
             for user_id in users_to_reward:
                 user = self.bot.get_user(user_id)
                 if not user: continue
@@ -419,10 +420,8 @@ class EconomyCore(commands.Cog):
             if logs_to_insert:
                 await supabase.table('user_activities').insert(logs_to_insert).execute()
                 
-                # [유저 경험치] 기존 방식 유지 (supabase.rpc 직접 호출 -> APIResponse 반환)
+                # 유저 XP 및 펫 XP 지급 (병렬 처리)
                 xp_update_tasks = [supabase.rpc('add_xp', {'p_user_id': str(uid), 'p_xp_to_add': xp_per_minute, 'p_source': 'voice'}).execute() for uid in users_to_reward]
-                
-                # [펫 경험치] 수정된 함수 사용 (add_xp_to_pet_db 호출 -> List[Dict] 반환)
                 pet_xp_tasks = [add_xp_to_pet_db(uid, xp_per_minute) for uid in users_to_reward]
                 
                 xp_results, pet_xp_results = await asyncio.gather(
@@ -436,17 +435,26 @@ class EconomyCore(commands.Cog):
                         user = self.bot.get_user(list(users_to_reward)[i])
                         if user: await self.handle_level_up_event(user, result.data)
                 
-                # 펫 레벨업 처리
+                # ▼▼▼ [수정된 부분 시작] 펫 레벨업 처리 및 즉시 알림 ▼▼▼
+                pet_cog = self.bot.get_cog("PetSystem")
+                users_list = list(users_to_reward) # 인덱스로 접근하기 위해 리스트로 변환
+
                 for i, result in enumerate(pet_xp_results):
-                    user_id_from_list = list(users_to_reward)[i]
-                    # [수정됨] result는 APIResponse가 아니라 순수한 List[Dict] 혹은 None 입니다.
-                    # 따라서 hasattr(result, 'data') 검사를 하지 않고 바로 리스트로 취급합니다.
+                    user_id_from_list = users_list[i]
+                    
+                    # result는 [dict] 형태 혹은 None입니다.
                     if not isinstance(result, Exception) and result and isinstance(result, list) and result[0].get('leveled_up'):
-                        await save_config_to_db(f"pet_levelup_request_{user_id_from_list}", {
-                            "new_level": result[0].get('new_level'),
-                            "points_awarded": result[0].get('points_awarded')
-                        })
-                        await save_config_to_db(f"pet_evolution_check_request_{user_id_from_list}", time.time())
+                        if pet_cog:
+                            new_level = result[0].get('new_level')
+                            points = result[0].get('points_awarded')
+                            
+                            # 펫 시스템 Cog를 통해 즉시 알림 전송
+                            await pet_cog.notify_pet_level_up(user_id_from_list, new_level, points)
+                            
+                            # 진화 조건 체크 (선택)
+                            await pet_cog.check_and_process_auto_evolution({user_id_from_list})
+                # ▲▲▲ [수정된 부분 끝] ▲▲▲
+
         except Exception as e:
             logger.error(f"[음성 활동 추적] 순찰 중 오류 발생: {e}", exc_info=True)
         finally:
