@@ -82,7 +82,15 @@ class FishingGameView(ui.View):
         
         xp_to_add = get_config("GAME_CONFIG", {}).get("XP_FROM_FISHING", 20)
         await log_activity(self.player.id, 'fishing_catch', xp_earned=xp_to_add)
-        res = await supabase.rpc('add_xp', {'p_user_id': self.player.id, 'p_xp_to_add': xp_to_add, 'p_source': 'fishing'}).execute()
+        
+        # ▼▼▼ [수정] self.player.id -> str(self.player.id) 로 변환 ▼▼▼
+        res = await supabase.rpc('add_xp', {
+            'p_user_id': str(self.player.id),  # 정수를 문자열로 변환하여 전달
+            'p_xp_to_add': xp_to_add, 
+            'p_source': 'fishing'
+        }).execute()
+        # ▲▲▲ [수정 완료] ▲▲▲
+        
         if res.data: await self.fishing_cog.handle_level_up_event(self.player, res.data)
 
         user_abilities = await get_user_abilities(self.player.id); rare_up_bonus = 0.2 if 'fish_rare_up_2' in user_abilities else 0.0
