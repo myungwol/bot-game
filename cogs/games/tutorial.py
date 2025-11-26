@@ -53,23 +53,21 @@ class TutorialView(ui.View):
         if interaction.user.id != self.user.id:
             return await interaction.response.send_message("❌ 본인의 튜토리얼만 확인할 수 있습니다.", ephemeral=True)
 
-        # [수정] 버튼 처리를 위해 defer 먼저 호출
-        await interaction.response.defer(ephemeral=True)
-
         # DB 상태 재확인
         current_data = await self.cog.get_user_tutorial(self.user.id)
         db_step = current_data.get('current_step', 1)
         db_completed = current_data.get('is_completed', False)
 
-        # 1. 이미 완료된 경우
+        # 1. 이미 완료된 경우 (응답 전이므로 edit_message 사용)
         if db_completed:
             await self.disable_button(interaction, "모두 완료됨")
             return await interaction.followup.send("🎉 이미 모든 튜토리얼을 완료하셨습니다!", ephemeral=True)
         
-        # 2. 이미 보상을 받은 경우 (단계 불일치)
+        # 2. 이미 보상을 받은 경우 (응답 전이므로 edit_message 사용)
         if db_step > self.step:
             self.step = db_step
             next_step_info = TUTORIAL_STEPS.get(self.step, {})
+            
             await self.disable_button(interaction, f"{self.step-1}단계 완료됨")
             return await interaction.followup.send(
                  f"✅ 이미 완료된 단계입니다. 다음 단계로 진행해주세요.\n"
@@ -81,28 +79,21 @@ class TutorialView(ui.View):
         passed = await self.cog.check_step_condition(self.user, self.step)
         
         if passed:
-            # 보상 지급 (DB 처리만 수행)
+            # 보상 지급 로직 등 시간이 걸리므로 여기서 defer 수행
+            await interaction.response.defer(ephemeral=True)
+            
+            # 보상 지급 (DB 처리)
             success = await self.cog.process_reward(self.user, self.step)
             if not success:
                 return await interaction.followup.send("❌ 보상 지급 중 오류가 발생했습니다.", ephemeral=True)
 
-            # [핵심] 버튼 비활성화 (메시지 수정)
-            await self.disable_button(interaction, f"{self.step}단계 완료됨")
-
-            # 완료 메시지 및 다음 단계 안내
-            info = TUTORIAL_STEPS.get(self.step)
-            
-            embed = discord.Embed(title=f"🎉 튜토리얼 {self.step}단계 완료!", description=f"보상으로 **{info['reward_txt']}**을(를) 받았습니다.", color=0x2ECC71)
-            
+            # [핵심] defer가 호출된 상태이므로 edit_original_response 사용
             self.step += 1
-            is_finished = self.step > len(TUTORIAL_STEPS)
+            await self.disable_button(interaction, f"{self.step-1}단계 완료됨", content=f"🎉 **{self.step-1}단계 완료!** 다음 단계로 진행하세요.")
 
-            if is_finished:
-                embed.description += "\n\n🏆 **모든 튜토리얼을 마쳤습니다! 진정한 서버의 일원이 되신 것을 환영합니다.**"
-                await interaction.followup.send(embed=embed, ephemeral=True)
-            else:
+            # 다음 단계 안내
+            if self.step <= len(TUTORIAL_STEPS):
                 next_info = TUTORIAL_STEPS.get(self.step, {})
-                await interaction.followup.send(embed=embed, ephemeral=True)
                 await interaction.followup.send(
                     f"➡️ **다음 단계 ({self.step}/{len(TUTORIAL_STEPS)})**\n"
                     f"**목표:** {next_info.get('title')}\n"
@@ -110,11 +101,14 @@ class TutorialView(ui.View):
                     f"ℹ️ *'내 튜토리얼 보기' 버튼을 다시 눌러 갱신된 내용을 확인하세요.*",
                     ephemeral=True
                 )
+            else:
+                await interaction.followup.send("🏆 **모든 튜토리얼을 마쳤습니다! 진정한 서버의 일원이 되신 것을 환영합니다.**", ephemeral=True)
         else:
+            # 아직 달성 못함 (메시지 전송만)
             current_info = TUTORIAL_STEPS.get(self.step, {})
-            await interaction.followup.send(f"❌ 아직 조건을 달성하지 못했습니다.\n**목표:** {current_info.get('desc')}", ephemeral=True)
+            await interaction.response.send_message(f"❌ 아직 조건을 달성하지 못했습니다.\n**목표:** {current_info.get('desc')}", ephemeral=True)
 
-    async def disable_button(self, interaction: discord.Interaction, label: str):
+    async def disable_button(self, interaction: discord.Interaction, label: str, content: Optional[str] = None):
         """현재 View의 버튼을 비활성화하고 메시지를 업데이트합니다."""
         for item in self.children:
             item.disabled = True
@@ -122,8 +116,18 @@ class TutorialView(ui.View):
             item.style = discord.ButtonStyle.secondary
         
         try:
-            # 상호작용이 일어난 '해당 메시지'를 직접 수정
-            await interaction.message.edit(view=self)
+            # 이미 defer 되었거나 응답이 된 상태라면 edit_original_response 사용
+            if interaction.response.is_done():
+                if content:
+                    await interaction.edit_original_response(content=content, view=self)
+                else:
+                    await interaction.edit_original_response(view=self)
+            # 아직 응답하지 않은 상태라면 response.edit_message 사용
+            else:
+                if content:
+                    await interaction.response.edit_message(content=content, view=self)
+                else:
+                    await interaction.response.edit_message(view=self)
         except Exception as e:
             logger.warning(f"튜토리얼 버튼 비활성화 실패: {e}")
 
@@ -214,6 +218,7 @@ class TutorialSystem(commands.Cog):
             elif step == 18: # 전직
                 res = await supabase.table('user_jobs').select('job_id').eq('user_id', str(uid)).execute()
                 has_job = (res.data and len(res.data) > 0) if res else False
+                
                 lvl_res = await supabase.table('user_levels').select('level').eq('user_id', str(uid)).single().execute()
                 return (lvl_res.data['level'] >= 50 and has_job) if lvl_res.data else False
         except Exception as e:
@@ -222,7 +227,6 @@ class TutorialSystem(commands.Cog):
         return False
 
     async def process_reward(self, user: discord.Member, step: int) -> bool:
-        """보상을 지급하고 DB 단계를 업데이트합니다. (UI 처리 없음)"""
         info = TUTORIAL_STEPS.get(step)
         reward = info.get('reward', {})
         
@@ -300,7 +304,6 @@ class TutorialSystem(commands.Cog):
         view = ui.View(timeout=None)
         check_button = ui.Button(label="내 튜토리얼 보기", style=discord.ButtonStyle.primary, emoji="🧭", custom_id="open_tutorial_status")
         
-        # 패널 버튼 콜백 (register_persistent_views와 동일하게)
         async def open_status(interaction: discord.Interaction):
             await interaction.response.defer(ephemeral=True)
             data = await self.get_user_tutorial(interaction.user.id)
