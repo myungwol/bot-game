@@ -56,8 +56,25 @@ class TutorialView(ui.View):
 
         await interaction.response.defer(ephemeral=True)
         
-        if self.is_completed:
+        # ▼▼▼ [핵심 수정] DB에서 최신 진행 상황을 다시 조회하여 중복 수령 방지 ▼▼▼
+        current_data = await self.cog.get_user_tutorial(self.user.id)
+        current_step_db = current_data.get('current_step', 1)
+        is_completed_db = current_data.get('is_completed', False)
+
+        if is_completed_db:
             return await interaction.followup.send("🎉 이미 모든 튜토리얼을 완료하셨습니다!", ephemeral=True)
+        
+        # View의 단계보다 DB의 단계가 더 높다면, 이미 보상을 받은 상태임
+        if current_step_db > self.step:
+             # View의 상태를 최신화하고 안내 메시지 전송
+             self.step = current_step_db
+             next_step_info = TUTORIAL_STEPS.get(self.step, {})
+             return await interaction.followup.send(
+                 f"✅ 이미 완료된 단계입니다. 다음 단계로 진행해주세요.\n"
+                 f"**현재 목표 ({self.step}단계):** {next_step_info.get('title')}", 
+                 ephemeral=True
+             )
+        # ▲▲▲ [수정 완료] ▲▲▲
 
         # 조건 검사
         passed = await self.cog.check_step_condition(self.user, self.step)
@@ -65,6 +82,8 @@ class TutorialView(ui.View):
         if passed:
             # 보상 지급 및 단계 상승
             await self.cog.complete_step(interaction, self.user, self.step)
+            # 완료 후 View의 단계도 업데이트 (메모리 상)
+            self.step += 1
         else:
             # 실패 메시지
             current_info = TUTORIAL_STEPS.get(self.step, {})
