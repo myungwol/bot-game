@@ -50,72 +50,59 @@ class TutorialView(ui.View):
 
     @ui.button(label="진행 상황 확인 & 보상 받기", style=discord.ButtonStyle.success, emoji="✅", custom_id="check_tutorial_progress")
     async def check_progress(self, interaction: discord.Interaction, button: ui.Button):
-        # 본인 확인
         if interaction.user.id != self.user.id:
             return await interaction.response.send_message("❌ 본인의 튜토리얼만 확인할 수 있습니다.", ephemeral=True)
 
-        # DB에서 최신 상태 다시 확인 (중복 수령 방지)
+        # [수정] 버튼 처리를 위해 defer 먼저 호출
+        await interaction.response.defer(ephemeral=True)
+
+        # DB 상태 재확인
         current_data = await self.cog.get_user_tutorial(self.user.id)
         db_step = current_data.get('current_step', 1)
         db_completed = current_data.get('is_completed', False)
 
-        # 1. 이미 모든 튜토리얼을 완료한 경우
+        # 1. 이미 완료된 경우
         if db_completed:
-            # 버튼 비활성화 및 메시지 수정
-            for item in self.children:
-                item.disabled = True
-                item.label = "모두 완료됨"
-                item.style = discord.ButtonStyle.secondary
-            await interaction.response.edit_message(view=self)
+            await self.disable_button(interaction, "모두 완료됨")
             return await interaction.followup.send("🎉 이미 모든 튜토리얼을 완료하셨습니다!", ephemeral=True)
         
-        # 2. 이미 보상을 받은 단계인 경우 (중복 클릭 방지)
+        # 2. 이미 보상을 받은 경우 (단계 불일치)
         if db_step > self.step:
             self.step = db_step
             next_step_info = TUTORIAL_STEPS.get(self.step, {})
-            
-            # 버튼 비활성화 및 메시지 수정
-            for item in self.children:
-                item.disabled = True
-                item.label = "이미 완료됨"
-                item.style = discord.ButtonStyle.secondary
-            
-            await interaction.response.edit_message(content=f"✅ {self.step-1}단계는 이미 완료되었습니다.", view=self)
-            
+            await self.disable_button(interaction, f"{self.step-1}단계 완료됨")
             return await interaction.followup.send(
                  f"✅ 이미 완료된 단계입니다. 다음 단계로 진행해주세요.\n"
                  f"**현재 목표 ({self.step}단계):** {next_step_info.get('title', '없음')}", 
                  ephemeral=True
             )
 
-        # 3. 조건 검사 및 보상 지급 시도
+        # 3. 조건 검사
         passed = await self.cog.check_step_condition(self.user, self.step)
         
         if passed:
-            # [핵심] 먼저 defer를 호출하여 응답 시간을 확보합니다.
-            await interaction.response.defer(ephemeral=True)
-            
-            # 보상 지급 및 DB 업데이트
-            await self.cog.complete_step(interaction, self.user, self.step)
-            
-            # 보상 지급 성공 후, 버튼 비활성화 및 메시지 수정
-            self.step += 1
-            for item in self.children: 
-                item.disabled = True
-                item.label = "완료됨"
-                item.style = discord.ButtonStyle.secondary
-            
-            try:
-                # defer를 했으므로 edit_original_response 대신 message.edit 사용
-                # (상호작용 메시지는 Ephemeral이라 message.edit이 안 될 수 있으므로 edit_original_response 사용 권장하지만,
-                # 여기서는 View가 붙어있는 원본 메시지를 수정해야 함 -> interaction.message.edit)
-                await interaction.message.edit(content=f"🎉 **{self.step-1}단계 완료!** 다음 단계로 진행하세요.", view=self)
-            except Exception as e:
-                logger.warning(f"튜토리얼 완료 메시지 수정 실패: {e}")
+            # 보상 지급 (DB 처리만 수행)
+            success = await self.cog.process_reward(self.user, self.step)
+            if not success:
+                return await interaction.followup.send("❌ 보상 지급 중 오류가 발생했습니다.", ephemeral=True)
 
-            # 다음 단계 안내 메시지 전송
-            if self.step <= len(TUTORIAL_STEPS):
+            # [핵심] 버튼 비활성화 (메시지 수정)
+            await self.disable_button(interaction, f"{self.step}단계 완료됨")
+
+            # 완료 메시지 및 다음 단계 안내
+            info = TUTORIAL_STEPS.get(self.step)
+            
+            embed = discord.Embed(title=f"🎉 튜토리얼 {self.step}단계 완료!", description=f"보상으로 **{info['reward_txt']}**을(를) 받았습니다.", color=0x2ECC71)
+            
+            self.step += 1
+            is_finished = self.step > len(TUTORIAL_STEPS)
+
+            if is_finished:
+                embed.description += "\n\n🏆 **모든 튜토리얼을 마쳤습니다! 진정한 서버의 일원이 되신 것을 환영합니다.**"
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            else:
                 next_info = TUTORIAL_STEPS.get(self.step, {})
+                await interaction.followup.send(embed=embed, ephemeral=True)
                 await interaction.followup.send(
                     f"➡️ **다음 단계 ({self.step}/{len(TUTORIAL_STEPS)})**\n"
                     f"**목표:** {next_info.get('title')}\n"
@@ -124,9 +111,22 @@ class TutorialView(ui.View):
                     ephemeral=True
                 )
         else:
-            # 조건 미달성 시 (버튼 유지)
             current_info = TUTORIAL_STEPS.get(self.step, {})
-            await interaction.response.send_message(f"❌ 아직 조건을 달성하지 못했습니다.\n**목표:** {current_info.get('desc')}", ephemeral=True)
+            await interaction.followup.send(f"❌ 아직 조건을 달성하지 못했습니다.\n**목표:** {current_info.get('desc')}", ephemeral=True)
+
+    async def disable_button(self, interaction: discord.Interaction, label: str):
+        """현재 View의 버튼을 비활성화하고 메시지를 업데이트합니다."""
+        for item in self.children:
+            item.disabled = True
+            item.label = label
+            item.style = discord.ButtonStyle.secondary
+        
+        try:
+            # 상호작용이 일어난 '해당 메시지'를 직접 수정
+            await interaction.message.edit(view=self)
+        except Exception as e:
+            logger.warning(f"튜토리얼 버튼 비활성화 실패: {e}")
+
 class TutorialSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -136,28 +136,16 @@ class TutorialSystem(commands.Cog):
         self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙")
 
     async def get_user_tutorial(self, user_id: int) -> Dict:
-        """
-        유저의 튜토리얼 진행 정보를 DB에서 가져옵니다.
-        DB 오류 발생 시 안전하게 기본값을 반환합니다.
-        """
         try:
             res = await supabase.table('user_tutorials').select('*').eq('user_id', str(user_id)).maybe_single().execute()
+            if res and res.data: return res.data
             
-            if res and res.data:
-                return res.data
-            
-            # 데이터가 없으면 생성 시도. .select() 제거됨
             init_res = await supabase.table('user_tutorials').insert({'user_id': str(user_id), 'current_step': 1}).execute()
+            if init_res and init_res.data: return init_res.data[0]
             
-            if init_res and init_res.data:
-                return init_res.data[0]
-            
-            # insert 후 데이터가 반환되지 않았을 경우 (드문 케이스)
             return {'user_id': str(user_id), 'current_step': 1, 'is_completed': False}
-
         except Exception as e:
             logger.error(f"튜토리얼 정보 조회 중 DB 오류 발생 (User: {user_id}): {e}", exc_info=True)
-            # DB 연결 실패 시 봇이 멈추지 않도록 기본값 반환
             return {'user_id': str(user_id), 'current_step': 1, 'is_completed': False}
 
     async def check_step_condition(self, user: discord.Member, step: int) -> bool:
@@ -166,161 +154,118 @@ class TutorialSystem(commands.Cog):
             if step == 1: # 출석체크
                 stats = await get_all_user_stats(uid)
                 return stats.get('daily', {}).get('check_in_count', 0) > 0
-            
-            elif step == 2: # 소지품 확인
-                return True
-            
+            elif step == 2: return True # 소지품 확인
             elif step == 3: # 주사위 게임
                 res = await supabase.table('user_activities').select('count', count='exact').eq('user_id', str(uid)).eq('activity_type', 'dice_game_play').execute()
                 return (res.count or 0) > 0 if res else False
-            
             elif step == 4: # 슬롯머신
                 res = await supabase.table('user_activities').select('count', count='exact').eq('user_id', str(uid)).eq('activity_type', 'slot_machine_play').execute()
                 return (res.count or 0) > 0 if res else False
-            
-            elif step == 5: # 일일 퀘스트 완료 (보상 수령 여부 확인)
+            elif step == 5: # 일일 퀘스트
                 today_str = datetime.now(timezone(timedelta(hours=9))).strftime('%Y-%m-%d')
-                cooldown_key = f"quest_claimed_daily_all_{today_str}"
-                return await get_cooldown(uid, cooldown_key) > 0
-            
-            elif step == 6: # 레벨 확인
-                return True
-            
-            elif step == 7: # 낚싯대 구매 및 장착
+                return await get_cooldown(uid, f"quest_claimed_daily_all_{today_str}") > 0
+            elif step == 6: return True # 레벨 확인
+            elif step == 7: # 낚싯대 구매/장착
                 gear = await get_user_gear(user)
                 return gear.get('rod') and gear.get('rod') != "맨손"
-            
-            elif step == 8: # 낚시 후 판매
-                act_fish = await supabase.table('user_activities').select('count', count='exact').eq('user_id', str(uid)).eq('activity_type', 'fishing_catch').execute()
-                act_sell = await supabase.table('user_activities').select('count', count='exact').eq('user_id', str(uid)).eq('activity_type', 'sell_fish').execute()
-                fish_count = (act_fish.count or 0) if act_fish else 0
-                sell_count = (act_sell.count or 0) if act_sell else 0
-                return fish_count > 0 and sell_count > 0
-            
-            elif step == 9: # 괭이, 물뿌리개, 호박 씨앗 구매
+            elif step == 8: # 낚시 판매
+                fish = await supabase.table('user_activities').select('count', count='exact').eq('user_id', str(uid)).eq('activity_type', 'fishing_catch').execute()
+                sell = await supabase.table('user_activities').select('count', count='exact').eq('user_id', str(uid)).eq('activity_type', 'sell_fish').execute()
+                return ((fish.count or 0) > 0) and ((sell.count or 0) > 0)
+            elif step == 9: # 농사 도구 구매
                 inv = await get_inventory(user)
-                has_hoe = any('괭이' in name for name in inv.keys()) 
                 gear = await get_user_gear(user)
-                has_hoe_equipped = '괭이' in gear.get('hoe', '')
-                
-                has_can = any('물뿌리개' in name for name in inv.keys())
-                has_can_equipped = '물뿌리개' in gear.get('watering_can', '')
-                
+                has_hoe = any('괭이' in k for k in inv) or '괭이' in gear.get('hoe', '')
+                has_can = any('물뿌리개' in k for k in inv) or '물뿌리개' in gear.get('watering_can', '')
                 has_seed = inv.get('호박 씨앗', 0) > 0
-                
-                return (has_hoe or has_hoe_equipped) and (has_can or has_can_equipped) and has_seed
-            
-            elif step == 10: # 농장 생성 및 파종
+                return has_hoe and has_can and has_seed
+            elif step == 10: # 농장 파종
                 farm = await get_farm_data(uid)
                 if not farm: return False
-                plots = farm.get('farm_plots', [])
-                for plot in plots:
-                    if plot['state'] == 'planted':
-                        return True
+                for plot in farm.get('farm_plots', []):
+                    if plot['state'] == 'planted': return True
                 return False
-            
-            elif step == 11: # 광산 입장
+            elif step == 11: # 광산
                 res = await supabase.table('user_activities').select('count', count='exact').eq('user_id', str(uid)).eq('activity_type', 'mining').execute()
                 return (res.count or 0) > 0 if res else False
-            
-            elif step == 12: # 대장간 업그레이드
+            elif step == 12: # 대장간
                 res = await supabase.table('blacksmith_upgrades').select('count', count='exact').eq('user_id', str(uid)).execute()
-                count = (res.count or 0) if res else 0
-                if count > 0: return True
-                
+                if (res.count or 0) > 0: return True
                 gear = await get_user_gear(user)
                 for g in gear.values():
-                    if any(x in g for x in ['구리', '철', '금', '다이아']):
-                        return True
+                    if any(x in g for x in ['구리', '철', '금', '다이아']): return True
                 return False
-            
             elif step == 13: # 펫 부화
                 res = await supabase.table('pets').select('count', count='exact').eq('user_id', str(uid)).execute()
                 return (res.count or 0) > 0 if res else False
-            
             elif step == 14: # 주간 퀘스트
                 now = datetime.now(timezone(timedelta(hours=9)))
-                start_of_week = now - timedelta(days=now.weekday())
-                week_str = start_of_week.strftime('%Y-%m-%d')
-                cooldown_key = f"quest_claimed_weekly_all_{week_str}"
-                return await get_cooldown(uid, cooldown_key) > 0
-            
+                week_str = (now - timedelta(days=now.weekday())).strftime('%Y-%m-%d')
+                return await get_cooldown(uid, f"quest_claimed_weekly_all_{week_str}") > 0
             elif step == 15: # 펫 탐사
                 res = await supabase.table('pet_explorations').select('count', count='exact').eq('user_id', str(uid)).execute()
                 return (res.count or 0) > 0 if res else False
-            
             elif step == 16: # 부엌 생성
                 res = await supabase.table('user_settings').select('kitchen_thread_id').eq('user_id', str(uid)).maybe_single().execute()
                 return res.data and res.data.get('kitchen_thread_id') is not None if res else False
-            
-            elif step == 17: # 호박죽 요리
+            elif step == 17: # 호박죽
                 inv = await get_inventory(user)
                 return inv.get('호박죽', 0) > 0
-            
-            elif step == 18: # 레벨 50 및 전직
+            elif step == 18: # 전직
                 res = await supabase.table('user_jobs').select('job_id').eq('user_id', str(uid)).execute()
                 has_job = (res.data and len(res.data) > 0) if res else False
-                
                 lvl_res = await supabase.table('user_levels').select('level').eq('user_id', str(uid)).single().execute()
-                level = lvl_res.data['level'] if lvl_res and lvl_res.data else 1
-                
-                return level >= 50 and has_job
-
+                return (lvl_res.data['level'] >= 50 and has_job) if lvl_res.data else False
         except Exception as e:
-            logger.error(f"튜토리얼 조건 검사 중 오류 (Step {step}, User {uid}): {e}", exc_info=True)
+            logger.error(f"튜토리얼 조건 검사 중 오류 (Step {step}): {e}")
             return False
-        
         return False
 
-    async def complete_step(self, interaction: discord.Interaction, user: discord.Member, step: int):
+    async def process_reward(self, user: discord.Member, step: int) -> bool:
+        """보상을 지급하고 DB 단계를 업데이트합니다. (UI 처리 없음)"""
         info = TUTORIAL_STEPS.get(step)
         reward = info.get('reward', {})
         
-        # 보상 지급 로직 (이전과 동일)
-        if coin := reward.get('coin'): await update_wallet(user, coin)
-        if xp := reward.get('xp'):
-            if pet_cog := self.bot.get_cog("PetSystem"): await supabase.rpc('add_xp', {'p_user_id': str(user.id), 'p_xp_to_add': xp}).execute()
-        if items := reward.get('item'):
-            for name, qty in items.items(): await update_inventory(user.id, name, qty)
-        if role_key := reward.get('role'):
-            if role_id := get_id(role_key):
-                role = user.guild.get_role(role_id)
-                if role: 
-                    try: await user.add_roles(role)
-                    except: pass
-
-        # DB 업데이트 (이전과 동일)
-        next_step = step + 1
-        is_finished = next_step > len(TUTORIAL_STEPS)
         try:
+            if coin := reward.get('coin'): await update_wallet(user, coin)
+            if xp := reward.get('xp'):
+                if pet_cog := self.bot.get_cog("PetSystem"): await supabase.rpc('add_xp', {'p_user_id': str(user.id), 'p_xp_to_add': xp}).execute()
+            if items := reward.get('item'):
+                for name, qty in items.items(): await update_inventory(user.id, name, qty)
+            if role_key := reward.get('role'):
+                if role_id := get_id(role_key):
+                    role = user.guild.get_role(role_id)
+                    if role: 
+                        try: await user.add_roles(role)
+                        except: pass
+
+            next_step = step + 1
+            is_finished = next_step > len(TUTORIAL_STEPS)
+            
             await supabase.table('user_tutorials').update({
                 'current_step': next_step,
                 'is_completed': is_finished,
                 'last_updated': datetime.now(timezone.utc).isoformat()
             }).eq('user_id', str(user.id)).execute()
+            
+            return True
         except Exception as e:
-            logger.error(f"튜토리얼 단계 업데이트 실패: {e}")
-            return
+            logger.error(f"튜토리얼 보상 지급 실패 (User {user.id}, Step {step}): {e}")
+            return False
 
-        # 완료 축하 메시지 (followup으로 전송)
-        embed = discord.Embed(title=f"🎉 튜토리얼 {step}단계 완료!", description=f"보상으로 **{info['reward_txt']}**을(를) 받았습니다.", color=0x2ECC71)
-        if is_finished: embed.description += "\n\n🏆 **모든 튜토리얼을 마쳤습니다! 진정한 서버의 일원이 되신 것을 환영합니다.**"
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        
     async def register_persistent_views(self):
-        # 영구 View 등록
         view = ui.View(timeout=None)
-        # 기본 버튼을 가진 뷰를 등록합니다.
         check_button = ui.Button(label="내 튜토리얼 보기", style=discord.ButtonStyle.primary, emoji="🧭", custom_id="open_tutorial_status")
         
         async def open_status_callback(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
             data = await self.get_user_tutorial(interaction.user.id)
             step = data['current_step']
             is_completed = data['is_completed']
             
             if is_completed:
                 embed = discord.Embed(title="🏆 튜토리얼 완료", description="모든 과정을 마치셨습니다. 즐거운 서버 생활 되세요!", color=0xFFD700)
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
                 return
 
             step_info = TUTORIAL_STEPS.get(step, {})
@@ -329,12 +274,11 @@ class TutorialSystem(commands.Cog):
             embed.add_field(name=f"🎁 보상", value=step_info.get('reward_txt'), inline=False)
             
             status_view = TutorialView(self, interaction.user, data)
-            await interaction.response.send_message(embed=embed, view=status_view, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=status_view, ephemeral=True)
 
         check_button.callback = open_status_callback
         view.add_item(check_button)
         self.bot.add_view(view)
-        
         logger.info("✅ 튜토리얼 시스템의 영구 View가 성공적으로 등록되었습니다.")
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_tutorial", **kwargs):
@@ -356,17 +300,16 @@ class TutorialSystem(commands.Cog):
         view = ui.View(timeout=None)
         check_button = ui.Button(label="내 튜토리얼 보기", style=discord.ButtonStyle.primary, emoji="🧭", custom_id="open_tutorial_status")
         
-        # 콜백 함수는 register_persistent_views와 동일하게 구성해야 view persistence가 작동합니다.
-        # 여기서는 뷰 객체 자체를 동일하게 재생성하는 것이 좋습니다.
-        # 위에서 register_persistent_views에서 사용하는 뷰 구조와 동일하게 만들어줍니다.
+        # 패널 버튼 콜백 (register_persistent_views와 동일하게)
         async def open_status(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
             data = await self.get_user_tutorial(interaction.user.id)
             step = data['current_step']
             is_completed = data['is_completed']
             
             if is_completed:
                 embed = discord.Embed(title="🏆 튜토리얼 완료", description="모든 과정을 마치셨습니다. 즐거운 서버 생활 되세요!", color=0xFFD700)
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
                 return
 
             step_info = TUTORIAL_STEPS.get(step, {})
@@ -375,7 +318,7 @@ class TutorialSystem(commands.Cog):
             embed.add_field(name=f"🎁 보상", value=step_info.get('reward_txt'), inline=False)
             
             status_view = TutorialView(self, interaction.user, data)
-            await interaction.response.send_message(embed=embed, view=status_view, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=status_view, ephemeral=True)
 
         check_button.callback = open_status
         view.add_item(check_button)
