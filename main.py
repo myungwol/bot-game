@@ -62,7 +62,7 @@ class MyBot(commands.Bot):
             "Quests", "Farm", "Mining", "Blacksmith", 
             "Trade", "Cooking", "FriendInvite", "PetSystem",
             "Exploration", "BossRaid", "PetPvP",
-            "LevelSystem" # ◀◀◀ [추가] 여기에 'LevelSystem'을 꼭 추가해야 합니다!
+            "LevelSystem", "TutorialSystem"
         ]
          
         registered_views_count = 0
