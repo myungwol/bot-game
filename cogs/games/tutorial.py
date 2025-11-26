@@ -50,45 +50,55 @@ class TutorialView(ui.View):
 
     @ui.button(label="진행 상황 확인 & 보상 받기", style=discord.ButtonStyle.success, emoji="✅", custom_id="check_tutorial_progress")
     async def check_progress(self, interaction: discord.Interaction, button: ui.Button):
+        # 본인 확인
         if interaction.user.id != self.user.id:
             return await interaction.response.send_message("❌ 본인의 튜토리얼만 확인할 수 있습니다.", ephemeral=True)
 
-        # 여기서 defer를 하지 않고, 조건 검증 후에 처리합니다.
-        # defer를 하면 이후에 message edit이 까다로울 수 있습니다.
-        
-        # DB 상태 확인
+        # DB에서 최신 상태 다시 확인 (중복 수령 방지)
         current_data = await self.cog.get_user_tutorial(self.user.id)
         db_step = current_data.get('current_step', 1)
         db_completed = current_data.get('is_completed', False)
 
+        # 1. 이미 모든 튜토리얼을 완료한 경우
         if db_completed:
-            await interaction.response.send_message("🎉 이미 모든 튜토리얼을 완료하셨습니다!", ephemeral=True)
-            # 완료되었으므로 버튼 비활성화
-            for item in self.children: item.disabled = True
-            await interaction.message.edit(view=self)
-            return
+            # 버튼 비활성화 및 메시지 수정
+            for item in self.children:
+                item.disabled = True
+                item.label = "모두 완료됨"
+                item.style = discord.ButtonStyle.secondary
+            await interaction.response.edit_message(view=self)
+            return await interaction.followup.send("🎉 이미 모든 튜토리얼을 완료하셨습니다!", ephemeral=True)
         
+        # 2. 이미 보상을 받은 단계인 경우 (중복 클릭 방지)
         if db_step > self.step:
             self.step = db_step
             next_step_info = TUTORIAL_STEPS.get(self.step, {})
-            await interaction.response.send_message(
+            
+            # 버튼 비활성화 및 메시지 수정
+            for item in self.children:
+                item.disabled = True
+                item.label = "이미 완료됨"
+                item.style = discord.ButtonStyle.secondary
+            
+            await interaction.response.edit_message(content=f"✅ {self.step-1}단계는 이미 완료되었습니다.", view=self)
+            
+            return await interaction.followup.send(
                  f"✅ 이미 완료된 단계입니다. 다음 단계로 진행해주세요.\n"
                  f"**현재 목표 ({self.step}단계):** {next_step_info.get('title', '없음')}", 
                  ephemeral=True
             )
-            # 버튼 비활성화 (새 창을 열도록 유도)
-            for item in self.children: item.disabled = True
-            await interaction.message.edit(content=f"✅ {self.step-1}단계 완료됨", view=self)
-            return
 
-        # 조건 검사
+        # 3. 조건 검사 및 보상 지급 시도
         passed = await self.cog.check_step_condition(self.user, self.step)
         
         if passed:
-            await interaction.response.defer(ephemeral=True) # 보상 지급 등 시간이 걸릴 수 있으므로 여기서 defer
+            # [핵심] 먼저 defer를 호출하여 응답 시간을 확보합니다.
+            await interaction.response.defer(ephemeral=True)
+            
+            # 보상 지급 및 DB 업데이트
             await self.cog.complete_step(interaction, self.user, self.step)
             
-            # [핵심 수정] 보상 지급 후, 원래 메시지의 버튼을 비활성화하고 완료 메시지로 수정
+            # 보상 지급 성공 후, 버튼 비활성화 및 메시지 수정
             self.step += 1
             for item in self.children: 
                 item.disabled = True
@@ -96,12 +106,14 @@ class TutorialView(ui.View):
                 item.style = discord.ButtonStyle.secondary
             
             try:
-                # 상호작용했던 원래 메시지(패널)를 수정
+                # defer를 했으므로 edit_original_response 대신 message.edit 사용
+                # (상호작용 메시지는 Ephemeral이라 message.edit이 안 될 수 있으므로 edit_original_response 사용 권장하지만,
+                # 여기서는 View가 붙어있는 원본 메시지를 수정해야 함 -> interaction.message.edit)
                 await interaction.message.edit(content=f"🎉 **{self.step-1}단계 완료!** 다음 단계로 진행하세요.", view=self)
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"튜토리얼 완료 메시지 수정 실패: {e}")
 
-            # 다음 단계 안내
+            # 다음 단계 안내 메시지 전송
             if self.step <= len(TUTORIAL_STEPS):
                 next_info = TUTORIAL_STEPS.get(self.step, {})
                 await interaction.followup.send(
@@ -112,9 +124,9 @@ class TutorialView(ui.View):
                     ephemeral=True
                 )
         else:
+            # 조건 미달성 시 (버튼 유지)
             current_info = TUTORIAL_STEPS.get(self.step, {})
             await interaction.response.send_message(f"❌ 아직 조건을 달성하지 못했습니다.\n**목표:** {current_info.get('desc')}", ephemeral=True)
-
 class TutorialSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
