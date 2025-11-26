@@ -56,25 +56,24 @@ class TutorialView(ui.View):
 
         await interaction.response.defer(ephemeral=True)
         
-        # ▼▼▼ [핵심 수정] DB에서 최신 진행 상황을 다시 조회하여 중복 수령 방지 ▼▼▼
+        # DB에서 최신 상태 다시 확인 (중복 수령 방지)
         current_data = await self.cog.get_user_tutorial(self.user.id)
-        current_step_db = current_data.get('current_step', 1)
-        is_completed_db = current_data.get('is_completed', False)
+        db_step = current_data.get('current_step', 1)
+        db_completed = current_data.get('is_completed', False)
 
-        if is_completed_db:
+        if db_completed:
+            self.is_completed = True
             return await interaction.followup.send("🎉 이미 모든 튜토리얼을 완료하셨습니다!", ephemeral=True)
         
-        # View의 단계보다 DB의 단계가 더 높다면, 이미 보상을 받은 상태임
-        if current_step_db > self.step:
-             # View의 상태를 최신화하고 안내 메시지 전송
-             self.step = current_step_db
-             next_step_info = TUTORIAL_STEPS.get(self.step, {})
-             return await interaction.followup.send(
-                 f"✅ 이미 완료된 단계입니다. 다음 단계로 진행해주세요.\n"
-                 f"**현재 목표 ({self.step}단계):** {next_step_info.get('title')}", 
-                 ephemeral=True
-             )
-        # ▲▲▲ [수정 완료] ▲▲▲
+        # 만약 View의 단계보다 DB 단계가 높다면, 이미 보상을 받은 것임.
+        if db_step > self.step:
+            self.step = db_step # View 상태 동기화
+            next_step_info = TUTORIAL_STEPS.get(self.step, {})
+            return await interaction.followup.send(
+                f"✅ 이미 완료된 단계입니다. 다음 단계로 진행해주세요.\n"
+                f"**현재 목표 ({self.step}단계):** {next_step_info.get('title', '없음')}", 
+                ephemeral=True
+            )
 
         # 조건 검사
         passed = await self.cog.check_step_condition(self.user, self.step)
@@ -82,8 +81,21 @@ class TutorialView(ui.View):
         if passed:
             # 보상 지급 및 단계 상승
             await self.cog.complete_step(interaction, self.user, self.step)
-            # 완료 후 View의 단계도 업데이트 (메모리 상)
+            
+            # 완료 후 View 상태 업데이트
             self.step += 1
+            if self.step > len(TUTORIAL_STEPS):
+                self.is_completed = True
+                
+            # 다음 단계 정보 보여주기
+            if not self.is_completed:
+                next_info = TUTORIAL_STEPS.get(self.step, {})
+                await interaction.followup.send(
+                    f"➡️ **다음 단계 ({self.step}/{len(TUTORIAL_STEPS)})**\n"
+                    f"**목표:** {next_info.get('title')}\n"
+                    f"**내용:** {next_info.get('desc')}",
+                    ephemeral=True
+                )
         else:
             # 실패 메시지
             current_info = TUTORIAL_STEPS.get(self.step, {})
@@ -276,9 +288,6 @@ class TutorialSystem(commands.Cog):
         
         await interaction.followup.send(embed=embed, ephemeral=True)
         
-        # 패널 갱신
-        await self.regenerate_panel(interaction.channel)
-
     async def register_persistent_views(self):
         # 영구 View 등록
         view = ui.View(timeout=None)
