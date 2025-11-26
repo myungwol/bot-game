@@ -50,56 +50,70 @@ class TutorialView(ui.View):
 
     @ui.button(label="진행 상황 확인 & 보상 받기", style=discord.ButtonStyle.success, emoji="✅", custom_id="check_tutorial_progress")
     async def check_progress(self, interaction: discord.Interaction, button: ui.Button):
-        # 본인 확인
         if interaction.user.id != self.user.id:
             return await interaction.response.send_message("❌ 본인의 튜토리얼만 확인할 수 있습니다.", ephemeral=True)
 
-        await interaction.response.defer(ephemeral=True)
+        # 여기서 defer를 하지 않고, 조건 검증 후에 처리합니다.
+        # defer를 하면 이후에 message edit이 까다로울 수 있습니다.
         
-        # DB에서 최신 상태 다시 확인 (중복 수령 방지)
+        # DB 상태 확인
         current_data = await self.cog.get_user_tutorial(self.user.id)
         db_step = current_data.get('current_step', 1)
         db_completed = current_data.get('is_completed', False)
 
         if db_completed:
-            self.is_completed = True
-            return await interaction.followup.send("🎉 이미 모든 튜토리얼을 완료하셨습니다!", ephemeral=True)
+            await interaction.response.send_message("🎉 이미 모든 튜토리얼을 완료하셨습니다!", ephemeral=True)
+            # 완료되었으므로 버튼 비활성화
+            for item in self.children: item.disabled = True
+            await interaction.message.edit(view=self)
+            return
         
-        # 만약 View의 단계보다 DB 단계가 높다면, 이미 보상을 받은 것임.
         if db_step > self.step:
-            self.step = db_step # View 상태 동기화
+            self.step = db_step
             next_step_info = TUTORIAL_STEPS.get(self.step, {})
-            return await interaction.followup.send(
-                f"✅ 이미 완료된 단계입니다. 다음 단계로 진행해주세요.\n"
-                f"**현재 목표 ({self.step}단계):** {next_step_info.get('title', '없음')}", 
-                ephemeral=True
+            await interaction.response.send_message(
+                 f"✅ 이미 완료된 단계입니다. 다음 단계로 진행해주세요.\n"
+                 f"**현재 목표 ({self.step}단계):** {next_step_info.get('title', '없음')}", 
+                 ephemeral=True
             )
+            # 버튼 비활성화 (새 창을 열도록 유도)
+            for item in self.children: item.disabled = True
+            await interaction.message.edit(content=f"✅ {self.step-1}단계 완료됨", view=self)
+            return
 
         # 조건 검사
         passed = await self.cog.check_step_condition(self.user, self.step)
         
         if passed:
-            # 보상 지급 및 단계 상승
+            await interaction.response.defer(ephemeral=True) # 보상 지급 등 시간이 걸릴 수 있으므로 여기서 defer
             await self.cog.complete_step(interaction, self.user, self.step)
             
-            # 완료 후 View 상태 업데이트
+            # [핵심 수정] 보상 지급 후, 원래 메시지의 버튼을 비활성화하고 완료 메시지로 수정
             self.step += 1
-            if self.step > len(TUTORIAL_STEPS):
-                self.is_completed = True
-                
-            # 다음 단계 정보 보여주기
-            if not self.is_completed:
+            for item in self.children: 
+                item.disabled = True
+                item.label = "완료됨"
+                item.style = discord.ButtonStyle.secondary
+            
+            try:
+                # 상호작용했던 원래 메시지(패널)를 수정
+                await interaction.message.edit(content=f"🎉 **{self.step-1}단계 완료!** 다음 단계로 진행하세요.", view=self)
+            except:
+                pass
+
+            # 다음 단계 안내
+            if self.step <= len(TUTORIAL_STEPS):
                 next_info = TUTORIAL_STEPS.get(self.step, {})
                 await interaction.followup.send(
                     f"➡️ **다음 단계 ({self.step}/{len(TUTORIAL_STEPS)})**\n"
                     f"**목표:** {next_info.get('title')}\n"
-                    f"**내용:** {next_info.get('desc')}",
+                    f"**내용:** {next_info.get('desc')}\n\n"
+                    f"ℹ️ *'내 튜토리얼 보기' 버튼을 다시 눌러 갱신된 내용을 확인하세요.*",
                     ephemeral=True
                 )
         else:
-            # 실패 메시지
             current_info = TUTORIAL_STEPS.get(self.step, {})
-            await interaction.followup.send(f"❌ 아직 조건을 달성하지 못했습니다.\n**목표:** {current_info.get('desc')}", ephemeral=True)
+            await interaction.response.send_message(f"❌ 아직 조건을 달성하지 못했습니다.\n**목표:** {current_info.get('desc')}", ephemeral=True)
 
 class TutorialSystem(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -250,15 +264,12 @@ class TutorialSystem(commands.Cog):
         info = TUTORIAL_STEPS.get(step)
         reward = info.get('reward', {})
         
-        # 보상 지급
-        if coin := reward.get('coin'):
-            await update_wallet(user, coin)
+        # 보상 지급 로직 (이전과 동일)
+        if coin := reward.get('coin'): await update_wallet(user, coin)
         if xp := reward.get('xp'):
-            if pet_cog := self.bot.get_cog("PetSystem"):
-                await supabase.rpc('add_xp', {'p_user_id': str(user.id), 'p_xp_to_add': xp}).execute()
+            if pet_cog := self.bot.get_cog("PetSystem"): await supabase.rpc('add_xp', {'p_user_id': str(user.id), 'p_xp_to_add': xp}).execute()
         if items := reward.get('item'):
-            for name, qty in items.items():
-                await update_inventory(user.id, name, qty)
+            for name, qty in items.items(): await update_inventory(user.id, name, qty)
         if role_key := reward.get('role'):
             if role_id := get_id(role_key):
                 role = user.guild.get_role(role_id)
@@ -266,10 +277,9 @@ class TutorialSystem(commands.Cog):
                     try: await user.add_roles(role)
                     except: pass
 
-        # DB 업데이트
+        # DB 업데이트 (이전과 동일)
         next_step = step + 1
         is_finished = next_step > len(TUTORIAL_STEPS)
-        
         try:
             await supabase.table('user_tutorials').update({
                 'current_step': next_step,
@@ -278,14 +288,11 @@ class TutorialSystem(commands.Cog):
             }).eq('user_id', str(user.id)).execute()
         except Exception as e:
             logger.error(f"튜토리얼 단계 업데이트 실패: {e}")
-            await interaction.followup.send("❌ 진행 상황 저장 중 오류가 발생했습니다.", ephemeral=True)
             return
 
-        # 메시지 전송
+        # 완료 축하 메시지 (followup으로 전송)
         embed = discord.Embed(title=f"🎉 튜토리얼 {step}단계 완료!", description=f"보상으로 **{info['reward_txt']}**을(를) 받았습니다.", color=0x2ECC71)
-        if is_finished:
-            embed.description += "\n\n🏆 **모든 튜토리얼을 마쳤습니다! 진정한 서버의 일원이 되신 것을 환영합니다.**"
-        
+        if is_finished: embed.description += "\n\n🏆 **모든 튜토리얼을 마쳤습니다! 진정한 서버의 일원이 되신 것을 환영합니다.**"
         await interaction.followup.send(embed=embed, ephemeral=True)
         
     async def register_persistent_views(self):
