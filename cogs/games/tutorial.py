@@ -231,11 +231,30 @@ class TutorialSystem(commands.Cog):
         reward = info.get('reward', {})
         
         try:
-            if coin := reward.get('coin'): await update_wallet(user, coin)
+            if coin := reward.get('coin'): 
+                await update_wallet(user, coin)
+            
             if xp := reward.get('xp'):
-                if pet_cog := self.bot.get_cog("PetSystem"): await supabase.rpc('add_xp', {'p_user_id': str(user.id), 'p_xp_to_add': xp}).execute()
+                # [수정] RPC 호출 실패 시 수동 업데이트 시도 (Fallback)
+                try:
+                    if pet_cog := self.bot.get_cog("PetSystem"): 
+                        await supabase.rpc('add_xp', {'p_user_id': str(user.id), 'p_xp_to_add': xp}).execute()
+                except Exception as e:
+                    logger.warning(f"XP 지급 RPC 오류 (User {user.id}): {e}. 수동 업데이트를 시도합니다.")
+                    try:
+                        # 수동으로 현재 XP 조회 및 업데이트
+                        curr = await supabase.table('user_levels').select('xp').eq('user_id', str(user.id)).single().execute()
+                        cur_xp = curr.data['xp'] if curr and curr.data else 0
+                        await supabase.table('user_levels').upsert({'user_id': str(user.id), 'xp': cur_xp + xp}).execute()
+                        logger.info(f"User {user.id}에게 수동으로 {xp} XP 지급 완료.")
+                    except Exception as ex:
+                        logger.error(f"XP 지급 수동 업데이트 실패: {ex}")
+                        return False
+
             if items := reward.get('item'):
-                for name, qty in items.items(): await update_inventory(user.id, name, qty)
+                for name, qty in items.items(): 
+                    await update_inventory(user.id, name, qty)
+            
             if role_key := reward.get('role'):
                 if role_id := get_id(role_key):
                     role = user.guild.get_role(role_id)
@@ -254,7 +273,7 @@ class TutorialSystem(commands.Cog):
             
             return True
         except Exception as e:
-            logger.error(f"튜토리얼 보상 지급 실패 (User {user.id}, Step {step}): {e}")
+            logger.error(f"튜토리얼 보상 지급 실패 (User {user.id}, Step {step}): {e}", exc_info=True)
             return False
 
     async def register_persistent_views(self):
