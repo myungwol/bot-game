@@ -86,18 +86,16 @@ class TutorialSystem(commands.Cog):
         try:
             res = await supabase.table('user_tutorials').select('*').eq('user_id', str(user_id)).maybe_single().execute()
             
-            # [수정] res가 None이거나 res.data가 None인 경우를 모두 체크
             if res and res.data:
                 return res.data
             
-            # 데이터가 없으면 생성 시도
-            init_res = await supabase.table('user_tutorials').insert({'user_id': str(user_id), 'current_step': 1}).select().execute()
+            # 데이터가 없으면 생성 시도. .select() 제거됨
+            init_res = await supabase.table('user_tutorials').insert({'user_id': str(user_id), 'current_step': 1}).execute()
             
             if init_res and init_res.data:
                 return init_res.data[0]
             
-            # 생성 실패 시 (매우 드문 케이스) 기본 딕셔너리 반환
-            logger.warning(f"튜토리얼 데이터 생성 실패 (User: {user_id}). 임시 데이터를 사용합니다.")
+            # insert 후 데이터가 반환되지 않았을 경우 (드문 케이스)
             return {'user_id': str(user_id), 'current_step': 1, 'is_completed': False}
 
         except Exception as e:
@@ -112,12 +110,11 @@ class TutorialSystem(commands.Cog):
                 stats = await get_all_user_stats(uid)
                 return stats.get('daily', {}).get('check_in_count', 0) > 0
             
-            elif step == 2: # 소지품 확인 (버튼 누르는 행위 자체로 인정)
+            elif step == 2: # 소지품 확인
                 return True
             
             elif step == 3: # 주사위 게임
                 res = await supabase.table('user_activities').select('count', count='exact').eq('user_id', str(uid)).eq('activity_type', 'dice_game_play').execute()
-                # [수정] res가 None인 경우 대비
                 return (res.count or 0) > 0 if res else False
             
             elif step == 4: # 슬롯머신
@@ -129,7 +126,7 @@ class TutorialSystem(commands.Cog):
                 cooldown_key = f"quest_claimed_daily_all_{today_str}"
                 return await get_cooldown(uid, cooldown_key) > 0
             
-            elif step == 6: # 레벨 확인 (버튼 누르는 행위 자체로 인정)
+            elif step == 6: # 레벨 확인
                 return True
             
             elif step == 7: # 낚싯대 구매 및 장착
@@ -137,14 +134,13 @@ class TutorialSystem(commands.Cog):
                 return gear.get('rod') and gear.get('rod') != "맨손"
             
             elif step == 8: # 낚시 후 판매
-                # 낚시 1회 이상 AND 판매 1회 이상
                 act_fish = await supabase.table('user_activities').select('count', count='exact').eq('user_id', str(uid)).eq('activity_type', 'fishing_catch').execute()
                 act_sell = await supabase.table('user_activities').select('count', count='exact').eq('user_id', str(uid)).eq('activity_type', 'sell_fish').execute()
                 fish_count = (act_fish.count or 0) if act_fish else 0
                 sell_count = (act_sell.count or 0) if act_sell else 0
                 return fish_count > 0 and sell_count > 0
             
-            elif step == 9: # 괭이, 물뿌리개, 호박 씨앗 구매 (인벤토리 확인)
+            elif step == 9: # 괭이, 물뿌리개, 호박 씨앗 구매
                 inv = await get_inventory(user)
                 has_hoe = any('괭이' in name for name in inv.keys()) 
                 gear = await get_user_gear(user)
@@ -157,7 +153,7 @@ class TutorialSystem(commands.Cog):
                 
                 return (has_hoe or has_hoe_equipped) and (has_can or has_can_equipped) and has_seed
             
-            elif step == 10: # 농장 생성 및 파종, 물주기
+            elif step == 10: # 농장 생성 및 파종
                 farm = await get_farm_data(uid)
                 if not farm: return False
                 plots = farm.get('farm_plots', [])
@@ -175,19 +171,17 @@ class TutorialSystem(commands.Cog):
                 count = (res.count or 0) if res else 0
                 if count > 0: return True
                 
-                # 혹은 장비 중 기본 장비가 아닌 것이 있는지 확인
                 gear = await get_user_gear(user)
                 for g in gear.values():
                     if any(x in g for x in ['구리', '철', '금', '다이아']):
                         return True
                 return False
             
-            elif step == 13: # 펫 부화 (등록)
-                pet = await get_user_pet(uid)
+            elif step == 13: # 펫 부화
                 res = await supabase.table('pets').select('count', count='exact').eq('user_id', str(uid)).execute()
                 return (res.count or 0) > 0 if res else False
             
-            elif step == 14: # 주간 퀘스트 (보상 수령 여부)
+            elif step == 14: # 주간 퀘스트
                 now = datetime.now(timezone(timedelta(hours=9)))
                 start_of_week = now - timedelta(days=now.weekday())
                 week_str = start_of_week.strftime('%Y-%m-%d')
@@ -202,7 +196,7 @@ class TutorialSystem(commands.Cog):
                 res = await supabase.table('user_settings').select('kitchen_thread_id').eq('user_id', str(uid)).maybe_single().execute()
                 return res.data and res.data.get('kitchen_thread_id') is not None if res else False
             
-            elif step == 17: # 호박죽 요리 (인벤토리 확인)
+            elif step == 17: # 호박죽 요리
                 inv = await get_inventory(user)
                 return inv.get('호박죽', 0) > 0
             
@@ -217,7 +211,6 @@ class TutorialSystem(commands.Cog):
 
         except Exception as e:
             logger.error(f"튜토리얼 조건 검사 중 오류 (Step {step}, User {uid}): {e}", exc_info=True)
-            # 에러 발생 시 False를 반환하여 진행을 막고, 유저가 다시 시도하게 함
             return False
         
         return False
@@ -230,9 +223,7 @@ class TutorialSystem(commands.Cog):
         if coin := reward.get('coin'):
             await update_wallet(user, coin)
         if xp := reward.get('xp'):
-            # [수정] 안전하게 Cog 호출
             if pet_cog := self.bot.get_cog("PetSystem"):
-                # 유저 XP 지급용
                 await supabase.rpc('add_xp', {'p_user_id': str(user.id), 'p_xp_to_add': xp}).execute()
         if items := reward.get('item'):
             for name, qty in items.items():
@@ -269,8 +260,37 @@ class TutorialSystem(commands.Cog):
         # 패널 갱신
         await self.regenerate_panel(interaction.channel)
 
+    async def register_persistent_views(self):
+        # 영구 View 등록
+        view = ui.View(timeout=None)
+        # 기본 버튼을 가진 뷰를 등록합니다.
+        check_button = ui.Button(label="내 튜토리얼 보기", style=discord.ButtonStyle.primary, emoji="🧭", custom_id="open_tutorial_status")
+        
+        async def open_status_callback(interaction: discord.Interaction):
+            data = await self.get_user_tutorial(interaction.user.id)
+            step = data['current_step']
+            is_completed = data['is_completed']
+            
+            if is_completed:
+                embed = discord.Embed(title="🏆 튜토리얼 완료", description="모든 과정을 마치셨습니다. 즐거운 서버 생활 되세요!", color=0xFFD700)
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+                return
+
+            step_info = TUTORIAL_STEPS.get(step, {})
+            embed = discord.Embed(title=f"🧭 튜토리얼 {step}/{len(TUTORIAL_STEPS)}단계", color=0x00BFFF)
+            embed.add_field(name=f"📌 목표: {step_info.get('title')}", value=step_info.get('desc'), inline=False)
+            embed.add_field(name=f"🎁 보상", value=step_info.get('reward_txt'), inline=False)
+            
+            status_view = TutorialView(self, interaction.user, data)
+            await interaction.response.send_message(embed=embed, view=status_view, ephemeral=True)
+
+        check_button.callback = open_status_callback
+        view.add_item(check_button)
+        self.bot.add_view(view)
+        
+        logger.info("✅ 튜토리얼 시스템의 영구 View가 성공적으로 등록되었습니다.")
+
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_tutorial", **kwargs):
-        # 기존 메시지 삭제 로직 (다른 패널과 동일)
         panel_name = panel_key.replace("panel_", "")
         if panel_info := get_panel_id(panel_name):
             if old_ch := self.bot.get_channel(panel_info.get('channel_id')):
@@ -279,7 +299,6 @@ class TutorialSystem(commands.Cog):
                     await msg.delete()
                 except: pass
         
-        # 새 패널 생성
         embed = discord.Embed(
             title="📘 서버 정착 가이드 (튜토리얼)",
             description="서버의 다양한 기능을 차근차근 배워보세요!\n아래 버튼을 눌러 나의 진행 상황을 확인하고 보상을 받을 수 있습니다.",
@@ -290,8 +309,10 @@ class TutorialSystem(commands.Cog):
         view = ui.View(timeout=None)
         check_button = ui.Button(label="내 튜토리얼 보기", style=discord.ButtonStyle.primary, emoji="🧭", custom_id="open_tutorial_status")
         
+        # 콜백 함수는 register_persistent_views와 동일하게 구성해야 view persistence가 작동합니다.
+        # 여기서는 뷰 객체 자체를 동일하게 재생성하는 것이 좋습니다.
+        # 위에서 register_persistent_views에서 사용하는 뷰 구조와 동일하게 만들어줍니다.
         async def open_status(interaction: discord.Interaction):
-            # 본인 데이터만 조회
             data = await self.get_user_tutorial(interaction.user.id)
             step = data['current_step']
             is_completed = data['is_completed']
