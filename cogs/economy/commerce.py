@@ -233,17 +233,19 @@ class BuyCategoryView(ShopViewBase):
         category = interaction.data['custom_id'].split('buy_category_')[-1]
         item_view = BuyItemView(self.user, category); item_view.message = self.message; await item_view.update_view(interaction)
 
-# ▼▼▼ [수정] SellFishView 시작 ▼▼▼
 class SellFishView(ShopViewBase):
     def __init__(self, user: discord.Member):
         super().__init__(user)
         self.fish_data_map: Dict[str, Dict[str, Any]] = {}
-        # 페이지네이션 추가
+        # 페이지네이션 및 데이터 저장을 위한 속성
         self.all_fish = []
         self.page_index = 0
-        self.items_per_page = 5
+        self.items_per_page = 20 # 한 페이지에 표시할 물고기 수
 
     async def refresh_view(self, interaction: discord.Interaction):
+        # 판매 후 목록 갱신을 위해 데이터 초기화
+        self.all_fish = []
+        self.page_index = 0
         await self.update_view(interaction)
 
     async def build_embed(self) -> discord.Embed:
@@ -255,98 +257,132 @@ class SellFishView(ShopViewBase):
     async def build_components(self):
         self.clear_items()
         
-        if not self.all_items:
-            inventory = await get_inventory(self.user)
-            item_db = get_item_database()
-            self.all_items = sorted(
-                [(name, qty) for name, qty in inventory.items() if item_db.get(name, {}).get('category', '').strip() == self.category],
-                key=lambda x: x[0]
-            )
+        # 1. 물고기 데이터 로드 (캐시가 비어있을 때만)
+        if not self.all_fish:
+            self.all_fish = await get_aquarium(str(self.user.id))
         
-        self.item_data_map.clear()
+        # 2. 가격 정보 로드
+        loot_res = await supabase.table('fishing_loots').select('*').execute()
+        if not (loot_res and loot_res.data):
+            self.add_item(ui.Button(label="오류: 가격 정보를 불러올 수 없습니다.", disabled=True))
+            return
+        loot_db = {loot['name']: loot for loot in loot_res.data}
+
+        self.fish_data_map.clear()
         
+        # 3. 페이지네이션 처리
         start_index = self.page_index * self.items_per_page
         end_index = start_index + self.items_per_page
-        items_on_page = self.all_items[start_index:end_index]
+        fish_on_page = self.all_fish[start_index:end_index]
 
         options = []
-        if items_on_page:
-            item_db = get_item_database()
-            for name, qty in items_on_page:
-                item_data = item_db.get(name, {})
+        if fish_on_page:
+            for fish in fish_on_page:
+                fish_id = str(fish['id'])
+                loot_info = loot_db.get(fish['name'], {})
                 
-                # ▼▼▼ [수정] 가격 계산 로직 안전하게 변경 ▼▼▼
-                # 1. 기본 가격 가져오기 (None이면 0으로 처리)
-                base_price = item_data.get('price')
-                if base_price is None: 
-                    base_price = 0
+                # 가격 계산 (기본가 + 크기 보너스)
+                base_value = loot_info.get('current_base_value')
+                if base_value is None:
+                    base_value = loot_info.get('base_value', 0)
                 
-                # 2. 판매가 설정이 없으면 기본가의 80%로 계산
-                sell_price = item_data.get('sell_price')
-                if sell_price is None:
-                    sell_price = int(base_price * 0.8)
+                size_bonus = fish['size'] * loot_info.get('size_multiplier', 0)
+                price = int(base_value + size_bonus)
                 
-                # 3. 시세 변동 가격이 있으면 최우선 적용, 없으면 판매가 사용
-                price = item_data.get('current_price')
-                if price is None:
-                    price = sell_price
-                # ▲▲▲ [수정 완료] ▲▲▲
-
-                self.item_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
-                options.append(discord.SelectOption(label=f"{name} (보유: {qty}개)", value=name, description=f"개당: {price}{self.currency_icon}", emoji=coerce_item_emoji(item_data.get('emoji', self.default_emoji))))
+                self.fish_data_map[fish_id] = {'price': price, 'name': fish['name']}
+                
+                label = f"{fish['name']} ({fish['size']}cm)"
+                description = f"판매가: {price:,}{self.currency_icon}"
+                emoji = coerce_item_emoji(loot_info.get('emoji', '🐟'))
+                
+                options.append(discord.SelectOption(label=label, value=fish_id, description=description, emoji=emoji))
         
+        # 4. 컴포넌트 추가
         if options:
-            select = ui.Select(placeholder=f"판매할 {self.category.replace('_', ' ')} 선택...(최대 25종)", options=options)
+            # 물고기 선택 메뉴 (다중 선택 가능)
+            select = ui.Select(
+                placeholder=f"판매할 물고기 선택... ({len(fish_on_page)}마리)", 
+                options=options, 
+                min_values=1, 
+                max_values=len(options)
+            )
             select.callback = self.on_select
             self.add_item(select)
-            
-        total_pages = math.ceil(len(self.all_items) / self.items_per_page)
+        else:
+            self.add_item(ui.Button(label="판매할 물고기가 없습니다.", disabled=True))
+        
+        # 판매 확정 버튼 (초기엔 비활성화)
+        sell_button = ui.Button(label="선택한 물고기 판매", style=discord.ButtonStyle.success, disabled=True, custom_id="sell_fish_confirm")
+        sell_button.callback = self.sell_fish
+        self.add_item(sell_button)
+        
+        # 페이지 이동 버튼
+        total_pages = math.ceil(len(self.all_fish) / self.items_per_page)
         if total_pages > 1:
             prev_button = ui.Button(label="◀ 이전", custom_id="prev_page", disabled=(self.page_index == 0), row=2)
             prev_button.callback = self.pagination_callback
             self.add_item(prev_button)
+            
             next_button = ui.Button(label="다음 ▶", custom_id="next_page", disabled=(self.page_index >= total_pages - 1), row=2)
             next_button.callback = self.pagination_callback
             self.add_item(next_button)
 
+        # 뒤로가기 버튼
         back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=3)
         back_button.callback = self.go_back
         self.add_item(back_button)
 
     async def pagination_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if interaction.data['custom_id'] == 'next_page': self.page_index += 1
-        else: self.page_index -= 1
+        if interaction.data['custom_id'] == 'next_page':
+            self.page_index += 1
+        else:
+            self.page_index -= 1
         await self.update_view(interaction)
 
     async def on_select(self, interaction: discord.Interaction):
-        if sell_button := next((c for c in self.children if isinstance(c, ui.Button) and c.custom_id == "sell_fish_confirm"), None): sell_button.disabled = False
+        # 선택 시 판매 버튼 활성화
+        if sell_button := next((c for c in self.children if isinstance(c, ui.Button) and c.custom_id == "sell_fish_confirm"), None):
+            sell_button.disabled = False
         await interaction.response.edit_message(view=self)
 
     async def sell_fish(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        
+        # 선택된 값 가져오기
         select_menu = next((c for c in self.children if isinstance(c, ui.Select)), None)
         if not select_menu or not select_menu.values:
-            msg = await interaction.followup.send("❌ 판매할 물고기가 선택되지 않았습니다.", ephemeral=True); asyncio.create_task(delete_after(msg, 5)); return
+            msg = await interaction.followup.send("❌ 판매할 물고기가 선택되지 않았습니다.", ephemeral=True)
+            asyncio.create_task(delete_after(msg, 5))
+            return
+            
         fish_ids_to_sell = [int(val) for val in select_menu.values]
         total_price = sum(self.fish_data_map[val]['price'] for val in select_menu.values)
+        
         try:
+            # 판매 처리 (DB)
             await sell_fish_from_db(str(self.user.id), fish_ids_to_sell, total_price)
+            
+            # 로그 기록 (추가된 부분)
             await log_activity(self.user.id, "sell_fish", amount=len(fish_ids_to_sell), coin_earned=total_price)
+            
             new_balance = (await get_wallet(self.user.id)).get('balance', 0)
             success_message = f"✅ 물고기 {len(fish_ids_to_sell)}마리를 `{total_price:,}`{self.currency_icon}에 판매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
-            msg = await interaction.followup.send(success_message, ephemeral=True); asyncio.create_task(delete_after(msg, 10))
-            # 판매 후 데이터 리프레시
-            self.all_fish = [] 
-            self.page_index = 0
+            
+            msg = await interaction.followup.send(success_message, ephemeral=True)
+            asyncio.create_task(delete_after(msg, 10))
+            
+            # 판매 후 목록 갱신
             await self.refresh_view(interaction)
-        except Exception as e: await self.handle_error(interaction, e)
+            
+        except Exception as e:
+            await self.handle_error(interaction, e)
 
     async def go_back(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        view = SellCategoryView(self.user); view.message = self.message; await view.update_view(interaction)
-# ▲▲▲ [수정] SellFishView 종료 ▲▲▲
-
+        view = SellCategoryView(self.user)
+        view.message = self.message
+        await view.update_view(interaction)
 # ▼▼▼ [수정] Sell-기타 아이템 View 공통 상속 클래스 생성 ▼▼▼
 class SellStackableView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str, title: str, color: int, emoji: str):
