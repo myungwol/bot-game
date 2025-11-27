@@ -15,7 +15,7 @@ from utils.database import (
     save_config_to_db, get_all_user_stats, log_activity, get_cooldown, set_cooldown,
     get_user_gear, load_all_data_from_db, ensure_user_gear_exists,
     load_bot_configs_from_db, delete_config_from_db, get_item_database, get_fishing_loot,
-    get_user_pet, add_xp_to_pet_db 
+    get_user_pet, add_xp_to_pet_db, update_inventory 
 )
 from utils.helpers import format_embed_from_db
 
@@ -271,6 +271,32 @@ class EconomyCore(commands.Cog):
                                     logger.info(f"[AdminBridge] {user.display_name}님의 XP/레벨을 처리했습니다.")
                             except Exception as e:
                                 logger.error(f"[AdminBridge] XP/레벨 요청 처리 중 오류: {e}", exc_info=True)
+
+            # ▼▼▼ [추가] 아이템 지급 요청 처리 로직 ▼▼▼
+            if 'item_admin_give' in requests_by_prefix:
+                for req in requests_by_prefix['item_admin_give']:
+                    try:
+                        # 키 형식: item_admin_give_request_{user_id}
+                        user_id = int(req['config_key'].split('_')[-1])
+                        payload = req['config_value']
+                        
+                        item_name = payload.get('item_name')
+                        amount = payload.get('amount')
+                        
+                        if user_id and item_name and amount:
+                            # 인벤토리에 아이템 추가
+                            await update_inventory(user_id, item_name, amount)
+                            
+                            # (선택) 유저 객체를 찾을 수 있다면 로그 출력
+                            if guild:
+                                user = guild.get_member(user_id)
+                                user_name = user.display_name if user else str(user_id)
+                                logger.info(f"[AdminBridge] {user_name}님에게 아이템 '{item_name}' {amount}개를 지급했습니다.")
+                            else:
+                                logger.info(f"[AdminBridge] 유저(ID: {user_id})에게 아이템 '{item_name}' {amount}개를 지급했습니다.")
+                                
+                    except Exception as e:
+                        logger.error(f"[AdminBridge] 아이템 지급 요청 처리 중 오류: {e}", exc_info=True)
             
             if keys_to_delete:
                 await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
