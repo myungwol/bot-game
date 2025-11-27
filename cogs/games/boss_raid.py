@@ -483,6 +483,8 @@ class BossRaid(commands.Cog):
                 logger.error(f"'{boss_type}' 보스의 보상 티어 정보를 찾을 수 없습니다.")
                 return
 
+# ... (cogs/games/boss_raid.py 내부) ...
+
             base_chest_item = "주간 보스 보물 상자" if boss_type == 'weekly' else "월간 보스 보물 상자"
             rare_reward_items = ["각성의 코어", "초월의 핵"]
             
@@ -500,15 +502,22 @@ class BossRaid(commands.Cog):
                 xp = random.randint(*user_tier['xp'])
                 
                 rolled_items = {}
+                # [수정] 희귀 아이템 수량 로직 적용
                 if random.random() < user_tier['rare_item_chance']:
                     rare_item = random.choice(rare_reward_items)
-                    rolled_items[rare_item] = 1
+                    # 설정된 수량 범위 가져오기 (없으면 기본값 1개)
+                    qty_range = user_tier.get('rare_item_qty', [1, 1])
+                    qty = random.randint(qty_range[0], qty_range[1])
+                    
+                    if qty > 0:
+                        rolled_items[rare_item] = qty
                 
                 chest_contents = {
                     "coins": coins,
                     "xp": xp,
                     "items": rolled_items
                 }
+                
                 
                 db_tasks.append(update_inventory(user_id, base_chest_item, 1))
                 db_tasks.append(log_chest_reward(user_id, base_chest_item, chest_contents))
