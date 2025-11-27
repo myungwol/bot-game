@@ -299,7 +299,6 @@ class LevelPanelView(ui.View):
 
         if retry_after:
             available_at = discord.utils.utcnow() + timedelta(seconds=retry_after)
-            
             await interaction.response.send_message(
                 f"⏳ 잠시 후 다시 시도해주세요. (사용 가능: {discord.utils.format_dt(available_at, style='R')})",
                 ephemeral=True,
@@ -310,10 +309,39 @@ class LevelPanelView(ui.View):
         try:
             await interaction.response.defer(ephemeral=False, thinking=True)
             
+            # [핵심 추가] 레벨업 가능 여부 체크 및 처리
+            try:
+                # 1. 현재 정보 가져오기
+                res = await supabase.table('user_levels').select('level, xp').eq('user_id', str(interaction.user.id)).maybe_single().execute()
+                if res and res.data:
+                    current_level = res.data['level']
+                    current_xp = res.data['xp']
+                    
+                    # 2. 레벨 재계산 (누적 경험치 기준)
+                    new_level = current_level
+                    while True:
+                        xp_needed_for_next = calculate_xp_for_level(new_level + 1)
+                        if current_xp >= xp_needed_for_next:
+                            new_level += 1
+                        else:
+                            break
+                    
+                    # 3. 레벨이 올랐다면 DB 업데이트 및 이벤트 발생
+                    if new_level > current_level:
+                        await supabase.table('user_levels').update({'level': new_level}).eq('user_id', str(interaction.user.id)).execute()
+                        await self.cog.handle_level_up_event(interaction.user, [{"leveled_up": True, "new_level": new_level}])
+                        
+                        # 잠시 대기하여 임베드 생성 시 업데이트된 정보를 반영하도록 함
+                        await asyncio.sleep(0.5)
+                        
+            except Exception as e:
+                logger.error(f"상태 확인 중 레벨업 체크 실패: {e}")
+
+            # [기존 로직] 임베드 생성 및 전송
             level_embed = await build_level_embed(interaction.user)
-            
             await interaction.followup.send(embed=level_embed, ephemeral=False)
             
+            # 패널 재생성 (선택 사항 - 부하를 줄이려면 제거 가능)
             panel_info = get_panel_id(self.cog.panel_key.replace("panel_", ""))
             if panel_info and (panel_channel := self.cog.bot.get_channel(panel_info['channel_id'])):
                 await self.cog.regenerate_panel(panel_channel, panel_key=self.cog.panel_key)
@@ -322,10 +350,7 @@ class LevelPanelView(ui.View):
             logger.error(f"개인 레벨 확인 및 패널 재생성 중 오류 발생 (유저: {interaction.user.id}): {e}", exc_info=True)
             error_message = "❌ 상태 정보를 불러오는 중 오류가 발생했습니다."
             if not interaction.response.is_done():
-                try:
-                    await interaction.response.send_message(error_message, ephemeral=True)
-                except discord.InteractionResponded:
-                    await interaction.followup.send(error_message, ephemeral=True)
+                await interaction.response.send_message(error_message, ephemeral=True)
             else:
                 await interaction.followup.send(error_message, ephemeral=True)
 
