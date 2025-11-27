@@ -255,36 +255,52 @@ class SellFishView(ShopViewBase):
     async def build_components(self):
         self.clear_items()
         
-        if not self.all_fish:
-            self.all_fish = await get_aquarium(str(self.user.id))
+        if not self.all_items:
+            inventory = await get_inventory(self.user)
+            item_db = get_item_database()
+            self.all_items = sorted(
+                [(name, qty) for name, qty in inventory.items() if item_db.get(name, {}).get('category', '').strip() == self.category],
+                key=lambda x: x[0]
+            )
         
-        loot_res = await supabase.table('fishing_loots').select('*').execute()
-        if not (loot_res and loot_res.data):
-            self.add_item(ui.Button(label="오류: 가격 정보를 불러올 수 없습니다.", disabled=True)); return
-        loot_db = {loot['name']: loot for loot in loot_res.data}
-
-        self.fish_data_map.clear()
+        self.item_data_map.clear()
         
         start_index = self.page_index * self.items_per_page
         end_index = start_index + self.items_per_page
-        fish_on_page = self.all_fish[start_index:end_index]
+        items_on_page = self.all_items[start_index:end_index]
 
         options = []
-        if fish_on_page:
-            for fish in fish_on_page:
-                fish_id = str(fish['id']); loot_info = loot_db.get(fish['name'], {})
-                base_value = loot_info.get('current_base_value', loot_info.get('base_value', 0))
-                price = int(base_value + (fish['size'] * loot_info.get('size_multiplier', 0)))
-                self.fish_data_map[fish_id] = {'price': price, 'name': fish['name']}
-                options.append(discord.SelectOption(label=f"{fish['name']} ({fish['size']}cm)", value=fish_id, description=f"{price}{self.currency_icon}", emoji=coerce_item_emoji(loot_info.get('emoji'))))
+        if items_on_page:
+            item_db = get_item_database()
+            for name, qty in items_on_page:
+                item_data = item_db.get(name, {})
+                
+                # ▼▼▼ [수정] 가격 계산 로직 안전하게 변경 ▼▼▼
+                # 1. 기본 가격 가져오기 (None이면 0으로 처리)
+                base_price = item_data.get('price')
+                if base_price is None: 
+                    base_price = 0
+                
+                # 2. 판매가 설정이 없으면 기본가의 80%로 계산
+                sell_price = item_data.get('sell_price')
+                if sell_price is None:
+                    sell_price = int(base_price * 0.8)
+                
+                # 3. 시세 변동 가격이 있으면 최우선 적용, 없으면 판매가 사용
+                price = item_data.get('current_price')
+                if price is None:
+                    price = sell_price
+                # ▲▲▲ [수정 완료] ▲▲▲
+
+                self.item_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
+                options.append(discord.SelectOption(label=f"{name} (보유: {qty}개)", value=name, description=f"개당: {price}{self.currency_icon}", emoji=coerce_item_emoji(item_data.get('emoji', self.default_emoji))))
         
         if options:
-            select = ui.Select(placeholder="판매할 물고기를 선택하세요...(여러 개 선택 가능)", options=options, min_values=1, max_values=len(options))
-            select.callback = self.on_select; self.add_item(select)
-        
-        sell_button = ui.Button(label="선택한 물고기 판매", style=discord.ButtonStyle.success, disabled=True, custom_id="sell_fish_confirm"); sell_button.callback = self.sell_fish; self.add_item(sell_button)
-        
-        total_pages = math.ceil(len(self.all_fish) / self.items_per_page)
+            select = ui.Select(placeholder=f"판매할 {self.category.replace('_', ' ')} 선택...(최대 25종)", options=options)
+            select.callback = self.on_select
+            self.add_item(select)
+            
+        total_pages = math.ceil(len(self.all_items) / self.items_per_page)
         if total_pages > 1:
             prev_button = ui.Button(label="◀ 이전", custom_id="prev_page", disabled=(self.page_index == 0), row=2)
             prev_button.callback = self.pagination_callback
@@ -293,7 +309,9 @@ class SellFishView(ShopViewBase):
             next_button.callback = self.pagination_callback
             self.add_item(next_button)
 
-        back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=3); back_button.callback = self.go_back; self.add_item(back_button)
+        back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=3)
+        back_button.callback = self.go_back
+        self.add_item(back_button)
 
     async def pagination_callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
