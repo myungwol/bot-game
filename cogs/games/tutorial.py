@@ -235,26 +235,44 @@ class TutorialSystem(commands.Cog):
                 await update_wallet(user, coin)
             
             if xp := reward.get('xp'):
-                # [수정] RPC 호출 실패 시 수동 업데이트 시도 (Fallback)
+                # [수정] XP 지급 및 레벨업 체크 로직 추가
                 try:
-                    if pet_cog := self.bot.get_cog("PetSystem"): 
-                        await supabase.rpc('add_xp', {'p_user_id': str(user.id), 'p_xp_to_add': xp}).execute()
+                    # 1. XP 지급 (RPC 호출)
+                    # add_xp 함수는 현재 레벨업 로직 없이 XP만 더하고 현재 상태를 반환함
+                    res = await supabase.rpc('add_xp', {'p_user_id': str(user.id), 'p_xp_to_add': xp}).execute()
+                    
+                    if res and res.data:
+                        current_data = res.data[0] # {new_level, new_xp, leveled_up(false)}
+                        current_level = current_data['new_level']
+                        current_xp = current_data['new_xp']
+                        
+                        # 2. 레벨업 필요 여부 계산 (Python 로직)
+                        # helpers.py의 calculate_xp_for_level 함수 사용 (다음 레벨 필요 XP 계산)
+                        # 주의: calculate_xp_for_level은 '누적 XP'를 반환하므로 비교 로직 주의
+                        from utils.helpers import calculate_xp_for_level
+                        
+                        new_level = current_level
+                        # 다음 레벨에 필요한 누적 XP보다 현재 XP가 많으면 레벨업
+                        while True:
+                            xp_needed_for_next = calculate_xp_for_level(new_level + 1)
+                            if current_xp >= xp_needed_for_next:
+                                new_level += 1
+                            else:
+                                break
+                        
+                        # 3. 레벨 변동이 있다면 DB 업데이트 및 이벤트 발생
+                        if new_level > current_level:
+                            await supabase.table('user_levels').update({'level': new_level}).eq('user_id', str(user.id)).execute()
+                            
+                            # 레벨업 이벤트 핸들링 (LevelSystem Cog 활용)
+                            if level_cog := self.bot.get_cog("LevelSystem"):
+                                await level_cog.handle_level_up_event(user, [{"leveled_up": True, "new_level": new_level}])
+                
                 except Exception as e:
-                    logger.warning(f"XP 지급 RPC 오류 (User {user.id}): {e}. 수동 업데이트를 시도합니다.")
-                    try:
-                        # 수동으로 현재 XP 조회 및 업데이트
-                        curr = await supabase.table('user_levels').select('xp').eq('user_id', str(user.id)).single().execute()
-                        cur_xp = curr.data['xp'] if curr and curr.data else 0
-                        await supabase.table('user_levels').upsert({'user_id': str(user.id), 'xp': cur_xp + xp}).execute()
-                        logger.info(f"User {user.id}에게 수동으로 {xp} XP 지급 완료.")
-                    except Exception as ex:
-                        logger.error(f"XP 지급 수동 업데이트 실패: {ex}")
-                        return False
+                    logger.error(f"튜토리얼 XP 지급 처리 중 오류: {e}", exc_info=True)
 
             if items := reward.get('item'):
-                for name, qty in items.items(): 
-                    await update_inventory(user.id, name, qty)
-            
+                for name, qty in items.items(): await update_inventory(user.id, name, qty)
             if role_key := reward.get('role'):
                 if role_id := get_id(role_key):
                     role = user.guild.get_role(role_id)
@@ -273,7 +291,7 @@ class TutorialSystem(commands.Cog):
             
             return True
         except Exception as e:
-            logger.error(f"튜토리얼 보상 지급 실패 (User {user.id}, Step {step}): {e}", exc_info=True)
+            logger.error(f"튜토리얼 보상 지급 실패 (User {user.id}, Step {step}): {e}")
             return False
 
     async def register_persistent_views(self):
