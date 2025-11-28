@@ -160,6 +160,12 @@ class EconomyCore(commands.Cog):
                         await cog.load_configs()
                 logger.info("[CONFIG] 모든 설정 새로고침 완료.")
 
+            if 'game_data_reload' in requests_by_prefix:
+                from utils.database import reload_game_data_from_db
+                logger.info("[GAME DATA] 게임 데이터 새로고침 요청 감지...")
+                await reload_game_data_from_db()
+                logger.info("[GAME DATA] 게임 데이터 새로고침 완료.")
+
             if 'manual_update' in requests_by_prefix:
                 logger.info("[수동 업데이트] 요청 감지...")
                 if farm_cog := self.bot.get_cog("Farm"):
@@ -200,12 +206,10 @@ class EconomyCore(commands.Cog):
                     except Exception as e:
                         logger.error(f"펫 탐사 즉시 완료 처리 중 오류: {e}", exc_info=True)
 
-            # --- ▼▼▼▼▼ 핵심 수정 시작 ▼▼▼▼▼ ---
             if 'boss_reset_manual' in requests_by_prefix:
                 if boss_cog := self.bot.get_cog("BossRaid"):
                     logger.info("[Dispatcher] 수동 보스 리셋 요청을 감지하여 처리합니다.")
                     await boss_cog.manual_reset_check(force_weekly=True, force_monthly=True)
-            # --- ▲▲▲▲▲ 핵심 수정 종료 ▲▲▲▲▲ ---
 
             if 'boss_spawn_test' in requests_by_prefix or 'boss_defeat_test' in requests_by_prefix:
                 boss_cog = self.bot.get_cog("BossRaid")
@@ -271,32 +275,24 @@ class EconomyCore(commands.Cog):
                                     logger.info(f"[AdminBridge] {user.display_name}님의 XP/레벨을 처리했습니다.")
                             except Exception as e:
                                 logger.error(f"[AdminBridge] XP/레벨 요청 처리 중 오류: {e}", exc_info=True)
-
-            # ▼▼▼ [추가] 아이템 지급 요청 처리 로직 ▼▼▼
-            if 'item_admin_give' in requests_by_prefix:
-                for req in requests_by_prefix['item_admin_give']:
-                    try:
-                        # 키 형식: item_admin_give_request_{user_id}
-                        user_id = int(req['config_key'].split('_')[-1])
-                        payload = req['config_value']
-                        
-                        item_name = payload.get('item_name')
-                        amount = payload.get('amount')
-                        
-                        if user_id and item_name and amount:
-                            # 인벤토리에 아이템 추가
-                            await update_inventory(user_id, item_name, amount)
+                
+                if 'item_admin_give' in requests_by_prefix:
+                    for req in requests_by_prefix['item_admin_give']:
+                        try:
+                            user_id = int(req['config_key'].split('_')[-1])
+                            payload = req['config_value']
                             
-                            # (선택) 유저 객체를 찾을 수 있다면 로그 출력
-                            if guild:
+                            item_name = payload.get('item_name')
+                            amount = payload.get('amount')
+                            
+                            if user_id and item_name and amount:
+                                await update_inventory(user_id, item_name, amount)
                                 user = guild.get_member(user_id)
                                 user_name = user.display_name if user else str(user_id)
                                 logger.info(f"[AdminBridge] {user_name}님에게 아이템 '{item_name}' {amount}개를 지급했습니다.")
-                            else:
-                                logger.info(f"[AdminBridge] 유저(ID: {user_id})에게 아이템 '{item_name}' {amount}개를 지급했습니다.")
-                                
-                    except Exception as e:
-                        logger.error(f"[AdminBridge] 아이템 지급 요청 처리 중 오류: {e}", exc_info=True)
+                                    
+                        except Exception as e:
+                            logger.error(f"[AdminBridge] 아이템 지급 요청 처리 중 오류: {e}", exc_info=True)
             
             if keys_to_delete:
                 await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
@@ -308,13 +304,12 @@ class EconomyCore(commands.Cog):
     async def before_unified_dispatcher(self):
         await self.bot.wait_until_ready()
 
-async def coin_log_sender(self):
+    async def coin_log_sender(self):
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             try:
                 async with self.log_sender_lock:
                     if self.coin_log_queue:
-                        # 1. 큐에서 일단 꺼냅니다.
                         embed_to_send = self.coin_log_queue.popleft()
                         
                         try:
@@ -322,14 +317,12 @@ async def coin_log_sender(self):
                             if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
                                 await log_channel.send(embed=embed_to_send)
                         except Exception as send_error:
-                            # 2. [핵심 수정] 전송 실패 시(네트워크 오류 등) 다시 큐의 맨 앞에 넣어 복구합니다.
-                            # 이렇게 하면 로그가 사라지지 않고 다음 루프 때 다시 시도합니다.
                             self.coin_log_queue.appendleft(embed_to_send)
-                            raise send_error # 에러 로그 출력을 위해 예외를 상위로 던집니다.
+                            raise send_error
 
             except Exception as e:
                 logger.error(f"코인 지급 로그 발송 중 오류: {e}", exc_info=True)
-                await asyncio.sleep(5) # 에러 발생 시 5초간 대기하여 API 부하 방지
+                await asyncio.sleep(5)
             
             await asyncio.sleep(2)
 
@@ -342,7 +335,6 @@ async def coin_log_sender(self):
             self.chat_cache.clear()
 
         try:
-            # 1. 활동 기록 DB 삽입
             for log in logs_to_process:
                 log['user_id'] = str(log['user_id'])
             await supabase.table('user_activities').insert(logs_to_process).execute()
@@ -363,30 +355,22 @@ async def coin_log_sender(self):
                 user = self.bot.get_user(user_id)
                 if not user: continue
 
-                # 유저 경험치 지급
                 xp_to_add = self.xp_from_chat * count
                 if xp_to_add > 0:
                     xp_res = await supabase.rpc('add_xp', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
                     if xp_res.data:
                         await self.handle_level_up_event(user, xp_res.data)
                     
-                    # ▼▼▼ [수정된 부분 시작] 펫 경험치 지급 및 즉시 알림 ▼▼▼
                     pet_xp_res = await add_xp_to_pet_db(user_id, xp_to_add)
                     
-                    # 결과가 있고, 레벨업이 확인되면 즉시 알림 전송
                     if pet_xp_res and pet_xp_res[0].get('leveled_up'):
                         new_level = pet_xp_res[0].get('new_level')
                         points = pet_xp_res[0].get('points_awarded')
                         
-                        # PetSystem Cog를 가져와서 직접 호출
                         if pet_cog := self.bot.get_cog("PetSystem"):
                             await pet_cog.notify_pet_level_up(user_id, new_level, points)
-                            
-                            # 진화 조건 체크 (선택 사항)
                             await pet_cog.check_and_process_auto_evolution({user_id})
-                    # ▲▲▲ [수정된 부분 끝] ▲▲▲
 
-                # 채팅 횟수 달성 보상 로직 (기존 코드 유지)
                 stats = await get_all_user_stats(user_id)
                 daily_stats = stats.get('daily', {})
                 if daily_stats.get('chat_count', 0) >= self.chat_message_requirement:
@@ -436,8 +420,6 @@ async def coin_log_sender(self):
 
         try:
             xp_per_minute = self.xp_from_voice
-            
-            # 코인 보상 (10분마다) 로직 (기존 코드 유지)
             for user_id in users_to_reward:
                 user = self.bot.get_user(user_id)
                 if not user: continue
@@ -457,7 +439,6 @@ async def coin_log_sender(self):
             if logs_to_insert:
                 await supabase.table('user_activities').insert(logs_to_insert).execute()
                 
-                # 유저 XP 및 펫 XP 지급 (병렬 처리)
                 xp_update_tasks = [supabase.rpc('add_xp', {'p_user_id': str(uid), 'p_xp_to_add': xp_per_minute, 'p_source': 'voice'}).execute() for uid in users_to_reward]
                 pet_xp_tasks = [add_xp_to_pet_db(uid, xp_per_minute) for uid in users_to_reward]
                 
@@ -466,31 +447,23 @@ async def coin_log_sender(self):
                     asyncio.gather(*pet_xp_tasks, return_exceptions=True)
                 )
 
-                # 유저 레벨업 처리
                 for i, result in enumerate(xp_results):
                     if not isinstance(result, Exception) and hasattr(result, 'data') and result.data:
                         user = self.bot.get_user(list(users_to_reward)[i])
                         if user: await self.handle_level_up_event(user, result.data)
                 
-                # ▼▼▼ [수정된 부분 시작] 펫 레벨업 처리 및 즉시 알림 ▼▼▼
                 pet_cog = self.bot.get_cog("PetSystem")
-                users_list = list(users_to_reward) # 인덱스로 접근하기 위해 리스트로 변환
+                users_list = list(users_to_reward)
 
                 for i, result in enumerate(pet_xp_results):
                     user_id_from_list = users_list[i]
                     
-                    # result는 [dict] 형태 혹은 None입니다.
                     if not isinstance(result, Exception) and result and isinstance(result, list) and result[0].get('leveled_up'):
                         if pet_cog:
                             new_level = result[0].get('new_level')
                             points = result[0].get('points_awarded')
-                            
-                            # 펫 시스템 Cog를 통해 즉시 알림 전송
                             await pet_cog.notify_pet_level_up(user_id_from_list, new_level, points)
-                            
-                            # 진화 조건 체크 (선택)
                             await pet_cog.check_and_process_auto_evolution({user_id_from_list})
-                # ▲▲▲ [수정된 부분 끝] ▲▲▲
 
         except Exception as e:
             logger.error(f"[음성 활동 추적] 순찰 중 오류 발생: {e}", exc_info=True)
