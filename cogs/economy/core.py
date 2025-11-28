@@ -308,18 +308,29 @@ class EconomyCore(commands.Cog):
     async def before_unified_dispatcher(self):
         await self.bot.wait_until_ready()
 
-    async def coin_log_sender(self):
+async def coin_log_sender(self):
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             try:
                 async with self.log_sender_lock:
                     if self.coin_log_queue:
+                        # 1. 큐에서 일단 꺼냅니다.
                         embed_to_send = self.coin_log_queue.popleft()
-                        log_channel_id = get_id("coin_log_channel_id")
-                        if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
-                            await log_channel.send(embed=embed_to_send)
+                        
+                        try:
+                            log_channel_id = get_id("coin_log_channel_id")
+                            if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
+                                await log_channel.send(embed=embed_to_send)
+                        except Exception as send_error:
+                            # 2. [핵심 수정] 전송 실패 시(네트워크 오류 등) 다시 큐의 맨 앞에 넣어 복구합니다.
+                            # 이렇게 하면 로그가 사라지지 않고 다음 루프 때 다시 시도합니다.
+                            self.coin_log_queue.appendleft(embed_to_send)
+                            raise send_error # 에러 로그 출력을 위해 예외를 상위로 던집니다.
+
             except Exception as e:
                 logger.error(f"코인 지급 로그 발송 중 오류: {e}", exc_info=True)
+                await asyncio.sleep(5) # 에러 발생 시 5초간 대기하여 API 부하 방지
+            
             await asyncio.sleep(2)
 
     @tasks.loop(minutes=1)
