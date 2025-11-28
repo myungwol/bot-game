@@ -293,6 +293,51 @@ class EconomyCore(commands.Cog):
                                     
                         except Exception as e:
                             logger.error(f"[AdminBridge] 아이템 지급 요청 처리 중 오류: {e}", exc_info=True)
+
+            # ▼▼▼ [추가] 역할 상점 등록 처리 로직 ▼▼▼
+            if 'shop_add_role' in requests_by_prefix:
+                for req in requests_by_prefix['shop_add_role']:
+                    try:
+                        payload = req['config_value']
+                        role_id = payload['role_id']
+                        role_name = payload['role_name']
+                        price = payload['price']
+                        
+                        id_key = f"role_shop_{role_id}" # 고유 ID 키 생성
+
+                        # 1. 아이템 테이블에 추가 (판매 가능하게)
+                        item_data = {
+                            "name": role_name,
+                            "category": "역할",
+                            "price": price,
+                            "buyable": True,
+                            "sellable": False, # 역할은 환불 불가
+                            "max_ownable": 1,  # 역할은 하나만 있으면 됨
+                            "is_stackable": False,
+                            "id_key": id_key,
+                            "emoji": "🎟️",
+                            "description": f"구매 후 사용하면 {role_name} 역할을 획득합니다."
+                        }
+                        await supabase.table('items').upsert(item_data, on_conflict="name").execute()
+                        
+                        # 2. USABLE_ITEMS 설정 업데이트 (사용 가능하게)
+                        usable_items = get_config("USABLE_ITEMS", {})
+                        usable_items[id_key] = {
+                            "name": role_name,
+                            "type": "add_role", # 새로운 타입 정의
+                            "role_id": role_id,
+                            "description": "사용 시 역할을 부여받습니다."
+                        }
+                        await save_config_to_db("USABLE_ITEMS", usable_items)
+
+                        # 3. 역할 ID 매핑 저장 (안전 장치)
+                        await supabase.table('channel_configs').upsert({"channel_key": id_key, "channel_id": str(role_id)}).execute()
+                        
+                        logger.info(f"[Dispatcher] 역할 상품 '{role_name}'을 상점에 등록했습니다.")
+
+                    except Exception as e:
+                        logger.error(f"역할 상점 등록 처리 중 오류: {e}", exc_info=True)
+            # ▲▲▲ [추가 완료] ▲▲▲
             
             if keys_to_delete:
                 await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
