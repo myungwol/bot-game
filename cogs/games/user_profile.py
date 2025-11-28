@@ -40,29 +40,41 @@ class RoleSelectView(ui.View):
         self.has_options = False
 
     async def setup_options(self):
-        # DB에서 '역할' 카테고리이면서 'buyable'이 true인 아이템 조회
-        res = await supabase.table('items').select('*').eq('category', '역할').eq('buyable', True).execute()
-        
-        if not res.data:
-            return False
+        # [수정] buyable 조건 제거 (혹시 실수로 판매 불가로 설정했을 수도 있으니)
+        # category가 '역할'인 모든 아이템을 조회합니다.
+        try:
+            res = await supabase.table('items').select('*').eq('category', '역할').execute()
+            
+            if not res.data:
+                logger.warning(f"역할 선택권 사용 시도: '역할' 카테고리의 아이템이 DB에 없습니다.")
+                return False
 
-        options = []
-        for item in res.data:
-            # 이미 가진 역할은 제외할 수도 있지만, 일단 다 보여주고 선택 시 체크
-            role_name = item['name']
-            description = f"상점 판매가: {item.get('price', 0):,} 코인"
-            # id_key를 value로 사용
-            options.append(discord.SelectOption(label=role_name, value=item['id_key'], description=description, emoji="🎟️"))
-        
-        if not options:
-            return False
+            options = []
+            for item in res.data:
+                role_name = item['name']
+                # 가격 정보 안전하게 가져오기
+                price = item.get('current_price') or item.get('price') or 0
+                description = f"가치: {price:,} 코인"
+                
+                # id_key가 없으면 스킵
+                if not item.get('id_key'): continue
 
-        # 25개 제한 (디스코드 제한)
-        select = ui.Select(placeholder="획득할 역할을 선택하세요...", options=options[:25])
-        select.callback = self.callback
-        self.add_item(select)
-        self.has_options = True
-        return True
+                options.append(discord.SelectOption(label=role_name, value=item['id_key'], description=description, emoji="🎟️"))
+            
+            if not options:
+                logger.warning(f"역할 선택권 사용 시도: 유효한 id_key를 가진 역할 아이템이 없습니다.")
+                return False
+
+            # 25개 제한
+            select = ui.Select(placeholder="획득할 역할을 선택하세요...", options=options[:25])
+            select.callback = self.callback
+            self.add_item(select)
+            self.has_options = True
+            return True
+            
+        except Exception as e:
+            logger.error(f"역할 선택 옵션 로드 중 오류: {e}", exc_info=True)
+            return False
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.user.id:
