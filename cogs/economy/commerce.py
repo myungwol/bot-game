@@ -106,7 +106,7 @@ class BuyItemView(ShopViewBase):
         category_display_names = { 
             "아이템": "잡화점", "장비": "장비점", "미끼": "미끼가게", "농장_씨앗": "씨앗가게", 
             "펫 아이템": "펫 상점", "알": "알 상점", "조미료": "조미료 가게", "입장권": "입장권 판매소",
-            "역할": "역할 상점" # [추가] 역할 상점 이름
+            "역할": "역할 상점"
         }
         display_name = category_display_names.get(self.category, self.category.replace("_", " "))
         description_template = commerce_strings.get("item_view_desc", "현재 소지금: `{balance}`{currency_icon}\n구매하고 싶은 상품을 선택해주세요.")
@@ -127,15 +127,23 @@ class BuyItemView(ShopViewBase):
             items_on_page = self.items_in_category[start_index:end_index]
             
             for name, data in items_on_page:
-                # [수정] 가격 정보 안전하게 가져오기 (None이면 0)
                 price = int(data.get('current_price') if data.get('current_price') is not None else data.get('price', 0))
                 
-                field_name = f"{data.get('emoji', '📦')} {name}"
-                
-                # [수정] 역할 카테고리는 설명 제외, 그 외에는 설명 포함
+                # [수정] 역할 탭일 경우 표시 방식 변경
                 if self.category == "역할":
-                     field_value = f"**가격:** `{price:,}`{self.currency_icon}"
+                    # 역할 ID를 이용해 멘션 생성 시도
+                    role_id_key = data.get('id_key')
+                    role_id = get_id(role_id_key) if role_id_key else None
+                    
+                    # 역할 멘션이 가능하면 멘션 사용, 아니면 이름 사용
+                    display_text = f"<@&{role_id}>" if role_id else f"**{name}**"
+                    
+                    # 제목엔 이모지만, 내용에 멘션과 가격 표시
+                    field_name = f"{data.get('emoji', '🎟️')} 상품"
+                    field_value = f"> {display_text}\n**가격:** `{price:,}`{self.currency_icon}"
                 else:
+                    # 기존 아이템 표시 방식
+                    field_name = f"{data.get('emoji', '📦')} {name}"
                     description = data.get('description', '설명이 없습니다.')
                     field_value = (f"**가격:** `{price:,}`{self.currency_icon}\n"
                                    f"> {description}")
@@ -149,7 +157,7 @@ class BuyItemView(ShopViewBase):
             else:
                 embed.set_footer(text=footer_text)
         return embed
-
+        
     async def build_components(self):
         self.clear_items()
         start_index, end_index = self.page_index * self.items_per_page, (self.page_index + 1) * self.items_per_page
