@@ -259,9 +259,8 @@ class ProfileView(ui.View):
         
         description = f"**{self.status_message}**\n\n" if self.status_message else ""
         
-        # [수정] 카테고리 맵에서 ticket 제거하고 로직 통합
         category_map = {
-            "item": ("아이템", "📦"), # 입장권도 여기에 포함됨
+            "item": ("아이템", "📦"), 
             "gear": None, "fish": None, 
             "seed": ("농장_씨앗", "🌱"), "crop": ("농장_작물", "🌾"), 
             "mineral": ("광물", "💎"), "food": ("요리", "🍲"), 
@@ -323,7 +322,6 @@ class ProfileView(ui.View):
             if category_info:
                 category_name, default_emoji = category_info
                 
-                # [수정] 아이템 탭일 경우 입장권도 포함
                 target_categories = [category_name]
                 if self.current_page == "item":
                     target_categories.append("입장권")
@@ -345,13 +343,14 @@ class ProfileView(ui.View):
         self.clear_items()
         tabs_config = get_string("profile_view.tabs", [])
         
-        # [수정] 레이아웃 맵 업데이트 (Row 0: 4개, Row 1: 5개, Row 2: 1개)
-        layout_map = {0: 4, 1: 5, 2: 1}
+        # [수정] 5개/5개 레이아웃 적용
+        layout_map = {0: 5, 1: 5}
         current_row, buttons_in_row = 0, 0
 
         for config in tabs_config:
             if not (key := config.get("key")): continue
             
+            # 한 줄에 5개가 차면 다음 줄로
             if buttons_in_row >= layout_map.get(current_row, 5):
                 current_row += 1
                 buttons_in_row = 0
@@ -360,16 +359,16 @@ class ProfileView(ui.View):
             self.add_item(ui.Button(label=config.get("label"), style=style, custom_id=f"profile_tab_{key}", emoji=config.get("emoji"), row=current_row))
             buttons_in_row += 1
         
-        # 기능 버튼들은 마지막 줄(Row 2) 다음인 Row 3부터 배치
+        # 기능 버튼들은 탭 버튼 다음 줄부터 배치
         action_row = current_row + 1
         
-        if self.current_page == "item": # 입장권도 여기서 처리
+        if self.current_page == "item": 
             self.add_item(ui.Button(label=get_string("profile_view.item_tab.use_item_button_label", "아이템 사용"), style=discord.ButtonStyle.success, emoji="✨", custom_id="profile_use_item", row=action_row))
         
         if self.current_page == "gear":
             self.add_item(ui.Button(label="낚싯대 변경", style=discord.ButtonStyle.blurple, custom_id="profile_change_rod", emoji="🎣", row=action_row))
             self.add_item(ui.Button(label="미끼 변경", style=discord.ButtonStyle.blurple, custom_id="profile_change_bait", emoji="🐛", row=action_row))
-            # 줄바꿈
+            # 다음 줄로 넘겨서 배치 (버튼이 많으므로)
             self.add_item(ui.Button(label="괭이 변경", style=discord.ButtonStyle.success, custom_id="profile_change_hoe", emoji="🪓", row=action_row+1))
             self.add_item(ui.Button(label="물뿌리개 변경", style=discord.ButtonStyle.success, custom_id="profile_change_watering_can", emoji="💧", row=action_row+1))
             self.add_item(ui.Button(label="곡괭이 변경", style=discord.ButtonStyle.secondary, custom_id="profile_change_pickaxe", emoji="⛏️", row=action_row+1))
