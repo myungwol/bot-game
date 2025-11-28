@@ -93,7 +93,7 @@ class BuyItemView(ShopViewBase):
             
         all_items_in_category = sorted(
             [(n, d) for n, d in item_db.items() if d.get('buyable') and d.get('category', '').strip() in target_categories],
-            key=lambda item: item[1].get('price', 0)
+            key=lambda item: int(item[1].get('price') or 0) # [수정] 가격 정렬 시 None 안전 처리
         )
         self.items_in_category = all_items_in_category
 
@@ -102,29 +102,46 @@ class BuyItemView(ShopViewBase):
         balance = wallet.get('balance', 0)
         all_ui_strings = get_config("strings", {})
         commerce_strings = all_ui_strings.get("commerce", {})
+        
         category_display_names = { 
             "아이템": "잡화점", "장비": "장비점", "미끼": "미끼가게", "농장_씨앗": "씨앗가게", 
-            "펫 아이템": "펫 상점", "알": "알 상점", "조미료": "조미료 가게", "입장권": "입장권 판매소"
+            "펫 아이템": "펫 상점", "알": "알 상점", "조미료": "조미료 가게", "입장권": "입장권 판매소",
+            "역할": "역할 상점" # [추가] 역할 상점 이름
         }
         display_name = category_display_names.get(self.category, self.category.replace("_", " "))
         description_template = commerce_strings.get("item_view_desc", "현재 소지금: `{balance}`{currency_icon}\n구매하고 싶은 상품을 선택해주세요.")
+        
         embed = discord.Embed(
             title=f"🏪 구매함 - {display_name}",
             description=description_template.format(balance=f"{balance:,}", currency_icon=self.currency_icon),
             color=discord.Color.blue()
         )
+        
         await self._filter_items_for_user()
+        
         if not self.items_in_category:
             wip_message = commerce_strings.get("wip_category", "이 카테고리의 상품은 현재 준비 중입니다.")
             embed.add_field(name="준비 중", value=wip_message)
         else:
             start_index, end_index = self.page_index * self.items_per_page, (self.page_index + 1) * self.items_per_page
             items_on_page = self.items_in_category[start_index:end_index]
+            
             for name, data in items_on_page:
+                # [수정] 가격 정보 안전하게 가져오기 (None이면 0)
+                price = int(data.get('current_price') if data.get('current_price') is not None else data.get('price', 0))
+                
                 field_name = f"{data.get('emoji', '📦')} {name}"
-                field_value = (f"**가격:** `{data.get('current_price', data.get('price', 0)):,}`{self.currency_icon}\n"
-                               f"> {data.get('description', '설명이 없습니다.')}")
+                
+                # [수정] 역할 카테고리는 설명 제외, 그 외에는 설명 포함
+                if self.category == "역할":
+                     field_value = f"**가격:** `{price:,}`{self.currency_icon}"
+                else:
+                    description = data.get('description', '설명이 없습니다.')
+                    field_value = (f"**가격:** `{price:,}`{self.currency_icon}\n"
+                                   f"> {description}")
+                
                 embed.add_field(name=field_name, value=field_value, inline=False)
+                
             total_pages = math.ceil(len(self.items_in_category) / self.items_per_page)
             footer_text = "매일 00:05(KST)에 시세 변동"
             if total_pages > 1:
@@ -137,11 +154,32 @@ class BuyItemView(ShopViewBase):
         self.clear_items()
         start_index, end_index = self.page_index * self.items_per_page, (self.page_index + 1) * self.items_per_page
         items_on_page = self.items_in_category[start_index:end_index]
+        
         if items_on_page:
-            options = [discord.SelectOption(label=name, value=name, description=f"가격: {data.get('current_price', data.get('price', 0)):,}{self.currency_icon}", emoji=coerce_item_emoji(data.get('emoji'))) for name, data in items_on_page]
+            options = []
+            for name, data in items_on_page:
+                # [수정] 가격 정보 안전하게 가져오기
+                price = int(data.get('current_price') if data.get('current_price') is not None else data.get('price', 0))
+                
+                # [수정] 역할 카테고리는 설명 비움
+                description = "" if self.category == "역할" else f"가격: {price:,}{self.currency_icon}"
+                if self.category == "역할":
+                    # 역할은 label에 멘션을 쓸 수 없으므로 이름만 표시 (어쩔 수 없음)
+                    label = name
+                else:
+                    label = name
+
+                options.append(discord.SelectOption(
+                    label=label, 
+                    value=name, 
+                    description=description, 
+                    emoji=coerce_item_emoji(data.get('emoji'))
+                ))
+                
             select = ui.Select(placeholder=f"구매할 '{self.category}' 상품을 선택하세요...", options=options)
             select.callback = self.select_callback
             self.add_item(select)
+            
         total_pages = math.ceil(len(self.items_in_category) / self.items_per_page)
         if total_pages > 1:
             prev_button = ui.Button(label="◀ 이전", custom_id="prev_page", disabled=(self.page_index == 0), row=2)
