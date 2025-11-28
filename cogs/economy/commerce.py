@@ -1,577 +1,571 @@
-# cogs/economy/commerce.py
+# cogs/economy/core.py
 
 import discord
-from discord.ext import commands
-from discord import ui
-import logging
+from discord.ext import commands, tasks
+import random
 import asyncio
-import math
+import logging
 import time
-from typing import Optional, Dict, List, Any
-from utils.helpers import coerce_item_emoji
-
-logger = logging.getLogger(__name__)
+from datetime import datetime, timezone, timedelta, time as dt_time
+from typing import Dict, Optional, List, Deque, Set
+from collections import deque, defaultdict
 
 from utils.database import (
-    get_inventory, get_wallet, supabase, get_id, get_item_database,
-    get_config,
-    get_aquarium, get_fishing_loot, sell_fish_from_db,
-    save_panel_id, get_panel_id, get_embed_from_db,
-    update_inventory, update_wallet, get_farm_data, expand_farm_db,
-    save_config_to_db, log_activity
+    get_wallet, update_wallet, get_id, supabase, get_embed_from_db, get_config,
+    save_config_to_db, get_all_user_stats, log_activity, get_cooldown, set_cooldown,
+    get_user_gear, load_all_data_from_db, ensure_user_gear_exists,
+    load_bot_configs_from_db, delete_config_from_db, get_item_database, get_fishing_loot,
+    get_user_pet, add_xp_to_pet_db, update_inventory 
 )
 from utils.helpers import format_embed_from_db
 
-async def delete_after(message: discord.WebhookMessage, delay: int):
-    await asyncio.sleep(delay)
-    try:
-        await message.delete()
-    except (discord.NotFound, discord.Forbidden):
+logger = logging.getLogger(__name__)
+
+KST = timezone(timedelta(hours=9))
+KST_MONTHLY_RESET = dt_time(hour=0, minute=2, tzinfo=KST)
+KST_MIDNIGHT_AGGREGATE = dt_time(hour=0, minute=5, tzinfo=KST)
+
+class EconomyCore(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.currency_icon = "🪙"
+        self._coin_reward_cooldown = commands.CooldownMapping.from_cooldown(1, 3.0, commands.BucketType.user)
+        self.users_in_vc_last_minute: Set[int] = set()
+        self.chat_cache: Deque[Dict] = deque()
+        self._cache_lock = asyncio.Lock()
+        self.voice_time_requirement_minutes = 10
+        self.voice_reward_range = [10, 15]
+        self.chat_message_requirement = 20
+        self.chat_reward_range = [10, 15]
+        self.xp_from_chat = 5
+        self.xp_from_voice = 10
+        self.coin_log_queue: Deque[discord.Embed] = deque()
+        self.log_sender_task: Optional[asyncio.Task] = None
+        self.log_sender_lock = asyncio.Lock()
+        self.activity_log_loop.start()
+        self.voice_activity_tracker.start()
+        self.update_market_prices.start()
+        self.monthly_whale_reset.start()
+        self.unified_request_dispatcher.start()
+        self.initial_setup_done = False
+        logger.info("EconomyCore Cog가 성공적으로 초기화되었습니다.")
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if self.initial_setup_done:
+            return
+        logger.info("EconomyCore: 봇이 준비되었습니다. 데이터베이스 초기화를 시작합니다.")
+        await load_all_data_from_db()
+        logger.info("EconomyCore: 데이터베이스 설정 로딩 완료.")
+        await self._ensure_all_members_have_gear()
+        self.initial_setup_done = True
+
+    async def cog_load(self):
+        await self.load_configs()
+        if not self.log_sender_task or self.log_sender_task.done():
+            self.log_sender_task = self.bot.loop.create_task(self.coin_log_sender())
+
+    async def _ensure_all_members_have_gear(self):
+        logger.info("[초기화] 서버 멤버 장비 정보 확인 및 생성을 시작합니다.")
+        server_id_str = get_config("SERVER_ID")
+        if not server_id_str:
+            logger.error("[초기화] DB에 'SERVER_ID'가 설정되지 않아 멤버 확인을 건너뜁니다.")
+            return
+        try:
+            guild = self.bot.get_guild(int(server_id_str))
+            if not guild:
+                logger.error(f"[초기화] 설정된 SERVER_ID({server_id_str})에 해당하는 서버를 찾을 수 없습니다.")
+                return
+        except ValueError:
+            logger.error(f"[초기화] DB의 SERVER_ID ('{server_id_str}')가 올바른 숫자가 아닙니다.")
+            return
+        logger.info(f"[초기화] 대상 서버: {guild.name} (ID: {guild.id})")
+        tasks = [ensure_user_gear_exists(member.id) for member in guild.members if not member.bot]
+        if tasks:
+            logger.info(f"[초기화] 총 {len(tasks)}명의 멤버 정보를 확인 및 생성합니다.")
+            await asyncio.gather(*tasks)
+        logger.info("[초기화] 모든 멤버의 장비 정보 확인 작업이 완료되었습니다.")
+
+    async def load_configs(self):
+        game_config = get_config("GAME_CONFIG", {})
+        self.currency_icon = game_config.get("CURRENCY_ICON", "🪙")
+        self.voice_time_requirement_minutes = game_config.get("VOICE_TIME_REQUIREMENT_MINUTES", 10)
+        self.voice_reward_range = game_config.get("VOICE_REWARD_RANGE", [10, 15])
+        self.chat_message_requirement = game_config.get("CHAT_MESSAGE_REQUIREMENT", 20)
+        self.chat_reward_range = game_config.get("CHAT_REWARD_RANGE", [10, 15])
+        self.xp_from_chat = game_config.get("XP_FROM_CHAT", 5)
+        self.xp_from_voice = game_config.get("XP_FROM_VOICE", 10)
+
+    def cog_unload(self):
+        self.activity_log_loop.cancel()
+        self.voice_activity_tracker.cancel()
+        self.update_market_prices.cancel()
+        self.monthly_whale_reset.cancel()
+        if self.log_sender_task: self.log_sender_task.cancel()
+        self.unified_request_dispatcher.cancel()
+
+    @tasks.loop(seconds=10.0)
+    async def unified_request_dispatcher(self):
+        try:
+            response = await supabase.table('bot_configs').select('config_key, config_value').like('config_key', '%_request%').execute()
+            
+            if not (response and response.data):
+                return
+
+            requests = response.data
+            keys_to_delete = [req['config_key'] for req in requests]
+
+            requests_by_prefix = defaultdict(list)
+            for req in requests:
+                prefix_parts = req['config_key'].split('_request')
+                if len(prefix_parts) > 1:
+                    prefix = prefix_parts[0]
+                    requests_by_prefix[prefix].append(req)
+
+            if 'level_tier_update' in requests_by_prefix or 'job_advancement' in requests_by_prefix:
+                if level_cog := self.bot.get_cog("LevelSystem"):
+                    await level_cog.process_level_requests(requests_by_prefix)
+            
+            if 'farm_ui_update' in requests_by_prefix:
+                if farm_cog := self.bot.get_cog("Farm"):
+                    user_ids = {int(req['config_key'].split('_')[-1]) for req in requests_by_prefix['farm_ui_update']}
+                    await farm_cog.process_ui_update_requests(user_ids)
+
+            if 'kitchen_ui_update' in requests_by_prefix:
+                if cooking_cog := self.bot.get_cog("Cooking"):
+                    user_ids = {int(req['config_key'].split('_')[-1]) for req in requests_by_prefix['kitchen_ui_update']}
+                    await cooking_cog.process_ui_update_requests(user_ids)
+
+            if 'pet_ui_update' in requests_by_prefix:
+                if pet_cog := self.bot.get_cog("PetSystem"):
+                    for req in requests_by_prefix['pet_ui_update']:
+                        try:
+                            user_id = int(req['config_key'].split('_')[-1])
+                            pet_data = await get_user_pet(user_id)
+                            if pet_data and (thread_id := pet_data.get('thread_id')):
+                                if thread := self.bot.get_channel(thread_id):
+                                    await pet_cog.update_pet_ui(user_id, thread, message=None, is_refresh=True)
+                        except Exception as e:
+                            logger.error(f"개별 펫 UI 업데이트 요청 처리 중 오류: {e}", exc_info=True)
+            
+            if 'panel_regenerate' in requests_by_prefix:
+                if panel_cog := self.bot.get_cog("PanelUpdater"):
+                    await panel_cog.process_panel_regenerate_requests(requests_by_prefix['panel_regenerate'])
+
+            if 'config_reload' in requests_by_prefix:
+                logger.info("[CONFIG] 설정 새로고침 요청 감지...")
+                await load_bot_configs_from_db()
+                for cog in self.bot.cogs.values():
+                    if hasattr(cog, 'load_configs'):
+                        await cog.load_configs()
+                logger.info("[CONFIG] 모든 설정 새로고침 완료.")
+
+            if 'game_data_reload' in requests_by_prefix:
+                from utils.database import reload_game_data_from_db
+                logger.info("[GAME DATA] 게임 데이터 새로고침 요청 감지...")
+                await reload_game_data_from_db()
+                logger.info("[GAME DATA] 게임 데이터 새로고침 완료.")
+
+            if 'manual_update' in requests_by_prefix:
+                logger.info("[수동 업데이트] 요청 감지...")
+                if farm_cog := self.bot.get_cog("Farm"):
+                    await farm_cog.daily_crop_update()
+                await self.update_market_prices()
+                logger.info("[수동 업데이트] 모든 수동 업데이트 완료.")
+            
+            if 'pet_levelup' in requests_by_prefix:
+                if pet_cog := self.bot.get_cog("PetSystem"):
+                    await pet_cog.process_levelup_requests(requests_by_prefix['pet_levelup'])
+
+            if 'pet_admin_levelup' in requests_by_prefix:
+                if pet_cog := self.bot.get_cog("PetSystem"):
+                    admin_requests = requests_by_prefix['pet_admin_levelup']
+                    await pet_cog.process_levelup_requests(admin_requests, is_admin=True)
+
+            if 'pet_evolution_check' in requests_by_prefix:
+                 if pet_cog := self.bot.get_cog("PetSystem"):
+                    user_ids = {int(req['config_key'].split('_')[-1]) for req in requests_by_prefix['pet_evolution_check']}
+                    await pet_cog.check_and_process_auto_evolution(user_ids)
+            
+            if 'pet_level_set' in requests_by_prefix:
+                if pet_cog := self.bot.get_cog("PetSystem"):
+                    await pet_cog.process_level_set_requests(requests_by_prefix['pet_level_set'])
+            
+            if 'exploration_complete' in requests_by_prefix:
+                for req in requests_by_prefix['exploration_complete']:
+                    try:
+                        user_id = int(req['config_key'].split('_')[-1])
+                        pet_res = await supabase.table('pets').select('current_exploration_id').eq('user_id', str(user_id)).single().execute()
+                        
+                        if pet_res.data and (exp_id := pet_res.data.get('current_exploration_id')):
+                            past_time = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+                            await supabase.table('pet_explorations').update({'end_time': past_time}).eq('id', exp_id).execute()
+                            logger.info(f"[Dispatcher] 유저 {user_id}의 탐사(ID: {exp_id})를 즉시 완료 처리했습니다.")
+                        else:
+                            logger.warning(f"[Dispatcher] 즉시 완료 요청된 유저 {user_id}가 탐사 중이 아닙니다.")
+                    except Exception as e:
+                        logger.error(f"펫 탐사 즉시 완료 처리 중 오류: {e}", exc_info=True)
+
+            if 'boss_reset_manual' in requests_by_prefix:
+                if boss_cog := self.bot.get_cog("BossRaid"):
+                    logger.info("[Dispatcher] 수동 보스 리셋 요청을 감지하여 처리합니다.")
+                    await boss_cog.manual_reset_check(force_weekly=True, force_monthly=True)
+
+            if 'boss_spawn_test' in requests_by_prefix or 'boss_defeat_test' in requests_by_prefix:
+                boss_cog = self.bot.get_cog("BossRaid")
+                if boss_cog:
+                    spawn_requests = requests_by_prefix.get('boss_spawn_test', [])
+                    defeat_requests = requests_by_prefix.get('boss_defeat_test', [])
+                    
+                    if spawn_requests:
+                        payload = spawn_requests[-1].get('config_value', {})
+                        boss_type = payload.get('boss_type')
+                        if boss_type:
+                            logger.info(f"[AdminBridge] 강제 소환 요청 수신: {boss_type}")
+                            await boss_cog.create_new_raid(boss_type, force=True)
+                    
+                    if defeat_requests:
+                        payload = defeat_requests[-1].get('config_value', {})
+                        boss_type = payload.get('boss_type')
+                        if boss_type:
+                            logger.info(f"[AdminBridge] 강제 처치 요청 수신: {boss_type}")
+                            raid_res = await supabase.table('boss_raids').select('id, bosses!inner(type)').eq('status', 'active').eq('bosses.type', boss_type).limit(1).execute()
+                            
+                            if raid_res and raid_res.data:
+                                raid_id = raid_res.data[0]['id']
+                                channel_key = "weekly_boss_channel_id" if boss_type == 'weekly' else "monthly_boss_channel_id"
+                                if (channel_id := get_id(channel_key)) and (channel := self.bot.get_channel(channel_id)):
+                                    await boss_cog.handle_boss_defeat(channel, raid_id)
+                                else:
+                                    logger.error(f"강제 처치를 위한 {boss_type} 보스 채널을 찾을 수 없습니다.")
+                            else:
+                                logger.warning(f"강제 처치 요청: 현재 활성화된 {boss_type} 보스가 없습니다.")
+            
+            server_id_str = get_config("SERVER_ID")
+            guild = self.bot.get_guild(int(server_id_str)) if server_id_str else None
+
+            if guild:
+                if 'coin_admin_update' in requests_by_prefix:
+                    for req in requests_by_prefix['coin_admin_update']:
+                        try:
+                            user_id = int(req['config_key'].split('_')[-1])
+                            user = guild.get_member(user_id)
+                            amount = req['config_value'].get('amount')
+                            if user and amount is not None:
+                                await update_wallet(user, amount)
+                                logger.info(f"[AdminBridge] {user.display_name}님에게 코인 {amount}를 처리했습니다.")
+                        except Exception as e:
+                            logger.error(f"[AdminBridge] 코인 요청 처리 중 오류: {e}", exc_info=True)
+
+                if 'xp_admin_update' in requests_by_prefix:
+                    level_cog = self.bot.get_cog("LevelSystem")
+                    if level_cog:
+                        for req in requests_by_prefix['xp_admin_update']:
+                            try:
+                                user_id = int(req['config_key'].split('_')[-1])
+                                user = guild.get_member(user_id)
+                                payload = req['config_value']
+                                xp_to_add = payload.get('xp_to_add')
+                                exact_level = payload.get('exact_level')
+                                if user:
+                                    if xp_to_add is not None:
+                                        await level_cog.update_user_xp_and_level_from_admin(user, xp_to_add=xp_to_add)
+                                    elif exact_level is not None:
+                                        await level_cog.update_user_xp_and_level_from_admin(user, exact_level=exact_level)
+                                    logger.info(f"[AdminBridge] {user.display_name}님의 XP/레벨을 처리했습니다.")
+                            except Exception as e:
+                                logger.error(f"[AdminBridge] XP/레벨 요청 처리 중 오류: {e}", exc_info=True)
+                
+                # 아이템 지급 요청 처리 로직
+                if 'item_admin_give' in requests_by_prefix:
+                    for req in requests_by_prefix['item_admin_give']:
+                        try:
+                            user_id = int(req['config_key'].split('_')[-1])
+                            payload = req['config_value']
+                            
+                            item_name = payload.get('item_name')
+                            amount = payload.get('amount')
+                            
+                            if user_id and item_name and amount:
+                                await update_inventory(user_id, item_name, amount)
+                                user = guild.get_member(user_id)
+                                user_name = user.display_name if user else str(user_id)
+                                logger.info(f"[AdminBridge] {user_name}님에게 아이템 '{item_name}' {amount}개를 지급했습니다.")
+                                    
+                        except Exception as e:
+                            logger.error(f"[AdminBridge] 아이템 지급 요청 처리 중 오류: {e}", exc_info=True)
+            
+            if keys_to_delete:
+                await supabase.table('bot_configs').delete().in_('config_key', keys_to_delete).execute()
+
+        except Exception as e:
+            logger.error(f"통합 요청 처리기에서 오류 발생: {e}", exc_info=True)
+
+    @unified_request_dispatcher.before_loop
+    async def before_unified_dispatcher(self):
+        await self.bot.wait_until_ready()
+
+    async def coin_log_sender(self):
+        await self.bot.wait_until_ready()
+        while not self.bot.is_closed():
+            try:
+                async with self.log_sender_lock:
+                    if self.coin_log_queue:
+                        embed_to_send = self.coin_log_queue.popleft()
+                        
+                        try:
+                            log_channel_id = get_id("coin_log_channel_id")
+                            if log_channel_id and (log_channel := self.bot.get_channel(log_channel_id)):
+                                await log_channel.send(embed=embed_to_send)
+                        except Exception as send_error:
+                            self.coin_log_queue.appendleft(embed_to_send)
+                            raise send_error
+
+            except Exception as e:
+                logger.error(f"코인 지급 로그 발송 중 오류: {e}", exc_info=True)
+                await asyncio.sleep(5)
+            
+            await asyncio.sleep(2)
+
+    @tasks.loop(minutes=1)
+    async def activity_log_loop(self):
+        await self.bot.wait_until_ready()
+        async with self._cache_lock:
+            if not self.chat_cache: return
+            logs_to_process = list(self.chat_cache)
+            self.chat_cache.clear()
+
+        try:
+            for log in logs_to_process:
+                log['user_id'] = str(log['user_id'])
+            await supabase.table('user_activities').insert(logs_to_process).execute()
+
+        except Exception as e:
+            logger.error(f"활동 기록 DB 삽입 중 심각한 오류 발생. 데이터를 캐시로 복원합니다: {e}", exc_info=True)
+            async with self._cache_lock:
+                self.chat_cache.extend(logs_to_process)
+            return
+
+        try:
+            user_chat_counts = defaultdict(int)
+            for log in logs_to_process:
+                user_id = int(log['user_id'])
+                user_chat_counts[user_id] += log.get('amount', 0)
+
+            for user_id, count in user_chat_counts.items():
+                user = self.bot.get_user(user_id)
+                if not user: continue
+
+                xp_to_add = self.xp_from_chat * count
+                if xp_to_add > 0:
+                    xp_res = await supabase.rpc('add_xp', {'p_user_id': str(user_id), 'p_xp_to_add': xp_to_add, 'p_source': 'chat'}).execute()
+                    if xp_res.data:
+                        await self.handle_level_up_event(user, xp_res.data)
+                    
+                    pet_xp_res = await add_xp_to_pet_db(user_id, xp_to_add)
+                    
+                    if pet_xp_res and pet_xp_res[0].get('leveled_up'):
+                        new_level = pet_xp_res[0].get('new_level')
+                        points = pet_xp_res[0].get('points_awarded')
+                        
+                        if pet_cog := self.bot.get_cog("PetSystem"):
+                            await pet_cog.notify_pet_level_up(user_id, new_level, points)
+                            await pet_cog.check_and_process_auto_evolution({user_id})
+
+                stats = await get_all_user_stats(user_id)
+                daily_stats = stats.get('daily', {})
+                if daily_stats.get('chat_count', 0) >= self.chat_message_requirement:
+                    reward_res = await supabase.table('user_activities').select('id', count='exact').eq('user_id', str(user_id)).eq('activity_type', 'reward_chat').gte('created_at', datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat()).execute()
+                    if reward_res.count == 0:
+                        reward = random.randint(*self.chat_reward_range)
+                        await update_wallet(user, reward)
+                        await supabase.table('user_activities').insert({'user_id': str(user_id), 'activity_type': 'reward_chat', 'coin_earned': reward}).execute()
+                        await self.log_coin_activity(user, reward, f"채팅 {self.chat_message_requirement}회 달성")
+
+        except Exception as e:
+            logger.error(f"활동 로그 보상 지급 중 오류 발생: {e}", exc_info=True)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot or message.guild is None or not message.content or message.content.startswith('/'): return
+        bucket = self._coin_reward_cooldown.get_bucket(message)
+        if not bucket.update_rate_limit():
+            xp_to_add = self.xp_from_chat
+            async with self._cache_lock:
+                self.chat_cache.append({'user_id': message.author.id, 'activity_type': 'chat', 'amount': 1, 'xp_earned': xp_to_add})
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         pass
 
-class QuantityModal(ui.Modal):
-    quantity = ui.TextInput(label="수량", placeholder="예: 10", required=True, max_length=5)
-    def __init__(self, title: str, max_value: int):
-        super().__init__(title=title)
-        self.quantity.placeholder = f"최대 {max_value}개까지"
-        self.max_value = max_value
-        self.value: Optional[int] = None
-    async def on_submit(self, i: discord.Interaction):
-        try:
-            q_val = int(self.quantity.value)
-            if not (1 <= q_val <= self.max_value):
-                await i.response.send_message(f"1부터 {self.max_value} 사이의 숫자를 입력해주세요.", ephemeral=True, delete_after=5)
-                return
-            self.value = q_val
-            await i.response.defer(ephemeral=True)
-        except ValueError:
-            await i.response.send_message("숫자만 입력해주세요.", ephemeral=True, delete_after=5)
-        except Exception:
-            self.stop()
+    @tasks.loop(minutes=1)
+    async def voice_activity_tracker(self):
+        await self.bot.wait_until_ready()
+        server_id_str = get_config("SERVER_ID")
+        if not server_id_str: return
+        guild = self.bot.get_guild(int(server_id_str))
+        if not guild: return
 
-class ShopViewBase(ui.View):
-    def __init__(self, user: discord.Member):
-        super().__init__(timeout=300)
-        self.user = user
-        self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙")
-        self.message: Optional[discord.WebhookMessage] = None
+        currently_active_users: Set[int] = set()
+        afk_channel_id = guild.afk_channel.id if guild.afk_channel else None
 
-    async def update_view(self, interaction: discord.Interaction):
-        embed = await self.build_embed()
-        await self.build_components()
-        await interaction.edit_original_response(embed=embed, view=self)
+        for channel in guild.voice_channels:
+            if channel.id == afk_channel_id: continue
+            for member in channel.members:
+                if not member.bot: currently_active_users.add(member.id)
 
-    async def build_embed(self) -> discord.Embed:
-        raise NotImplementedError("build_embed는 하위 클래스에서 구현해야 합니다.")
-
-    async def build_components(self):
-        raise NotImplementedError("build_components는 하위 클래스에서 구현해야 합니다.")
-
-    async def handle_error(self, interaction: discord.Interaction, error: Exception, custom_message: str = ""):
-        logger.error(f"상점 처리 중 오류 발생: {error}", exc_info=True)
-        message_content = custom_message or "❌ 처리 중 오류가 발생했습니다."
-        if interaction.response.is_done():
-            msg = await interaction.followup.send(message_content, ephemeral=True)
-            asyncio.create_task(delete_after(msg, 5))
-        else:
-            await interaction.response.send_message(message_content, ephemeral=True, delete_after=5)
-
-class BuyItemView(ShopViewBase):
-    def __init__(self, user: discord.Member, category: str):
-        super().__init__(user)
-        self.category = category
-        self.items_in_category = []
-        self.page_index = 0
-        self.items_per_page = 20
-
-    async def _filter_items_for_user(self):
-        item_db = get_item_database()
-        
-        # '아이템' 카테고리일 경우 '입장권'도 포함하도록 필터링 조건 수정
-        target_categories = [self.category]
-        if self.category == "아이템":
-            target_categories.append("입장권")
-            
-        all_items_in_category = sorted(
-            [(n, d) for n, d in item_db.items() if d.get('buyable') and d.get('category', '').strip() in target_categories],
-            key=lambda item: item[1].get('price', 0)
-        )
-        self.items_in_category = all_items_in_category
-
-    async def build_embed(self) -> discord.Embed:
-        wallet = await get_wallet(self.user.id)
-        balance = wallet.get('balance', 0)
-        all_ui_strings = get_config("strings", {})
-        commerce_strings = all_ui_strings.get("commerce", {})
-        category_display_names = { 
-            "아이템": "잡화점", "장비": "장비점", "미끼": "미끼가게", "농장_씨앗": "씨앗가게", 
-            "펫 아이템": "펫 상점", "알": "알 상점", "조미료": "조미료 가게", "입장권": "입장권 판매소"
-        }
-        display_name = category_display_names.get(self.category, self.category.replace("_", " "))
-        description_template = commerce_strings.get("item_view_desc", "현재 소지금: `{balance}`{currency_icon}\n구매하고 싶은 상품을 선택해주세요.")
-        embed = discord.Embed(
-            title=f"🏪 구매함 - {display_name}",
-            description=description_template.format(balance=f"{balance:,}", currency_icon=self.currency_icon),
-            color=discord.Color.blue()
-        )
-        await self._filter_items_for_user()
-        if not self.items_in_category:
-            wip_message = commerce_strings.get("wip_category", "이 카테고리의 상품은 현재 준비 중입니다.")
-            embed.add_field(name="준비 중", value=wip_message)
-        else:
-            start_index, end_index = self.page_index * self.items_per_page, (self.page_index + 1) * self.items_per_page
-            items_on_page = self.items_in_category[start_index:end_index]
-            for name, data in items_on_page:
-                field_name = f"{data.get('emoji', '📦')} {name}"
-                field_value = (f"**가격:** `{data.get('current_price', data.get('price', 0)):,}`{self.currency_icon}\n"
-                               f"> {data.get('description', '설명이 없습니다.')}")
-                embed.add_field(name=field_name, value=field_value, inline=False)
-            total_pages = math.ceil(len(self.items_in_category) / self.items_per_page)
-            footer_text = "매일 00:05(KST)에 시세 변동"
-            if total_pages > 1:
-                embed.set_footer(text=f"페이지 {self.page_index + 1} / {total_pages} | {footer_text}")
-            else:
-                embed.set_footer(text=footer_text)
-        return embed
-
-    async def build_components(self):
-        self.clear_items()
-        start_index, end_index = self.page_index * self.items_per_page, (self.page_index + 1) * self.items_per_page
-        items_on_page = self.items_in_category[start_index:end_index]
-        if items_on_page:
-            options = [discord.SelectOption(label=name, value=name, description=f"가격: {data.get('current_price', data.get('price', 0)):,}{self.currency_icon}", emoji=coerce_item_emoji(data.get('emoji'))) for name, data in items_on_page]
-            select = ui.Select(placeholder=f"구매할 '{self.category}' 상품을 선택하세요...", options=options)
-            select.callback = self.select_callback
-            self.add_item(select)
-        total_pages = math.ceil(len(self.items_in_category) / self.items_per_page)
-        if total_pages > 1:
-            prev_button = ui.Button(label="◀ 이전", custom_id="prev_page", disabled=(self.page_index == 0), row=2)
-            prev_button.callback = self.pagination_callback
-            self.add_item(prev_button)
-            next_button = ui.Button(label="다음 ▶", custom_id="next_page", disabled=(self.page_index >= total_pages - 1), row=2)
-            next_button.callback = self.pagination_callback
-            self.add_item(next_button)
-        back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=3)
-        back_button.callback = self.back_callback
-        self.add_item(back_button)
-
-    async def pagination_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        if interaction.data['custom_id'] == 'next_page': self.page_index += 1
-        else: self.page_index -= 1
-        await self.update_view(interaction)
-
-    async def select_callback(self, interaction: discord.Interaction):
-        item_name = interaction.data['values'][0]
-        item_data = get_item_database().get(item_name)
-        if not item_data: return
-        try:
-            inventory = await get_inventory(self.user); wallet = await get_wallet(self.user.id)
-            price = item_data.get('current_price', item_data.get('price', 0))
-            if wallet.get('balance', 0) < price:
-                return await interaction.response.send_message("❌ 코인이 부족하여 아이템을 구매할 수 없습니다.", ephemeral=True, delete_after=5)
-            if item_data.get('max_ownable', 1) > 1:
-                await self.handle_quantity_purchase(interaction, item_name, item_data, inventory, wallet)
-            else:
-                await self.handle_single_purchase(interaction, item_name, item_data, price, wallet)
-        except Exception as e:
-            await self.handle_error(interaction, e, str(e))
-    
-    async def handle_quantity_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict, inventory: Dict, wallet: Dict):
-        price = item_data.get('current_price', item_data.get('price', 0)); max_ownable = item_data.get('max_ownable', 999)
-        can_own_more = max_ownable - inventory.get(item_name, 0); max_from_balance = wallet.get('balance', 0) // price if price > 0 else can_own_more
-        max_buyable = min(can_own_more, max_from_balance)
-        if max_buyable <= 0:
-            return await interaction.response.send_message("❌ 잔액이 부족하거나 더 이상 구매할 수 없습니다.", ephemeral=True, delete_after=5)
-        modal = QuantityModal(f"{item_name} 구매", max_buyable); await interaction.response.send_modal(modal); await modal.wait()
-        if modal.value is None: return
-        quantity, total_price = modal.value, price * modal.value
-        current_wallet = await get_wallet(self.user.id)
-        if current_wallet.get('balance', 0) < total_price:
-            return await interaction.followup.send("❌ 코인이 부족하여 아이템을 구매할 수 없습니다.", ephemeral=True)
-        await update_inventory(str(self.user.id), item_name, quantity); await update_wallet(self.user, -total_price)
-        if item_name == "가마솥": await save_config_to_db(f"kitchen_ui_update_request_{self.user.id}", time.time())
-        new_wallet = await get_wallet(self.user.id)
-        success_message = f"✅ **{item_name}** {quantity}개를 `{total_price:,}`{self.currency_icon}에 구매했습니다.\n(잔액: `{new_wallet.get('balance', 0):,}`{self.currency_icon})"
-        msg = await interaction.followup.send(success_message, ephemeral=True); asyncio.create_task(delete_after(msg, 10)); await self.update_view(interaction)
-
-    async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict, price: int, wallet: Dict):
-        await interaction.response.defer(ephemeral=True); await update_inventory(str(self.user.id), item_name, 1); await update_wallet(self.user, -price)
-        if (id_key := item_data.get('id_key')) and (role_id := get_id(id_key)) and (role := interaction.guild.get_role(role_id)):
-            try: await self.user.add_roles(role, reason=f"'{item_name}' 아이템 구매")
-            except discord.Forbidden: logger.error(f"역할 부여 실패: {role.name} 역할을 부여할 권한이 없습니다.")
-        new_wallet = await get_wallet(self.user.id)
-        success_message = f"✅ **{item_name}**을(를) `{price:,}`{self.currency_icon}에 구매했습니다.\n(잔액: `{new_wallet.get('balance', 0):,}`{self.currency_icon})"
-        msg = await interaction.followup.send(success_message, ephemeral=True); asyncio.create_task(delete_after(msg, 10)); await self.update_view(interaction)
-        
-    async def back_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(); category_view = BuyCategoryView(self.user); category_view.message = self.message; await category_view.update_view(interaction)
-
-class BuyCategoryView(ShopViewBase):
-    async def build_embed(self) -> discord.Embed:
-        all_ui_strings = get_config("strings", {}); commerce_strings = all_ui_strings.get("commerce", {})
-        title = commerce_strings.get("category_view_title", "🏪 구매함"); description = commerce_strings.get("category_view_desc", "구매하고 싶은 아이템의 카테고리를 선택해주세요.")
-        embed = discord.Embed(title=title, description=description, color=discord.Color.green()); embed.set_footer(text="매일 00:05(KST)에 시세 변동"); return embed
-    
-    async def build_components(self):
-        self.clear_items()
-        
-        # 요청하신 새 레이아웃으로 변경
-        layout = [
-            [("역할", "역할"), ("아이템", "아이템"), ("장비", "장비"), ("조미료", "조미료")],
-            [("미끼", "미끼"), ("씨앗", "농장_씨앗"), ("펫", "펫 아이템"), ("알", "알")]
-        ]
-        
-        for row_index, row_items in enumerate(layout):
-            for label, category_key in row_items:
-                button = ui.Button(label=label, custom_id=f"buy_category_{category_key}", row=row_index)
-                button.callback = self.category_callback
-                self.add_item(button)
-    
-    async def category_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        category = interaction.data['custom_id'].split('buy_category_')[-1]
-        item_view = BuyItemView(self.user, category); item_view.message = self.message; await item_view.update_view(interaction)
-
-class SellFishView(ShopViewBase):
-    def __init__(self, user: discord.Member):
-        super().__init__(user)
-        self.fish_data_map: Dict[str, Dict[str, Any]] = {}
-        # 페이지네이션 및 데이터 저장을 위한 속성
-        self.all_fish = []
-        self.page_index = 0
-        self.items_per_page = 20 # 한 페이지에 표시할 물고기 수
-
-    async def refresh_view(self, interaction: discord.Interaction):
-        # 판매 후 목록 갱신을 위해 데이터 초기화
-        self.all_fish = []
-        self.page_index = 0
-        await self.update_view(interaction)
-
-    async def build_embed(self) -> discord.Embed:
-        balance = (await get_wallet(self.user.id)).get('balance', 0)
-        embed = discord.Embed(title="🎣 판매함 - 물고기", description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 물고기를 아래 메뉴에서 선택해주세요.", color=discord.Color.blue())
-        embed.set_footer(text="매일 00:05(KST)에 시세 변동")
-        return embed
-
-    async def build_components(self):
-        self.clear_items()
-        
-        # 1. 물고기 데이터 로드 (캐시가 비어있을 때만)
-        if not self.all_fish:
-            self.all_fish = await get_aquarium(str(self.user.id))
-        
-        # 2. 가격 정보 로드
-        loot_res = await supabase.table('fishing_loots').select('*').execute()
-        if not (loot_res and loot_res.data):
-            self.add_item(ui.Button(label="오류: 가격 정보를 불러올 수 없습니다.", disabled=True))
+        users_to_reward = currently_active_users.intersection(self.users_in_vc_last_minute)
+        if not users_to_reward:
+            self.users_in_vc_last_minute = currently_active_users
             return
-        loot_db = {loot['name']: loot for loot in loot_res.data}
 
-        self.fish_data_map.clear()
-        
-        # 3. 페이지네이션 처리
-        start_index = self.page_index * self.items_per_page
-        end_index = start_index + self.items_per_page
-        fish_on_page = self.all_fish[start_index:end_index]
-
-        options = []
-        if fish_on_page:
-            for fish in fish_on_page:
-                fish_id = str(fish['id'])
-                loot_info = loot_db.get(fish['name'], {})
-                
-                # 가격 계산 (기본가 + 크기 보너스)
-                base_value = loot_info.get('current_base_value')
-                if base_value is None:
-                    base_value = loot_info.get('base_value', 0)
-                
-                size_bonus = fish['size'] * loot_info.get('size_multiplier', 0)
-                price = int(base_value + size_bonus)
-                
-                self.fish_data_map[fish_id] = {'price': price, 'name': fish['name']}
-                
-                label = f"{fish['name']} ({fish['size']}cm)"
-                description = f"판매가: {price:,}{self.currency_icon}"
-                emoji = coerce_item_emoji(loot_info.get('emoji', '🐟'))
-                
-                options.append(discord.SelectOption(label=label, value=fish_id, description=description, emoji=emoji))
-        
-        # 4. 컴포넌트 추가
-        if options:
-            # 물고기 선택 메뉴 (다중 선택 가능)
-            select = ui.Select(
-                placeholder=f"판매할 물고기 선택... ({len(fish_on_page)}마리)", 
-                options=options, 
-                min_values=1, 
-                max_values=len(options)
-            )
-            select.callback = self.on_select
-            self.add_item(select)
-        else:
-            self.add_item(ui.Button(label="판매할 물고기가 없습니다.", disabled=True))
-        
-        # 판매 확정 버튼 (초기엔 비활성화)
-        sell_button = ui.Button(label="선택한 물고기 판매", style=discord.ButtonStyle.success, disabled=True, custom_id="sell_fish_confirm")
-        sell_button.callback = self.sell_fish
-        self.add_item(sell_button)
-        
-        # 페이지 이동 버튼
-        total_pages = math.ceil(len(self.all_fish) / self.items_per_page)
-        if total_pages > 1:
-            prev_button = ui.Button(label="◀ 이전", custom_id="prev_page", disabled=(self.page_index == 0), row=2)
-            prev_button.callback = self.pagination_callback
-            self.add_item(prev_button)
-            
-            next_button = ui.Button(label="다음 ▶", custom_id="next_page", disabled=(self.page_index >= total_pages - 1), row=2)
-            next_button.callback = self.pagination_callback
-            self.add_item(next_button)
-
-        # 뒤로가기 버튼
-        back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=3)
-        back_button.callback = self.go_back
-        self.add_item(back_button)
-
-    async def pagination_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        if interaction.data['custom_id'] == 'next_page':
-            self.page_index += 1
-        else:
-            self.page_index -= 1
-        await self.update_view(interaction)
-
-    async def on_select(self, interaction: discord.Interaction):
-        # 선택 시 판매 버튼 활성화
-        if sell_button := next((c for c in self.children if isinstance(c, ui.Button) and c.custom_id == "sell_fish_confirm"), None):
-            sell_button.disabled = False
-        await interaction.response.edit_message(view=self)
-
-    async def sell_fish(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        # 선택된 값 가져오기
-        select_menu = next((c for c in self.children if isinstance(c, ui.Select)), None)
-        if not select_menu or not select_menu.values:
-            msg = await interaction.followup.send("❌ 판매할 물고기가 선택되지 않았습니다.", ephemeral=True)
-            asyncio.create_task(delete_after(msg, 5))
-            return
-            
-        fish_ids_to_sell = [int(val) for val in select_menu.values]
-        total_price = sum(self.fish_data_map[val]['price'] for val in select_menu.values)
-        
         try:
-            # 판매 처리 (DB)
-            await sell_fish_from_db(str(self.user.id), fish_ids_to_sell, total_price)
+            xp_per_minute = self.xp_from_voice
+            for user_id in users_to_reward:
+                user = self.bot.get_user(user_id)
+                if not user: continue
+                stats = await get_all_user_stats(user_id)
+                new_total_voice_minutes_today = stats.get('daily', {}).get('voice_minutes', 0) + 1
+                if new_total_voice_minutes_today > 0 and new_total_voice_minutes_today % self.voice_time_requirement_minutes == 0:
+                    today_str = datetime.now(KST).strftime('%Y-%m-%d')
+                    cooldown_key = f"voice_reward_{today_str}_{new_total_voice_minutes_today}m"
+                    if await get_cooldown(user_id, cooldown_key) == 0:
+                        reward = random.randint(*self.voice_reward_range)
+                        await update_wallet(user, reward)
+                        await log_activity(user_id, 'reward_voice', coin_earned=reward)
+                        await self.log_coin_activity(user, reward, f"음성 채널에서 {new_total_voice_minutes_today}분 활동")
+                        await set_cooldown(user_id, cooldown_key)
             
-            # 로그 기록 (추가된 부분)
-            await log_activity(self.user.id, "sell_fish", amount=len(fish_ids_to_sell), coin_earned=total_price)
-            
-            new_balance = (await get_wallet(self.user.id)).get('balance', 0)
-            success_message = f"✅ 물고기 {len(fish_ids_to_sell)}마리를 `{total_price:,}`{self.currency_icon}에 판매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
-            
-            msg = await interaction.followup.send(success_message, ephemeral=True)
-            asyncio.create_task(delete_after(msg, 10))
-            
-            # 판매 후 목록 갱신
-            await self.refresh_view(interaction)
-            
+            logs_to_insert = [{'user_id': str(uid), 'activity_type': 'voice', 'amount': 1, 'xp_earned': xp_per_minute} for uid in users_to_reward]
+            if logs_to_insert:
+                await supabase.table('user_activities').insert(logs_to_insert).execute()
+                
+                xp_update_tasks = [supabase.rpc('add_xp', {'p_user_id': str(uid), 'p_xp_to_add': xp_per_minute, 'p_source': 'voice'}).execute() for uid in users_to_reward]
+                pet_xp_tasks = [add_xp_to_pet_db(uid, xp_per_minute) for uid in users_to_reward]
+                
+                xp_results, pet_xp_results = await asyncio.gather(
+                    asyncio.gather(*xp_update_tasks, return_exceptions=True),
+                    asyncio.gather(*pet_xp_tasks, return_exceptions=True)
+                )
+
+                for i, result in enumerate(xp_results):
+                    if not isinstance(result, Exception) and hasattr(result, 'data') and result.data:
+                        user = self.bot.get_user(list(users_to_reward)[i])
+                        if user: await self.handle_level_up_event(user, result.data)
+                
+                pet_cog = self.bot.get_cog("PetSystem")
+                users_list = list(users_to_reward)
+
+                for i, result in enumerate(pet_xp_results):
+                    user_id_from_list = users_list[i]
+                    
+                    if not isinstance(result, Exception) and result and isinstance(result, list) and result[0].get('leveled_up'):
+                        if pet_cog:
+                            new_level = result[0].get('new_level')
+                            points = result[0].get('points_awarded')
+                            await pet_cog.notify_pet_level_up(user_id_from_list, new_level, points)
+                            await pet_cog.check_and_process_auto_evolution({user_id_from_list})
+
         except Exception as e:
-            await self.handle_error(interaction, e)
+            logger.error(f"[음성 활동 추적] 순찰 중 오류 발생: {e}", exc_info=True)
+        finally:
+            self.users_in_vc_last_minute = currently_active_users
+    
+    @voice_activity_tracker.before_loop
+    async def before_voice_activity_tracker(self):
+        await self.bot.wait_until_ready()
 
-    async def go_back(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        view = SellCategoryView(self.user)
-        view.message = self.message
-        await view.update_view(interaction)
-class SellStackableView(ShopViewBase):
-    def __init__(self, user: discord.Member, category: str, title: str, color: int, emoji: str):
-        super().__init__(user)
-        self.category = category
-        self.embed_title = title
-        self.embed_color = color
-        self.default_emoji = emoji
-        self.item_data_map: Dict[str, Dict[str, Any]] = {}
-        self.all_items = []
-        self.page_index = 0
-        self.items_per_page = 20
+    async def handle_level_up_event(self, user: discord.User, result_data: List[Dict]):
+        if not result_data or not result_data[0].get('leveled_up'): return
+        new_level = result_data[0].get('new_level')
+        logger.info(f"유저 {user.display_name}(ID: {user.id})가 레벨 {new_level}(으)로 레벨업했습니다.")
+        game_config = get_config("GAME_CONFIG", {})
+        job_advancement_levels = game_config.get("JOB_ADVANCEMENT_LEVELS", [50, 100])
+        if new_level in job_advancement_levels:
+            await save_config_to_db(f"job_advancement_request_{user.id}", {"level": new_level, "timestamp": time.time()})
+        await save_config_to_db(f"level_tier_update_request_{user.id}", {"level": new_level, "timestamp": time.time()})
 
-    async def refresh_view(self, interaction: discord.Interaction):
-        self.all_items = []
-        self.page_index = 0
-        await self.update_view(interaction)
-        
-    async def build_embed(self) -> discord.Embed:
-        balance = (await get_wallet(self.user.id)).get('balance', 0)
-        embed = discord.Embed(title=self.embed_title, description=f"현재 소지금: `{balance:,}`{self.currency_icon}\n판매할 아이템을 아래 메뉴에서 선택해주세요.", color=self.embed_color)
-        embed.set_footer(text="매일 00:05(KST)에 시세 변동")
-        return embed
+    async def log_coin_activity(self, user: discord.Member, amount: int, reason: str):
+        embed_data = await get_embed_from_db("log_coin_gain")
+        if not embed_data: return
+        embed = format_embed_from_db(embed_data, user_mention=user.mention, amount=f"{amount:,}", currency_icon=self.currency_icon, reason=reason)
+        if user.display_avatar: embed.set_thumbnail(url=user.display_avatar.url)
+        async with self.log_sender_lock: self.coin_log_queue.append(embed)
 
-    async def build_components(self):
-        self.clear_items()
-        
-        if not self.all_items:
-            inventory = await get_inventory(self.user)
-            item_db = get_item_database()
-            self.all_items = sorted(
-                [(name, qty) for name, qty in inventory.items() if item_db.get(name, {}).get('category', '').strip() == self.category],
-                key=lambda x: x[0]
-            )
-        
-        self.item_data_map.clear()
-        
-        start_index = self.page_index * self.items_per_page
-        end_index = start_index + self.items_per_page
-        items_on_page = self.all_items[start_index:end_index]
-
-        options = []
-        if items_on_page:
-            item_db = get_item_database()
-            for name, qty in items_on_page:
-                item_data = item_db.get(name, {})
-                
-                # ▼▼▼ [핵심 수정] 가격 계산 로직 안전하게 변경 (NoneType 에러 방지) ▼▼▼
-                # 1. 기본 가격 가져오기 (DB가 NULL이면 0으로 처리)
-                base_price = item_data.get('price')
-                if base_price is None: 
-                    base_price = 0
-                
-                # 2. 판매가 설정이 없으면 기본가의 80%로 계산
-                sell_price = item_data.get('sell_price')
-                if sell_price is None:
-                    sell_price = int(base_price * 0.8)
-                
-                # 3. 시세 변동 가격이 있으면 최우선 적용, 없으면 판매가 사용
-                price = item_data.get('current_price')
-                if price is None:
-                    price = sell_price
-                # ▲▲▲ [수정 완료] ▲▲▲
-
-                self.item_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
-                options.append(discord.SelectOption(label=f"{name} (보유: {qty}개)", value=name, description=f"개당: {price}{self.currency_icon}", emoji=coerce_item_emoji(item_data.get('emoji', self.default_emoji))))
-        
-        if options:
-            select = ui.Select(placeholder=f"판매할 {self.category.replace('_', ' ')} 선택...(최대 25종)", options=options)
-            select.callback = self.on_select
-            self.add_item(select)
-            
-        total_pages = math.ceil(len(self.all_items) / self.items_per_page)
-        if total_pages > 1:
-            prev_button = ui.Button(label="◀ 이전", custom_id="prev_page", disabled=(self.page_index == 0), row=2)
-            prev_button.callback = self.pagination_callback
-            self.add_item(prev_button)
-            next_button = ui.Button(label="다음 ▶", custom_id="next_page", disabled=(self.page_index >= total_pages - 1), row=2)
-            next_button.callback = self.pagination_callback
-            self.add_item(next_button)
-
-        back_button = ui.Button(label="카테고리 선택으로 돌아가기", style=discord.ButtonStyle.grey, row=3)
-        back_button.callback = self.go_back
-        self.add_item(back_button)
-
-    async def pagination_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        if interaction.data['custom_id'] == 'next_page': self.page_index += 1
-        else: self.page_index -= 1
-        await self.update_view(interaction)
-
-    async def on_select(self, interaction: discord.Interaction):
-        selected_item = interaction.data['values'][0]
-        item_info = self.item_data_map.get(selected_item)
-        if not item_info: return
-
-        modal = QuantityModal(f"'{selected_item}' 판매", item_info['max_qty'])
-        await interaction.response.send_modal(modal)
-        await modal.wait()
-
-        if modal.value is None:
-            # 시간 초과 또는 취소 시 메시지 처리
-            return
-            
-        quantity_to_sell = modal.value
-        total_price = item_info['price'] * quantity_to_sell
+    @tasks.loop(time=KST_MONTHLY_RESET)
+    async def monthly_whale_reset(self):
+        now = datetime.now(KST)
+        if now.day != 1: return
+        logger.info("[월간 리셋] 고래 출현 공지 및 패널 재설치를 시작합니다.")
         try:
-            await update_inventory(str(self.user.id), selected_item, -quantity_to_sell)
-            await update_wallet(self.user, total_price)
-            new_balance = (await get_wallet(self.user.id)).get('balance', 0)
-            
-            # [추가] 판매 로그 기록 (튜토리얼 연동 등 활용)
-            # from utils.database import log_activity 가 상단에 있어야 함
-            # await log_activity(self.user.id, "sell_item", amount=quantity_to_sell, coin_earned=total_price)
-
-            success_message = f"✅ **{selected_item}** {quantity_to_sell}개를 `{total_price:,}`{self.currency_icon}에 판매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
-            msg = await interaction.followup.send(success_message, ephemeral=True); asyncio.create_task(delete_after(msg, 10))
-            await self.refresh_view(interaction)
+            sea_fishing_channel_id = get_id("sea_fishing_panel_channel_id")
+            if not (sea_fishing_channel_id and (channel := self.bot.get_channel(sea_fishing_channel_id))): return
+            fishing_cog = self.bot.get_cog("Fishing")
+            if not fishing_cog: return
+            if old_msg_id := get_config("whale_announcement_message_id"):
+                try: await (await channel.fetch_message(int(old_msg_id))).delete()
+                except (discord.NotFound, discord.Forbidden): pass
+            if embed_data := await get_embed_from_db("embed_whale_reset_announcement"):
+                announcement_embed = discord.Embed.from_dict(embed_data)
+                announcement_msg = await channel.send(embed=announcement_embed)
+                await save_config_to_db("whale_announcement_message_id", announcement_msg.id)
+                await fishing_cog.regenerate_panel(channel, panel_key="panel_fishing_sea")
         except Exception as e:
-            await self.handle_error(interaction, e)
+            logger.error(f"[월간 리셋] 고래 공지 처리 중 오류 발생: {e}", exc_info=True)
 
-    async def go_back(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        view = SellCategoryView(self.user); view.message = self.message; await view.update_view(interaction)
+    @monthly_whale_reset.before_loop
+    async def before_monthly_whale_reset(self):
+        await self.bot.wait_until_ready()
 
-class SellCropView(SellStackableView):
-    def __init__(self, user: discord.Member):
-        super().__init__(user, '농장_작물', "🌾 판매함 - 작물", 0x2ECC71, "🌾")
+    @tasks.loop(time=KST_MIDNIGHT_AGGREGATE)
+    async def update_market_prices(self):
+        logger.info("[시장] 일일 아이템 및 물고기 가격 변동을 시작합니다.")
+        try:
+            from utils.database import load_game_data_from_db
+            await load_game_data_from_db()
+            item_db, loot_db = get_item_database(), get_fishing_loot()
+            items_to_update, announcements, fish_to_update = [], [], []
+            for name, data in item_db.items():
+                if data.get('volatility', 0) > 0:
+                    old_price = data.get('current_price', data.get('price', 0))
+                    new_price = self._calculate_new_price(old_price, data['volatility'], data.get('min_price'), data.get('max_price'))
+                    if new_price != old_price:
+                        item_update_payload = {**data, 'name': name, 'current_price': new_price}
+                        items_to_update.append(item_update_payload)
+                        if abs((new_price - old_price) / old_price) > 0.25:
+                            status = "폭등 📈" if new_price > old_price else "폭락 📉"
+                            announcements.append(f" - {name}: `{old_price}` → `{new_price}`{self.currency_icon} ({status})")
+            for fish in loot_db:
+                if fish.get('volatility', 0) > 0 and 'id' in fish:
+                    old_price = fish.get('current_base_value', fish.get('base_value', 0))
+                    new_price = self._calculate_new_price(old_price, fish['volatility'], fish.get('min_price'), fish.get('max_price'))
+                    if new_price != old_price:
+                        fish_update_payload = {**fish, 'current_base_value': new_price}
+                        fish_to_update.append(fish_update_payload)
+                        if abs((new_price - old_price) / old_price) > 0.20:
+                            status = "풍어 📈" if new_price > old_price else "흉어 📉"
+                            announcements.append(f" - {fish['name']} (기본 가치): `{old_price}` → `{new_price}`{self.currency_icon} ({status})")
+            if items_to_update: await supabase.table('items').upsert(items_to_update, on_conflict="name").execute()
+            if fish_to_update: await supabase.table('fishing_loots').upsert(fish_to_update, on_conflict="id").execute()
+            if items_to_update or fish_to_update:
+                await load_game_data_from_db()
+            await save_config_to_db("market_fluctuations", announcements)
+            if announcements and (log_channel_id := get_id("market_log_channel_id")) and (log_channel := self.bot.get_channel(log_channel_id)):
+                embed = discord.Embed(title="📢 오늘의 주요 시세 변동 정보", description="\n".join(announcements), color=0xFEE75C)
+                await log_channel.send(embed=embed)
+            if (commerce_cog := self.bot.get_cog("Commerce")) and (commerce_channel_id := get_id("commerce_panel_channel_id")) and (channel := self.bot.get_channel(commerce_channel_id)):
+                await commerce_cog.regenerate_panel(channel)
+            logger.info("[시장] 가격 변동 처리가 완료되었습니다.")
+        except Exception as e:
+            logger.error(f"[시장] 아이템 가격 업데이트 중 오류: {e}", exc_info=True)
+            
+    def _calculate_new_price(self, current, volatility, min_p, max_p):
+        new_price = int(current * (1 + random.uniform(-volatility, volatility)))
+        return min(max_p, max(min_p, new_price)) if min_p is not None and max_p is not None else new_price
+        
+    @update_market_prices.before_loop
+    async def before_update_market_prices(self):
+        await self.bot.wait_until_ready()
 
-class SellMineralView(SellStackableView):
-    def __init__(self, user: discord.Member):
-        super().__init__(user, '광물', "💎 판매함 - 광물", 0x607D8B, "💎")
-
-class SellCookingView(SellStackableView):
-    def __init__(self, user: discord.Member):
-        super().__init__(user, '요리', "🍲 판매함 - 음식", 0xE67E22, "🍲")
-
-class SellLootView(SellStackableView):
-    def __init__(self, user: discord.Member):
-        super().__init__(user, '전리품', "🏆 판매함 - 전리품", 0xFFD700, "🏆")
-# ▲▲▲ [수정] Sell-기타 아이템 View 공통 상속 클래스 및 개별 View 종료 ▲▲▲
-
-class SellCategoryView(ShopViewBase):
-    async def build_embed(self) -> discord.Embed:
-        embed = discord.Embed(title="📦 판매함 - 카테고리 선택", description="판매할 아이템의 카테고리를 선택해주세요.", color=discord.Color.green())
-        embed.set_footer(text="매일 00:05(KST)에 시세 변동")
-        return embed
-    async def build_components(self):
-        self.clear_items()
-        self.add_item(ui.Button(label="물고기", custom_id="sell_category_fish"))
-        self.add_item(ui.Button(label="작물", custom_id="sell_category_crop"))
-        self.add_item(ui.Button(label="광물", custom_id="sell_category_mineral"))
-        self.add_item(ui.Button(label="음식", custom_id="sell_category_cooking"))
-        self.add_item(ui.Button(label="전리품", custom_id="sell_category_loot"))
-        for child in self.children:
-            if isinstance(child, ui.Button): child.callback = self.on_button_click
-    async def on_button_click(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        category = interaction.data['custom_id'].split('_')[-1]
-        view_map = {"fish": SellFishView, "crop": SellCropView, "mineral": SellMineralView, "cooking": SellCookingView, "loot": SellLootView}
-        if view_class := view_map.get(category):
-            view = view_class(self.user); view.message = self.message; await view.update_view(interaction)
-
-class CommercePanelView(ui.View):
-    def __init__(self, cog_instance: 'Commerce'):
-        super().__init__(timeout=None); self.commerce_cog = cog_instance
-        shop_button = ui.Button(label="구매함 (아이템 구매)", style=discord.ButtonStyle.success, emoji="🏪", custom_id="commerce_open_shop"); shop_button.callback = self.open_shop; self.add_item(shop_button)
-        market_button = ui.Button(label="판매함 (아이템 판매)", style=discord.ButtonStyle.danger, emoji="📦", custom_id="commerce_open_market"); market_button.callback = self.open_market; self.add_item(market_button)
-    async def open_shop(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True); view = BuyCategoryView(interaction.user)
-        embed = await view.build_embed(); await view.build_components()
-        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True); view.message = message
-    async def open_market(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True); view = SellCategoryView(interaction.user)
-        embed = await view.build_embed(); await view.build_components()
-        message = await interaction.followup.send(embed=embed, view=view, ephemeral=True); view.message = message
-
-class Commerce(commands.Cog):
-    def __init__(self, bot: commands.Cog): self.bot = bot
-    async def register_persistent_views(self): self.bot.add_view(CommercePanelView(self))
-    async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_commerce"):
-        panel_name = panel_key.replace("panel_", "")
-        if (panel_info := get_panel_id(panel_name)) and (old_channel_id := panel_info.get("channel_id")) and (old_channel := self.bot.get_channel(old_channel_id)):
-            try: await (await old_channel.fetch_message(panel_info["message_id"])).delete()
-            except (discord.NotFound, discord.Forbidden): pass
-        if not (embed_data := await get_embed_from_db(panel_key)): logger.warning(f"DB에서 '{panel_key}' 임베드 데이터를 찾을 수 없어 패널 생성을 건너뜁니다."); return
-        market_updates_list = get_config("market_fluctuations", []); market_updates_text = "\n".join(market_updates_list) if market_updates_list else "오늘은 큰 가격 변동이 없었습니다."
-        embed = format_embed_from_db(embed_data, market_updates=market_updates_text); embed.set_footer(text="매일 00:05(KST)에 시세 변동")
-        view = CommercePanelView(self); new_message = await channel.send(embed=embed, view=view); await save_panel_id(panel_name, new_message.id, channel.id)
-        logger.info(f"✅ {panel_key} 패널을 성공적으로 생성했습니다. (채널: #{channel.name})")
-
-async def setup(bot: commands.Cog):
-    await bot.add_cog(Commerce(bot))
+async def setup(bot: commands.Bot):
+    await bot.add_cog(EconomyCore(bot))
