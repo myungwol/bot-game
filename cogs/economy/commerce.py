@@ -195,13 +195,58 @@ class BuyItemView(ShopViewBase):
         msg = await interaction.followup.send(success_message, ephemeral=True); asyncio.create_task(delete_after(msg, 10)); await self.update_view(interaction)
 
     async def handle_single_purchase(self, interaction: discord.Interaction, item_name: str, item_data: Dict, price: int, wallet: Dict):
-        await interaction.response.defer(ephemeral=True); await update_inventory(str(self.user.id), item_name, 1); await update_wallet(self.user, -price)
+        # ▼▼▼ [수정] 역할 카테고리는 즉시 지급 처리 ▼▼▼
+        if item_data.get('category') == '역할':
+            await interaction.response.defer(ephemeral=True)
+            
+            # 역할 ID 가져오기
+            id_key = item_data.get('id_key')
+            role_id = get_id(id_key) if id_key else None
+            
+            if not role_id:
+                return await interaction.followup.send("❌ 오류: 역할 정보를 찾을 수 없습니다.", ephemeral=True)
+            
+            role = interaction.guild.get_role(role_id)
+            if not role:
+                return await interaction.followup.send("❌ 오류: 서버에서 해당 역할을 찾을 수 없습니다.", ephemeral=True)
+            
+            if role in self.user.roles:
+                return await interaction.followup.send(f"ℹ️ 이미 **{role.name}** 역할을 가지고 있습니다.", ephemeral=True)
+
+            # 돈 차감 및 역할 지급 (인벤토리 추가 X)
+            try:
+                await update_wallet(self.user, -price)
+                await self.user.add_roles(role, reason=f"상점에서 '{item_name}' 구매")
+                
+                new_wallet = await get_wallet(self.user.id)
+                success_message = f"✅ **{role.name}** 역할을 구매하여 즉시 적용되었습니다!\n(잔액: `{new_wallet.get('balance', 0):,}`{self.currency_icon})"
+                
+                msg = await interaction.followup.send(success_message, ephemeral=True)
+                asyncio.create_task(delete_after(msg, 10))
+                await self.update_view(interaction)
+                return
+            except discord.Forbidden:
+                await update_wallet(self.user, price) # 환불
+                return await interaction.followup.send("❌ 봇에게 권한이 없어 역할을 지급하지 못했습니다.", ephemeral=True)
+            except Exception as e:
+                logger.error(f"역할 구매 중 오류: {e}")
+                return await interaction.followup.send("❌ 구매 처리 중 오류가 발생했습니다.", ephemeral=True)
+        # ▲▲▲ [수정 완료] ▲▲▲
+        await interaction.response.defer(ephemeral=True)
+        await update_inventory(str(self.user.id), item_name, 1)
+        await update_wallet(self.user, -price)
+        
+        # (기타 기존 코드 유지...)
         if (id_key := item_data.get('id_key')) and (role_id := get_id(id_key)) and (role := interaction.guild.get_role(role_id)):
+             # 여기는 역할 카테고리가 아닌 일반 아이템인데 역할을 주는 경우(거의 없음)를 대비해 남겨둠
             try: await self.user.add_roles(role, reason=f"'{item_name}' 아이템 구매")
-            except discord.Forbidden: logger.error(f"역할 부여 실패: {role.name} 역할을 부여할 권한이 없습니다.")
+            except discord.Forbidden: pass
+
         new_wallet = await get_wallet(self.user.id)
         success_message = f"✅ **{item_name}**을(를) `{price:,}`{self.currency_icon}에 구매했습니다.\n(잔액: `{new_wallet.get('balance', 0):,}`{self.currency_icon})"
-        msg = await interaction.followup.send(success_message, ephemeral=True); asyncio.create_task(delete_after(msg, 10)); await self.update_view(interaction)
+        msg = await interaction.followup.send(success_message, ephemeral=True)
+        asyncio.create_task(delete_after(msg, 10))
+        await self.update_view(interaction)
         
     async def back_callback(self, interaction: discord.Interaction):
         await interaction.response.defer(); category_view = BuyCategoryView(self.user); category_view.message = self.message; await category_view.update_view(interaction)
