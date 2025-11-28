@@ -199,49 +199,80 @@ class ItemUsageView(ui.View):
 
 class ProfileView(ui.View):
     def __init__(self, user: discord.Member, cog_instance: 'UserProfile'):
-        super().__init__(timeout=300); self.user: discord.Member = user; self.cog = cog_instance; self.message: Optional[discord.WebhookMessage] = None
-        self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙"); self.current_page = "info"; self.fish_page_index = 0
-        self.cached_data = {}; self.status_message: Optional[str] = None
+        super().__init__(timeout=300)
+        self.user: discord.Member = user
+        self.cog = cog_instance
+        self.message: Optional[discord.WebhookMessage] = None
+        self.currency_icon = get_config("GAME_CONFIG", {}).get("CURRENCY_ICON", "🪙")
+        self.current_page = "info"
+        self.fish_page_index = 0
+        self.cached_data = {}
+        self.status_message: Optional[str] = None
 
     async def build_and_send(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True, thinking=True); await self.load_data(self.user)
-        embed = await self.build_embed(); self.build_components()
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        await self.load_data(self.user)
+        embed = await self.build_embed()
+        self.build_components()
         self.message = await interaction.followup.send(embed=embed, view=self, ephemeral=True)
 
     async def update_display(self, interaction: Optional[discord.Interaction], reload_data: bool = False):
-        if interaction and not interaction.response.is_done(): await interaction.response.defer()
-        if reload_data: await self.load_data(self.user)
-        embed = await self.build_embed(); self.build_components()
+        if interaction and not interaction.response.is_done():
+            await interaction.response.defer()
+        if reload_data:
+            await self.load_data(self.user)
+        embed = await self.build_embed()
+        self.build_components()
+        
         target_message_editor = interaction.edit_original_response if interaction else (self.message.edit if self.message else None)
         if target_message_editor:
-            try: await target_message_editor(embed=embed, view=self)
-            except discord.NotFound: logger.warning("프로필 메시지를 수정하려 했으나 찾을 수 없습니다.")
+            try:
+                await target_message_editor(embed=embed, view=self)
+            except discord.NotFound:
+                logger.warning("프로필 메시지를 수정하려 했으나 찾을 수 없습니다.")
         self.status_message = None
         
     async def load_data(self, user: discord.Member):
-        wallet_data, inventory, aquarium, gear = await asyncio.gather(get_wallet(user.id), get_inventory(user), get_aquarium(str(user.id)), get_user_gear(user))
+        wallet_data, inventory, aquarium, gear = await asyncio.gather(
+            get_wallet(user.id), 
+            get_inventory(user), 
+            get_aquarium(str(user.id)), 
+            get_user_gear(user)
+        )
         self.cached_data = {"wallet": wallet_data, "inventory": inventory, "aquarium": aquarium, "gear": gear}
 
     def _get_current_tab_config(self) -> Dict:
         return next((tab for tab in get_string("profile_view.tabs", []) if tab.get("key") == self.current_page), {})
 
     async def build_embed(self) -> discord.Embed:
-        inventory = self.cached_data.get("inventory", {}); gear = self.cached_data.get("gear", {}); balance = self.cached_data.get("wallet", {}).get('balance', 0)
-        item_db = get_item_database(); base_title = get_string("profile_view.base_title", "{user_name}의 소지품", user_name=self.user.display_name)
+        inventory = self.cached_data.get("inventory", {})
+        gear = self.cached_data.get("gear", {})
+        balance = self.cached_data.get("wallet", {}).get('balance', 0)
+        item_db = get_item_database()
+        
+        base_title = get_string("profile_view.base_title", "{user_name}의 소지품", user_name=self.user.display_name)
         title_suffix = self._get_current_tab_config().get("title_suffix", "")
+        
         embed = discord.Embed(title=f"{base_title}{title_suffix}", color=self.user.color or discord.Color.blue())
-        if self.user.display_avatar: embed.set_thumbnail(url=self.user.display_avatar.url)
+        if self.user.display_avatar:
+            embed.set_thumbnail(url=self.user.display_avatar.url)
+        
         description = f"**{self.status_message}**\n\n" if self.status_message else ""
         
-        # [수정] 모든 탭에 대한 로직을 하나로 통합
+        # [수정] 카테고리 맵에서 ticket 제거하고 로직 통합
         category_map = {
-            "item": ("아이템", "📦"), "ticket": ("입장권", "🎟️"), "gear": None, "fish": None, "seed": ("농장_씨앗", "🌱"),
-            "crop": ("농장_작물", "🌾"), "mineral": ("광물", "💎"), "food": ("요리", "🍲"), "loot": ("전리품", "🏆"), "pet": ("펫 아이템", "🐾")
+            "item": ("아이템", "📦"), # 입장권도 여기에 포함됨
+            "gear": None, "fish": None, 
+            "seed": ("농장_씨앗", "🌱"), "crop": ("농장_작물", "🌾"), 
+            "mineral": ("광물", "💎"), "food": ("요리", "🍲"), 
+            "loot": ("전리품", "🏆"), "pet": ("펫 아이템", "🐾")
         }
         
         if self.current_page == "info":
             embed.add_field(name=get_string("profile_view.info_tab.field_balance", "소지금"), value=f"`{balance:,}`{self.currency_icon}", inline=True)
-            job_mention = "`없음`"; job_role_map = get_config("JOB_SYSTEM_CONFIG", {}).get("JOB_ROLE_MAP", {})
+            
+            job_mention = "`없음`"
+            job_role_map = get_config("JOB_SYSTEM_CONFIG", {}).get("JOB_ROLE_MAP", {})
             try:
                 job_res = await supabase.table('user_jobs').select('jobs(job_key, job_name)').eq('user_id', self.user.id).maybe_single().execute()
                 if job_res and job_res.data and job_res.data.get('jobs'):
@@ -250,6 +281,7 @@ class ProfileView(ui.View):
                         job_mention = f"<@&{role_id}>"
             except Exception as e: logger.error(f"직업 정보 조회 중 오류 (유저: {self.user.id}): {e}")
             embed.add_field(name="직업", value=job_mention, inline=True)
+            
             user_rank_mention = get_string("profile_view.info_tab.default_rank_name", "새내기 주민")
             rank_roles_config = get_config("PROFILE_RANK_ROLES", []) 
             if rank_roles_config:
@@ -259,6 +291,7 @@ class ProfileView(ui.View):
                         user_rank_mention = f"<@&{rank_role_id}>"; break
             embed.add_field(name=get_string("profile_view.info_tab.field_rank", "등급"), value=user_rank_mention, inline=True)
             description += get_string("profile_view.info_tab.description", "아래 탭을 선택하여 상세 정보를 확인하세요.")
+            
         elif self.current_page == "gear":
             gear_categories = {"낚시": {"rod": "낚싯대", "bait": "미끼"}, "농장": {"hoe": "괭이", "watering_can": "물뿌리개"}, "광산": {"pickaxe": "곡괭이"}}
             for category_name, items in gear_categories.items():
@@ -274,21 +307,30 @@ class ProfileView(ui.View):
                 embed.add_field(name="\n**[ 보유 중인 장비 ]**", value="\n".join(gear_list), inline=False)
             else:
                 embed.add_field(name="\n**[ 보유 중인 장비 ]**", value=get_string("profile_view.gear_tab.no_owned_gear", "보유 중인 장비가 없습니다."), inline=False)
+                
         elif self.current_page == "fish":
             aquarium = self.cached_data.get("aquarium", [])
             if not aquarium: description += get_string("profile_view.fish_tab.no_fish", "어항에 물고기가 없습니다.")
             else:
-                total_pages = math.ceil(len(aquarium) / 10); self.fish_page_index = max(0, min(self.fish_page_index, total_pages - 1))
+                total_pages = math.ceil(len(aquarium) / 10)
+                self.fish_page_index = max(0, min(self.fish_page_index, total_pages - 1))
                 fish_on_page = aquarium[self.fish_page_index * 10 : self.fish_page_index * 10 + 10]
                 description += "\n".join([f"{str(coerce_item_emoji(f.get('emoji', '🐠')))} **{f['name']}**: `{f['size']}`cm" for f in fish_on_page])
                 embed.set_footer(text=get_string("profile_view.fish_tab.pagination_footer", "페이지 {current_page} / {total_pages}", current_page=self.fish_page_index + 1, total_pages=total_pages))
+                
         elif self.current_page in category_map:
             category_info = category_map[self.current_page]
             if category_info:
                 category_name, default_emoji = category_info
-                filtered_items = {n: c for n, c in inventory.items() if item_db.get(n, {}).get('category') == category_name}
-                if category_name == "펫 아이템": # 알 포함
-                    filtered_items.update({n: c for n, c in inventory.items() if item_db.get(n, {}).get('category') == '알'})
+                
+                # [수정] 아이템 탭일 경우 입장권도 포함
+                target_categories = [category_name]
+                if self.current_page == "item":
+                    target_categories.append("입장권")
+                elif self.current_page == "pet":
+                    target_categories.append("알")
+
+                filtered_items = {n: c for n, c in inventory.items() if item_db.get(n, {}).get('category') in target_categories}
                 
                 if filtered_items:
                     item_list = [f"{str(coerce_item_emoji(item_db.get(n,{}).get('emoji', default_emoji)))} **{n}**: `{c}`개" for n, c in sorted(filtered_items.items())]
@@ -303,12 +345,13 @@ class ProfileView(ui.View):
         self.clear_items()
         tabs_config = get_string("profile_view.tabs", [])
         
-        # [수정] 요청된 레이아웃에 맞게 버튼을 배치
-        layout_map = {0: 4, 1: 5, 2: 2} # 0행: 4개, 1행: 5개, 2행: 2개
+        # [수정] 레이아웃 맵 업데이트 (Row 0: 4개, Row 1: 5개, Row 2: 1개)
+        layout_map = {0: 4, 1: 5, 2: 1}
         current_row, buttons_in_row = 0, 0
 
         for config in tabs_config:
             if not (key := config.get("key")): continue
+            
             if buttons_in_row >= layout_map.get(current_row, 5):
                 current_row += 1
                 buttons_in_row = 0
@@ -317,21 +360,25 @@ class ProfileView(ui.View):
             self.add_item(ui.Button(label=config.get("label"), style=style, custom_id=f"profile_tab_{key}", emoji=config.get("emoji"), row=current_row))
             buttons_in_row += 1
         
-        current_row += 1
-        if self.current_page == "item":
-            self.add_item(ui.Button(label=get_string("profile_view.item_tab.use_item_button_label", "아이템 사용"), style=discord.ButtonStyle.success, emoji="✨", custom_id="profile_use_item", row=current_row))
+        # 기능 버튼들은 마지막 줄(Row 2) 다음인 Row 3부터 배치
+        action_row = current_row + 1
+        
+        if self.current_page == "item": # 입장권도 여기서 처리
+            self.add_item(ui.Button(label=get_string("profile_view.item_tab.use_item_button_label", "아이템 사용"), style=discord.ButtonStyle.success, emoji="✨", custom_id="profile_use_item", row=action_row))
+        
         if self.current_page == "gear":
-            self.add_item(ui.Button(label="낚싯대 변경", style=discord.ButtonStyle.blurple, custom_id="profile_change_rod", emoji="🎣", row=current_row))
-            self.add_item(ui.Button(label="미끼 변경", style=discord.ButtonStyle.blurple, custom_id="profile_change_bait", emoji="🐛", row=current_row))
-            current_row += 1
-            self.add_item(ui.Button(label="괭이 변경", style=discord.ButtonStyle.success, custom_id="profile_change_hoe", emoji="🪓", row=current_row))
-            self.add_item(ui.Button(label="물뿌리개 변경", style=discord.ButtonStyle.success, custom_id="profile_change_watering_can", emoji="💧", row=current_row))
-            self.add_item(ui.Button(label="곡괭이 변경", style=discord.ButtonStyle.secondary, custom_id="profile_change_pickaxe", emoji="⛏️", row=current_row))
+            self.add_item(ui.Button(label="낚싯대 변경", style=discord.ButtonStyle.blurple, custom_id="profile_change_rod", emoji="🎣", row=action_row))
+            self.add_item(ui.Button(label="미끼 변경", style=discord.ButtonStyle.blurple, custom_id="profile_change_bait", emoji="🐛", row=action_row))
+            # 줄바꿈
+            self.add_item(ui.Button(label="괭이 변경", style=discord.ButtonStyle.success, custom_id="profile_change_hoe", emoji="🪓", row=action_row+1))
+            self.add_item(ui.Button(label="물뿌리개 변경", style=discord.ButtonStyle.success, custom_id="profile_change_watering_can", emoji="💧", row=action_row+1))
+            self.add_item(ui.Button(label="곡괭이 변경", style=discord.ButtonStyle.secondary, custom_id="profile_change_pickaxe", emoji="⛏️", row=action_row+1))
+        
         if self.current_page == "fish" and self.cached_data.get("aquarium"):
             total_pages = math.ceil(len(self.cached_data["aquarium"]) / 10)
             if total_pages > 1:
-                self.add_item(ui.Button(label=get_string("profile_view.pagination_buttons.prev", "◀"), custom_id="profile_fish_prev", disabled=self.fish_page_index == 0, row=current_row))
-                self.add_item(ui.Button(label=get_string("profile_view.pagination_buttons.next", "▶"), custom_id="profile_fish_next", disabled=self.fish_page_index >= total_pages - 1, row=current_row))
+                self.add_item(ui.Button(label=get_string("profile_view.pagination_buttons.prev", "◀"), custom_id="profile_fish_prev", disabled=self.fish_page_index == 0, row=action_row))
+                self.add_item(ui.Button(label=get_string("profile_view.pagination_buttons.next", "▶"), custom_id="profile_fish_next", disabled=self.fish_page_index >= total_pages - 1, row=action_row))
         
         for child in self.children:
             if isinstance(child, ui.Button): child.callback = self.button_callback
