@@ -30,7 +30,78 @@ class ReasonModal(ui.Modal):
         self.add_item(self.reason_input); self.reason: Optional[str] = None
     async def on_submit(self, interaction: discord.Interaction):
         self.reason = self.reason_input.value; await interaction.response.defer(ephemeral=True); self.stop()
+        
+class RoleSelectView(ui.View):
+    def __init__(self, user: discord.Member, item_name: str):
+        super().__init__(timeout=60)
+        self.user = user
+        self.item_name = item_name
+        self.value = None
+        self.has_options = False
 
+    async def setup_options(self):
+        # DB에서 '역할' 카테고리이면서 'buyable'이 true인 아이템 조회
+        res = await supabase.table('items').select('*').eq('category', '역할').eq('buyable', True).execute()
+        
+        if not res.data:
+            return False
+
+        options = []
+        for item in res.data:
+            # 이미 가진 역할은 제외할 수도 있지만, 일단 다 보여주고 선택 시 체크
+            role_name = item['name']
+            description = f"상점 판매가: {item.get('price', 0):,} 코인"
+            # id_key를 value로 사용
+            options.append(discord.SelectOption(label=role_name, value=item['id_key'], description=description, emoji="🎟️"))
+        
+        if not options:
+            return False
+
+        # 25개 제한 (디스코드 제한)
+        select = ui.Select(placeholder="획득할 역할을 선택하세요...", options=options[:25])
+        select.callback = self.callback
+        self.add_item(select)
+        self.has_options = True
+        return True
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user.id:
+            return await interaction.response.send_message("본인만 선택할 수 있습니다.", ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True)
+        
+        selected_id_key = interaction.data['values'][0]
+        role_id = get_id(selected_id_key)
+        
+        if not role_id:
+            return await interaction.followup.send("❌ 역할 정보를 찾을 수 없습니다.", ephemeral=True)
+        
+        role = interaction.guild.get_role(role_id)
+        if not role:
+            return await interaction.followup.send("❌ 서버에 해당 역할이 존재하지 않습니다.", ephemeral=True)
+        
+        if role in self.user.roles:
+            return await interaction.followup.send(f"ℹ️ 이미 **{role.name}** 역할을 가지고 있습니다. 다른 역할을 선택해주세요.", ephemeral=True)
+
+        try:
+            # 역할 지급
+            await self.user.add_roles(role, reason=f"'{self.item_name}' 사용")
+            # 아이템 소모
+            await update_inventory(self.user.id, self.item_name, -1)
+            
+            await interaction.followup.send(f"✅ **{role.name}** 역할을 성공적으로 획득했습니다!", ephemeral=True)
+            
+            # View 비활성화
+            for item in self.children: item.disabled = True
+            await interaction.edit_original_response(view=self)
+            self.stop()
+            
+        except discord.Forbidden:
+            await interaction.followup.send("❌ 봇에게 권한이 없어 역할을 지급하지 못했습니다.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"역할 선택권 처리 중 오류: {e}", exc_info=True)
+            await interaction.followup.send("❌ 처리 중 오류가 발생했습니다.", ephemeral=True)
+            
 class ItemUsageView(ui.View):
     def __init__(self, parent_view: 'ProfileView'):
         super().__init__(timeout=180); self.parent_view = parent_view; self.user = parent_view.user; self.message: Optional[discord.WebhookMessage] = None
