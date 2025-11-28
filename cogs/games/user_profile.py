@@ -126,8 +126,44 @@ class ItemUsageView(ui.View):
 
                     if thread := self.parent_view.cog.bot.get_channel(pet_xp_result[0].get('thread_id')): 
                          await pet_cog.check_and_process_auto_evolution({self.user.id})
-            
+
             return await self.on_back(interaction, reload_data=True)
+
+        # ▼▼▼ [추가] 역할 아이템 사용 로직 ▼▼▼
+        if item_type == "add_role":
+            await interaction.response.defer()
+            
+            role_id = item_info.get('role_id')
+            if not role_id:
+                self.parent_view.status_message = "❌ 역할 정보를 찾을 수 없습니다."
+                return await self.on_back(interaction, reload_data=True)
+            
+            guild = self.user.guild
+            role = guild.get_role(role_id)
+            
+            if not role:
+                self.parent_view.status_message = "❌ 해당 역할이 서버에 존재하지 않습니다."
+                return await self.on_back(interaction, reload_data=True)
+            
+            if role in self.user.roles:
+                self.parent_view.status_message = "ℹ️ 이미 해당 역할을 가지고 있습니다."
+                return await self.on_back(interaction, reload_data=True)
+
+            try:
+                await self.user.add_roles(role, reason=f"아이템 '{item_name}' 사용")
+                await update_inventory(self.user.id, item_name, -1)
+                
+                self.parent_view.status_message = f"✅ **{role.name}** 역할을 획득했습니다!"
+                
+            except discord.Forbidden:
+                self.parent_view.status_message = "❌ 봇에게 권한이 없어 역할을 지급하지 못했습니다."
+            except Exception as e:
+                logger.error(f"역할 아이템 사용 중 오류: {e}", exc_info=True)
+                self.parent_view.status_message = "❌ 처리 중 오류가 발생했습니다."
+                
+            return await self.on_back(interaction, reload_data=True)
+        # ▲▲▲ [추가 완료] ▲▲▲
+
         if item_type == "consume_with_reason":
             if selected_item_key == "role_item_event_priority":
                 if not get_config("event_priority_pass_active", False): await interaction.response.send_message("❌ 현재 우선 참여권을 사용할 수 있는 이벤트가 없습니다.", ephemeral=True, delete_after=5); return
