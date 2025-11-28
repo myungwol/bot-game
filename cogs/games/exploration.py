@@ -10,29 +10,44 @@ from typing import Optional, Dict, List, Any
 import asyncio
 from collections import defaultdict
 import time
+import re # 정규표현식 모듈 추가
 
 from utils.database import (
     supabase, get_user_pet, get_exploration_locations, get_exploration_loot,
     start_pet_exploration, get_completed_explorations, update_exploration_message_id,
     get_exploration_by_id, claim_and_end_exploration, update_inventory,
     update_wallet, get_id, get_config, save_panel_id, get_panel_id, get_embed_from_db,
-    save_config_to_db
+    save_config_to_db, add_xp_to_pet_db
 )
 from utils.helpers import format_embed_from_db
 
 logger = logging.getLogger(__name__)
 
-class ClaimRewardView(ui.View):
-    def __init__(self, cog_instance: 'Exploration', exploration_id: int):
-        super().__init__(timeout=86400)
-        self.cog = cog_instance
+# [수정] 영구적인 처리를 위한 Dynamic Item 버튼 클래스
+class PersistentClaimButton(ui.DynamicItem[ui.Button], template=r'claim_exploration:(?P<exploration_id>[0-9]+)'):
+    def __init__(self, exploration_id: int):
+        super().__init__(
+            ui.Button(
+                label="보상 수령",
+                style=discord.ButtonStyle.success,
+                emoji="🎁",
+                custom_id=f"claim_exploration:{exploration_id}"
+            )
+        )
         self.exploration_id = exploration_id
 
-    @ui.button(label="보상 수령", style=discord.ButtonStyle.success, emoji="🎁")
-    async def claim_reward_button(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        await self.cog.handle_claim_reward(interaction, self.exploration_id)
-        self.stop()
+    @classmethod
+    async def from_custom_id(cls, interaction: discord.Interaction, item: ui.Button, match: re.Match, /):
+        return cls(int(match['exploration_id']))
+
+    async def callback(self, interaction: discord.Interaction):
+        # Cog 인스턴스를 봇에서 가져옴
+        cog = interaction.client.get_cog("Exploration")
+        if cog:
+            await interaction.response.defer(ephemeral=True)
+            await cog.handle_claim_reward(interaction, self.exploration_id)
+        else:
+            await interaction.response.send_message("오류: Exploration Cog를 찾을 수 없습니다.", ephemeral=True)
 
 class PetExplorationPanelView(ui.View):
     def __init__(self, cog_instance: 'Exploration'):
@@ -43,7 +58,6 @@ class PetExplorationPanelView(ui.View):
     def add_exploration_buttons(self):
         locations = get_exploration_locations()
         if not locations:
-            logger.warning("[PetExplorationPanelView] 탐사 지역 정보가 없어 버튼을 생성할 수 없습니다.")
             return
 
         self.clear_items()
@@ -147,7 +161,9 @@ class Exploration(commands.Cog):
                 if not thread or not user:
                     continue
                 
-                view = ClaimRewardView(self, exp['id'])
+                # [수정] 영구 버튼이 포함된 View 생성
+                view = ui.View(timeout=None)
+                view.add_item(PersistentClaimButton(exp['id']))
 
                 message = await thread.send(
                     content=f"{user.mention}, 펫이 탐사를 마치고 돌아왔습니다! 아래 버튼을 눌러 보상을 확인하세요.",
@@ -164,8 +180,15 @@ class Exploration(commands.Cog):
     async def handle_claim_reward(self, interaction: discord.Interaction, exploration_id: int):
         exploration_data = await get_exploration_by_id(exploration_id)
         if not exploration_data:
-            return await interaction.followup.send("❌ 만료되었거나 잘못된 탐사 정보입니다.", ephemeral=True)
+            # 이미 처리되었거나 삭제된 경우 메시지 삭제 시도
+            try: await interaction.message.delete()
+            except: pass
+            return await interaction.followup.send("❌ 이미 처리되었거나 만료된 탐사입니다.", ephemeral=True)
         
+        # 본인 확인
+        if interaction.user.id != int(exploration_data['user_id']):
+             return await interaction.followup.send("❌ 본인의 탐사 보상만 수령할 수 있습니다.", ephemeral=True)
+
         pet_level = exploration_data.get('pets', {}).get('level', 1)
         location = exploration_data.get('exploration_locations', {})
         
@@ -181,15 +204,17 @@ class Exploration(commands.Cog):
         
         db_tasks = []
         if coin_reward > 0: db_tasks.append(update_wallet(interaction.user, coin_reward))
+        
+        # [수정] 안전한 펫 XP 지급 함수 사용
         if xp_reward > 0: 
-            db_tasks.append(
-                supabase.rpc('add_xp_to_pet', {'p_user_id': interaction.user.id, 'p_xp_to_add': xp_reward}).execute()
-            )
+            db_tasks.append(add_xp_to_pet_db(interaction.user.id, xp_reward))
+
         for item, qty in item_rewards.items():
             db_tasks.append(update_inventory(interaction.user.id, item, qty))
         
         results = await asyncio.gather(*db_tasks, return_exceptions=True)
 
+        # 상태 업데이트 및 탐사 기록 삭제
         await claim_and_end_exploration(exploration_id, exploration_data['pet_id'])
 
         reward_lines = [
@@ -208,30 +233,26 @@ class Exploration(commands.Cog):
         except (discord.NotFound, discord.Forbidden):
             pass
 
-        # ▼▼▼ [핵심 수정] DB 요청 방식 대신 PetSystem Cog를 직접 호출하여 UI를 즉시 업데이트합니다. ▼▼▼
+        # 펫 UI 업데이트
         pet_cog = self.bot.get_cog("PetSystem")
         if pet_cog:
-            # is_refresh=False (기본값)로 설정하여 메시지를 수정하도록 합니다.
-            # message=None으로 전달하면 update_pet_ui 함수가 DB에서 메시지 ID를 찾아 자동으로 처리합니다.
             await pet_cog.update_pet_ui(interaction.user.id, interaction.channel, message=None)
-        else:
-            logger.error("[Exploration] PetSystem Cog를 찾을 수 없어 UI를 업데이트할 수 없습니다.")
-        # ▲▲▲ [핵심 수정] 완료 ▲▲▲
-
-
-        for res in results:
-            if isinstance(res, dict) and 'data' in res and res.data:
-                if isinstance(res.data, list) and res.data[0].get('leveled_up'):
-                    if (pet_cog := self.bot.get_cog("PetSystem")):
-                        await pet_cog.notify_pet_level_up(
-                            interaction.user.id,
-                            res.data[0].get('new_level'),
-                            res.data[0].get('points_awarded')
-                        )
+            
+            # 레벨업 체크
+            for res in results:
+                if isinstance(res, list) and res and res[0].get('leveled_up'):
+                    await pet_cog.notify_pet_level_up(
+                        interaction.user.id,
+                        res[0].get('new_level'),
+                        res[0].get('points_awarded')
+                    )
                     break
 
     async def register_persistent_views(self):
+        # 패널용 뷰 등록
         self.bot.add_view(PetExplorationPanelView(self))
+        # [수정] 동적 버튼(DynamicItem) 등록 - 탐사 보상 버튼용
+        self.bot.add_dynamic_items(PersistentClaimButton)
 
     async def regenerate_panel(self, channel: discord.TextChannel, panel_key: str = "panel_pet_exploration"):
         panel_name = panel_key.replace("panel_", "")
