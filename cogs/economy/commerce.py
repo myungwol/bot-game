@@ -383,7 +383,6 @@ class SellFishView(ShopViewBase):
         view = SellCategoryView(self.user)
         view.message = self.message
         await view.update_view(interaction)
-# ▼▼▼ [수정] Sell-기타 아이템 View 공통 상속 클래스 생성 ▼▼▼
 class SellStackableView(ShopViewBase):
     def __init__(self, user: discord.Member, category: str, title: str, color: int, emoji: str):
         super().__init__(user)
@@ -429,7 +428,24 @@ class SellStackableView(ShopViewBase):
             item_db = get_item_database()
             for name, qty in items_on_page:
                 item_data = item_db.get(name, {})
-                price = item_data.get('current_price', int(item_data.get('sell_price', item_data.get('price', 10) * 0.8))) 
+                
+                # ▼▼▼ [핵심 수정] 가격 계산 로직 안전하게 변경 (NoneType 에러 방지) ▼▼▼
+                # 1. 기본 가격 가져오기 (DB가 NULL이면 0으로 처리)
+                base_price = item_data.get('price')
+                if base_price is None: 
+                    base_price = 0
+                
+                # 2. 판매가 설정이 없으면 기본가의 80%로 계산
+                sell_price = item_data.get('sell_price')
+                if sell_price is None:
+                    sell_price = int(base_price * 0.8)
+                
+                # 3. 시세 변동 가격이 있으면 최우선 적용, 없으면 판매가 사용
+                price = item_data.get('current_price')
+                if price is None:
+                    price = sell_price
+                # ▲▲▲ [수정 완료] ▲▲▲
+
                 self.item_data_map[name] = {'price': price, 'name': name, 'max_qty': qty}
                 options.append(discord.SelectOption(label=f"{name} (보유: {qty}개)", value=name, description=f"개당: {price}{self.currency_icon}", emoji=coerce_item_emoji(item_data.get('emoji', self.default_emoji))))
         
@@ -467,7 +483,8 @@ class SellStackableView(ShopViewBase):
         await modal.wait()
 
         if modal.value is None:
-            msg = await interaction.followup.send("판매가 취소되었습니다.", ephemeral=True); asyncio.create_task(delete_after(msg, 5)); return
+            # 시간 초과 또는 취소 시 메시지 처리
+            return
             
         quantity_to_sell = modal.value
         total_price = item_info['price'] * quantity_to_sell
@@ -475,6 +492,11 @@ class SellStackableView(ShopViewBase):
             await update_inventory(str(self.user.id), selected_item, -quantity_to_sell)
             await update_wallet(self.user, total_price)
             new_balance = (await get_wallet(self.user.id)).get('balance', 0)
+            
+            # [추가] 판매 로그 기록 (튜토리얼 연동 등 활용)
+            # from utils.database import log_activity 가 상단에 있어야 함
+            # await log_activity(self.user.id, "sell_item", amount=quantity_to_sell, coin_earned=total_price)
+
             success_message = f"✅ **{selected_item}** {quantity_to_sell}개를 `{total_price:,}`{self.currency_icon}에 판매했습니다.\n(잔액: `{new_balance:,}`{self.currency_icon})"
             msg = await interaction.followup.send(success_message, ephemeral=True); asyncio.create_task(delete_after(msg, 10))
             await self.refresh_view(interaction)
