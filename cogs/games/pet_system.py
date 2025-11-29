@@ -12,14 +12,12 @@ import asyncio
 import re 
 from collections import defaultdict
 from postgrest.exceptions import APIError
-from discord import app_commands
 
 from utils.database import (
     supabase, get_inventory, update_inventory, get_item_database,
     save_panel_id, get_panel_id, get_embed_from_db, set_cooldown, get_cooldown,
     save_config_to_db, delete_config_from_db, get_id, get_user_pet,
-    get_wallet, update_wallet,
-    get_inventories_for_users
+    get_wallet, update_wallet, get_inventories_for_users
 )
 from utils.helpers import format_embed_from_db
 
@@ -425,7 +423,10 @@ class PetSystem(commands.Cog):
         next_stage_info = stage_info_json.get(str(next_stage_num))
 
         if not (current_stage_info and next_stage_info): return False
-        if pet_data.get('level', 0) < current_stage_info.get('level_cap', 999): return False
+        
+        # [추가] 레벨 조건 확인 (현재 레벨이 해당 단계의 최대 레벨에 도달했는지)
+        level_cap = current_stage_info.get('level_cap', 999)
+        if pet_data.get('level', 0) < level_cap: return False
         
         required_items = next_stage_info.get('items', {})
         if not required_items: return True
@@ -704,13 +705,10 @@ class PetSystem(commands.Cog):
         await supabase.table('pets').update({
             'current_stage': 2, 'level': 1, 'xp': 0, 'hunger': 100, 'friendship': 0,
             'nickname': species_info['species_name'],
-            # ▼▼▼▼▼ 핵심 수정 ▼▼▼▼▼
-            # 계산된 최종 능력치를 모두 업데이트하도록 수정합니다.
             'current_hp': final_stats['hp'],
             'current_attack': final_stats['attack'],
             'current_defense': final_stats['defense'],
             'current_speed': final_stats['speed'],
-            # ▲▲▲▲▲ 핵심 수정 ▲▲▲▲▲
             'natural_bonus_hp': natural_bonus_stats['hp'], 
             'natural_bonus_attack': natural_bonus_stats['attack'],
             'natural_bonus_defense': natural_bonus_stats['defense'], 
@@ -735,13 +733,12 @@ class PetSystem(commands.Cog):
             except (discord.NotFound, discord.Forbidden) as e:
                 logger.error(f"부화 UI 업데이트 실패 (스레드: {thread.id}): {e}")
     
-  async def process_levelup_requests(self, requests: List[Dict], is_admin: bool = False):
+    async def process_levelup_requests(self, requests: List[Dict], is_admin: bool = False):
         user_ids_to_notify = {int(req['config_key'].split('_')[-1]): req.get('config_value') for req in requests}
         for user_id, payload in user_ids_to_notify.items():
             new_level, points_awarded = None, None
             
             if is_admin:
-                # 관리자 강제 레벨업 시에도 레벨 캡 확인 필요
                 pet_res = await supabase.table('pets').select('level, xp, current_stage, pet_species(stage_info)').eq('user_id', user_id).maybe_single().execute()
                 if pet_res and pet_res.data:
                     pet_data = pet_res.data
@@ -749,14 +746,11 @@ class PetSystem(commands.Cog):
                     current_stage = str(pet_data.get('current_stage', 1))
                     stage_info = pet_data.get('pet_species', {}).get('stage_info', {})
                     
-                    # 현재 단계의 최대 레벨 확인
                     level_cap = stage_info.get(current_stage, {}).get('level_cap', 999)
                     
                     if current_level >= level_cap:
-                        # 이미 최대 레벨이면 경험치 추가 중단
                         continue
 
-                    # (기존 로직 유지)
                     current_xp_in_level = pet_data.get('xp', 0)
                     xp_for_this_level = calculate_xp_for_pet_level(current_level)
                     xp_to_add = (xp_for_this_level - current_xp_in_level) + 1
@@ -798,7 +792,6 @@ class PetSystem(commands.Cog):
 
         nickname = pet_data.get('nickname', '이름 없는 펫')
         
-        # 레벨 캡 도달 여부 확인
         current_stage = str(pet_data.get('current_stage', 1))
         stage_info = pet_data.get('pet_species', {}).get('stage_info', {})
         level_cap = stage_info.get(current_stage, {}).get('level_cap', 999)
@@ -806,13 +799,11 @@ class PetSystem(commands.Cog):
         log_channel_id = get_id("log_pet_levelup_channel_id")
         log_channel = self.bot.get_channel(log_channel_id) if log_channel_id else None
 
-        # 레벨업 축하 메시지
         message_text = (f"🎉 {user.mention}님의 '**{nickname}**'이(가) **레벨 {new_level}**(으)로 성장했습니다! 스탯 포인트 **{points_awarded}**개를 획득했습니다. ✨")
         if log_channel:
             try: await log_channel.send(message_text)
             except Exception as e: logger.error(f"펫 레벨업 로그 전송 실패: {e}")
 
-        # 스레드 업데이트
         thread_id = pet_data.get('thread_id')
         if not thread_id: return
         thread = self.bot.get_channel(thread_id)
@@ -820,7 +811,6 @@ class PetSystem(commands.Cog):
         
         await self.update_pet_ui(user_id, thread)
         
-        # [추가] 레벨 캡 도달 시 진화 안내 메시지 전송
         if new_level >= level_cap:
             next_stage_num = int(current_stage) + 1
             next_stage_info = stage_info.get(str(next_stage_num))
