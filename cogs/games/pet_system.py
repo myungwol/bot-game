@@ -735,15 +735,29 @@ class PetSystem(commands.Cog):
             except (discord.NotFound, discord.Forbidden) as e:
                 logger.error(f"부화 UI 업데이트 실패 (스레드: {thread.id}): {e}")
     
-    async def process_levelup_requests(self, requests: List[Dict], is_admin: bool = False):
+  async def process_levelup_requests(self, requests: List[Dict], is_admin: bool = False):
         user_ids_to_notify = {int(req['config_key'].split('_')[-1]): req.get('config_value') for req in requests}
         for user_id, payload in user_ids_to_notify.items():
             new_level, points_awarded = None, None
+            
             if is_admin:
-                pet_res = await supabase.table('pets').select('level, xp').eq('user_id', user_id).maybe_single().execute()
+                # 관리자 강제 레벨업 시에도 레벨 캡 확인 필요
+                pet_res = await supabase.table('pets').select('level, xp, current_stage, pet_species(stage_info)').eq('user_id', user_id).maybe_single().execute()
                 if pet_res and pet_res.data:
-                    current_level = pet_res.data.get('level', 1)
-                    current_xp_in_level = pet_res.data.get('xp', 0)
+                    pet_data = pet_res.data
+                    current_level = pet_data.get('level', 1)
+                    current_stage = str(pet_data.get('current_stage', 1))
+                    stage_info = pet_data.get('pet_species', {}).get('stage_info', {})
+                    
+                    # 현재 단계의 최대 레벨 확인
+                    level_cap = stage_info.get(current_stage, {}).get('level_cap', 999)
+                    
+                    if current_level >= level_cap:
+                        # 이미 최대 레벨이면 경험치 추가 중단
+                        continue
+
+                    # (기존 로직 유지)
+                    current_xp_in_level = pet_data.get('xp', 0)
                     xp_for_this_level = calculate_xp_for_pet_level(current_level)
                     xp_to_add = (xp_for_this_level - current_xp_in_level) + 1
                     if xp_to_add > 0:
@@ -754,7 +768,8 @@ class PetSystem(commands.Cog):
             else: 
                 if isinstance(payload, dict):
                     new_level, points_awarded = payload.get('new_level'), payload.get('points_awarded')
-            if new_level is not None and points_awarded is not None:
+            
+            if new_level is not None:
                 await self.notify_pet_level_up(user_id, new_level, points_awarded)
 
     async def process_level_set_requests(self, requests: List[Dict]):
