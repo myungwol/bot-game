@@ -792,18 +792,25 @@ class PetSystem(commands.Cog):
 
         nickname = pet_data.get('nickname', '이름 없는 펫')
         
+        # 레벨 캡 및 단계 이름 확인 로직 수정
         current_stage = str(pet_data.get('current_stage', 1))
         stage_info = pet_data.get('pet_species', {}).get('stage_info', {})
-        level_cap = stage_info.get(current_stage, {}).get('level_cap', 999)
+        
+        # [수정] 현재 단계 정보 가져오기
+        current_stage_info = stage_info.get(current_stage, {})
+        level_cap = current_stage_info.get('level_cap', 999)
+        current_stage_name = current_stage_info.get('name', '알 수 없음') # 여기서 직접 이름 추출
         
         log_channel_id = get_id("log_pet_levelup_channel_id")
         log_channel = self.bot.get_channel(log_channel_id) if log_channel_id else None
 
+        # 레벨업 축하 메시지
         message_text = (f"🎉 {user.mention}님의 '**{nickname}**'이(가) **레벨 {new_level}**(으)로 성장했습니다! 스탯 포인트 **{points_awarded}**개를 획득했습니다. ✨")
         if log_channel:
             try: await log_channel.send(message_text)
             except Exception as e: logger.error(f"펫 레벨업 로그 전송 실패: {e}")
 
+        # 스레드 업데이트
         thread_id = pet_data.get('thread_id')
         if not thread_id: return
         thread = self.bot.get_channel(thread_id)
@@ -811,14 +818,16 @@ class PetSystem(commands.Cog):
         
         await self.update_pet_ui(user_id, thread)
         
+        # 레벨 캡 도달 시 진화 안내 메시지 전송
         if new_level >= level_cap:
             next_stage_num = int(current_stage) + 1
             next_stage_info = stage_info.get(str(next_stage_num))
             next_stage_name = next_stage_info.get('name', '다음 단계') if next_stage_info else "다음 단계"
             
+            # [수정] pet_data.get(...) 대신 위에서 파싱한 current_stage_name 변수 사용
             warning_msg = (
                 f"⚠️ **성장 한계 도달!**\n"
-                f"현재 단계({pet_data.get('current_stage_name', '알 수 없음')})의 최대 레벨({level_cap})에 도달했습니다.\n"
+                f"현재 단계(**{current_stage_name}**)의 최대 레벨({level_cap})에 도달했습니다.\n"
                 f"더 이상 레벨업을 하려면 **진화**가 필요합니다! (`{next_stage_name}`로 진화 가능)"
             )
             await thread.send(warning_msg)
